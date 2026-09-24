@@ -10,6 +10,7 @@
  */
 
 import type { AppNode, PortDefinition, ShaderNodeData } from '@/types';
+import { valueNum, valueStr } from './valueCoerce';
 import { getNodeValues } from '@/types';
 import { MAX_COLUMNS, type ParsedCsv } from './csvParser';
 import { float32ToBase64, base64ToFloat32 } from './binaryCodec';
@@ -115,9 +116,9 @@ export function columnForHandle(
 /** Decode a Data node's stored columns. Returns null if the payload is missing
  *  or malformed (graphToCode then emits an inert fallback). */
 export function decodeDataNode(values: Record<string, string | number>): DecodedDataNode | null {
-  const rowCount = Number(values.rowCount);
-  const columnCount = Number(values.columnCount);
-  const dataB64 = String(values.dataB64 ?? '');
+  const rowCount = valueNum(values.rowCount);
+  const columnCount = valueNum(values.columnCount);
+  const dataB64 = valueStr(values.dataB64 ?? '');
   if (!Number.isInteger(rowCount) || rowCount <= 0) return null;
   if (!Number.isInteger(columnCount) || columnCount <= 0) return null;
   if (!dataB64) return null;
@@ -162,7 +163,7 @@ export function decodeDataNode(values: Record<string, string | number>): Decoded
     // pass below already contains the damage, but the rule lives in ONE place
     // (utils/safeJson.ts) precisely so the next key added to the deny-list
     // reaches every boundary instead of only the sites that opted in.
-    const parsed = JSON.parse(String(values.columnNames ?? '[]'), safeJsonReviver);
+    const parsed = JSON.parse(valueStr(values.columnNames ?? '[]'), safeJsonReviver);
     if (Array.isArray(parsed)) columnNames = parsed.map((s) => String(s));
   } catch {
     // Fall back to synthesized names below.

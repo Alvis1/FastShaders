@@ -370,16 +370,32 @@ describe('the Output settings menu is titled for what it edits', () => {
     expect(MENU).not.toContain("{t('Shader Settings', language)}");
   });
 
-  it('the three WHOLE-DOCUMENT figures say so under their own heading', () => {
-    // Total Cost seeds every contributing Output, the budget is a device
-    // setting, and the texture figure widened past one material deliberately —
-    // filing them under "Material" would be a lie about three rows.
-    expect(MENU).toContain("{t('Shader (whole document)', language)}");
-    const at = MENU.indexOf("{t('Shader (whole document)', language)}");
-    const block = MENU.slice(at, at + 1600);
-    expect(block).toContain("t('Total Cost:', language)");
-    expect(block).toContain("t('Budget:', language)");
-    expect(block).toContain('textureMemoryLine(texBytes, texCount, language)');
+  it('shows no cost or budget figure: the CostBar already carries both', () => {
+    // They were a third copy of two numbers that sit at the top of the app at
+    // all times. The texture figure STAYS — this menu is its only surface.
+    expect(MENU).not.toContain("{t('Shader (whole document)', language)}");
+    expect(MENU).not.toContain("t('Total Cost:', language)");
+    expect(MENU).not.toContain("t('Budget:', language)");
+    expect(MENU).toContain('textureMemoryLine(texBytes, texCount, language)');
+  });
+
+  it('is laid out by SHADER STAGE, pixel before vertex', () => {
+    // "Output Ports" (the channels) and "Rendering" (the material flags) both
+    // describe the fragment stage and are now one section; "Displacement" is
+    // the vertex stage under its own name.
+    expect(MENU).toContain("{t('Pixel (Fragment) Shader', language)}");
+    expect(MENU).toContain("{t('Vertex Shader', language)}");
+    expect(MENU).not.toContain("{t('Output Ports', language)}");
+    expect(MENU).not.toContain("{t('Displacement', language)}");
+    expect(MENU).not.toContain("{t('Rendering', language)}");
+    // The render state sits INSIDE the pixel section: after its heading and
+    // before the vertex one.
+    const pixel = MENU.indexOf("{t('Pixel (Fragment) Shader', language)}");
+    const vertex = MENU.indexOf("{t('Vertex Shader', language)}");
+    const transparent = MENU.indexOf("{t('Transparent', language)}");
+    expect(pixel).toBeGreaterThan(-1);
+    expect(transparent).toBeGreaterThan(pixel);
+    expect(vertex).toBeGreaterThan(transparent);
   });
 
   it('the two MODULE-level geometry rows render only where they apply', () => {
@@ -391,7 +407,6 @@ describe('the Output settings menu is titled for what it edits', () => {
   });
 
   it('does not stack a third "Material" heading under the new title', () => {
-    expect(MENU).toContain("{t('Rendering', language)}");
     expect(MENU).not.toMatch(/context-menu__category">\{t\('Material', language\)\}/);
   });
 });
@@ -406,8 +421,8 @@ describe('the Latvian side moved with it', () => {
 
   it('carries every key the menu now asks for, and drops the old one', () => {
     expect(ui['Material Settings']).toBe('Materiāla iestatījumi');
-    expect(ui['Shader (whole document)']).toBeTruthy();
-    expect(ui['Rendering']).toBeTruthy();
+    expect(ui['Pixel (Fragment) Shader']).toBeTruthy();
+    expect(ui['Vertex Shader']).toBeTruthy();
     expect(ui['Shader Settings']).toBeUndefined();
   });
 });
@@ -433,11 +448,12 @@ describe('the Shading row (Blender’s Shade Smooth / Shade Flat)', () => {
     expect(MENU).toContain("value={settings.flatShading ? 'flat' : 'smooth'}");
   });
 
-  it('is in the Material Settings menu, not the whole-document block', () => {
-    // It is a THREE.Material property, so two materials on one model may differ —
-    // it belongs beside Transparent / Side, under "Rendering".
-    const rendering = MENU.slice(MENU.indexOf("{t('Rendering', language)}"));
-    expect(rendering).toContain("{t('Shading', language)}");
+  it('sits with the other render-state rows, in the pixel section', () => {
+    // It is a THREE.Material property, so two materials on one model may
+    // differ — it belongs beside Transparent / Side.
+    const pixel = MENU.slice(MENU.indexOf("{t('Pixel (Fragment) Shader', language)}"));
+    expect(pixel.indexOf("{t('Shading', language)}")).toBeGreaterThan(-1);
+    expect(pixel.indexOf("{t('Shading', language)}")).toBeLessThan(pixel.indexOf("{t('Vertex Shader', language)}"));
   });
 
   it('carries its Latvian', () => {

@@ -12,8 +12,8 @@ describe('the Image node card shows its flips', () => {
   it('mirrors the thumbnail per axis', () => {
     // A checkbox in a menu you have to close before you can see its effect is
     // a guess; the card is where the picture is.
-    expect(SHADER_NODE).toMatch(/flipThumbX = Number\(data\.values\?\.flipX \?\? 0\) >= 0\.5/);
-    expect(SHADER_NODE).toMatch(/flipThumbY = Number\(data\.values\?\.flipY \?\? 0\) >= 0\.5/);
+    expect(SHADER_NODE).toMatch(/flipThumbX = valueNum\(data\.values\?\.flipX \?\? 0\) >= 0\.5/);
+    expect(SHADER_NODE).toMatch(/flipThumbY = valueNum\(data\.values\?\.flipY \?\? 0\) >= 0\.5/);
     expect(SHADER_NODE).toMatch(/transform: `scale\(\$\{flipThumbX \? -1 : 1\}, \$\{flipThumbY \? -1 : 1\}\)`/);
   });
 
@@ -60,9 +60,12 @@ describe('the source filename follows the card into dark mode', () => {
 describe('the empty image slot', () => {
   it('is drawn by the canvas whenever the node has no valid payload', () => {
     // A node added empty from the palette, or one whose payload a restore path
-    // stripped. A SIBLING of the <img>, never a restructure of it — the flip
-    // and filter pins above read that element's JSX.
-    expect(SHADER_NODE).toMatch(/\{!imageThumbUrl && data\.registryType === 'imageNode' && <ImageThumbEmpty/);
+    // stripped. The `else` of the thumbnail, never a restructure of the <img>
+    // itself — the flip and filter pins above read that element's JSX. Both
+    // live INSIDE the port region since 2026-09-19 (nodes/edgePorts.ts): the
+    // sockets are centred on that region, so the picture is in it.
+    expect(SHADER_NODE).toMatch(/\{imageThumbUrl \? \(/);
+    expect(SHADER_NODE).toMatch(/\) : \(\s*\/\*[\s\S]*?\*\/\s*<ImageThumbEmpty language=\{language\} \/>/);
   });
 
   it('is drawn by every replica — a replica never carries a payload', () => {

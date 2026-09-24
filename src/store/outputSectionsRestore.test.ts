@@ -25,7 +25,7 @@ import {
   loadSavedGroupsReport,
   reportOutputSectionsTrimmed,
 } from './useAppStore';
-import { makeNode, makeEdge } from '@/test-utils';
+import { HISTORY_IDLE, makeNode, makeEdge } from '@/test-utils';
 import { emitRank, outputMaterials, outputNodes, MAX_PARTS } from '@/utils/outputMaterials';
 import { embedProjectState, type FastShadersProject } from '@/engine/fastShadersProject';
 import { importShaderText } from '@/engine/projectImport';
@@ -97,6 +97,7 @@ function reset() {
     edges: [],
     past: [],
     future: [],
+    ...HISTORY_IDLE,
     savedGroups: [],
     pendingLimitNotices: [],
     ignoreImageLimits: false,

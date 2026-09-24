@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { projectDocs } from './projectDocs';
 
 /**
  * The suite runs with `isolate: false`, so a global a test file stubs and does
@@ -38,7 +39,7 @@ describe('vi.stubGlobal is always restored', () => {
   });
 
   it('CLAUDE.md states the rule, not a file count that goes stale', () => {
-    const doc = readFileSync(join(SRC, '../CLAUDE.md'), 'utf8');
+    const doc = projectDocs();
     expect(doc).not.toMatch(/\*\*\d+ files call `vi\.stubGlobal`/);
     expect(doc).toContain("every file that calls `vi.stubGlobal` (`grep -rl '" + STUB + "' src`) must restore it");
   });

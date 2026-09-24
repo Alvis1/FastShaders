@@ -411,6 +411,41 @@ interface PendingCsvImport {
 }
 
 /**
+ * A dropped SHADER file awaiting its answer — Open or Add
+ * (`components/Modals/ShaderImportModal.tsx`).
+ *
+ * The File itself rides the queue, unread: all three drop surfaces (the
+ * canvas, the 3D preview, the code panel) raise the dialog, and only the
+ * answer decides which of the two reads it needs — Open installs the
+ * archive's model, Add must not. Session-only, like every other queue here:
+ * never history, never the autosave, never a shared file.
+ *
+ * `source` is where the drop landed. An 'iframe' one has ALREADY passed the
+ * forwarded-shader confirm on its surface — sandboxed shader code can forge a
+ * drop, and a dialog it forged could still be answered by the user — so this
+ * field is carried for the record, not re-checked here.
+ */
+export interface PendingShaderImport {
+  id: string;
+  file: File;
+  /** Bounded for display (`sanitizeDroppedName`); never used to read the file. */
+  fileName: string;
+  source: 'dom' | 'iframe';
+  /**
+   * Run once, when the answer has settled, so the raising surface can finish
+   * the REST of the drop it received — the 3D model dropped WITH the shader,
+   * its own "the other files were ignored" notice — without this queue having
+   * to know what else was in that drop.
+   *
+   * 'imported' = an answer ran and landed; 'failed' = it ran and did not (the
+   * dialog has already said why); 'cancelled' = there was no answer, so a
+   * surface should do nothing more with that drop either. A function on a
+   * queued item, like `LimitNotice.proceed`.
+   */
+  onResolved?: (outcome: 'imported' | 'failed' | 'cancelled') => void;
+}
+
+/**
  * A limit/storage event awaiting user acknowledgement via LimitModal (shown
  * one at a time). Drop-time image notices carry the original File + drop
  * position so "Add anyway" can re-run the import with limits ignored.
@@ -1426,6 +1461,8 @@ interface AppState {
   nodePreview: NodePreviewTarget | null;
   /** Queue of over-wide CSV drops awaiting a user decision (shown one at a time). */
   pendingCsvImports: PendingCsvImport[];
+  /** Queue of dropped shader files awaiting Open-or-Add (shown one at a time). */
+  pendingShaderImports: PendingShaderImport[];
   /** Queue of limit/storage notices awaiting acknowledgement (LimitModal). */
   pendingLimitNotices: LimitNotice[];
   /** User opt-out of the image size limits (persisted; set via the LimitModal
@@ -1758,6 +1795,13 @@ interface AppState {
   enqueueCsvImport: (item: PendingCsvImport) => void;
   /** Resolve the head of the CSV-import queue and advance to the next. */
   resolveCsvImport: (action: 'cancel' | 'continue' | 'transpose') => void;
+  /** Ask about a dropped shader file (Open or Add). */
+  enqueueShaderImport: (item: PendingShaderImport) => void;
+  /** Drop the head of the shader-drop queue. The ANSWER is run by the dialog,
+   *  not here: a shader import reaches into every corner of the app
+   *  (`engine/projectImport.ts`) and the store must not import that module —
+   *  it imports the store, and a second edge back would close the cycle. */
+  dequeueShaderImport: (id: string) => void;
   /** Add a limit/storage notice to the LimitModal queue. */
   enqueueLimitNotice: (notice: LimitNotice) => void;
   /** Resolve the head of the limit-notice queue. `proceed` re-imports the
@@ -1890,6 +1934,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   hoveredNodeId: null,
   nodePreview: null,
   pendingCsvImports: [],
+  pendingShaderImports: [],
   pendingLimitNotices: [],
   ignoreImageLimits: loadString('fs:ignoreImageLimits', '0') === '1',
   hideImageDownscaleWarning: loadString('fs:hideImageDownscaleWarning', '0') === '1',
@@ -2624,6 +2669,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   enqueueCsvImport: (item) =>
     set((state) => ({ pendingCsvImports: [...state.pendingCsvImports, item] })),
+
+  enqueueShaderImport: (item) =>
+    set((state) => ({ pendingShaderImports: [...state.pendingShaderImports, item] })),
+
+  dequeueShaderImport: (id) =>
+    set((state) => ({ pendingShaderImports: state.pendingShaderImports.filter((p) => p.id !== id) })),
 
   resolveCsvImport: (action) => {
     const head = get().pendingCsvImports[0];

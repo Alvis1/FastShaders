@@ -22,6 +22,7 @@ import {
 } from './glyphs/NodeGlyph';
 import { NodeTitle } from './NodeTitle';
 import { effectiveNodeDef } from '@/utils/exposedPorts';
+import { edgePortOffset, edgePortRailHeight, usesEdgePorts } from './edgePorts';
 
 /** A freshly dropped node has nothing exposed. Module-scope so
  *  effectiveNodeDef's identity-stable fast path (every node but the ramp and
@@ -123,7 +124,8 @@ export function NodeVisual({
   // The same holds for the Image node's opt-in params (GLB Phase 4): a replica
   // shows none, exactly like a freshly added canvas node — before the shared
   // filter a tile drew six param rows with number boxes. Its effective def has
-  // no inputs, so it takes the rows branch: five labelled output rows.
+  // no inputs, so it draws the empty slot with its five channel sockets spread
+  // along the right border (the EDGE-PORT layout, nodes/edgePorts.ts).
   const def = effectiveNodeDef(rawDef, NO_EXPOSED);
   const box = nodeBox(def.type, design);
   const textScale = nodeTextScale(def.type, design);
@@ -347,10 +349,13 @@ export function NodeVisual({
   // ── Rows layout (ShaderNode's rows branch) ──
   const rows = buildRows(def);
   const outMoved = sockets['out'] != null && !!def.outputs[0];
+  /** ShaderNode's edge-port flag, read from the SAME predicate. */
+  const edgePorts = usesEdgePorts(def.type);
   /** Drop rows that draw nothing — THE SAME function ShaderNode uses, not a
    *  copy of the rule: without it the asset tiles and the Designer stage hang
-   *  an empty port row below the card exactly as the canvas did. */
-  const visibleRows = visiblePortRows(rows, sockets, def.outputs);
+   *  an empty port row below the card exactly as the canvas did. An edge-port
+   *  node has no rows at all, exactly as on the canvas. */
+  const visibleRows = edgePorts ? [] : visiblePortRows(rows, sockets, def.outputs);
   /** A row's right half — ShaderNode's `rowOutput`: the socket, preceded by
    *  its label only where {@link outputRowLabel} records a #8 exception, under
    *  ONE not-moved condition. `dynamic` is false: a replica never carries the
@@ -372,13 +377,9 @@ export function NodeVisual({
           mic surface renders through SoundNode/SoundCardContent instead.) */}
       <div className={cardClass} style={nodeStyle}>
         {header}
-        {/* Image node: a replica never carries a payload, so it draws the ONE
-            empty slot ShaderNode draws for a payload-less node — in the same
-            place (header, thumbnail, rows), with no filename. Its hover text
-            is the PLAIN statement: a replica has no settings menu, and on the
-            Node Designer stage (drawn hit-testable) the canvas hint's
-            "Right-click the node…" would open only the browser's menu. */}
-        {def.type === 'imageNode' && <ImageThumbEmpty language={language} hint={IMAGE_EMPTY_HINT_EVAL} />}
+        {/* (The Image node's empty slot moved INSIDE the port region below,
+            where ShaderNode also draws it — the edge-port sockets are centred
+            on that region, so the picture has to be in it.) */}
         {/* Colormap: the node's ART is its real ramp — same gradient helper as
             the canvas node, the settings menu and the picker, so no surface
             can show a different map. Designer dx/dy/scale move/grow it as a
@@ -401,12 +402,47 @@ export function NodeVisual({
             }}
           />
         )}
-        <div className="shader-node__region" style={{ position: 'relative', ...(box.height ? { height: box.height } : null) }}>
+        <div
+          className={`shader-node__region${edgePorts ? ' shader-node__edge-region' : ''}`}
+          style={{
+            position: 'relative',
+            // ShaderNode's floor, same helper: a column of edge ports stays
+            // inside the body even when the node's content is shorter than it.
+            ...(edgePorts ? { minHeight: edgePortRailHeight(rawDef.inputs.length, def.outputs.length) } : null),
+            ...(box.height ? { height: box.height } : null),
+          }}
+        >
           {hasNodeGlyph(def.type, design) && (
             <div className="shader-node__glyph" data-nd-glyph={interactive ? '' : undefined} style={interactiveStyle}>
               <NodeGlyph type={def.type} value={num('value')} size={30} design={design} />
             </div>
           )}
+
+          {/* Image node: a replica never carries a payload, so it draws the ONE
+              empty slot ShaderNode draws for a payload-less node — in the same
+              place (inside the port region), with no filename. Its hover text
+              is the PLAIN statement: a replica has no settings menu, and on the
+              Node Designer stage (drawn hit-testable) the canvas hint's
+              "Right-click the node…" would open only the browser's menu. */}
+          {def.type === 'imageNode' && <ImageThumbEmpty language={language} hint={IMAGE_EMPTY_HINT_EVAL} />}
+
+          {/* EDGE PORTS — ShaderNode's rail, inert. Indexed against the node's
+              FULL port lists (`rawDef`, not the exposure-filtered `def`) for
+              the same reason the canvas does it: a socket's slot is a property
+              of the node, not of what happens to be exposed, so the replica
+              and the live node put the same socket in the same place. A
+              replica exposes nothing, so only the outputs draw. */}
+          {edgePorts &&
+            def.outputs.map((out, i) => (
+              <StaticHandle
+                key={`ep-out-${out.id}`}
+                side="right"
+                dataType={out.dataType}
+                port={out.id}
+                label={out.label}
+                style={{ top: calcTop(sockets[out.id] ?? edgePortOffset(i, def.outputs.length)) }}
+              />
+            ))}
 
           <div className="node-base__body">
             {visibleRows.map((row, i) => {
@@ -493,7 +529,12 @@ export function NodeVisual({
               </div>
             );
           })}
-          {outMoved && (
+          {/* An edge-port node placed every socket in the rail above, designer
+              override included — reaching here too mounts `out` TWICE, at the
+              identical `top`. The Image node is designable, and the Designer's
+              corner drag rewrites `sockets.out` on any height change, so this
+              is reachable while authoring even without dragging a socket. */}
+          {!edgePorts && outMoved && (
             <StaticHandle side="right" dataType={def.outputs[0].dataType} port={def.outputs[0].id} label={def.outputs[0].label}
               style={{ top: calcTop(sockets['out']) }} />
           )}

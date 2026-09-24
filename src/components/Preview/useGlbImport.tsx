@@ -2,13 +2,14 @@
  * The GLB import FLOW (GLB Phase 5 Step 9): what `loadMeshFile` hands an
  * offerable `.glb`/`.gltf` to — read the model on the trusted side
  * (`readGltfModel`), derive the facts and the plan, show the dialog, run the
- * builder on Build, commit through `commitGlbImport`, post ONE report note.
+ * builder on "Mesh with Materials", commit through `commitGlbImport`,
+ * post ONE report note.
  *
  * The reader's report is TRANSIENT (it holds views into the dropped bytes):
  * it lives in this hook's state for exactly as long as the dialog is open,
  * and is dropped — with the bytes — on commit, cancel, a refused build or
  * unmount. Nothing here writes the store except through `commitGlbImport`
- * and `showImportNote`; "Model only" is the caller's own model drop over the
+ * and `showImportNote`; "Only Mesh" is the caller's own model drop over the
  * bytes already read (`applyModelBytes`), and fires nothing.
  *
  * A second drop while the dialog is open is REFUSED with a notice rather
@@ -268,8 +269,12 @@ export function useGlbImport(deps: {
         abortRef.current = null;
         clear();
         if (r.ok) {
-          commitGlbImport(r.project, r.mesh);
-          useAppStore.getState().showImportNote(glbImportReportLines(r.report));
+          // Replaces the GRAPH and keeps the DOCUMENT — see the commit.
+          // The note waits for the commit: a budget refusal defers it to the
+          // limit notice, and a dismissed notice imports nothing at all.
+          commitGlbImport(r.project, r.mesh, {
+            onCommitted: () => useAppStore.getState().showImportNote(glbImportReportLines(r.report)),
+          });
         } else if (r.reason === 'mesh-refused') {
           depsRef.current.showDropNotice(meshRefusalMessage(r.refusal, lang));
         } else if (r.reason === 'failed') {

@@ -432,9 +432,71 @@ function isValuesObject(v: unknown): v is Record<string, string | number> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+/**
+ * Can this entry be coerced at all?
+ *
+ * The guard above closes a tampered `values` OBJECT; this closes a tampered
+ * ENTRY, which is the same bug one level down and was reachable for far longer.
+ * `String(v)` and `Number(v)` run ToPrimitive, which THROWS when neither
+ * `valueOf` nor `toString` yields a primitive:
+ *
+ *     String({ toString: 1 })   // TypeError: Cannot convert object to primitive
+ *     Number(Symbol('x'))       // TypeError
+ *
+ * There are ~40 such coercions across codegen, the CPU evaluator, the export
+ * paths and the node components, and a `.fastshader` carrying
+ * `{"values":{"speed":{"toString":1}}}` made every one of them throw — inside
+ * `graphToCode`, inside the sync engine, inside a render, in an app with NO
+ * error boundary. React unmounts the root, the screen goes blank, and because
+ * the 300 ms autosave is a store SUBSCRIPTION outside React, the poisoned graph
+ * is written back to `fs:graph` and the app blanks again on every reload.
+ * MEASURED 2026-09-19: 38 poisoned single-key graphs across 17 node types, all
+ * of them fatal. Guarding the call sites one at a time did not converge —
+ * every node family has its own reads — so it is closed HERE, where every
+ * reader already comes through.
+ *
+ * Deliberately permissive: anything that coerces WITHOUT throwing is kept
+ * EXACTLY as it was, including a boolean (`Number(false)` is 0, and the Image
+ * node's `repeat` reads that 0 as CLAMP — pinned in imageTextureSpec.test.ts)
+ * and an array. Only what would throw is dropped, so no legitimate graph and
+ * no pinned junk-value behaviour changes at all.
+ */
+function coercibleEntry(v: unknown): boolean {
+  const t = typeof v;
+  if (t === 'string' || t === 'number' || t === 'boolean' || t === 'bigint' || v == null) return true;
+  if (t === 'symbol') return false;
+  // Object or function: the only way to know is to ask. Never reached for a
+  // graph any writer in this app produced, so the cost does not matter — and
+  // BOTH hints are tried, since a `Symbol.toPrimitive` can accept one and
+  // throw on the other.
+  try {
+    String(v);
+    Number(v);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `values` with every uncoercible entry dropped — BY IDENTITY when there is
+ * none, which is every real graph, so no allocation and no memo invalidation
+ * (the contract this module's header states).
+ */
+function coercedValues(values: Record<string, string | number>): Record<string, string | number> {
+  for (const k in values) {
+    if (!coercibleEntry(values[k])) {
+      const out: Record<string, string | number> = {};
+      for (const key in values) if (coercibleEntry(values[key])) out[key] = values[key];
+      return out;
+    }
+  }
+  return values;
+}
+
 function rawNodeValues(node: AppNode): Record<string, string | number> {
   const values = (node.data as ShaderNodeData).values;
-  return isValuesObject(values) ? values : {};
+  return isValuesObject(values) ? coercedValues(values) : {};
 }
 
 /** Safely extract values from any AppNode's data. */

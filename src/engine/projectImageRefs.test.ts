@@ -362,6 +362,9 @@ describe('source pins', () => {
     expect(src).toContain('const budget = newRefBudget();');
     expect(src).toContain('resolveProjectImageRefs(project, moduleImageLiterals(moduleText), budget)');
     expect(src).toContain('resolveImageRefs(fileRefs.project.graph.nodes, undefined, budget)');
-    expect(src).toContain('applyProjectToStore(projectResult.project, projectResult.stripped)');
+    // The module text is the SECOND argument, which is the claim here.
+    // Matched without the closing paren: the call grew a third argument
+    // (the dropped file's name fallback) and will grow more.
+    expect(src).toContain('applyProjectToStore(projectResult.project, projectResult.stripped');
   });
 });

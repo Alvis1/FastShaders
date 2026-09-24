@@ -31,6 +31,7 @@ import {
   validateSubdivision,
 } from './subdivisionSteps';
 import { shownGeometry, validateGeometry } from './previewGeometryPref';
+import { BOOT_MESH_WAIT_MS, shouldWaitForBootMesh } from './bootMeshWait';
 import { createPreviewMesh, detectMeshKind, preReadModelGate } from '@/utils/previewMesh';
 import {
   meshRefusalMessage,
@@ -66,6 +67,7 @@ import { collectImageAssets, inlineImageAssetsFromNodes } from '@/engine/imageAs
 import { PREVIEW_ASSETS_MESSAGE, planPreviewAssetFeed } from '@/engine/previewAssetFeed';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { importShaderText, importShaderZip, isZipFile, reportZipImportError } from '@/engine/projectImport';
+import { requestShaderImport } from '@/utils/shaderDropRequest';
 import { displayImageFileName } from '@/utils/imageNode';
 import { isImageChannelHandle } from '@/utils/imageChannels';
 import { platformWebGL2Reason } from '@/utils/feedbackReport';
@@ -606,18 +608,51 @@ export function ShaderPreview() {
   //
   // A zip import or a drop can land first (both are synchronous); either wins,
   // and the cache read is discarded rather than overwriting live state.
+  //
+  // It also SETTLES the boot hold below (bootMeshWait.ts) — on every exit
+  // path, including a read that finds nothing or fails, or the document would
+  // be held back for a mesh that is never coming.
+  const [bootMeshSettled, setBootMeshSettled] = useState(false);
   useEffect(() => {
-    if (useAppStore.getState().previewMesh) return;
+    if (useAppStore.getState().previewMesh) { setBootMeshSettled(true); return; }
     let cancelled = false;
-    void loadPreviewMeshFromCache().then((mesh) => {
-      if (cancelled || !mesh) return;
-      if (useAppStore.getState().previewMesh) return;
-      // persist:false — these bytes came straight OUT of the cache.
-      useAppStore.getState().setPreviewMesh(mesh, { persist: false });
-      if (bootGeometryWasCustom()) setGeometry('custom');
-    });
-    return () => { cancelled = true; };
+    // The cap (see BOOT_MESH_WAIT_MS): a blocked or absent IndexedDB resolves
+    // only on `idbSafe`'s own 5 s timeout, and an empty pane for that long is
+    // worse than the throwaway document this avoids.
+    const cap = window.setTimeout(() => { if (!cancelled) setBootMeshSettled(true); }, BOOT_MESH_WAIT_MS);
+    void loadPreviewMeshFromCache()
+      .then((mesh) => {
+        if (cancelled || !mesh) return;
+        if (useAppStore.getState().previewMesh) return;
+        // persist:false — these bytes came straight OUT of the cache.
+        useAppStore.getState().setPreviewMesh(mesh, { persist: false });
+        if (bootGeometryWasCustom()) setGeometry('custom');
+      })
+      // `finally`, not a second `then`: `loadPreviewMeshFromCache` resolves on
+      // every failure path by contract, but a throw ANYWHERE above (a store
+      // write, setGeometry) must still release the hold.
+      .finally(() => {
+        if (cancelled) return;
+        window.clearTimeout(cap);
+        setBootMeshSettled(true);
+      });
+    return () => { cancelled = true; window.clearTimeout(cap); };
   }, [setGeometry]);
+
+  /**
+   * Hold the FIRST document back while that read is in flight, so a boot with
+   * a dropped model builds ONE document and it is already the model's — rather
+   * than attaching a sphere document and rewriting `srcdoc` on it mid-load.
+   * The whole rule, and the bug it closes, is in bootMeshWait.ts.
+   *
+   * Derived per render, never captured: a drop landing during the hold ends it
+   * through `previewMesh` without waiting for the cap.
+   */
+  const waitingForBootMesh = shouldWaitForBootMesh(
+    bootGeometryWasCustom(),
+    previewMesh !== null,
+    bootMeshSettled,
+  );
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -1126,10 +1161,28 @@ export function ShaderPreview() {
     // DOM events and skip the prompt.
     let shaderFile = zip ?? script;
     if (shaderFile && source === 'iframe') {
-      const ok = window.confirm(
-        `${t('Load the dropped shader file? It replaces the current project.', language)}\n(${shaderFile.name})`,
-      );
+      // Outside a study session the Open/Add dialog follows, and Add replaces
+      // nothing — so the warning names what comes NEXT instead of a
+      // replacement the user may not choose.
+      const ask = isEvalMode()
+        ? 'Load the dropped shader file? It replaces the current project.'
+        : 'Accept the shader file dropped on the preview? You then choose whether to open it or add it.';
+      const ok = window.confirm(`${t(ask, language)}\n(${shaderFile.name})`);
       if (!ok) shaderFile = null;
+    }
+
+    // A dropped shader ASKS first — Open or Add (utils/shaderDropRequest.ts).
+    // The dialog owns the import and every message about it from here, and
+    // calls back when it settles so a model dropped WITH the shader still
+    // follows it; a CANCELLED drop is dropped whole, model included. It
+    // returns false in a study session, which keeps the direct path below.
+    if (
+      shaderFile &&
+      requestShaderImport(shaderFile, source, (outcome) => {
+        if (outcome !== 'cancelled' && model) void loadMeshFile(model, { offerBuild: false });
+      })
+    ) {
+      return;
     }
 
     // Shader import FIRST (it clears/overwrites the mesh — see
@@ -2065,7 +2118,11 @@ export function ShaderPreview() {
   // rebuilds go through here — the postMessage hot-update channels below mutate
   // the live scene and must NOT flash it.
   useEffect(() => {
-    if (!containerReady) return;
+    // `waitingForBootMesh` is a GATE **and a dep**: while the hold is on there
+    // is no document to seed, and when it lifts nothing else in this list has
+    // to move — so without the dep the document that finally attaches would
+    // run with the refs never seeded for it.
+    if (!containerReady || waitingForBootMesh) return;
     // The fresh document runs the module it was baked with. Declared ABOVE the
     // hot-swap effect, so in a render that both rebuilds and edits, the swap's
     // bail already sees the new document's module and posts nothing.
@@ -2079,7 +2136,7 @@ export function ShaderPreview() {
     setCompiling(true);
     const id = setTimeout(() => setCompiling(false), COMPILE_OVERLAY_TIMEOUT_MS);
     return () => clearTimeout(id);
-  }, [previewHtml, bakedModule, bootAssetKeys, containerReady, clearHotSwapWait]);
+  }, [previewHtml, bakedModule, bootAssetKeys, containerReady, waitingForBootMesh, clearHotSwapWait]);
 
   /**
    * Send a module to the LIVE document and start waiting for its ack.
@@ -2136,11 +2193,15 @@ export function ShaderPreview() {
    */
   useEffect(() => {
     if (!HOT_SWAP_ENABLED) return;
-    if (!containerReady) return;
+    // Same gate as the rebuild effect, and for a sharper reason: during the
+    // boot hold the iframe is still `about:blank`, so a swap would post into
+    // nothing, advance `runningModuleRef` past a module no document is
+    // running, and arm the ack watchdog against a document that cannot ack.
+    if (!containerReady || waitingForBootMesh) return;
     if (previewModule === runningModuleRef.current) return;
     postShaderSwap(previewModule);
     return clearHotSwapWait;
-  }, [previewModule, bakedModule, containerReady, postShaderSwap, clearHotSwapWait]);
+  }, [previewModule, bakedModule, containerReady, waitingForBootMesh, postShaderSwap, clearHotSwapWait]);
 
   // A rebuild throws the old document away, so the animation controls must go
   // with it: the new one re-announces via fs:anim (or doesn't, if it has no
@@ -2687,9 +2748,35 @@ export function ShaderPreview() {
           </div>
         )}
         <iframe
+          // A cold rebuild REPLACES this element instead of rewriting
+          // `srcdoc` on it. That is the difference between a guaranteed fresh
+          // navigation and one that has to supersede whatever the element was
+          // already loading — and a ~1.65 MB bundle plus a WebGPU pre-flight
+          // means "already loading" lasts SECONDS, so the overlap is the
+          // normal case, not a corner. A rewrite that does not take leaves a
+          // document nothing can correct: `coldDocKey` has already moved to
+          // its new value, every later edit rides the HOT channel into
+          // whatever is live, and the ack watchdog is disarmed by the rebuild
+          // effect — the owner's dropped GLB reappearing as a sphere while the
+          // Model dropdown named the file (2026-09-19). The boot hold
+          // (bootMeshWait.ts) stops the overlap from arising at boot; this
+          // makes the case it cannot prevent — a mesh that lands after the
+          // hold's cap, i.e. the LARGEST models — degrade to a second
+          // navigation rather than to that bug.
+          //
+          // Cheap: the element being keyed is the one already being thrown
+          // away, the compiling overlay already covers the gap, and the
+          // destroyed window drops its own late postMessages (the handler
+          // identifies the sender by `contentWindow`).
+          key={coldDocKey}
           ref={iframeRef}
           className="shader-preview__iframe"
-          srcDoc={containerReady ? previewHtml : undefined}
+          // Held back twice: until the pane has real dimensions (a 0×0 WebGPU
+          // boot paints the mesh solid red), and — only on a boot that expects
+          // a dropped model — until the cache read has settled, so this iframe
+          // is never handed a document that is about to be replaced
+          // mid-navigation (bootMeshWait.ts).
+          srcDoc={containerReady && !waitingForBootMesh ? previewHtml : undefined}
           onLoad={handleIframeLoad}
           title={t('Shader Preview', language)}
           // User-pasted TSL becomes an ES module that runs inside this iframe.

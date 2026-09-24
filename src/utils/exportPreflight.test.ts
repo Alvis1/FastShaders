@@ -208,15 +208,22 @@ describe('export pre-flight: the three user surfaces are wired, the study is not
     expect(src).not.toMatch(/downloadShader\(\s*\)/);
   });
 
-  it("NEW's save-first finishes the pre-flight before newGraph(), and Cancel abandons NEW", () => {
+  it("NEW's export finishes the pre-flight before it claims a file, and never resets the graph", () => {
+    // The two used to be ONE callback, where a cancelled pre-flight `return`ed
+    // and so abandoned NEW as well. They are separate answers now: the export
+    // must still bail on a cancelled pre-flight — reporting FALSE, so the
+    // dialog does not say "Exported!" about a file nobody wrote — and it must
+    // not touch the graph, which is the other button's job.
     const src = read('components/NodeEditor/NodeEditor.tsx');
-    const start = src.indexOf('const startNewShader');
-    const reset = src.indexOf('newGraph()', start);
+    const start = src.indexOf('const exportCurrentShader');
+    const end = src.indexOf('const startNewShader');
     expect(start).toBeGreaterThan(-1);
-    expect(reset).toBeGreaterThan(start);
-    const body = src.slice(start, reset);
+    expect(end).toBeGreaterThan(start);
+    const body = src.slice(start, end);
     expect(body).toContain('await buildShaderExportChecked(');
-    expect(body).toContain('if (!bundle) return');
+    expect(body).toContain('if (!bundle) return false');
+    expect(body).toContain('downloadShader(bundle);');
+    expect(body).not.toContain('newGraph()');
     expect(src).not.toMatch(/downloadShader\(\s*\)/);
   });
 

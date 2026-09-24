@@ -22,7 +22,7 @@ import { readGltfModel } from '@/utils/gltfReader';
 import { imageRefFor } from '@/utils/imagePayloadRefs';
 import { contributingOutputs, indexSectionsAwake, isIndexSection, loadedModelOf, outputMaterials, readModelSignature } from '@/utils/outputMaterials';
 import { encodeDataUri } from '@/utils/glbContainer';
-import { FS_FIXTURE_MODULE_MARKER, makeFastShadersGlb, makeNode, makeRealPng, type FsGlbFixture } from '@/test-utils';
+import { HISTORY_IDLE, FS_FIXTURE_MODULE_MARKER, makeFastShadersGlb, makeNode, makeRealPng, type FsGlbFixture } from '@/test-utils';
 import type { AppNode } from '@/types';
 
 let ls: Record<string, string>;
@@ -36,6 +36,7 @@ function reset() {
     edges: [],
     past: [],
     future: [],
+    ...HISTORY_IDLE,
     code: '',
     previewMesh: null,
     previewMeshInventory: null,

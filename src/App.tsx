@@ -13,6 +13,7 @@ import {
 import { AppLayout } from './components/Layout/AppLayout';
 import { useSyncEngine } from './hooks/useSyncEngine';
 import { isEvalMode } from './eval/evalMode';
+import { installFileDropGuard } from './utils/fileDropGuard';
 import complexityData from './registry/complexity.json';
 import type { AppNode, AppEdge, OutputNodeData, ShaderNodeData } from './types';
 import { generateId } from './utils/idGenerator';
@@ -286,6 +287,12 @@ export default function App() {
   const initialized = useRef(false);
   // Desktop only: the file-store read runs before the graph is seeded.
   const [desktopBooting, setDesktopBooting] = useState<boolean>(__FS_DESKTOP__);
+
+  // A file dropped where nothing handles it is a NO-OP, never a navigation —
+  // Chromium's default is to open the file, which throws the unsaved graph
+  // away (utils/fileDropGuard.ts). Mounted for the life of the app, above
+  // every drop zone, and blind to internal tile drags.
+  useEffect(() => installFileDropGuard(), []);
 
   useEffect(() => {
     if (initialized.current) return;

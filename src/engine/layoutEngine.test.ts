@@ -4,6 +4,7 @@ import { makeNode, makeEdge } from '@/test-utils';
 import { COLOR_NODE_SIZE } from '@/components/NodeEditor/nodes/ColorNode';
 import type { AppNode, AppEdge } from '@/types';
 import { getCostScale } from '@/utils/colorUtils';
+import { edgePortRailHeight } from '@/components/NodeEditor/nodes/edgePorts';
 
 /** Top edge of a node in the laid-out graph. */
 function topOf(nodes: AppNode[], id: string): number {
@@ -188,9 +189,14 @@ describe('estimateNodeSize — the Output node', () => {
 });
 
 describe('estimateNodeSize — the Image node', () => {
-  // Restates layoutEngine's private constants on purpose: HEADER_H 20, ROW_H
-  // 16, the thumbnail's 126 and the empty slot's 54 (ShaderNode.css caps).
+  // Restates layoutEngine's private constants on purpose: HEADER_H 20, the
+  // thumbnail's 126 and the empty slot's 54 (ShaderNode.css caps), plus the
+  // 8px padding. The ROW_H term is GONE: the node draws no port rows since
+  // 2026-09-19 — its sockets ride the card's border — so the body is the
+  // picture, floored by the rail those sockets need (`edgePortRailHeight`,
+  // read from the renderer's own module, never restated here).
   const s = getCostScale(0);
+  const RAIL = edgePortRailHeight(6, 5); // the Image node's 6 inputs / 5 outputs
   const withImage = (id = 'i') =>
     makeNode(id, 'imageNode', { imageB64: 'data:image/png;base64,AAAA', fileName: 'x.png' });
   const exposing = (n: AppNode, ports: string[]) => {
@@ -198,24 +204,28 @@ describe('estimateNodeSize — the Image node', () => {
     return n;
   };
 
-  it('counts the thumbnail plus one row per output', () => {
-    expect(estimateNodeSize(withImage()).height).toBeGreaterThanOrEqual((20 + 126 + 5 * 16) * s);
+  it('counts the thumbnail and its filename, with no row per output', () => {
+    // 20 header + max(RAIL, 12 filename + 126 thumb + 8).
+    expect(estimateNodeSize(withImage()).height).toBeCloseTo((20 + Math.max(RAIL, 12 + 126 + 8)) * s, 5);
   });
 
-  it('an empty node counts the empty slot, and is smaller than one with an image', () => {
+  it('an empty node is floored by the socket rail, and is smaller than one with an image', () => {
+    // 54 + 8 is under the rail, so the FLOOR is what the empty node measures —
+    // which is the whole point of the floor: five sockets must fit.
     const empty = estimateNodeSize(makeNode('e', 'imageNode')).height;
-    expect(empty).toBeGreaterThanOrEqual((20 + 54 + 5 * 16) * s);
+    expect(empty).toBeCloseTo((20 + RAIL) * s, 5);
     expect(empty).toBeLessThan(estimateNodeSize(withImage()).height);
   });
 
-  it('exposed params share the output rows — three add nothing, all six add one', () => {
+  it('exposing a param changes nothing — an exposed socket is a rail slot, not a row', () => {
     const base = estimateNodeSize(withImage()).height;
     expect(estimateNodeSize(exposing(withImage(), ['uv', 'tileX', 'tileY'])).height).toBe(base);
     const all = ['uv', 'tileX', 'tileY', 'offsetX', 'offsetY', 'dir'];
-    expect(estimateNodeSize(exposing(withImage(), all)).height).toBe(base + 16 * s);
+    expect(estimateNodeSize(exposing(withImage(), all)).height).toBe(base);
   });
 
   it('is at least as wide as the thumbnail it will draw', () => {
     expect(estimateNodeSize(withImage()).width).toBeGreaterThanOrEqual(192 * s);
   });
 });
+

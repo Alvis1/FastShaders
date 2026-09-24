@@ -134,23 +134,37 @@ export function glbReportLineText(line: GlbReportLine, lang: Language): string {
  *  test sweeps the values. `{name}` is the quoted file name — the CALLER adds
  *  the quotes, the key never contains them. */
 export const GLB_IMPORT_KEYS = Object.freeze({
-  title: 'Build a shader from {name}?',
-  summary: 'Materials: {m}, textures: {t}.',
-  build: "Build a shader from this model's materials (replaces the current shader)",
-  modelOnly: 'Model only',
+  // NO `title` KEY: the dialog's heading is the model's FILE NAME, which is
+  // data, not copy — there is nothing to translate, and a '{name}' key could
+  // never satisfy the lv.json sweep (its translation is itself).
+  texturesLine: 'Textures: {t} (memory: {mb} MB)',
+  /** No memory estimate to show (nothing extractable) — the count alone. */
+  texturesLinePlain: 'Textures: {t}',
+  /** Past the section ceiling the estimate covers FEWER textures than the
+   *  model has, and a MB figure beside a count it does not cover is a lie the
+   *  reader cannot detect. Both numbers, then. */
+  texturesLinePartial: 'Textures: {t} ({n} imported, memory: {mb} MB)',
+  materialsLine: 'Materials: {m}',
+  importHeading: 'Import',
+  meshOnly: 'Only Mesh',
+  /** The two button TOOLTIPS. The dialog says what the model HAS; what each
+   *  answer DOES is on the answer itself, so the panel stays a header, two
+   *  facts and a question. */
+  meshOnlyTitle: 'Imports the model on its own. Its materials and textures are discarded, and the shader on the canvas is left exactly as it is.',
+  withMaterials: 'Mesh with Materials',
+  /** The texture budget FOLDS INTO the button rather than adding a third one. */
+  withMaterialsAt: 'Mesh with Materials ({res} px)',
   cancel: 'Cancel',
-  replaces: 'Building replaces the current shader. Undo (Ctrl+Z / ⌘Z) brings it back while this tab stays open.',
+  replaces:
+    'The model\u2019s materials become the shader: the current nodes, connections and board drawings are replaced, and the shader takes the model\u2019s name. Your palettes and tuned values stay. Undo (Ctrl+Z / ⌘Z) brings back the nodes, connections and drawings while this tab stays open.',
   modelReplaced: 'The current 3D model is replaced either way, and undo does not bring it back.',
-  memoryOne: 'Estimated texture memory on the headset: {mb} MB (1 texture).',
-  memoryMany: 'Estimated texture memory on the headset: {mb} MB ({n} textures).',
   budgetTitle: "Textures exceed this project's image budget",
   budgetMany:
-    "This model's {n} textures would take about {est} of the {remaining} still free. Import them at a reduced resolution, or import the model only.",
+    "This model's {n} textures would take about {est} of the {remaining} still free. Import them at a reduced resolution, or import only the mesh.",
   budgetOne:
-    "This model's texture would take about {est} of the {remaining} still free. Import it at a reduced resolution, or import the model only.",
-  importAt: 'Import at {res} px',
+    "This model's texture would take about {est} of the {remaining} still free. Import it at a reduced resolution, or import only the mesh.",
   budgetNothingFits:
-    "Even at {res} px this model's textures would take about {est} of the {remaining} still free. Import the model only, or reduce its textures in your 3D software first.",
+    "Even at {res} px this model's textures would take about {est} of the {remaining} still free. Import only the mesh, or reduce its textures in your 3D software first.",
   gateBlocked:
     "This model has {n} materials. Imports are limited to {limit} — each becomes an Output node with its own textures and draw calls. Turn on “Allow more than {limit} materials” in the toolbar's right-click list to import them all.",
   gateConfirm: 'Import all {n} materials? Each adds an Output node, textures and draw calls.',
@@ -180,8 +194,6 @@ export const GLB_RESTORE_KEYS = Object.freeze({
     'The shader code inside this model was changed after it was exported. Restoring uses its node graph, which does not include those changes.',
   assetsRefused: 'Embedded images that cannot be used: {n}',
   replacesRestore: 'Restoring replaces the current shader. Undo (Ctrl+Z / ⌘Z) brings it back while this tab stays open.',
-  replacesBoth:
-    'Restoring or building replaces the current shader. Undo (Ctrl+Z / ⌘Z) brings it back while this tab stays open.',
   unreadable: 'The shader stored in this model could not be read ({reason}).',
   refusalNotice: 'The shader stored in {name} could not be read ({reason}), so only the model was loaded.',
   restoredProject: 'Restored the shader and node graph from {name}',
@@ -224,13 +236,23 @@ export interface GlbDialogLine {
 }
 
 export interface GlbDialogCopy {
+  /** The model's file name — the dialog's heading. */
   title: string;
+  /** The fact rows under the heading: textures, then materials. */
+  facts: string[];
   lines: GlbDialogLine[];
-  /** The primary button's label, or null when nothing can be built. */
+  /** The heading over the two buttons. */
+  importHeading: string;
+  /** "Mesh with Materials", with the budget resolution folded in, or null
+   *  when nothing can be built. */
   primaryLabel: string | null;
   modelOnlyLabel: string;
-  /** Why "Model only" is refused (the file is over the model cap), or null. */
+  /** The Only Mesh tooltip — the refusal when there is one, else what it does. */
+  modelOnlyTitle: string;
+  /** Why "Only Mesh" is refused (the file is over the model cap), or null. */
   modelOnlyDisabledReason: string | null;
+  /** The Mesh with Materials tooltip: what pressing it does to the canvas. */
+  primaryTitle: string;
   cancelLabel: string;
   /** The progress line while building, else null. */
   progress: string | null;
@@ -269,7 +291,6 @@ export function glbDialogCopy(
   const building = plan.gate !== null;
   const name = '\u201c' + (facts ? facts.fileName : (opts.fileName ?? '')) + '\u201d';
   if (restore) {
-    lines.push({ text: T(restore.hasProject ? GLB_RESTORE_KEYS.summaryProject : GLB_RESTORE_KEYS.summaryModule), tone: 'normal' });
     if (restore.moduleEdited && restore.hasProject) lines.push({ text: T(GLB_RESTORE_KEYS.moduleEdited), tone: 'warn' });
     if (restore.assetsRefused > 0) {
       lines.push({ text: fillTemplate(T(GLB_RESTORE_KEYS.assetsRefused), { n: restore.assetsRefused }), tone: 'warn' });
@@ -281,48 +302,100 @@ export function glbDialogCopy(
     });
   }
   if (building) buildLines(plan, lines, lang);
-  lines.push({
-    text: T(restore ? (plan.primary !== null ? GLB_RESTORE_KEYS.replacesBoth : GLB_RESTORE_KEYS.replacesRestore) : GLB_IMPORT_KEYS.replaces),
-    tone: 'normal',
-  });
-  if (opts.hasModel) lines.push({ text: T(GLB_IMPORT_KEYS.modelReplaced), tone: 'normal' });
+
+  // WHAT EACH ANSWER DOES rides the answer, as a `title` the app-wide
+  // TooltipLayer raises — it is not a condition the user has to read before
+  // choosing, and in the middle of the panel it pushed the two buttons below
+  // the fold of a short window. Only WARNINGS stay in the body (`lines` is
+  // filtered to them below): those are things about THIS model that change
+  // what the answer will do.
+  const modelNote = opts.hasModel ? ' ' + T(GLB_IMPORT_KEYS.modelReplaced) : '';
+  const meshOnlyTitle = T(GLB_IMPORT_KEYS.meshOnlyTitle) + modelNote;
+  const withMaterialsTitle = T(GLB_IMPORT_KEYS.replaces) + modelNote;
+
+  // The two FACT rows of the redesigned header. They describe what the model
+  // HAS, so they are shown whenever a build is on the table — including the
+  // blocked gate, where the numbers are the whole explanation.
+  const facts2: string[] = [];
+  if (building) {
+    const mem = plan.memory;
+    facts2.push(
+      !mem
+        ? fillTemplate(T(GLB_IMPORT_KEYS.texturesLinePlain), { t: plan.textures })
+        : mem.count === plan.textures
+          ? fillTemplate(T(GLB_IMPORT_KEYS.texturesLine), {
+              t: plan.textures,
+              mb: formatMiB(mem.bytes, lang, 'up'),
+            })
+          : fillTemplate(T(GLB_IMPORT_KEYS.texturesLinePartial), {
+              t: plan.textures,
+              n: mem.count,
+              mb: formatMiB(mem.bytes, lang, 'up'),
+            }),
+    );
+    facts2.push(fillTemplate(T(GLB_IMPORT_KEYS.materialsLine), { m: plan.materials }));
+  }
+
+  // ONE primary: the budget's reduced resolution is FOLDED INTO its label
+  // rather than standing as a third button (the owner's rule for the
+  // two-button layout). `plan.primary` still decides whether a build is
+  // offered at all, and `plan.maxDim` still carries the resolution to the
+  // builder — only the wording moved.
   const budget = plan.budget;
   const primaryLabel =
     plan.primary === 'build'
-      ? T(GLB_IMPORT_KEYS.build)
+      ? T(GLB_IMPORT_KEYS.withMaterials)
       : plan.primary === 'import-at' && budget && !budget.fits && budget.importAt !== null
-        ? fillTemplate(T(GLB_IMPORT_KEYS.importAt), { res: budget.importAt })
+        ? fillTemplate(T(GLB_IMPORT_KEYS.withMaterialsAt), { res: budget.importAt })
         : null;
   return {
-    title: fillTemplate(T(restore ? GLB_RESTORE_KEYS.title : GLB_IMPORT_KEYS.title), { name }),
-    lines,
+    // A restore still ASKS a question — it replaces the project with code out
+    // of someone else's file, and the file name alone would not say so. Only
+    // the build dialog's heading is the bare name.
+    title: restore
+      ? fillTemplate(T(GLB_RESTORE_KEYS.title), { name })
+      : (facts ? facts.fileName : (opts.fileName ?? '')),
+    facts: facts2,
+    importHeading: T(GLB_IMPORT_KEYS.importHeading),
+    // Warnings and their headings only — see `withMaterialsTitle` above.
+    lines: lines.filter((l) => l.tone !== 'normal'),
     primaryLabel,
-    modelOnlyLabel: T(GLB_IMPORT_KEYS.modelOnly),
+    modelOnlyLabel: T(GLB_IMPORT_KEYS.meshOnly),
+    // The REFUSAL wins the tooltip when there is one: why the button cannot be
+    // pressed outranks what it would have done.
+    modelOnlyTitle: plan.modelOnlyRefusal ? meshRefusalMessage(plan.modelOnlyRefusal, lang) : meshOnlyTitle,
     modelOnlyDisabledReason: plan.modelOnlyRefusal ? meshRefusalMessage(plan.modelOnlyRefusal, lang) : null,
+    primaryTitle: withMaterialsTitle,
     cancelLabel: T(GLB_IMPORT_KEYS.cancel),
     progress:
       opts.phase === 'building' && opts.progress
         ? fillTemplate(T(GLB_IMPORT_KEYS.progress), { i: opts.progress.done, n: opts.progress.total })
         : null,
     restoreLabel: restore ? T(GLB_RESTORE_KEYS.restore) : null,
-    restoreTitle: restore ? T(GLB_RESTORE_KEYS.restoreTitle) : null,
+    // The restore's summary sentence joins its own tooltip for the same
+    // reason the build's did.
+    // Its summary AND its replace warning: with each answer explaining itself,
+    // `replacesBoth` (the old combined sentence) has nothing left to combine —
+    // the build no longer replaces anything.
+    restoreTitle: restore
+      ? [
+          T(GLB_RESTORE_KEYS.restoreTitle),
+          T(restore.hasProject ? GLB_RESTORE_KEYS.summaryProject : GLB_RESTORE_KEYS.summaryModule),
+          T(GLB_RESTORE_KEYS.replacesRestore),
+        ].join(' ')
+      : null,
   };
 }
 
-/** The build half of the dialog's lines (summary, N12, N11, N9), unchanged from Phase 5. */
+/**
+ * The build half of the dialog's WARNING lines (N11, N9).
+ *
+ * The counts and the memory estimate that used to lead this list are now the
+ * header's two FACT rows (`GlbDialogCopy.facts`) — the redesign puts them
+ * under the file name, above the Import heading, rather than in the prose.
+ */
 function buildLines(plan: GlbDialogPlan, lines: GlbDialogLine[], lang: Language): void {
   const T = (key: string) => t(key, lang);
-  lines.push({ text: fillTemplate(T(GLB_IMPORT_KEYS.summary), { m: plan.materials, t: plan.textures }), tone: 'normal' });
-  if (plan.memory) {
-    const mb = formatMiB(plan.memory.bytes, lang, 'up');
-    lines.push({
-      text:
-        plan.memory.count === 1
-          ? fillTemplate(T(GLB_IMPORT_KEYS.memoryOne), { mb })
-          : fillTemplate(T(GLB_IMPORT_KEYS.memoryMany), { mb, n: plan.memory.count }),
-      tone: 'normal',
-    });
-  }
   const gate = plan.gate;
   if (gate?.state === 'blocked') {
     lines.push({ text: fillTemplate(T(GLB_IMPORT_KEYS.gateBlocked), { n: gate.n, limit: gate.limit }), tone: 'warn' });

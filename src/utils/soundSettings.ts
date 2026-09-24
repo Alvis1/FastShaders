@@ -21,6 +21,8 @@
  * the capture path, so the clamp is load-bearing, not cosmetic.
  */
 
+import { valueNum } from './valueCoerce';
+
 /** Allowed FFT sizes. Larger = finer bands but more latency and CPU. */
 export const MIC_FFT_SIZES = [512, 1024, 2048] as const;
 
@@ -69,7 +71,7 @@ export const SOUND_DEFAULT_VALUES: Record<string, number> = {
 };
 
 function clampNum(raw: unknown, min: number, max: number, fallback: number): number {
-  const n = Number(raw);
+  const n = valueNum(raw);
   if (!Number.isFinite(n)) return fallback;
   return n < min ? min : n > max ? max : n;
 }
@@ -83,7 +85,7 @@ function clampNum(raw: unknown, min: number, max: number, fallback: number): num
  */
 export function readSoundSettings(values: Record<string, unknown> | undefined | null): SoundSettings {
   const v = values ?? {};
-  const rawFft = Number(v.fftSize);
+  const rawFft = valueNum(v.fftSize);
   const fftSize: MicFftSize = MIC_FFT_SIZES.includes(rawFft as MicFftSize)
     ? (rawFft as MicFftSize)
     : MIC_SETTINGS_DEFAULTS.fftSize;

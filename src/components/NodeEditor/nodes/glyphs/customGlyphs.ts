@@ -229,7 +229,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     "width": 49,
     "height": 105,
     "sockets": {
-      "out": -52,
+      "out": 0,
       "channel": -44,
       "rotation": 40,
       "tilingV": 24,

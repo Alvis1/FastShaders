@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useAppStore } from '@/store/useAppStore';
-import { makeNode, makeEdge } from '@/test-utils';
+import { HISTORY_IDLE, makeNode, makeEdge } from '@/test-utils';
 import type { AppNode } from '@/types';
 
 /**
@@ -26,8 +26,7 @@ describe('organizeSelection', () => {
       edges: [],
       past: [],
       future: [],
-      isUndoRedo: false,
-      coalescingHistory: false,
+      ...HISTORY_IDLE,
     });
   });
 

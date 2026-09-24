@@ -11,6 +11,7 @@
  * would think a vec3 chain was actually a float.
  */
 import type { AppNode, AppEdge, TSLDataType, NodeDefinition } from '@/types';
+import { valueNum, valueStr } from '@/utils/valueCoerce';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { perlin2D, fbm2D, cellNoise2D, voronoi2D } from '@/utils/noisePreview';
@@ -753,7 +754,7 @@ function evaluate(
     case 'int':
     case 'property_float':
     case 'slider':
-      result = [Number(values.value ?? 0)];
+      result = [valueNum(values.value ?? 0)];
       break;
     case 'screenUV':
       result = [0.5, 0.5]; // center of screen as default
@@ -788,7 +789,7 @@ function evaluate(
       break;
     case 'color':
     case 'property_color': {
-      const hex = String(values.hex ?? '#ff0000');
+      const hex = valueStr(values.hex ?? '#ff0000');
       result = [...hexToRgb01(hex)];
       break;
     }

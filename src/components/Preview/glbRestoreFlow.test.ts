@@ -101,23 +101,25 @@ describe('glbDialogCopy — restore', () => {
   const copy = (plan: ReturnType<typeof planGlbImportDialog>, facts: GlbImportFacts | null, hasModel = false) =>
     glbDialogCopy(plan, facts, { hasModel, phase: 'ask', progress: null, fileName: 'x.glb' }, 'en');
 
-  it('restore only: the restore title, summary, replace line and button; no build words', () => {
+  it('restore only: the title asks, and its summary + replace warning ride the BUTTON', () => {
     const c = copy(planGlbImportDialog(null, CTX, { fact: FACT, refusal: null }), null);
     expect(c.title).toBe('Restore the shader stored in “x.glb”?');
-    expect(c.lines.map((l) => l.text)).toEqual([GLB_RESTORE_KEYS.summaryProject, GLB_RESTORE_KEYS.replacesRestore]);
+    // The body carries WARNINGS only now; what the answer does is its tooltip.
+    expect(c.lines).toEqual([]);
     expect(c.primaryLabel).toBeNull();
     expect(c.restoreLabel).toBe(GLB_RESTORE_KEYS.restore);
-    expect(c.restoreTitle).toBe(GLB_RESTORE_KEYS.restoreTitle);
+    expect(c.restoreTitle).toContain(GLB_RESTORE_KEYS.restoreTitle);
+    expect(c.restoreTitle).toContain(GLB_RESTORE_KEYS.summaryProject);
+    expect(c.restoreTitle).toContain(GLB_RESTORE_KEYS.replacesRestore);
   });
 
   it('module only, edited and with refused images: the module summary and the images warning, never the edited one', () => {
     const fact = { hasProject: false, hasModule: true, moduleEdited: true, assetsRefused: 2 };
     const c = copy(planGlbImportDialog(null, CTX, { fact, refusal: null }), null);
     expect(c.lines.map((l) => [l.text, l.tone])).toEqual([
-      [GLB_RESTORE_KEYS.summaryModule, 'normal'],
       ['Embedded images that cannot be used: 2', 'warn'],
-      [GLB_RESTORE_KEYS.replacesRestore, 'normal'],
     ]);
+    expect(c.restoreTitle).toContain(GLB_RESTORE_KEYS.summaryModule);
   });
 
   it('with the project, an edited module adds its warning', () => {
@@ -125,13 +127,18 @@ describe('glbDialogCopy — restore', () => {
     expect(c.lines.map((l) => l.text)).toContain(GLB_RESTORE_KEYS.moduleEdited);
   });
 
-  it('both: the restore lines, then the build lines, then the combined replace line and the model line', () => {
+  it('both offered: each answer explains ITSELF, and the body stays empty', () => {
     const c = copy(planGlbImportDialog(buildable(), CTX, { fact: FACT, refusal: null }), buildable(), true);
-    const texts = c.lines.map((l) => l.text);
-    expect(texts[0]).toBe(GLB_RESTORE_KEYS.summaryProject);
-    expect(texts[1]).toBe('Materials: 1, textures: 1.');
-    expect(texts.slice(-2)).toEqual([GLB_RESTORE_KEYS.replacesBoth, GLB_IMPORT_KEYS.modelReplaced]);
-    expect(c.primaryLabel).toBe(GLB_IMPORT_KEYS.build);
+    // The build's counts are the header's FACT rows now, not prose lines.
+    expect(c.facts).toEqual([expect.stringMatching(/^Textures: 1 \(memory: .* MB\)$/), 'Materials: 1']);
+    expect(c.lines).toEqual([]);
+    expect(c.primaryLabel).toBe(GLB_IMPORT_KEYS.withMaterials);
+    // The build tooltip promises the canvas survives; the restore's says it
+    // replaces. There is no combined sentence any more, because the two
+    // answers no longer do the same thing to the graph.
+    expect(c.primaryTitle).toContain(GLB_IMPORT_KEYS.replaces);
+    expect(c.primaryTitle).toContain(GLB_IMPORT_KEYS.modelReplaced);
+    expect(c.restoreTitle).toContain(GLB_RESTORE_KEYS.replacesRestore);
     expect(c.restoreLabel).toBe(GLB_RESTORE_KEYS.restore);
     expect(c.title).toContain('Restore');
   });
@@ -139,9 +146,11 @@ describe('glbDialogCopy — restore', () => {
   it('build with a refused stored shader: one warning line, the build title, no restore button', () => {
     const c = copy(planGlbImportDialog(buildable(), CTX, { fact: null, refusal: 'unsupported-version' }), buildable());
     expect(c.lines[0]).toEqual({ text: 'The shader stored in this model could not be read (it was saved by a newer FastShaders).', tone: 'warn' });
-    expect(c.title).toBe('Build a shader from “m.glb”?');
+    // A build dialog's heading is the bare file name; only a RESTORE still
+    // asks a question, because it replaces the project with someone else's code.
+    expect(c.title).toBe('m.glb');
     expect(c.restoreLabel).toBeNull();
-    expect(c.lines.map((l) => l.text)).toContain(GLB_IMPORT_KEYS.replaces);
+    expect(c.primaryTitle).toContain(GLB_IMPORT_KEYS.replaces);
   });
 });
 

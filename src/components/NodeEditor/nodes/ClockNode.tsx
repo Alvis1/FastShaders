@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, type CSSProperties } from 'react';
 import { Position, useStore, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import type { ShaderFlowNode, NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { valueNum } from '@/utils/valueCoerce';
 import { useAppStore } from '@/store/useAppStore';
 import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
 import { TypedHandle } from '../handles/TypedHandle';
@@ -65,7 +66,7 @@ export const ClockNode = memo(function ClockNode({
   // Speed multiplier (Node Settings → speed). Adversarial input: a missing key,
   // a string, NaN or ±Infinity must all read as 1x — and with a phase
   // accumulator a single NaN would poison the hand permanently.
-  const rawSpeed = Number(data.values?.speed);
+  const rawSpeed = valueNum(data.values?.speed);
   const speed = Number.isFinite(rawSpeed) ? rawSpeed : 1;
 
   // `speed` is an opt-in parameter socket, exactly like the noise nodes'

@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { GLB_READ_MAX_BYTES } from '@/utils/gltfCompression';
 import { READ_MAX_TOTAL_UNCOMPRESSED } from '@/utils/zipReader';
+import { projectDocs } from '../../projectDocs';
 
 const read = (p: string) => readFileSync(resolve(__dirname, p), 'utf8');
 const MODAL = read('GlbImportModal.tsx');
@@ -21,7 +22,7 @@ const TOOLBAR = read('../Layout/Toolbar.tsx');
 const EVAL_GATE = read('../../eval/EvalGate.tsx');
 const STORE = read('../../store/useAppStore.ts');
 const LIMITS = read('../../utils/glbImportLimits.ts');
-const CLAUDE = readFileSync(resolve(__dirname, '../../../CLAUDE.md'), 'utf8');
+const CLAUDE = projectDocs();
 
 /** Strip block and line comments, so a pin cannot be satisfied by prose. */
 function codeOnly(src: string): string {
@@ -69,18 +70,41 @@ describe('GlbImportModal', () => {
     const at = code.indexOf('ref={modelOnlyRef}');
     const btn = code.slice(at, code.indexOf('</button>', at));
     expect(btn).toContain('aria-disabled={modelOnlyBlocked || undefined}');
-    expect(btn).toContain('title={copy.modelOnlyDisabledReason ?? undefined}');
+    expect(btn).toContain('title={copy.modelOnlyTitle}');
     expect(btn).toContain("if (!modelOnlyBlocked) onChoose('model')");
   });
 
-  it('the primary is rendered only with a label, and the buttons are Cancel / Model only / primary', () => {
+  it('the build is rendered only with a label, and DOM order is reading order', () => {
     expect(code).toContain('{copy.primaryLabel && (');
-    const cancel = code.indexOf("onClick={() => onChoose('cancel')}");
+    // Only Mesh, Mesh with Materials, [Restore], Cancel — so Tab walks the
+    // dialog the way it reads and the answer that changes nothing is last.
+    // This inverts the old order, where Cancel came first.
     const model = code.indexOf('ref={modelOnlyRef}');
     const primary = code.indexOf("onClick={() => onChoose('build')}");
-    expect(cancel).toBeGreaterThan(-1);
-    expect(model).toBeGreaterThan(cancel);
+    const restore = code.indexOf("onClick={() => onChoose('restore')}");
+    const cancel = code.indexOf("onClick={() => onChoose('cancel')}", primary);
+    expect(model).toBeGreaterThan(-1);
     expect(primary).toBeGreaterThan(model);
+    expect(restore).toBeGreaterThan(primary);
+    expect(cancel).toBeGreaterThan(restore);
+  });
+
+  it('what each answer DOES is a tooltip, not a paragraph in the panel', () => {
+    // The body renders `copy.lines`, which the copy module filters to
+    // warnings; the prose that used to sit between the facts and the buttons
+    // now rides the buttons.
+    expect(code).toContain('title={copy.primaryTitle}');
+    expect(code).toContain('title={copy.modelOnlyTitle}');
+  });
+
+  it('the two answers are EQUAL plates and Cancel is not a plate at all', () => {
+    // A dialog whose two answers look different has already recommended one.
+    // The layout is SHARED with the NEW dialog (CsvImportModal.css), so the
+    // two questions with two answers cannot drift apart.
+    const choices = code.split('csv-import-modal__choice"').length - 1;
+    expect(choices).toBeGreaterThanOrEqual(2);
+    expect(code).toContain('csv-import-modal__button--yes csv-import-modal__choice');
+    expect(code).toContain('className="csv-import-modal__cancel"');
   });
 });
 
@@ -96,10 +120,14 @@ describe('useGlbImport', () => {
     expect(branch).not.toContain('dispatchEvent');
   });
 
-  it('Build commits exactly once and posts ONE report note', () => {
+  it('Mesh with Materials commits exactly once and posts ONE report note', () => {
     expect(code).toContain("import { commitGlbImport, importShaderGlb } from '@/engine/projectImport'");
     expect(code.split('commitGlbImport(')).toHaveLength(2); // exactly one call
     expect(code).toContain('showImportNote(glbImportReportLines(r.report))');
+    // There is ONE commit path again: the non-destructive splice and its
+    // second store-writing path were removed when "remove the current shader"
+    // became the rule (owner, 2026-09-19).
+    expect(code).not.toContain('commitGlbImportMerged');
   });
 
   it('a second drop while open is refused with the busy notice; the reader refusal is an info line', () => {

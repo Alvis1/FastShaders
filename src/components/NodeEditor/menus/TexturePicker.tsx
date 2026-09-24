@@ -7,10 +7,13 @@ import type { ImageConvertMode } from '@/utils/imageImport';
 import {
   projectTextureSources,
   textureSourcesKey,
+  mergeTextureSources,
+  textureSourceKey,
   MAX_LISTED_TEXTURE_SOURCES,
   type TextureSource,
 } from '@/utils/textureSources';
 import { rowStyle, labelStyle, wideFieldStyle, fieldStyle, hintStyle } from './menuShared';
+import { useModelTextures } from './useModelTextures';
 
 /** The row button reads like the other wide fields but never wraps: a long
  *  file name is clipped, and its full spelling is the button's title. */
@@ -26,21 +29,54 @@ const pickerButtonStyle = {
 const answerStyle = { ...fieldStyle, width: 'auto', cursor: 'pointer' } as const;
 
 /**
- * The `<img src>` a grid cell shows. Only a 'project' source exists today and
- * its `dataUrl` was whitelist-checked when `projectTextureSources` built it.
- * Phase 5's 'model' kind will need a display URL distinct from its payload (it
- * is not materialised until picked), so the `never` default makes that kind
- * fail to compile here until it says what to show.
+ * The `<img src>` a grid cell shows, or '' while there is nothing to show.
+ *
+ * A 'project' source IS its payload, whitelist-checked when
+ * `projectTextureSources` built it. A 'model' source has no payload until it
+ * is picked, so its cell shows a small thumbnail the picker encoded through
+ * the import's own encoder (`useModelTextures`) — a display URL distinct from
+ * the payload, exactly as the source-kind contract requires. '' until that
+ * arrives, or if the encoder refused the picture; the cell then draws its name
+ * and stays clickable, and the pick reports the same refusal.
+ *
+ * The `never` default makes a third kind fail to compile here until it says
+ * what to show.
  */
-function thumbnailUrl(src: TextureSource): string {
+function thumbnailUrl(src: TextureSource, modelThumbs: ReadonlyMap<number, string>): string {
   switch (src.kind) {
     case 'project':
       return src.dataUrl;
+    case 'model':
+      return modelThumbs.get(src.image) ?? '';
     default: {
-      // `src.kind` narrows to never here; `src` itself would not while the
-      // union has one member.
-      const unhandled: never = src.kind;
-      return unhandled;
+      const unhandled: never = src;
+      return String(unhandled);
+    }
+  }
+}
+
+/** Compact byte size for a hover title. Not `formatMiB` (utils/formatSize.ts):
+ *  that one rounds UP to whole MiB for the storage limits, which prints every
+ *  texture as "1 MiB". */
+function compactBytes(n: number): string {
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+
+/** A cell's hover text: the picture's name and, when known, its size. A model
+ *  source adds the encoded byte size, because "which of these four 2048px maps
+ *  is the big one" is the question the grid cannot answer by eye. */
+function cellTitle(src: TextureSource): string {
+  switch (src.kind) {
+    case 'project':
+      return `${displayImageFileName(src.fileName, src.dataUrl)} — ${src.width} × ${src.height}`;
+    case 'model': {
+      const dims = src.width && src.height ? ` — ${src.width} × ${src.height}` : '';
+      return `${src.fileName}${dims} — ${compactBytes(src.byteLength)}`;
+    }
+    default: {
+      const unhandled: never = src;
+      return String(unhandled);
     }
   }
 }
@@ -60,7 +96,8 @@ interface Props {
 
 /**
  * The Image node's "Texture" row: a button that expands an inline thumbnail
- * grid of every image the project already holds, plus "From file…".
+ * grid of every image the project already holds AND every picture still inside
+ * the loaded 3D model, plus "From file…".
  *
  * Settings-menu only — never an on-node control (the thumbnail stays a
  * picture, and a press on it selects or drags the node like any card body) —
@@ -72,7 +109,15 @@ interface Props {
  * open: the subscription is `textureSourcesKey` (a string, so a drag frame —
  * which replaces the nodes array — bails on `Object.is`), and the list itself
  * is rebuilt from `getState()` when that key moves. Closed, the key is '' and
- * the row costs nothing.
+ * the row costs nothing. The MODEL half works the same way behind
+ * `useModelTextures`, on its own key.
+ *
+ * PROJECT sources come FIRST and win a tie (`mergeTextureSources` keeps the
+ * first record for a key). They cannot actually collide — the two kinds are
+ * identified by different things — but the order is the point: after a "Mesh
+ * with Materials" import every built texture is already an Image node, and
+ * offering the node that HOLDS the pixels before the picture that would have
+ * to be encoded again is one click instead of a re-encode.
  *
  * "From file…" runs the canvas drop's pipeline into THIS node (the caller's
  * `onFile`). The drop asks its convert-or-keep question in a dialog; here the
@@ -89,12 +134,35 @@ export function TexturePicker({ currentUrl, currentName, disabled, loading, onPi
   const fileRef = useRef<HTMLInputElement>(null);
 
   const key = useAppStore((s) => (open ? textureSourcesKey(s.nodes) : ''));
-  const sources = useMemo(
+  const projectSources = useMemo(
     () => (open ? projectTextureSources(useAppStore.getState().nodes) : []),
     // `key` IS the subscription: the list is rebuilt when it moves.
     [open, key],
   );
-  const shown = sources.slice(0, MAX_LISTED_TEXTURE_SOURCES);
+  const model = useModelTextures(open);
+  const sources = useMemo(
+    () => mergeTextureSources(projectSources, model.sources),
+    [projectSources, model.sources],
+  );
+  /**
+   * The cells, project sources first — but never ALL project sources.
+   *
+   * The cap bounds decode cost, and a plain `slice(0, 64)` cuts from the END,
+   * which is where the model's pictures are. A 16-material GLB imported as
+   * "Mesh with Materials" can leave 64+ Image nodes in the project, and the
+   * grid would then show not one of the model's own textures — the exact thing
+   * this row was extended to offer. So the model's list keeps up to HALF the
+   * grid whenever the project's would otherwise fill it; with few project
+   * images nothing is reserved and the order is unchanged.
+   */
+  const shown = useMemo(() => {
+    if (sources.length <= MAX_LISTED_TEXTURE_SOURCES) return sources;
+    const modelCount = sources.filter((s) => s.kind === 'model').length;
+    const reserved = Math.min(modelCount, Math.floor(MAX_LISTED_TEXTURE_SOURCES / 2));
+    const project = sources.filter((s) => s.kind === 'project').slice(0, MAX_LISTED_TEXTURE_SOURCES - reserved);
+    const models = sources.filter((s) => s.kind === 'model').slice(0, MAX_LISTED_TEXTURE_SOURCES - project.length);
+    return [...project, ...models];
+  }, [sources]);
 
   const chooseFile = (file: File) => {
     if (convertMode === 'always') onFile(file, 'convert');
@@ -137,24 +205,44 @@ export function TexturePicker({ currentUrl, currentName, disabled, loading, onPi
         <>
           {shown.length === 0 ? (
             <div style={rowStyle}>
-              <span style={hintStyle}>{t('No images in this project yet.', language)}</span>
+              <span style={hintStyle}>
+                {model.loading
+                  ? t('Reading the model’s textures…', language)
+                  : t('No images in this project yet.', language)}
+              </span>
             </div>
           ) : (
             <div className="context-menu__texture-grid" role="listbox" aria-label={t('Texture', language)}>
-              {shown.map((s, i) => (
-                <button
-                  key={`${s.kind}:${s.holderIds[0] ?? i}`}
-                  type="button"
-                  className="context-menu__texture-cell"
-                  role="option"
-                  aria-selected={s.dataUrl === currentUrl}
-                  disabled={disabled}
-                  title={`${displayImageFileName(s.fileName, s.dataUrl)} — ${s.width} × ${s.height}`}
-                  onClick={() => onPick(s)}
-                >
-                  <img src={thumbnailUrl(s)} alt="" draggable={false} decoding="async" loading="lazy" />
-                </button>
-              ))}
+              {shown.map((s) => {
+                const url = thumbnailUrl(s, model.thumbs);
+                return (
+                  <button
+                    key={textureSourceKey(s)}
+                    type="button"
+                    className="context-menu__texture-cell"
+                    role="option"
+                    // A model source is never "the current one": this node
+                    // holds an encoded COPY, and an index into a file is not a
+                    // payload to compare against.
+                    aria-selected={s.kind === 'project' && s.dataUrl === currentUrl}
+                    disabled={disabled}
+                    title={cellTitle(s)}
+                    onClick={() => onPick(s)}
+                  >
+                    {url ? (
+                      <img src={url} alt="" draggable={false} decoding="async" loading="lazy" />
+                    ) : (
+                      /* A model picture whose thumbnail has not arrived (or
+                         that the encoder refused): the cell keeps its place
+                         and stays clickable rather than popping in later and
+                         moving every cell after it. */
+                      <span className="context-menu__texture-pending" aria-hidden>
+                        {model.loading ? '…' : '×'}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           )}
           {sources.length > MAX_LISTED_TEXTURE_SOURCES && (

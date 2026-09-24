@@ -28,6 +28,8 @@
  * A LEAF: it imports nothing.
  */
 
+import { valueStr, valueNum } from './valueCoerce';
+
 export interface ImageTextureSpec {
   /** `'data'` turns mipmaps off and stores linear values (NoColorSpace). */
   readonly colorSpace: 'color' | 'data';
@@ -43,13 +45,13 @@ export interface ImageTextureSpec {
 export function readImageTextureSpec(values: Record<string, unknown>): ImageTextureSpec {
   // An exact compare: only the literal string 'data' is a data map, so 'DATA',
   // a number or an absent key all read as a colour image.
-  const colorSpace = String(values.colorSpace ?? 'color') === 'data' ? 'data' : 'color';
+  const colorSpace = valueStr(values.colorSpace ?? 'color') === 'data' ? 'data' : 'color';
   // Exact again: anything but the literal string is linear, absent included.
   const nearest = values.filter === 'nearest';
   // A non-finite number (absent, NaN, 'x') falls back to 1 = repeat, while
   // null, '' and 0 coerce to 0 = clamp. That asymmetry is the historical read
   // (graphToCode's `numVal('repeat', 1) >= 0.5`), kept exactly.
-  const r = Number(values.repeat);
+  const r = valueNum(values.repeat);
   const repeat = (Number.isFinite(r) ? r : 1) >= 0.5;
   // glTF textures are stored top-down and uploaded unflipped — GLTFLoader's
   // `texture.flipY = false`. The rule is readImageUvMapping's

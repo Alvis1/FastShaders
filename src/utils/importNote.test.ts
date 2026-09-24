@@ -220,8 +220,10 @@ describe('announceExportDelivered runs only after delivery', () => {
     expect(toolbar).toContain('if (bundle) downloadShader(bundle);');
     expect(toolbar).not.toContain('announceExportDelivered(');
     const editor = read('components/NodeEditor/NodeEditor.tsx');
-    const newShader = slice(editor, 'const startNewShader', 'newGraph()');
-    expect(newShader).toContain('downloadShader(bundle);');
+    // NEW's export is its OWN answer now ("Export Current"), so it is its own
+    // callback — `startNewShader` no longer exports at all.
+    const exportCurrent = slice(editor, 'const exportCurrentShader', 'const startNewShader');
+    expect(exportCurrent).toContain('downloadShader(bundle);');
     expect(editor).not.toContain('announceExportDelivered(');
   });
 

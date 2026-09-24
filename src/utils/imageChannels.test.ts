@@ -22,11 +22,17 @@ describe('imageChannels — the ONE table', () => {
     expect([...IMAGE_CHANNEL_INDEX.keys()].sort()).toEqual([...IMAGE_CHANNEL_COMPONENTS.keys()].sort());
   });
 
-  it('lists the sockets in the registry order that follows `out`: alpha, r, g, b', () => {
+  it('lists the sockets in the registry order that follows `out`: r, g, b, alpha', () => {
     // engine/imageChannelSockets.test.ts pins the registry's output ids
     // against this order directly (and registry/imageNodeAddable.test.ts).
-    expect([...IMAGE_CHANNEL_COMPONENTS.keys()]).toEqual(['alpha', 'r', 'g', 'b']);
-    expect([...IMAGE_CHANNEL_COMPONENTS.values()]).toEqual(['a', 'r', 'g', 'b']);
+    //
+    // It was alpha-FIRST until 2026-09-19. Nothing in production iterates this
+    // Map — every read is `.get`/`.has` — so the move changed no emitted byte;
+    // what it changed is the order the four channel sockets sit in on the
+    // node, which is now the order every format the user already reads writes
+    // them in (RGBA, `#rrggbbaa`, an ORM map's r/g/b).
+    expect([...IMAGE_CHANNEL_COMPONENTS.keys()]).toEqual(['r', 'g', 'b', 'alpha']);
+    expect([...IMAGE_CHANNEL_COMPONENTS.values()]).toEqual(['r', 'g', 'b', 'a']);
   });
 
   it('never names `out` — the Color socket is the RGB run, not a channel', () => {

@@ -335,3 +335,17 @@
   object-fit: contain;
   display: block;
 }
+
+/* A MODEL texture whose thumbnail has not been encoded yet, or that the
+   encoder refused. The cell keeps its size either way: a picture appearing
+   later must not re-flow the grid under the pointer, and a refused one stays
+   clickable so the click can report WHY. */
+.context-menu .context-menu__texture-pending {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}

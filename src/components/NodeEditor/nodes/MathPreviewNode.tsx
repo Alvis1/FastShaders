@@ -3,6 +3,7 @@ import { Position, useStore, type NodeProps } from '@xyflow/react';
 import { makeConnectionRevealSelector } from './connectionReveal';
 import type { MathPreviewFlowNode, NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { valueNum } from '@/utils/valueCoerce';
 import { useAppStore } from '@/store/useAppStore';
 import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
 import { TypedHandle } from '../handles/TypedHandle';
@@ -120,7 +121,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
     : [null, null];
   const hasTime = xKey.charCodeAt(0) === 49; // '1' — ''.charCodeAt(0) is NaN
 
-  const inputX = Number(data.values?.x ?? 0);
+  const inputX = valueNum(data.values?.x ?? 0);
 
   // Animated branch: the WaveformSvg's initial render is declarative (it also
   // fully covers the static branches), and this loop only OVERWRITES the

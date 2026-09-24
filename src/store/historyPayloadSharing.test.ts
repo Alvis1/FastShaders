@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { useAppStore, cancelPendingGraphSave } from '@/store/useAppStore';
-import { makeNode } from '@/test-utils';
+import { HISTORY_IDLE, makeNode } from '@/test-utils';
 import type { AppNode } from '@/types';
 
 /**
@@ -47,8 +47,7 @@ describe('history carries big node payloads by reference', () => {
       edges: [],
       past: [],
       future: [],
-      isUndoRedo: false,
-      coalescingHistory: false,
+      ...HISTORY_IDLE,
     });
   });
 
@@ -112,8 +111,7 @@ describe('a no-op pushHistory does not notify subscribers', () => {
       edges: [],
       past: [],
       future: [],
-      isUndoRedo: false,
-      coalescingHistory: false,
+      ...HISTORY_IDLE,
     });
   });
 

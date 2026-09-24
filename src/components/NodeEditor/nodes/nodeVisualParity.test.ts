@@ -54,7 +54,7 @@ describe('node-visual parity across surfaces', () => {
     // showed none (GLB Phase 4). One function now serves both surfaces.
     expect(read('./ShaderNode.tsx')).not.toContain("registryType !== 'imageNode') return def");
     const rows = buildRows(effectiveNodeDef(NODE_REGISTRY.get('imageNode')!, []));
-    expect(rows.map((r) => r.output?.id)).toEqual(['out', 'alpha', 'r', 'g', 'b']);
+    expect(rows.map((r) => r.output?.id)).toEqual(['out', 'r', 'g', 'b', 'alpha']);
     for (const r of rows) {
       expect(r.input).toBeNull();
       expect(r.settingKey).toBeNull();

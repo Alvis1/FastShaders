@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { useAppStore, cancelPendingGraphSave } from '@/store/useAppStore';
-import { makeNode } from '@/test-utils';
+import { HISTORY_IDLE, makeNode } from '@/test-utils';
 import type { AppNode } from '@/types';
 
 // isolate: false shares this worker's globals with later files — restore the
@@ -43,8 +43,7 @@ beforeEach(() => {
     edges: [],
     past: [],
     future: [],
-    isUndoRedo: false,
-    coalescingHistory: false,
+    ...HISTORY_IDLE,
   });
 });
 

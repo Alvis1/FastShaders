@@ -24,3 +24,32 @@
   color: var(--text-secondary);
   margin-top: var(--space-2);
 }
+
+/* ── the two-answer layout (the owner's sketch, 2026-09-19) ─────────────────
+   The heading is the model's FILE NAME, then the two fact rows, then an
+   "Import" heading over two equal green plates, with Cancel as red text
+   below. The plates reuse `--yes` rather than minting a second green: the app
+   has ONE affirmative plate (#cdeab0), shared with the canvas NEW button. */
+
+/* The file name, centred and allowed to wrap — a model's name can be long,
+   and truncating the one thing that says WHICH file this is would be the
+   wrong economy. */
+.glb-import-modal__name {
+  text-align: center;
+  font-size: var(--font-size-md);
+}
+
+.glb-import-modal__facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-2) 0;
+}
+
+.glb-import-modal__heading {
+  text-align: center;
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: var(--space-3) 0 var(--space-2);
+}

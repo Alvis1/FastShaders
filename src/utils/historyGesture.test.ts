@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { asOneHistoryEntry } from './historyGesture';
 import { toggleExposedPort } from './exposedPorts';
 import { useAppStore, setGraphPersistence, cancelPendingGraphSave } from '@/store/useAppStore';
-import { makeNode, makeEdge } from '../test-utils';
+import { HISTORY_IDLE, makeNode, makeEdge } from '../test-utils';
 import type { ShaderNodeData } from '@/types';
 
 // Mirrors edgeUtils.test.ts — this block mutates the LIVE store and
@@ -21,8 +21,7 @@ describe('asOneHistoryEntry', () => {
     useAppStore.setState({
       nodes: [makeNode('f1', 'float', { value: 1 }), img],
       edges: [makeEdge('f1', 'out', 'img1', 'uv')],
-      past: [], future: [], isUndoRedo: false,
-      coalescingHistory: false, interactionDepth: 0,
+      past: [], future: [], ...HISTORY_IDLE,
     });
   });
 

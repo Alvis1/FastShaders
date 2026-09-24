@@ -156,17 +156,39 @@
   max-width: 180px;
 }
 
-/* Input-port label on the Image node's rows (UV / Tile X / Offset Y …) — the
-   sockets identify themselves by name; the editable numbers live in the
-   context menu only. */
-.shader-node__in-label {
-  font: 600 calc(9px * var(--node-text-scale, 1)) var(--font-mono);
-  color: rgba(var(--node-ink-rgb), 0.6);
-  white-space: nowrap;
-  margin-left: 2px;
+/* `.shader-node__in-label` — the Image node's input-port label (UV / Tile X /
+   Offset Y …) — was RETIRED on 2026-09-19 with the rows it sat in. No node
+   draws text beside an INPUT socket: a socket names itself through its own
+   tooltip, on hover, on a touch tap, or pinned by a double-click on the node
+   (`.fs-labels-shown`, TypedHandle.css), which is one label in one place
+   whatever showed it. Do not reintroduce the class — an on-card name is a
+   SECOND placement for the same string, which is the thing that rule exists
+   to prevent. */
+
+/* EDGE-PORT region (nodes/edgePorts.ts) — the Image node. Its sockets ride
+   this box's border rather than sitting in rows, so:
+     - it is the positioning ancestor (position: relative, set inline beside
+       the authored-height style, exactly as the plain region is);
+     - the content is CENTRED in it, because the sockets are centred on it and
+       a picture pinned to the top would leave them looking mis-aligned the
+       moment `min-height` floors a short node (the 48px empty slot).
+   Nothing here places the handles themselves: they carry an inline `top` and
+   take React Flow's own `translate(±50%, -50%)` for the straddle, the same way
+   a designer-detached socket in the plain region does. So this anchor does NOT
+   need the three-declaration copy NodeBase.css documents — it does not
+   override the transform, which is the half that makes the insets mandatory. */
+.shader-node__edge-region {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  /* NOT the default `stretch`: a flex item with `width: auto` stretches on the
+     cross axis, and the cross axis of a column is horizontal — which would
+     pull the thumbnail out to the card's width and show every picture
+     distorted. `center` keeps each child at its intrinsic width. */
+  align-items: center;
 }
 
-/* Image node: embedded-image thumbnail under the header. The size cap is
+/* Image node: embedded-image thumbnail inside the port region. The size cap is
    load-bearing — .node-base is width:fit-content, so an unbounded <img> would
    let the payload dictate node width. No shadow/background/hover of its own:
    stack layers stay the only depth cue and sockets must never move. */

@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo } from 'react';
+import { valueNum } from '@/utils/valueCoerce';
 import { Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import {
   assignMeshTargetsAcross,
@@ -470,7 +471,7 @@ export const OutputNode = memo(function OutputNode({
       );
     }
     if (portId in OUTPUT_FLOAT_VALUE_PORTS) {
-      const stored = Number(values[portId]);
+      const stored = valueNum(values[portId]);
       const shown = Number.isFinite(stored) && values[portId] !== undefined && values[portId] !== null
         ? stored
         : OUTPUT_FLOAT_VALUE_PORTS[portId];

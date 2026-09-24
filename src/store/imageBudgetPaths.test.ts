@@ -14,7 +14,7 @@
  */
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { useAppStore, cancelPendingGraphSave, type LimitNotice } from '@/store/useAppStore';
-import { makeNode } from '@/test-utils';
+import { HISTORY_IDLE, makeNode } from '@/test-utils';
 import type { AppNode } from '@/types';
 import { MAX_TOTAL_IMAGE_CHARS, MAX_LIBRARY_IMAGE_CHARS, MAX_IMAGE_ENCODED_CHARS } from '@/utils/imageNode';
 import { duplicateNodeWithinBudget } from '@/components/NodeEditor/menus/menuShared';
@@ -43,6 +43,7 @@ function reset() {
     edges: [],
     past: [],
     future: [],
+    ...HISTORY_IDLE,
     savedGroups: [],
     pendingLimitNotices: [],
     ignoreImageLimits: false,

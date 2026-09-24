@@ -25,8 +25,10 @@
  * hover box's height — while the sockets being aligned sit wherever their
  * nodes put them. Two shapes break it (measured on the shipped registry, 246
  * of 9540 dragged/hover/side combinations): a dragged node whose OUTPUT
- * socket is far from its own center (uv's `out` is 46px above it; select's is
- * 35px below) shifts the sweep off the hover node's lower or upper sockets,
+ * socket is far from its own center (select's is 35px below; `uv`'s was 46px
+ * ABOVE it when this was measured — it was re-authored to the body centre on
+ * 2026-09-19, so the shape now has one fewer example, not one fewer case)
+ * shifts the sweep off the hover node's lower or upper sockets,
  * and a dragged node TALLER than the hover node (remap, smoothstep, clamp,
  * mix, the Output node dropped onto a Float) can only bring the inputs within
  * ±half the hover height of its own center level with the hover's output.

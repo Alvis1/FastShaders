@@ -18,7 +18,7 @@ import { commitGlbImport } from './projectImport';
 import { glbImportReportLines } from '@/utils/glbImportReport';
 import { useAppStore, cancelPendingGraphSave } from '@/store/useAppStore';
 import { contributingOutputs, gltfIndexOf, isIndexSection, outputMaterials, readModelSignature, indexSectionsAwake, loadedModelOf } from '@/utils/outputMaterials';
-import { makeGlb, makeRealPng, pngHeaderBytes } from '@/test-utils';
+import { HISTORY_IDLE, makeGlb, makeRealPng, pngHeaderBytes } from '@/test-utils';
 import { blenderGlb, fakeEncoder, fakeStash, glbOf, manyMaterialsGlb, readOk, scanGlb } from './gltfImportFixtures';
 
 const CTX: GlbDialogContext = { allowManyMaterials: false, ignoreImageLimits: false, deviceMaxDim: 2048 };
@@ -150,6 +150,7 @@ function reset() {
     edges: [],
     past: [],
     future: [],
+    ...HISTORY_IDLE,
     previewMesh: null,
     previewMeshInventory: null,
     pendingLimitNotices: [],

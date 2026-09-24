@@ -3,6 +3,7 @@ import { Position, useStore, useUpdateNodeInternals, type NodeProps, type ReactF
 import type { ColorFlowNode } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
 import { hexToRgb01 } from '@/utils/colorUtils';
+import { valueStr } from '@/utils/valueCoerce';
 import { TypedHandle } from '../handles/TypedHandle';
 import { useLongPress } from '@/hooks/useLongPress';
 import { useFitText } from '@/hooks/useFitText';
@@ -85,13 +86,13 @@ export const ColorNode = memo(function ColorNode({
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const varName = useAppStore((s) => s.nodeVarNames[id]);
   const nodeRef = useRef<HTMLDivElement>(null);
-  const hex = String(data.values?.hex ?? '#ff0000');
+  const hex = valueStr(data.values?.hex ?? '#ff0000');
   // The named uniform shares this component but stays a rounded RECTANGLE, and
   // labels itself with the property name the user typed rather than the
   // generated varName.
   const isProperty = data.registryType === 'property_color';
   const label = isProperty
-    ? String(data.values?.name ?? 'color1')
+    ? valueStr(data.values?.name ?? 'color1')
     : (varName ?? 'Color');
 
   // The swatch is a fixed square, so a long property name wraps (CSS) and then

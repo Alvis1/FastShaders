@@ -21,6 +21,7 @@
  */
 
 import { COLORMAPS, type ColormapDef } from './colormapData';
+import { valueStr } from './valueCoerce';
 import { srgbToLinear01 } from './colorUtils';
 
 export type { ColormapDef, ColormapKind } from './colormapData';
@@ -38,7 +39,7 @@ const BY_ID = new Map(COLORMAPS.map((c) => [c.id, c]));
 /** Resolve an id to a definition; anything unrecognized falls back to the
  *  default so a tampered or older project still renders. */
 export function getColormap(id: unknown): ColormapDef {
-  return BY_ID.get(String(id ?? '')) ?? BY_ID.get(DEFAULT_COLORMAP_ID)!;
+  return BY_ID.get(valueStr(id)) ?? BY_ID.get(DEFAULT_COLORMAP_ID)!;
 }
 
 /** Parsed anchors, flattened as sRGB triples. Memoized per definition — the
@@ -49,7 +50,7 @@ const anchorCache = new WeakMap<ColormapDef, Float32Array>();
 function anchorsOf(def: ColormapDef): Float32Array {
   const hit = anchorCache.get(def);
   if (hit) return hit;
-  const parts = String(def.stops ?? '').split(',');
+  const parts = valueStr(def.stops).split(',');
   const out = new Float32Array(parts.length * 3);
   for (let i = 0; i < parts.length; i++) {
     const s = parts[i].trim();

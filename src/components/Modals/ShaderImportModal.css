@@ -1,0 +1,28 @@
+/* The dropped-shader dialog's own three rules; the panel, the two-answer
+   layout (`csv-import-modal__choices/__choice/__cancel`) and every button come
+   from CsvImportModal.css. Token-only, square corners, no blur — the app-wide
+   technical style.
+
+   These three mirror GlbImportModal.css's `__name`/`__facts`/`__heading`
+   rather than importing them: the two dialogs answer different questions and
+   must be free to move apart, and a stylesheet named for the GLB import is not
+   where the next person looks for the shader drop's layout. */
+
+.shader-import-modal__panel {
+  max-width: 480px;
+}
+
+/* The file name, centred and allowed to wrap — it is the one thing that says
+   WHICH file this is, so truncating it would be the wrong economy. */
+.shader-import-modal__name {
+  text-align: center;
+  font-size: var(--font-size-md);
+}
+
+.shader-import-modal__heading {
+  text-align: center;
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: var(--space-3) 0 var(--space-2);
+}

@@ -71,6 +71,7 @@ function useIdleMount(timeoutMs: number): boolean {
 }
 import { CsvImportModal } from '@/components/Modals/CsvImportModal';
 import { LimitModal } from '@/components/Modals/LimitModal';
+import { ShaderImportModal } from '@/components/Modals/ShaderImportModal';
 import { TooltipLayer } from '@/components/Tooltip/TooltipLayer';
 import { useAppStore } from '@/store/useAppStore';
 import './AppLayout.css';
@@ -131,6 +132,7 @@ export function AppLayout() {
         }
       />
       <CsvImportModal />
+      <ShaderImportModal />
       <LimitModal />
       <TooltipLayer />
     </div>

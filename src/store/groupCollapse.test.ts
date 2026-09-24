@@ -8,7 +8,7 @@ afterAll(() => {
   vi.unstubAllGlobals();
   useAppStore.setState({ nodes: [], edges: [], past: [], future: [] });
 });
-import { makeNode, makeEdge } from '@/test-utils';
+import { HISTORY_IDLE, makeNode, makeEdge } from '@/test-utils';
 import type { AppNode } from '@/types';
 
 /**
@@ -58,8 +58,7 @@ beforeEach(() => {
     edges: [makeEdge('a', 'out', 'b', 'a')],
     past: [],
     future: [],
-    isUndoRedo: false,
-    coalescingHistory: false,
+    ...HISTORY_IDLE,
   });
 });
 
@@ -215,6 +214,7 @@ describe('toggleGroupCollapsed: a group sized the OTHER way round-trips too', ()
       edges: [],
       past: [],
       future: [],
+      ...HISTORY_IDLE,
     });
   });
 

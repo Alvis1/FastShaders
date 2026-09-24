@@ -30,6 +30,7 @@ import {
 import { IMAGE_COST_REF_SIDE, IMAGE_COST_MAX_DIM } from './nodeCost';
 import { unwrapCollapsedGroupEdges } from './edgeUtils';
 import { graphToCode } from '@/engine/graphToCode';
+import { projectDocs } from '../projectDocs';
 
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 const UI = lv.ui as Record<string, string>;
@@ -397,7 +398,7 @@ describe('the PMREM term mirrors three r184, and fails loudly if three moves', (
     const header = read('./textureMemory.ts').replace(/\n \*\s+/g, ' ');
     expect(header).toContain("For a 2048x1024 equirect that is 48 MiB beside the image's own 10.7 MiB");
     expect(header).toContain('under-report an env-lit shader about 5.5x');
-    expect(read('../../CLAUDE.md')).toContain('about 4.5× (48 MiB beside 10.7 MiB for a 2048×1024 equirect)');
+    expect(projectDocs()).toContain('about 4.5× (48 MiB beside 10.7 MiB for a 2048×1024 equirect)');
   });
 
   it('PMREMGenerator sizes, types and keeps its targets as priced', () => {

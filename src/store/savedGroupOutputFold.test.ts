@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { useAppStore, cancelPendingGraphSave } from '@/store/useAppStore';
-import { makeNode, makeEdge } from '@/test-utils';
+import { HISTORY_IDLE, makeNode, makeEdge } from '@/test-utils';
 import type { AppNode } from '@/types';
 import type { OutputMaterial } from '@/utils/outputMaterials';
 import { activeSink } from '@/utils/sdfPartition';
@@ -63,7 +63,7 @@ const outputs = () =>
   useAppStore.getState().nodes.filter((n) => n.data.registryType === 'output');
 
 beforeEach(() => {
-  useAppStore.setState({ nodes: [], edges: [], past: [], future: [], savedGroups: [] });
+  useAppStore.setState({ nodes: [], edges: [], past: [], future: [], savedGroups: [], ...HISTORY_IDLE });
 });
 
 describe('instantiateSavedGroup and the Output it may carry', () => {

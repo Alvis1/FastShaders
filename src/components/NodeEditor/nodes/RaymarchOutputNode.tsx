@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo } from 'react';
+import { valueNum } from '@/utils/valueCoerce';
 import { Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import type { ShaderFlowNode } from '@/types';
 import { getNodeValues } from '@/types';
@@ -162,7 +163,7 @@ export const RaymarchOutputNode = memo(function RaymarchOutputNode({ id, data, s
     }
     const setting = config.settings[portId];
     if (setting) {
-      const stored = Number(values[portId]);
+      const stored = valueNum(values[portId]);
       const shown = Number.isFinite(stored) && values[portId] !== undefined
         ? stored
         : Number(def.defaultValues?.[portId] ?? 0);

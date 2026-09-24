@@ -135,3 +135,67 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ── the two-answer layout, shared by the model-drop and NEW dialogs ───────
+   A question with exactly two answers renders them as EQUAL plates side by
+   side with a red text Cancel below, so neither answer is recommended by its
+   shape. Lifted out of GlbImportModal.css when the NEW dialog took the same
+   form: one layout, one home — a copy in the second modal is how the two
+   drift. */
+/* Two equal answers, side by side, wrapping to a column on a narrow panel
+   (a phone, or the dialog inside the preview's fullscreen). */
+.csv-import-modal__choices {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+/* Equal width whatever the labels say — "Mesh with Materials (1024 px)" is
+   far longer than "Only Mesh", and two plates of different widths would read
+   as one being the recommended answer. `height: auto` + padding so a wrapped
+   label is not clipped by the uniform --ctl-size the base class sets. */
+.csv-import-modal__choice {
+  flex: 1 1 0;
+  min-width: 0;
+  height: auto;
+  min-height: var(--ctl-size);
+  padding: var(--space-2) 12px;
+  text-align: center;
+  white-space: normal;
+}
+
+/* Cancel: red TEXT, not a plate. It changes nothing, so it must not compete
+   with the two answers — and the app's one red (#d92d20, the toolbar feedback
+   button) says "this closes without importing" without shouting. A real
+   <button> so it keeps keyboard activation and the tab order. */
+.csv-import-modal__cancel {
+  display: block;
+  margin: var(--space-1) auto 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid transparent;
+  background: none;
+  font-size: var(--font-size-sm);
+  font-family: inherit;
+  color: #d92d20;
+  cursor: pointer;
+}
+.csv-import-modal__cancel:hover:not(:disabled) {
+  text-decoration: underline;
+}
+.csv-import-modal__cancel:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The answer that has become a FACT ("Exported!"). It occupies the button's
+   own slot so the row keeps its two equal halves and nothing shifts under the
+   pointer — a plate without a border, since there is nothing left to press. */
+.csv-import-modal__done {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+  color: var(--text-primary);
+}

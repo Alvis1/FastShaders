@@ -1,4 +1,5 @@
 import { useAppStore } from '@/store/useAppStore';
+import { valueNum, valueStr } from '@/utils/valueCoerce';
 import { drivingMarchOutput } from '@/utils/sdfPartition';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { contributingOutputs, materialPartsMirrorPlanAcross, moduleSettingsOutput } from '@/utils/outputMaterials';
@@ -47,15 +48,15 @@ export function collectShaderProperties(nodes: AppNode[]): PropertyInfo[] {
       const values = getNodeValues(n);
       if (n.data.registryType === 'property_color') {
         return {
-          name: String(values.name ?? 'color1'),
+          name: valueStr(values.name ?? 'color1'),
           type: 'color' as const,
-          defaultValue: String(values.hex ?? '#ff0000'),
+          defaultValue: valueStr(values.hex ?? '#ff0000'),
         };
       }
       return {
-        name: String(values.name ?? 'property1'),
+        name: valueStr(values.name ?? 'property1'),
         type: 'float' as const,
-        defaultValue: Number(values.value ?? 1.0),
+        defaultValue: valueNum(values.value ?? 1.0),
       };
     });
 }

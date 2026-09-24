@@ -24,6 +24,7 @@
  */
 
 import type { AppNode, ShaderNodeData } from '@/types';
+import { valueStr, valueNum } from './valueCoerce';
 import { getNodeValues } from '@/types';
 import { base64ToBytes } from './binaryCodec';
 import { fnv1a32Bytes } from './payloadDigest';
@@ -180,8 +181,11 @@ export function decodeImageNode(
   const m = IMAGE_DATA_URL_RE.exec(url);
   if (!m) return null;
 
-  const width = Number(values.width);
-  const height = Number(values.height);
+  // A valid payload with a TAMPERED width is the reachable case: the typeof
+  // guard above already rejected a poisoned payload, so `Number()` here would
+  // be the throw. `valueNum` yields NaN, which the integer test below rejects.
+  const width = valueNum(values.width);
+  const height = valueNum(values.height);
   if (!Number.isInteger(width) || width <= 0 || width > MAX_IMAGE_DIM_FIELD) return null;
   if (!Number.isInteger(height) || height <= 0 || height > MAX_IMAGE_DIM_FIELD) return null;
 
@@ -260,7 +264,7 @@ export function collectImageFiles(nodes: AppNode[]): ImageFileEntry[] {
     if (bucket) bucket.push(decoded.bytes);
     else seen.set(ident, [decoded.bytes]);
     const ext = decoded.mime === 'jpeg' ? 'jpg' : decoded.mime;
-    const rawStem = String(values.fileName ?? '').replace(/\.[^.]*$/, '');
+    const rawStem = valueStr(values.fileName).replace(/\.[^.]*$/, '');
     const stem =
       rawStem
         .replace(/[^a-zA-Z0-9._ -]/g, '_')

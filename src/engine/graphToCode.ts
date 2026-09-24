@@ -1,4 +1,5 @@
 import type { AppNode, AppEdge, NodeDefinition, GeneratedCode, ShaderNodeData, OutputMaterial } from '@/types';
+import { valueNum, valueStr } from '@/utils/valueCoerce';
 import { getNodeValues } from '@/types';
 import {
   defaultOutput,
@@ -180,10 +181,10 @@ function numericParam(
  * the radial path, and that decision belongs to the caller's import collector.
  */
 function rampCoord(nv: Record<string, string | number>): { radial: boolean; expr: string } {
-  const radial = Number(nv.radial ?? 0) >= 0.5;
-  const cx = Number(nv.center_x ?? 0.5);
-  const cy = Number(nv.center_y ?? 0.5);
-  const radius = Math.max(Number(nv.radius ?? 0.5), 1e-4);
+  const radial = valueNum(nv.radial ?? 0) >= 0.5;
+  const cx = valueNum(nv.center_x ?? 0.5);
+  const cy = valueNum(nv.center_y ?? 0.5);
+  const radius = Math.max(valueNum(nv.radius ?? 0.5), 1e-4);
   return {
     radial,
     expr: radial
@@ -463,7 +464,7 @@ export function graphToCode(
     // Unknown nodes: use the stored function name as the variable base
     if (def.type === 'unknown') {
       const nv = getNodeValues(node);
-      let baseName = String(nv.functionName ?? 'unknown').replace(/[^a-zA-Z0-9_$]/g, '_');
+      let baseName = valueStr(nv.functionName ?? 'unknown').replace(/[^a-zA-Z0-9_$]/g, '_');
       if (!baseName) baseName = 'unknown';
       varNames.set(node.id, claimName(baseName));
       continue;
@@ -723,7 +724,7 @@ export function graphToCode(
     // verdict is available (useSyncEngine does).
     if (def.type === 'unknown') {
       const nv = getNodeValues(node);
-      const rawExpr = String(nv.rawExpression ?? 'float(0)');
+      const rawExpr = valueStr(nv.rawExpression ?? 'float(0)');
       const safeExpr = isSafeUnknownExpression(rawExpr) ? rawExpr : 'float(0)';
       bodyLines.push(`  const ${varName} = ${safeExpr};`);
       continue;
@@ -898,7 +899,7 @@ export function graphToCode(
         // flip is `1-c`, emitted as mul/add so it composes with a connected
         // uv source.
         const numVal = (key: string, dflt: number) => {
-          const v = Number(nv[key]);
+          const v = valueNum(nv[key]);
           return Number.isFinite(v) ? v : dflt;
         };
         // Tile/offset can be exposed as sockets — a wired edge overrides the
@@ -995,8 +996,8 @@ export function graphToCode(
       // so the bars stay continuous (no tearing). Derivative AA + moiré
       // fade-to-average defeat shimmering when the period drops below a pixel.
       const nv = getNodeValues(node);
-      const bf = Number(nv.baseFrequency ?? 80);
-      const dens = Number(nv.density ?? 1.5);
+      const bf = valueNum(nv.baseFrequency ?? 80);
+      const dens = valueNum(nv.density ?? 1.5);
       // Ramp endpoints go out as `color(0x…)`, NOT `vec3(r/255, …)`.
       // THREE.Color converts a hex from sRGB into the renderer's linear working
       // space (ColorManagement, on by default since r152); a bare vec3 of
@@ -1018,7 +1019,7 @@ export function graphToCode(
       const { radial, expr: coordExpr } = rampCoord(nv);
       // How strongly the stripes darken the value-color. 0 = a clean value
       // heatmap (no stripes, colour alone shows the data); ~0.75 = bold stripes.
-      const lineStrength = Math.min(Math.max(Number(nv.lineStrength ?? 0.75), 0), 1);
+      const lineStrength = Math.min(Math.max(valueNum(nv.lineStrength ?? 0.75), 0), 1);
       addImport('three/tsl', 'float');
       addImport('three/tsl', 'color');
       addImport('three/tsl', 'uv');
@@ -1089,15 +1090,15 @@ export function graphToCode(
       // into a normalized HalfFloat value texture (filterable) and sampled at the
       // coord; the tone curve is applied as a chain of TSL ops before the mix.
       const nv = getNodeValues(node);
-      const scale = Number(nv.scale ?? 1);
-      const offset = Number(nv.offset ?? 0);
-      const contrast = Number(nv.contrast ?? 1);
-      const lowCut = Number(nv.lowCutoff ?? 0);
-      const highCut = Number(nv.highCutoff ?? 1);
+      const scale = valueNum(nv.scale ?? 1);
+      const offset = valueNum(nv.offset ?? 0);
+      const contrast = valueNum(nv.contrast ?? 1);
+      const lowCut = valueNum(nv.lowCutoff ?? 0);
+      const highCut = valueNum(nv.highCutoff ?? 1);
       // Midpoint drives a gamma so the chosen input value maps to output 0.5
       // (lower midpoint → brighter midtones). Kept strictly inside (0,1) so the
       // log is finite.
-      const midpoint = Math.min(Math.max(Number(nv.midpoint ?? 0.5), 1e-3), 1 - 1e-3);
+      const midpoint = Math.min(Math.max(valueNum(nv.midpoint ?? 0.5), 1e-3), 1 - 1e-3);
       // sRGB → linear via `color(0x…)`; see the matching note in the Stripes
       // branch above.
       // A wired ramp colour wins over the stored swatch (the exposedPorts
@@ -1169,8 +1170,8 @@ export function graphToCode(
       // sample — see buildColormapLut.
       const nv = getNodeValues(node);
       const cmap = getColormap(nv.map);
-      const reverse = Number(nv.reverse ?? 0) >= 0.5;
-      const levels = Math.floor(Number(nv.levels ?? 0));
+      const reverse = valueNum(nv.reverse ?? 0) >= 0.5;
+      const levels = Math.floor(valueNum(nv.levels ?? 0));
       const lutVar = `_${varName}_lut`;
       // `reverse` is baked into the table, so it costs nothing per fragment and
       // the emitted TSL is identical either way.
@@ -1212,11 +1213,11 @@ export function graphToCode(
       const traced = traceSignalColumn(valueEdge, gidx);
       const stats = traced ? columnStats(traced.capped) : null;
       const manual = {
-        lo: Number(nv.domainMin ?? 0),
-        hi: Number(nv.domainMax ?? 1),
+        lo: valueNum(nv.domainMin ?? 0),
+        hi: valueNum(nv.domainMax ?? 1),
       };
       const plan = planNormalize(mode, stats, manual);
-      const doClamp = Number(nv.clamp ?? 1) >= 0.5;
+      const doClamp = valueNum(nv.clamp ?? 1) >= 0.5;
 
       let src = scalarRefOf(valueEdge);
       if (!src) {
@@ -1667,7 +1668,7 @@ export function graphToCode(
           const ref = resolveEdgeRef(e, varNames, gidx);
           if (ref) return ref;
         }
-        const v = Number(nv[key]);
+        const v = valueNum(nv[key]);
         return num(Number.isFinite(v) ? v : dflt);
       };
       const indent = (l: string) => `  ${l}`;
@@ -2706,7 +2707,16 @@ function resolveArguments(
     // exactly what a legacy node with no stored value already does — so every
     // legit graph emits byte-identically. `Number(undefined)` is NaN, so the
     // old `!== undefined` guards are subsumed by the isFinite tests.
-    const stored = Number(nodeVals[input.id]);
+    // `valueNum`, not `Number()`: `values` is adversarial and ToPrimitive
+    // THROWS on a tampered entry (`{"tileX":{"toString":1}}` out of a shared
+    // `.fastshader`). This is the GENERIC resolver — every node type's stored
+    // port values pass through it — and it runs inside graphToCode, inside the
+    // sync engine, inside a render, with no error boundary above it: the throw
+    // blanks the whole app, and the autosave then writes the poisoned graph
+    // back so every reload blanks again. `valueNum` is a drop-in: it differs
+    // from `Number()` only where `Number()` would throw, so every legitimate
+    // graph still emits byte-identically (utils/valueCoerce.ts).
+    const stored = valueNum(nodeVals[input.id]);
     if (Number.isFinite(stored)) return num(stored);
     const dflt = Number(def.defaultValues?.[input.id]);
     if (Number.isFinite(dflt)) return num(dflt);

@@ -18,6 +18,7 @@ import { detectMeshKind } from '@/utils/previewMesh';
 import { requestPreviewModelLoad } from '@/utils/previewModelDrop';
 import { evalLog } from '@/eval/telemetry';
 import { isEvalMode } from '@/eval/evalMode';
+import { requestShaderImport } from '@/utils/shaderDropRequest';
 import { effectiveExportFormat } from '@/utils/glbExportAvailability';
 import { GLB_EXPORT_KEYS } from '@/utils/glbExportCopy';
 import { fillTemplate } from '@/utils/fillTemplate';
@@ -351,7 +352,12 @@ export function CodeEditor() {
 
   // Project/script import logic is shared with the canvas drop —
   // see src/engine/projectImport.ts. This wrapper only adds the tab switch.
-  const importScriptFile = useCallback((file: File) => {
+  //
+  // `fromDrop` is what tells the two callers apart, and the difference is the
+  // whole point: a file DROPPED here asks Open or Add (the dialog), while
+  // "Load Script…" is already an explicit instruction to open one and must not
+  // grow a question in front of it.
+  const importScriptFile = useCallback((file: File, opts?: { fromDrop?: boolean }) => {
     // A 3D model is not a script: hand it to the 3D preview's own model path
     // (utils/previewModelDrop.ts), exactly as the canvas does, so every surface
     // validates and announces a model the same way. Before anything else here,
@@ -401,6 +407,15 @@ export function CodeEditor() {
           useAppStore.getState().importCostProfile(parsed);
         })
         .catch(() => window.alert(t('Could not read that file.', language)));
+      return;
+    }
+    // The dropped-shader dialog owns the import and every message about it
+    // from here; the tab still switches, but only once something landed.
+    // False = a study session, which keeps the direct path below.
+    if (
+      opts?.fromDrop &&
+      requestShaderImport(file, 'dom', (outcome) => { if (outcome === 'imported') setActiveTab('tsl'); })
+    ) {
       return;
     }
     if (isZipFile(file)) {
@@ -488,7 +503,7 @@ export function CodeEditor() {
       );
       return;
     }
-    importScriptFile(file);
+    importScriptFile(file, { fromDrop: true });
   }, [importScriptFile, language]);
 
   return (

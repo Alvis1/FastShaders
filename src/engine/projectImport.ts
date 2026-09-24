@@ -15,7 +15,7 @@
  */
 
 import { useAppStore } from '@/store/useAppStore';
-import { sanitizeImageNodes } from '@/utils/imageNode';
+import { exceedsImageBudget, sanitizeImageNodes } from '@/utils/imageNode';
 import { resolveImageRefs, newRefBudget } from '@/utils/imagePayloadRefs';
 import { sanitizeDataNodes } from '@/utils/dataNode';
 import { sanitizeDataRangeNodes } from '@/utils/dataRangeFormula';
@@ -54,7 +54,9 @@ import { contributingOutputs, gltfIndexOf, outputMaterials, sanitizeOutputMateri
 import type { ImportNoteLine } from '@/utils/importNote';
 import { extractProjectState, type FastShadersProject } from './fastShadersProject';
 import { moduleImageLiterals, resolveProjectImageRefs, splitImageLosses } from './projectImageRefs';
-import type { AppNode, MaterialSettings } from '@/types';
+import { droppedGroupLabel, sanitizeDroppedName, shaderDropStem } from '@/utils/shaderDropName';
+import { planShaderGroup } from './shaderGroupImport';
+import type { AppEdge, AppNode, MaterialSettings } from '@/types';
 
 /**
  * Apply a FastShaders project snapshot to the store. Graph state is restored
@@ -66,11 +68,24 @@ import type { AppNode, MaterialSettings } from '@/types';
  * `stripped`): the module whose `data:` literals a block's `imageRefs` may
  * name. It is only scanned when the block has a ref to resolve.
  */
-function applyProjectToStore(project: FastShadersProject, moduleText = ''): void {
+function applyProjectToStore(
+  project: FastShadersProject,
+  moduleText = '',
+  nameFallback = '',
+): void {
   const store = useAppStore.getState();
   store.pushHistory();
 
-  if (project.shaderName) store.setShaderName(project.shaderName);
+  // The AUTHORED name wins; `nameFallback` (the dropped file's stem, and only
+  // ever set by the drop path) is what a block shipping no name falls back to
+  // instead of leaving the PREVIOUS shader's name on an unrelated graph. Both
+  // absent keeps today's behaviour exactly: the name is not touched.
+  // See utils/shaderDropName.ts for why the file stem is the second choice.
+  // The block is unvalidated JSON: a non-string name must not throw here
+  // (after `pushHistory`), and an authored one is bounded exactly like a stem.
+  const authored = typeof project.shaderName === 'string' ? project.shaderName : '';
+  const adopted = sanitizeDroppedName(authored) || nameFallback;
+  if (adopted) store.setShaderName(adopted);
   if (project.selectedHeadsetId) store.setSelectedHeadsetId(project.selectedHeadsetId);
   // Theme BEFORE canvas color: the canvas backdrop is now stored per-theme, so
   // setNodeEditorBgColor writes into the active theme's slot — set the theme
@@ -256,27 +271,133 @@ function announceGraphImport(): void {
 }
 
 /**
- * Commit a shader BUILT from a dropped model's materials (the GLB import
- * builder, `engine/gltfImport.ts`; the dialog of Phase 5 Step 9 is its only
- * caller). ONE undo entry (`applyProjectToStore`'s pushHistory), the same
- * restore-path sanitizers as any shared file, `fs:project-imported` then
- * `fs:graph-imported` — each once, since `applyProjectToStore` already ends
- * with `announceGraphImport` (a second call here would arm the canvas's
- * import auto-fit twice and log a second eval `import`).
+ * "Mesh with Materials" — the model's materials BECOME the shader.
  *
- * The texture-stripped mesh is set FIRST (`importShaderZip`'s order), so the
- * prefs re-read `applyProjectToStore` fires synchronously already describes
- * the document it is about. The geometry no longer DEPENDS on that order —
- * `shownGeometry` (components/Preview/previewGeometryPref.ts) derives the
- * no-mesh fallback from the live mesh at render, rather than the validator
- * downgrading a stored 'custom' — but the mesh-then-project order stays the
- * one every import path uses. `preview.geometry` is forced to 'custom'
- * whatever the builder wrote, so the model the sections were built for is what
- * the 3D view shows. "Model only" never comes here and fires nothing.
+ * It replaces the GRAPH and keeps the DOCUMENT, which is the line the owner
+ * drew (2026-09-19): the nodes, the wires and the board drawings go, the
+ * shader is renamed after the model, and everything else the user has built
+ * around the document stays — their palettes, their tuned uniform values, and
+ * on desktop the Work-folder file they have open.
+ *
+ * That is why this is not `applyProjectToStore`, which is the OPEN-a-document
+ * path: it also clears uniform values, bounds, palettes and the camera, and
+ * announces `fs:graph-imported` — the event whose meaning is "this is a
+ * different document now", and which the desktop Work folder answers by
+ * forgetting the open file (components/Layout/WorkFolder.tsx), silently
+ * turning the next Save into a Save-as. A model import is not that. It fires
+ * `fs:graph-merged` instead, which carries the two things it does want: the
+ * canvas auto-fit, and ending Preview mode (which routes ONE node to the
+ * Output in a derived graph and would otherwise hide the arriving materials).
+ *
+ * DRAWINGS go with the graph deliberately: board ink annotates nodes, and
+ * notes about a chain that no longer exists are worse than no notes. Palettes
+ * do not — they are a library the user assembled, not a description of the
+ * shader that is being replaced.
+ *
+ * The budget is counted against an EMPTY graph, because the images that were
+ * on the canvas are leaving with it. The refusal happens BEFORE `pushHistory`,
+ * so a refused import leaves no undo entry, and `proceed` re-runs the whole
+ * commit — the `instantiateSavedGroup` shape. The mesh is set FIRST, as on
+ * every import path, so the prefs re-read `showCustomMesh` fires already
+ * describes it. ONE undo entry restores the graph and the drawings; the NAME
+ * is not history (HistoryEntry has no field for it), so it stays the model's.
+ *
+ * `onCommitted` runs only once the graph actually changed — directly, or from
+ * the limit notice's `proceed` — so a caller's success report never claims an
+ * import the budget refusal deferred or the user then dismissed.
  */
-export function commitGlbImport(project: FastShadersProject, mesh: PreviewMesh): void {
+export function commitGlbImport(
+  project: FastShadersProject,
+  mesh: PreviewMesh,
+  opts?: { overBudgetOk?: boolean; onCommitted?: () => void },
+): void {
+  const store = useAppStore.getState();
+  const built = project.graph;
+
+  if (!opts?.overBudgetOk && exceedsImageBudget([], built.nodes, store.ignoreImageLimits)) {
+    store.enqueueLimitNotice({
+      id: generateId(),
+      kind: 'image-total-cap',
+      fileName: project.shaderName ?? '',
+      proceed: () => commitGlbImport(project, mesh, { ...opts, overBudgetOk: true }),
+    });
+    return;
+  }
+
   useAppStore.getState().setPreviewMesh(mesh);
-  applyProjectToStore({ ...project, preview: { ...(project.preview ?? {}), geometry: 'custom' } });
+
+  // The same ingestion passes every other path runs on arriving nodes: folded
+  // node types before anything reads a def, param ports exposed for the edges
+  // that land on them, and `edge.data` sanitized as adversarial input.
+  built.nodes = migrateLegacyNodeTypes(built.nodes);
+  autoExposeConnectedParamPorts(built.nodes, built.edges);
+  const arrivingEdges = sanitizeEdgeExtras(built.edges);
+
+  // The image BACKSTOP. The builder already encodes every texture under the
+  // device cap and the project budget (`encodeGltfImages`), so in practice
+  // nothing here is over — which is exactly why the cap has to be re-asserted
+  // at the store boundary rather than trusted upstream, like every other path
+  // that brings payloads in. Soft caps follow the platform through imageNode's
+  // constants, so no argument is needed.
+  const images = sanitizeImageNodes(built.nodes, !store.ignoreImageLimits);
+  built.nodes = images.nodes;
+  if (images.strippedCount > 0) {
+    store.enqueueLimitNotice({
+      id: generateId(),
+      kind: 'images-stripped',
+      detail: String(images.strippedCount),
+    });
+  }
+
+  useAppStore.getState().pushHistory();
+
+  // The restore chain, in the order every restore path uses.
+  const secs = sanitizeOutputMaterialsReport(built.nodes);
+  const split = unfoldOutputMaterials(secs.nodes, arrivingEdges);
+  const nodes = normalizeActiveOutput(split.nodes);
+  useAppStore.setState({
+    nodes,
+    edges: pruneOrphanMaterialEdges(nodes, split.edges).edges,
+    drawings: [],
+    syncSource: 'graph',
+    isUndoRedo: false,
+  });
+  if (secs.trimmed > 0) {
+    useAppStore.getState().enqueueLimitNotice({
+      id: generateId(),
+      kind: 'output-sections-trimmed',
+      detail: String(secs.trimmed),
+    });
+  }
+
+  // The document is the model's shader now, so it carries the model's name —
+  // keeping the previous shader's name on a graph that has nothing to do with
+  // it is what would mislead the next EXPORT.
+  // Bounded like every dropped name: the builder takes it from the FILE.
+  const name = typeof project.shaderName === 'string' ? sanitizeDroppedName(project.shaderName) : '';
+  if (name) useAppStore.getState().setShaderName(name);
+
+  showCustomMesh();
+  announceGraphMerged();
+  opts?.onCommitted?.();
+}
+
+/**
+ * "The graph was replaced, but the DOCUMENT was not." The canvas frames the
+ * result and ends Preview mode; the Work folder and the study telemetry,
+ * which answer `fs:graph-imported`, deliberately do not hear this one.
+ */
+export const GRAPH_MERGED_EVENT = 'fs:graph-merged';
+
+/**
+ * Tell the canvas that nodes were ADDED to the graph rather than replacing it:
+ * frame the result and end Preview mode, without the "this is a different
+ * document now" meaning `fs:graph-imported` carries for the Work folder and
+ * the study telemetry. See `commitGlbImport` and `addDroppedShader`.
+ */
+function announceGraphMerged(): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(GRAPH_MERGED_EVENT));
 }
 
 /**
@@ -336,14 +457,20 @@ let scriptImportSeq = 0;
  */
 export function importShaderText(
   text: string,
-  opts?: { keepPreviewMesh?: boolean },
+  opts?: {
+    keepPreviewMesh?: boolean;
+    nameFallback?: string;
+    /** `extractProjectState(text)`, when the caller already ran it — a block
+     *  with embedded images is megabytes of JSON, parsed once, not twice. */
+    parsed?: ReturnType<typeof extractProjectState>;
+  },
 ): 'project' | 'script' {
-  const projectResult = extractProjectState(text);
+  const projectResult = opts?.parsed !== undefined ? opts.parsed : extractProjectState(text);
   // Clear AFTER the parse — an import that dies in extractProjectState (the
   // throw propagates to the caller's error surface) must not wipe the mesh.
   if (!opts?.keepPreviewMesh) useAppStore.getState().setPreviewMesh(null);
   if (projectResult) {
-    applyProjectToStore(projectResult.project, projectResult.stripped);
+    applyProjectToStore(projectResult.project, projectResult.stripped, opts?.nameFallback ?? '');
     return 'project';
   }
   // A bare script's graph doesn't exist yet — useSyncEngine's code→graph pass
@@ -360,6 +487,10 @@ export function importShaderText(
   // Nothing here reads store state those listeners write, so the move is inert
   // on the synchronous path.
   announceGraphImport();
+  // A bare script carries no name at all, so the fallback is the ONLY answer
+  // this branch has. Set synchronously, beside the announcement: it does not
+  // depend on the conversion, which may land a tick later.
+  if (opts?.nameFallback) useAppStore.getState().setShaderName(opts.nameFallback);
   // Last import wins: a second one started while the chunk was in flight owns
   // the document, and this one's continuation must not overwrite it.
   const seq = ++scriptImportSeq;
@@ -551,7 +682,10 @@ function isJunkEntry(name: string): boolean {
  * A refused model beside a script is not a refusal: the shader loads and the
  * canvas import note says the model was skipped and why.
  */
-export async function importShaderZip(file: File): Promise<'project' | 'script' | 'model' | null> {
+export async function importShaderZip(
+  file: File,
+  opts?: { nameFallback?: string },
+): Promise<'project' | 'script' | 'model' | null> {
   // Before `arrayBuffer()`: a gigabyte drop must not be allocated just to be
   // refused (the ShaderPreview model gate's pattern).
   if (file.size > READ_MAX_ARCHIVE_BYTES) {
@@ -612,7 +746,10 @@ export async function importShaderZip(file: File): Promise<'project' | 'script' 
   // geometry itself is derived from the live mesh now — previewGeometryPref.ts
   // — so the order is a clarity rule here, not a correctness one.)
   useAppStore.getState().setPreviewMesh(mesh);
-  const imported = importShaderText(withProject ?? scripts[0], { keepPreviewMesh: true });
+  const imported = importShaderText(withProject ?? scripts[0], {
+    keepPreviewMesh: true,
+    nameFallback: opts?.nameFallback,
+  });
   if (mesh) showCustomMesh();
   // Only once the shader has loaded — an import that threw above must not
   // claim "the shader loaded".
@@ -622,6 +759,226 @@ export async function importShaderZip(file: File): Promise<'project' | 'script' 
     ]);
   }
   return imported;
+}
+
+/* ── the dropped-shader dialog: OPEN and ADD ─────────────────────────────── */
+
+/**
+ * A dropped shader file has TWO answers, and this is where both of them live
+ * (`components/Modals/ShaderImportModal.tsx` is the dialog; all three drop
+ * surfaces raise it through the store queue).
+ *
+ * OPEN is what a drop has always done — replace the document — plus the one
+ * thing it never did: adopt a NAME when the file supplies none
+ * (`utils/shaderDropName.ts`).
+ *
+ * ADD keeps the document and parks the dropped shader's chain beside it in one
+ * group frame (`engine/shaderGroupImport.ts`), with every Output dropped, so
+ * nothing arrives driving the picture.
+ *
+ * Both are here rather than on the surfaces because a shader import is the one
+ * path in this app that touches everything — the graph, the mesh, the prefs,
+ * the palettes — and it has exactly one home by design.
+ */
+
+/**
+ * The shader script inside a dropped file, WITHOUT touching the store — the
+ * read ADD needs (OPEN goes through `importShaderZip`, which also installs the
+ * archive's model; an Add must not swap the mesh the user is looking at).
+ *
+ * Same entry rules as `importShaderZip`: the script carrying a project block
+ * wins, else the first one. Null = the file holds no shader script. The zip
+ * reader's caps still THROW, so the caller's `reportZipImportError` mapping
+ * says why on every surface.
+ */
+async function readDroppedShaderText(file: File): Promise<string | null> {
+  if (!isZipFile(file)) return file.text();
+  if (file.size > READ_MAX_ARCHIVE_BYTES) {
+    throw new ZipLimitError('total-size', READ_MAX_TOTAL_UNCOMPRESSED, file.size, 'archive too large');
+  }
+  let entries: ZipReadEntry[];
+  try {
+    entries = await readZip(new Uint8Array(await file.arrayBuffer()));
+  } catch (e) {
+    if (isZipLimitError(e)) throw e;
+    return null;
+  }
+  const dec = new TextDecoder();
+  const scripts = entries
+    .filter((e) => !isJunkEntry(e.name) && /\.(js|mjs|tsl)$/i.test(e.name))
+    .map((e) => dec.decode(e.data));
+  if (scripts.length === 0) return null;
+  return scripts.find((t) => t.includes('FASTSHADERS_PROJECT_V1')) ?? scripts[0];
+}
+
+/**
+ * OPEN: today's import, plus the name. Returns what `importShaderText` /
+ * `importShaderZip` return, so a caller's "no shader in that zip" branch is
+ * unchanged. Throws exactly what they throw.
+ */
+export async function openDroppedShader(
+  file: File,
+): Promise<'project' | 'script' | 'model' | null> {
+  const nameFallback = sanitizeDroppedName(shaderDropStem(file.name));
+  if (isZipFile(file)) return importShaderZip(file, { nameFallback });
+  const text = await file.text();
+  // Pay for the converter chunk here, on the async boundary this path already
+  // has, so a bare script's branch is settled when this resolves.
+  const parsed = extractProjectState(text);
+  if (!parsed) await preloadShaderImport();
+  return importShaderText(text, { nameFallback, parsed });
+}
+
+export type ShaderAddOutcome =
+  | { ok: true; added: number; droppedSinks: number; groupLabel: string }
+  | { ok: false; reason: 'no-shader' | 'nothing-to-add' | 'parse-failed' | 'over-budget' };
+
+/**
+ * The arriving graph an ADD is about: a project block's own nodes and edges,
+ * or a bare shaderloader script parsed back to a graph and laid out (a parsed
+ * graph carries no positions at all — `autoLayout` is what useSyncEngine gives
+ * it on the OPEN path, so ADD gives it the same one).
+ *
+ * `codeToGraph` and `layoutEngine` are loaded on demand for the same reason
+ * `scriptToTSL` is: this module is imported by four boot-path components, and
+ * the Babel front end is only needed when someone actually adds a bare script.
+ */
+async function droppedShaderGraph(
+  text: string,
+): Promise<{ nodes: AppNode[]; edges: AppEdge[]; moduleText: string; project: FastShadersProject | null } | null> {
+  const projectResult = extractProjectState(text);
+  if (projectResult) {
+    return {
+      nodes: projectResult.project.graph.nodes,
+      edges: projectResult.project.graph.edges,
+      moduleText: projectResult.stripped,
+      // The WHOLE block: its top-level `imageRefs` name the module literals.
+      project: projectResult.project,
+    };
+  }
+  const converter = await preloadShaderImport();
+  if (!converter) return null;
+  const { code } = converter.scriptToTSLWithSettings(text);
+  const [{ codeToGraph }, { autoLayout }] = await Promise.all([
+    import('./codeToGraph'),
+    import('./layoutEngine'),
+  ]);
+  const parsed = codeToGraph(code);
+  // A warning still yields a graph (the sync engine's own rule); anything
+  // else means there is nothing trustworthy to add.
+  if (parsed.errors.some((e) => e.severity !== 'warning')) return null;
+  if (parsed.nodes.length === 0) return null;
+  return {
+    nodes: autoLayout(parsed.nodes, parsed.edges, 'LR'),
+    edges: parsed.edges,
+    moduleText: '',
+    project: null,
+  };
+}
+
+/**
+ * ADD: park the dropped shader beside the graph on the canvas, in one group
+ * frame named after the file, wired to nothing.
+ *
+ * The arriving nodes go through the SAME sanitizers every other ingestion path
+ * runs — a `.fastshader` is adversarial input whichever answer opens it — with
+ * two differences that fall out of what ADD is:
+ *
+ *  - the image budget is counted against the LIVE graph plus the arrivals
+ *    (`instantiateSavedGroup`'s rule), because nothing is leaving; the refusal
+ *    happens BEFORE `pushHistory`, so a refused add leaves no undo entry and
+ *    `proceed` re-runs the whole thing;
+ *  - the Output sanitizers are not run, because the planner drops every sink
+ *    before they would have anything to look at.
+ *
+ * ONE undo entry. `fs:graph-merged`, never `fs:graph-imported`: the document
+ * did not change, so the desktop Work folder must not forget the open file and
+ * the study telemetry must not log an import.
+ */
+export async function addDroppedShader(
+  file: File,
+  opts?: { overBudgetOk?: boolean },
+): Promise<ShaderAddOutcome> {
+  const text = await readDroppedShaderText(file);
+  if (text === null) return { ok: false, reason: 'no-shader' };
+  const graph = await droppedShaderGraph(text);
+  if (!graph) return { ok: false, reason: 'parse-failed' };
+
+  const store = useAppStore.getState();
+
+  // Folded node types first — before anything reads a def.
+  let nodes = migrateLegacyNodeTypes(graph.nodes);
+  const edges = sanitizeEdgeExtras(graph.edges);
+  autoExposeConnectedParamPorts(nodes, edges);
+
+  // Image payloads: the file's own refs resolve against the file's own copies,
+  // under ONE budget per document, and every picture that does not come back
+  // is announced — exactly as the OPEN path (applyProjectToStore) does it.
+  let dangling = 0;
+  let losses = { missing: 0, alsoDangling: 0 };
+  if (graph.project) {
+    const budget = newRefBudget();
+    const fileRefs = resolveProjectImageRefs(
+      { ...graph.project, graph: { ...graph.project.graph, nodes, edges } },
+      moduleImageLiterals(graph.moduleText),
+      budget,
+    );
+    const refs = resolveImageRefs(fileRefs.project.graph.nodes, undefined, budget);
+    losses = splitImageLosses(fileRefs.project.graph.nodes, refs.nodes, fileRefs.unresolvedIds);
+    dangling = refs.dangling;
+    nodes = refs.nodes;
+  }
+
+  const images = sanitizeImageNodes(nodes, !store.ignoreImageLimits);
+  nodes = sanitizeDataRangeNodes(sanitizeDataNodes(images.nodes).nodes);
+
+  // The project image budget, counted on every path that ADDS a payload.
+  if (!opts?.overBudgetOk && exceedsImageBudget(store.nodes, nodes, store.ignoreImageLimits)) {
+    store.enqueueLimitNotice({
+      id: generateId(),
+      kind: 'image-total-cap',
+      fileName: file.name,
+      proceed: () => { void addDroppedShader(file, { overBudgetOk: true }); },
+    });
+    return { ok: false, reason: 'over-budget' };
+  }
+
+  const groupLabel = droppedGroupLabel(file.name);
+  const plan = planShaderGroup({ nodes, edges }, store.nodes, groupLabel);
+  if (!plan) return { ok: false, reason: 'nothing-to-add' };
+
+  const stripped = images.strippedCount + dangling - losses.alsoDangling;
+  if (stripped > 0) {
+    store.enqueueLimitNotice({
+      id: generateId(),
+      kind: 'images-stripped',
+      detail: String(stripped),
+    });
+  }
+  if (losses.missing > 0) {
+    store.enqueueLimitNotice({
+      id: generateId(),
+      kind: 'images-missing',
+      detail: String(losses.missing),
+    });
+  }
+
+  useAppStore.getState().pushHistory();
+  useAppStore.setState((state) => ({
+    // The frame BEFORE its members — React Flow requires a parent to precede
+    // its children, and the planner already ordered the members that way.
+    nodes: [plan.group, ...state.nodes, ...plan.members] as AppNode[],
+    edges: [...state.edges, ...plan.edges] as AppEdge[],
+    syncSource: 'graph' as const,
+    isUndoRedo: false,
+  }));
+  announceGraphMerged();
+  return {
+    ok: true,
+    added: plan.members.length,
+    droppedSinks: plan.droppedSinks,
+    groupLabel,
+  };
 }
 
 /* ── the GLB restore (Phase 7) ───────────────────────────────────────────── */

@@ -317,12 +317,26 @@ const definitions: NodeDefinition[] = [
   //
   // OUTPUTS: `out` (Color, vec3) stays outputs[0] — every `outputs[0]` reader
   // (splice, a dropped wire, ⌘-click Preview, the `?? 'out'` defaults, the
-  // designer's `sockets['out']` key) and every saved edge mean it. Alpha, R, G
-  // and B are always mounted float SWIZZLES of the same ONE sample; their ids
+  // designer's `sockets['out']` key) and every saved edge mean it. R, G, B and
+  // Alpha are always mounted float SWIZZLES of the same ONE sample; their ids
   // must equal utils/imageChannels.ts's IMAGE_CHANNEL_COMPONENTS keys, in that
   // order (pinned), and none may collide with an input id — TypedEdge's
   // disconnect selector matches `data-handleid` without a source/target class.
-  // They render as LABELLED rows (NODE_DESIGN_REQUIREMENTS #8b, `outputRowLabel`).
+  //
+  // The order after `out` is R, G, B, Alpha — the order the channels are
+  // written in every format the user already knows (RGBA, #rrggbbaa, an ORM
+  // map's r/g/b). It was Alpha-second until 2026-09-19; the move is SAFE
+  // because emission is handle-keyed throughout (graphToCode reads
+  // `IMAGE_CHANNEL_COMPONENTS.get(edge.sourceHandle)` and never walks
+  // `def.outputs`), edge ids are built from handle STRINGS, and the node is
+  // one-way through codeToGraph — so no emitted byte and no saved `.fastshader`
+  // moves. What DOES move is the on-node socket order, which is the point.
+  //
+  // They carry NO text on the card: the node uses the edge-port layout
+  // (nodes/edgePorts.ts) and the names live in the socket's own tooltip —
+  // hover, a touch tap, or the double-click label pin. That is
+  // NODE_DESIGN_REQUIREMENTS #8 ("output sockets show no text/label"), which
+  // this node was the 8b exception to between 2026-09-11 and 2026-09-19.
   {
     type: 'imageNode',
     label: 'Image',
@@ -342,14 +356,14 @@ const definitions: NodeDefinition[] = [
     ],
     outputs: [
       { id: 'out', label: 'Color', dataType: 'vec3' },
-      { id: 'alpha', label: 'Alpha', dataType: 'float' },
       { id: 'r', label: 'R', dataType: 'float' },
       { id: 'g', label: 'G', dataType: 'float' },
       { id: 'b', label: 'B', dataType: 'float' },
+      { id: 'alpha', label: 'Alpha', dataType: 'float' },
     ],
     defaultValues: { tileX: 1, tileY: 1, offsetX: 0, offsetY: 0 },
     description:
-      'An image sampled as a texture: its color (RGB), plus Alpha, R, G and B as separate outputs; optional UV, tile, offset and direction inputs. Also: texture, sampler, picture, bitmap',
+      'An image sampled as a texture: its color (RGB), plus R, G, B and Alpha as separate outputs; optional UV, tile, offset and direction inputs. Also: texture, sampler, picture, bitmap',
   },
   {
     type: 'property_float',

@@ -23,7 +23,7 @@ import {
   reportImagesStrippedOnLoad,
   type SavedGroup,
 } from './useAppStore';
-import { makeNode } from '@/test-utils';
+import { HISTORY_IDLE, makeNode } from '@/test-utils';
 import { getNodeValues, type AppNode } from '@/types';
 import { toAsciiStorageJson } from '@/utils/asciiStorage';
 import { HARD_MAX_IMAGE_ENCODED_CHARS } from '@/utils/imageNode';
@@ -50,7 +50,7 @@ beforeEach(() => {
     removeItem: (k: string) => { delete store[k]; },
   });
   setGraphPersistence(true);
-  useAppStore.setState({ nodes: [], edges: [], pendingLimitNotices: [] });
+  useAppStore.setState({ nodes: [], edges: [], pendingLimitNotices: [], ...HISTORY_IDLE });
   cancelPendingGraphSave();
 });
 

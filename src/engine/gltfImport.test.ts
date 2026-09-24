@@ -10,6 +10,7 @@
  * test, the stubbed localStorage is undone, the pending autosave cancelled.
  */
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
+import { HISTORY_IDLE } from '@/test-utils';
 import { buildGlbImport, glbImportShaderName, type BuildGlbImportOptions } from './gltfImport';
 import { graphToCode } from './graphToCode';
 import { codeToGraph } from './codeToGraph';
@@ -301,6 +302,7 @@ function reset() {
     edges: [],
     past: [],
     future: [],
+    ...HISTORY_IDLE,
     previewMesh: null,
     previewMeshInventory: null,
     pendingLimitNotices: [],

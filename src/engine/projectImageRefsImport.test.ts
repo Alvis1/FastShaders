@@ -8,7 +8,6 @@
  * access on this path is guarded.
  */
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { useAppStore, cancelPendingGraphSave } from '@/store/useAppStore';
 import { makeNode } from '@/test-utils';
 import { getNodeValues, type AppNode } from '@/types';
@@ -17,6 +16,7 @@ import { imageRefFor } from '@/utils/imagePayloadRefs';
 import { embedProjectState, type FastShadersProject } from './fastShadersProject';
 import { referenceImagesInModule } from './projectImageRefs';
 import { importShaderText, importShaderZip } from './projectImport';
+import { projectDocs } from '../projectDocs';
 
 const enc = new TextEncoder();
 const P1 = `data:image/png;base64,${btoa('one')}`;
@@ -146,7 +146,7 @@ describe('CLAUDE.md', () => {
   // 'a ref-only block recovers every payload from its own module' above is the
   // fact: with a block present, this reader reads the MODULE's data: literals.
   it('does not claim the module goes unread while a project block is present', () => {
-    const doc = readFileSync(new URL('../../CLAUDE.md', import.meta.url), 'utf8');
+    const doc = projectDocs();
     expect(doc).not.toContain('no FastShaders reader or Podest ever reads them');
     expect(doc).toContain('pixel RESTORE reads the per-node block copies');
     expect(doc).toContain('which is all Podest/A-Frame and the top-level imageRefs reader need');

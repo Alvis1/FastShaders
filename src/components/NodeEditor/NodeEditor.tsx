@@ -130,9 +130,10 @@ import {
   type ImageDropReport,
 } from '@/utils/imageImportNote';
 import { encodeImageFile, isImageFile, isSvgFile, type ImageConvertMode } from '@/utils/imageImport';
-import { importShaderZip, importShaderText, isZipFile, reportZipImportError } from '@/engine/projectImport';
+import { GRAPH_MERGED_EVENT, importShaderZip, importShaderText, isZipFile, reportZipImportError } from '@/engine/projectImport';
 import { detectMeshKind } from '@/utils/previewMesh';
 import { requestPreviewModelLoad } from '@/utils/previewModelDrop';
+import { requestShaderImport } from '@/utils/shaderDropRequest';
 import type { AppNode, AppEdge, ShaderNodeData, OutputNodeData, NodeDefinition } from '@/types';
 import { getNodeValues } from '@/types';
 import { t } from '@/i18n';
@@ -894,9 +895,13 @@ export function NodeEditor() {
     const clear = () => useAppStore.getState().setNodePreview(null);
     window.addEventListener('fs:graph-imported', clear);
     window.addEventListener('fs:graph-new', clear);
+    // A merge too: Preview mode routes ONE node to the Output in a derived
+    // graph, so it would hide the very materials that just arrived.
+    window.addEventListener(GRAPH_MERGED_EVENT, clear);
     return () => {
       window.removeEventListener('fs:graph-imported', clear);
       window.removeEventListener('fs:graph-new', clear);
+      window.removeEventListener(GRAPH_MERGED_EVENT, clear);
     };
   }, []);
   /**
@@ -2861,6 +2866,29 @@ export function NodeEditor() {
         if (projects.length > 0) {
           const proj = projects[0];
           const ignored = projects.length - 1 + csvs.length + images.length;
+          // Everything this drop still owes once the shader half has settled:
+          // the 3D model that came with it (PAIRED, so the preview never
+          // offers to build a shader from it) and the "other files ignored"
+          // notice, which may only follow an import that actually landed.
+          const finishDrop = (ok: boolean) => {
+            if (models.length > 0) requestPreviewModelLoad(models[0], { pairedWithShader: true });
+            if (ok && ignored > 0) {
+              window.alert(
+                fillTemplate(t('Loaded {name}. {n} other dropped file(s) were ignored — drop a project on its own.', lang), {
+                  name: `“${proj.name}”`,
+                  n: ignored,
+                }),
+              );
+            }
+          };
+          // A dropped shader ASKS first — Open or Add (utils/shaderDropRequest.ts).
+          // The dialog owns the import and every message about it from here, and
+          // calls back when it settles so the rest of the drop can follow; a
+          // CANCELLED drop is dropped whole, model included. False = a study
+          // session, which keeps today's replace-the-document path below.
+          if (requestShaderImport(proj, 'dom', (outcome) => {
+            if (outcome !== 'cancelled') finishDrop(outcome === 'imported');
+          })) return;
           const done = isZipFile(proj)
             ? importShaderZip(proj).then((result) => {
                 if (result === null) {
@@ -2892,26 +2920,15 @@ export function NodeEditor() {
               );
               return false;
             })
-            .then((ok) => {
-              // A model dropped WITH the project follows the import, as on the
-              // preview (ShaderPreview.handleDroppedFiles): the import clears or
-              // overwrites the mesh first, so the dropped model deterministically
-              // wins. Routed, not ignored — hence not counted in `ignored`.
-              // PAIRED with the shader just imported, so the preview never
-              // offers to build a shader from it (the GLB-import convention).
-              if (models.length > 0) requestPreviewModelLoad(models[0], { pairedWithShader: true });
-              // The "ignored companions" notice may only follow an import that
-              // actually succeeded — alerting 'Loaded "x"' before (or despite)
-              // a failure gave contradictory feedback.
-              if (ok && ignored > 0) {
-                window.alert(
-                  fillTemplate(t('Loaded {name}. {n} other dropped file(s) were ignored — drop a project on its own.', lang), {
-                    name: `“${proj.name}”`,
-                    n: ignored,
-                  }),
-                );
-              }
-            });
+            // A model dropped WITH the project follows the import, as on the
+            // preview (ShaderPreview.handleDroppedFiles): the import clears or
+            // overwrites the mesh first, so the dropped model deterministically
+            // wins. Routed, not ignored — hence not counted in `ignored`. The
+            // "ignored companions" notice may only follow an import that
+            // actually succeeded — alerting 'Loaded "x"' before (or despite) a
+            // failure gave contradictory feedback. Both are `finishDrop`,
+            // shared with the dialog's callback above.
+            .then(finishDrop);
           return;
         }
 
@@ -3664,9 +3681,17 @@ export function NodeEditor() {
     // Work folder's `fs:graph-new` tracking is untouched — and arming twice on
     // the NEW button is two fits to the same box, i.e. free.
     window.addEventListener('fs:graph-new', arm);
+    // A model's materials built into the graph (`commitGlbImport`) and a
+    // shader ADDED beside it (`addDroppedShader`) are the same "nodes
+    // appeared, viewport did not move" case: without a fit the arrivals can be
+    // off-screen and the import reads as nothing having happened. It is its
+    // own event because the DOCUMENT did not change — the Work folder must
+    // not forget the file the user opened.
+    window.addEventListener(GRAPH_MERGED_EVENT, arm);
     return () => {
       window.removeEventListener('fs:graph-imported', arm);
       window.removeEventListener('fs:graph-new', arm);
+      window.removeEventListener(GRAPH_MERGED_EVENT, arm);
       window.clearTimeout(importFitTimerRef.current);
       cancelAnimationFrame(importFitRafRef.current);
     };
@@ -3692,20 +3717,35 @@ export function NodeEditor() {
   // That includes the export pre-flight (N1): it must finish before newGraph(),
   // which REMOVES the preview model, and its "without the 3D model" rebuild
   // reads the store too. Cancel in the size dialog ABANDONS NEW, because the
-  // user asked to save first; the graph stays, and NEW can be reopened with
-  // "Don't save".
+  // user asked to save first; the graph stays, and NEW can be reopened and
+  // answered with "Start NEW".
+  /**
+   * The NEW dialog's two answers, SEPARATE since it grew a second button.
+   *
+   * They used to be one `startNewShader(save)`: with `save` it exported and
+   * then reset, and a cancelled export pre-flight `return`ed — abandoning NEW
+   * as well. That coupling is what the two-button row removes. Export Current
+   * now only exports (the dialog stays open and says "Exported!"), and Start
+   * NEW only resets; the user decides whether they want both, and in which
+   * order.
+   *
+   * `false` on a cancelled pre-flight is what stops the dialog claiming a file
+   * that was never written.
+   */
+  const exportCurrentShader = useCallback(async () => {
+    const bundle = await buildShaderExportChecked({
+      preflight: askExportPreflight,
+      glb: glbExportUi,
+      delivery: 'download',
+    });
+    if (!bundle) return false;
+    downloadShader(bundle);
+    return true;
+  }, [askExportPreflight, glbExportUi]);
+
   const startNewShader = useCallback(
-    async (save: boolean) => {
+    () => {
       setNewShaderOpen(false);
-      if (save) {
-        const bundle = await buildShaderExportChecked({
-          preflight: askExportPreflight,
-          glb: glbExportUi,
-          delivery: 'download',
-        });
-        if (!bundle) return;
-        downloadShader(bundle);
-      }
       useAppStore.getState().newGraph();
       // The viewport is unchanged by the reset, so the lone Output node at the
       // origin can land off-screen. Two frames, like the tile-drop snap: the
@@ -3716,7 +3756,7 @@ export function NodeEditor() {
         requestAnimationFrame(() => fitView(FIT_VIEW_OPTIONS)),
       );
     },
-    [fitView, askExportPreflight, glbExportUi],
+    [fitView],
   );
 
   return (
@@ -4038,7 +4078,8 @@ export function NodeEditor() {
         <NewShaderModal
           open={newShaderOpen}
           onCancel={() => setNewShaderOpen(false)}
-          onConfirm={startNewShader}
+          onExport={exportCurrentShader}
+          onStartNew={startNewShader}
         />
         {exportPreflightModal}
       </div>

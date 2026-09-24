@@ -53,8 +53,13 @@ describe('pickTexture — one click, one undo entry', () => {
     expect(body).not.toContain('image-total-cap');
   });
 
-  it('switches on the source kind with a never default (Phase 5 must handle a new kind here)', () => {
-    expect(body).toMatch(/switch \(src\.kind\) \{\s*case 'project':\s*break;\s*default: \{[\s\S]{0,200}?const unhandled: never = src\.kind;/);
+  it('switches on the source kind with a never default (a new kind must be handled here)', () => {
+    // 'project' is the synchronous value copy this describe() is about;
+    // 'model' leaves it entirely (there is no payload to copy until the import
+    // pipeline has made one) and is pinned by its own describe below.
+    expect(body).toMatch(/switch \(src\.kind\) \{\s*case 'project':\s*break;/);
+    expect(body).toMatch(/case 'model': \{/);
+    expect(body).toMatch(/default: \{[\s\S]{0,200}?const unhandled: never = src;/);
   });
 });
 
@@ -73,7 +78,10 @@ describe('the budget a pick is held to', () => {
 });
 
 describe('"From file…" — the drop pipeline, into THIS node', () => {
-  const body = between(MENU, 'async function fillImageNodeFromFile(', '/** Image-node section');
+  // Ends at the MODEL materialiser, which follows it: both are module
+  // functions with the same shape, and a slice spanning both would count two
+  // `updateNodeData` calls and report the pair as one broken function.
+  const body = between(MENU, 'async function fillImageNodeFromFile(', 'async function materialiseModelTexture(');
 
   it('runs the drop pipeline: encode, then the snap-only-with-its-stash rule', () => {
     expect(body).toContain('await encodeImageFile(file, ignore, deviceCap, mode)');
@@ -135,10 +143,15 @@ describe('TexturePicker', () => {
   it('lists only what projectTextureSources vouched for, through the two-step selector', () => {
     expect(PICKER).toMatch(/useAppStore\(\(s\) => \(open \? textureSourcesKey\(s\.nodes\) : ''\)\)/);
     expect(PICKER).toContain('projectTextureSources(useAppStore.getState().nodes)');
+    // The MODEL half, on its own cheap key — the picker never parses a model
+    // it is not showing.
+    expect(PICKER).toContain('useModelTextures(open)');
+    expect(PICKER).toContain('mergeTextureSources(projectSources, model.sources)');
     // The ONLY <img src> is the kind-switched thumbnail.
     expect(count(PICKER, 'src={')).toBe(1);
-    expect(PICKER).toContain('<img src={thumbnailUrl(s)}');
-    expect(PICKER).toMatch(/function thumbnailUrl\(src: TextureSource\): string \{\s*switch \(src\.kind\) \{\s*case 'project':\s*return src\.dataUrl;\s*default: \{[\s\S]{0,200}?const unhandled: never = src\.kind;/);
+    expect(PICKER).toContain('<img src={url}');
+    expect(PICKER).toMatch(/const url = thumbnailUrl\(s, model\.thumbs\);/);
+    expect(PICKER).toMatch(/function thumbnailUrl\(src: TextureSource, modelThumbs: ReadonlyMap<number, string>\): string \{\s*switch \(src\.kind\) \{\s*case 'project':\s*return src\.dataUrl;\s*case 'model':\s*return modelThumbs\.get\(src\.image\) \?\? '';\s*default: \{[\s\S]{0,200}?const unhandled: never = src;/);
     expect(PICKER).toContain('MAX_LISTED_TEXTURE_SOURCES');
   });
 
@@ -188,7 +201,10 @@ describe('the empty slot names the picker — except in a study session', () => 
   it('ImageThumbEmpty defaults to imageEmptyHint(), so every canvas slot agrees', () => {
     expect(SHADER_NODE).toContain('hint = imageEmptyHint(),');
     expect(SHADER_NODE).toContain('title={t(hint, language)}');
-    expect(SHADER_NODE).toMatch(/imageNode' && <ImageThumbEmpty language=\{language\} \/>/);
+    // The slot is the `else` of the thumbnail now, both INSIDE the port
+    // region (the edge-port layout centres the sockets on that region, so the
+    // picture has to be in it).
+    expect(SHADER_NODE).toMatch(/<ImageThumbEmpty language=\{language\} \/>/);
   });
 
   it('a replica keeps the plain statement: it has no menu to name', () => {
@@ -202,5 +218,129 @@ describe('the empty slot names the picker — except in a study session', () => 
 describe('textureSources.ts stays the one value shape', () => {
   it('a pick is withImagePayload behind the no-op check', () => {
     expect(SOURCES).toMatch(/if \(current\.imageB64 === src\.dataUrl\) return null;\s*return withImagePayload\(current, src\);/);
+  });
+});
+
+/**
+ * A MODEL texture — a picture still inside the loaded 3D model — becomes this
+ * node's picture (2026-09-19). Source pins for the same reason as the rest of
+ * this file: the env is `node`, so the component cannot be rendered. The pure
+ * halves ARE run, in utils/modelTextureSources.test.ts.
+ */
+describe('picking a texture out of the loaded model', () => {
+  const HOOK = read('./useModelTextures.ts');
+  const body = between(MENU, 'async function materialiseModelTextureInner(', '/** Image-node section');
+
+  it('leaves the synchronous pick entirely — there is no payload to copy yet', () => {
+    const pick = between(MENU, 'const pickTexture = ', 'const pickFile = ');
+    expect(pick).toMatch(/case 'model': \{[\s\S]{0,400}?materialiseModelTexture\(targetId, src\)/);
+    // It marks the node busy while it runs, exactly as "From file…" does, so
+    // the menu's other controls cannot fire a second write into the same node.
+    expect(pick).toMatch(/setImportingFor\(targetId\);/);
+  });
+
+  it('re-reads the LIVE model, never the picker’s parse', () => {
+    // The model can be swapped while the grid is open, and an image index
+    // means nothing across two files.
+    expect(body).toMatch(/const mesh = before\.previewMesh;/);
+    expect(body).toMatch(/readGltfModel\(mesh\.bytes, mesh\.kind\)/);
+    expect(body).toMatch(/if \(!read\.ok\) return;/);
+    expect(body).toMatch(/if \(!img \|\| img\.status !== 'ok' \|\| !img\.bytes\) return;/);
+  });
+
+  it('encodes through the GLB import’s own encoder, at the picture’s slot', () => {
+    expect(body).toMatch(/encodeGltfImages\(read\.model, \[\{ image: src\.image, slot: src\.slot \}\]/);
+    // The slot's own policy is the size: no second cap invented here.
+    expect(body).toMatch(/maxDim: null,/);
+    expect(body).toMatch(/stash: \(p\) => stashImageOrigin\(p, Date\.now\(\)\)/);
+  });
+
+  it('re-reads the target node AFTER the await and writes it once (or not at all)', () => {
+    const awaitAt = body.indexOf('await encodeGltfImages(');
+    const liveAt = body.indexOf('store.nodes.find((n) => n.id === targetId)');
+    expect(awaitAt).toBeGreaterThan(-1);
+    expect(liveAt).toBeGreaterThan(awaitAt);
+    expect(count(body, 'updateNodeData(')).toBe(1);
+    expect(body).toMatch(/const picked = withImagePayload\(liveVals, \{/);
+    expect(body).toMatch(/store\.updateNodeData\(targetId, \{\s*values: \{/);
+  });
+
+  it('carries the picture’s OWN two facts: the glTF orientation and the slot colour space', () => {
+    // A pick IS the "Mesh with Materials" import, for one texture, so it must
+    // agree with it: `gltfTextureValues` writes `orientation: 'gltf'` (a glTF
+    // texture's first row is its TOP row) and the section builder writes
+    // `slotColorSpace(slot)`. Without the first the picture renders upside
+    // down on the model it came from; without the second a normal or ORM map
+    // is gamma decoded — wrong normals, wrong roughness, invisible until you
+    // look at the lighting.
+    // Orientation rides the PAYLOAD fields, so withImagePayload writes it and
+    // the next picture loaded into this node clears it.
+    expect(body).toMatch(/fileName: enc\.fileName,\s*orientation: 'gltf',/);
+    expect(body).toMatch(/colorSpace: slotColorSpace\(src\.slot\)/);
+    // The UV set and the texture transform are NOT carried: they belong to a
+    // material's textureInfo, not to the picture. (The comment above the write
+    // says so by name, so the pin is on the CODE — the one call that would
+    // copy them.)
+    expect(body).not.toMatch(/gltfTextureValues\(/);
+    expect(body).not.toMatch(/uvSet:/);
+  });
+
+  it('announces a DEVICE downscale, the way a drop does', () => {
+    expect(body).toMatch(/kind: 'image-device-downscaled'/);
+    expect(body).toMatch(/outcome\.reason === 'device'/);
+    expect(body).toMatch(/!store\.hideImageDownscaleWarning/);
+  });
+
+  it('checks the picture’s NAME against the fresh parse, not just its index', () => {
+    // The model can be swapped while the grid is open, and image 2 of the new
+    // file is a different picture.
+    expect(body).toMatch(/gltfImageFileName\(read\.model, src\.image, mesh\.name\) !== src\.fileName/);
+  });
+
+  it('cannot run twice on one node — the guard outlives the menu', () => {
+    // `importingFor` is the MENU's state and dies with it; closing the menu
+    // mid-encode and reopening it would otherwise start a second encode of
+    // the same node, and the two would race to updateNodeData.
+    const outer = between(MENU, 'const materialising = new Set<string>();', 'async function materialiseModelTextureInner(');
+    expect(outer).toMatch(/if \(materialising\.has\(targetId\)\) return;/);
+    expect(outer).toMatch(/materialising\.add\(targetId\);/);
+    expect(outer).toMatch(/finally \{\s*materialising\.delete\(targetId\);/);
+  });
+
+  it('holds a growing payload to the SAME per-instance budget and notice', () => {
+    expect(body).toMatch(
+      /!ignore &&\s*enc\.payload\.dataUrl\.length > currentUrl\.length &&\s*imageCharsReplacing\(store\.nodes, targetId, enc\.payload\.dataUrl\) > MAX_TOTAL_IMAGE_CHARS/,
+    );
+    expect(body).toContain("kind: 'image-pick-cap'");
+  });
+
+  it('carries the origin, so Revert and the Resolution ladder still work', () => {
+    expect(body).toMatch(/originId: enc\.origin\.originId, srcWidth: enc\.origin\.srcWidth, srcHeight: enc\.origin\.srcHeight/);
+  });
+
+  it('the thumbnails are encoded, never raw model bytes in an <img>', () => {
+    // The whole security story: an attacker-supplied model's bytes never reach
+    // the DOM — what does is a re-encoded data: URL of the same shape as every
+    // other picture in the app.
+    expect(HOOK).toContain('encodeGltfImages(');
+    // The CODE, not the prose: the file's header explains at length why a
+    // blob: URL over the model's bytes was not the shortcut taken.
+    expect(HOOK).not.toContain('URL.createObjectURL');
+    expect(HOOK).not.toMatch(/new Blob\(/);
+    expect(HOOK).toMatch(/maxDim: THUMB_MAX_DIM,/);
+    // Not a payload: no budget, no origin stash, no per-image refusal.
+    expect(HOOK).toMatch(/budgetChars: Infinity,/);
+    expect(HOOK).toMatch(/stash: \(\) => null,/);
+  });
+
+  it('parses at most once per model, only while the grid is open, and aborts', () => {
+    expect(HOOK).toMatch(/useAppStore\(\(s\) => \(open \? modelTextureKey\(s\.previewMesh\) : ''\)\)/);
+    expect(HOOK).toContain('useAppStore.getState().previewMesh');
+    // Closing the grid must not throw the parse away (key '' on close).
+    expect(HOOK).toMatch(/if \(key\) parseKeyRef\.current = key;/);
+    expect(HOOK).toMatch(/\}, \[parseKey\]\);/);
+    expect(HOOK).toMatch(/if \(thumbKey\.current === key\) return;/);
+    expect(HOOK).toContain('new AbortController()');
+    expect(HOOK).toMatch(/ctrl\.abort\(\);/);
   });
 });

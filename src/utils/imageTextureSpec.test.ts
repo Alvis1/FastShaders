@@ -110,9 +110,22 @@ describe('imageTextureSpecKey', () => {
 });
 
 describe('imageTextureSpec: the ONE normaliser', () => {
-  it('is a leaf: it imports nothing', () => {
-    expect(SPEC_SRC).not.toMatch(/^\s*import\s/m);
+  it('is a leaf: the ONLY thing it imports is a deeper leaf', () => {
+    // The rule is "never inside the store's import cycle" (the costTable
+    // lesson: evaluating across the cycle during initialisation throws a TDZ
+    // ReferenceError that depends on which module a vitest worker reached
+    // first) — not "no imports" for its own sake. `utils/valueCoerce.ts` is
+    // itself import-free, so the chain stays a leaf chain and no cycle is
+    // reachable; it is here because this normaliser reads ADVERSARIAL
+    // `values`, and a bare `String()`/`Number()` on a tampered entry throws
+    // inside codegen, inside a render, with no error boundary above it.
+    const imports = [...SPEC_SRC.matchAll(/^\s*import\s[^;]*from\s*'([^']+)'/gm)].map((m) => m[1]);
+    expect(imports).toEqual(['./valueCoerce']);
     expect(SPEC_SRC).not.toMatch(/\brequire\(/);
+    // …and the thing it imports imports nothing.
+    const coerce = readFileSync(new URL('./valueCoerce.ts', import.meta.url), 'utf8');
+    expect(coerce).not.toMatch(/^\s*import\s/m);
+    expect(coerce).not.toMatch(/\brequire\(/);
   });
 
   it('the texture planner reads colour space, filter and wrap through it, and codegen reads them nowhere else', () => {

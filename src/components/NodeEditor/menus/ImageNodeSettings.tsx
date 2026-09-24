@@ -8,6 +8,9 @@ import { resolutionLadder } from '@/utils/imageCodec';
 import { resizeEncodedImage, encodeImageFile, isSvgFile, type ImageConvertMode } from '@/utils/imageImport';
 import { imageDropReport, type ConvertNoteReason } from '@/utils/imageImportNote';
 import { pickTextureValues, withImagePayload, type TextureSource } from '@/utils/textureSources';
+import type { ModelTextureSource } from '@/utils/modelTextureSources';
+import { readGltfModel, gltfImageFileName, slotColorSpace } from '@/utils/gltfReader';
+import { encodeGltfImages } from '@/utils/gltfTextureEncode';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { isEvalMode } from '@/eval/evalMode';
 import { TexturePicker } from './TexturePicker';
@@ -133,6 +136,170 @@ async function fillImageNodeFromFile(
         sourceH: res.sourceHeight,
         finalW: res.original?.width ?? payload.width,
         finalH: res.original?.height ?? payload.height,
+      },
+    });
+  }
+}
+
+/**
+ * A MODEL texture becomes this node's picture: the 'model' half of
+ * `pickTexture`, which cannot be the synchronous value copy the 'project' half
+ * is — there is no payload until the import pipeline makes one.
+ *
+ * It is the drop path with a different source of bytes, and every step it
+ * shares is deliberate:
+ *  - the bytes come from the LIVE `previewMesh`, re-read here rather than from
+ *    the picker's parse: the model can be swapped while the grid is open, and
+ *    an image index means nothing across two files. A model that has gone, or
+ *    one whose image index is no longer there, is simply a pick that does
+ *    nothing rather than a pick that writes the wrong picture;
+ *  - the encode is `encodeGltfImages`, the GLB import's own, at the class the
+ *    picture's SLOT demands — a normal map must not come back through a colour
+ *    slot's lossy settings, and that decision is already made and tested;
+ *  - the ORIGIN is stashed, exactly as an import or a drop stashes it, so
+ *    "Revert to original" and the Resolution ladder work on a picked model
+ *    texture like on any other picture;
+ *  - the project budget is checked the way the 'project' pick checks it: per
+ *    INSTANCE, only when the new payload GROWS this node's, and a refusal
+ *    raises the same `image-pick-cap` notice.
+ *
+ * A module function, not a closure over the render: the menu can close or MOVE
+ * to another node mid-encode. It takes the node's id, re-reads that node LIVE
+ * after the await, and writes ONE `updateNodeData` (one undo entry) or nothing.
+ */
+const materialising = new Set<string>();
+
+async function materialiseModelTexture(targetId: string, src: ModelTextureSource): Promise<void> {
+  // Module scope, not the menu's `importingFor`: that state dies when the menu
+  // unmounts, and this function deliberately outlives it — closing the menu
+  // mid-encode and reopening it would otherwise start a SECOND encode of the
+  // same node, and the two would race to `updateNodeData` with two undo
+  // entries for one act.
+  if (materialising.has(targetId)) return;
+  materialising.add(targetId);
+  try {
+    await materialiseModelTextureInner(targetId, src);
+  } finally {
+    materialising.delete(targetId);
+  }
+}
+
+async function materialiseModelTextureInner(targetId: string, src: ModelTextureSource): Promise<void> {
+  const before = useAppStore.getState();
+  const mesh = before.previewMesh;
+  if (!mesh || (mesh.kind !== 'glb' && mesh.kind !== 'gltf')) return;
+  const read = readGltfModel(mesh.bytes, mesh.kind);
+  if (!read.ok) return;
+  const img = read.model.images[src.image];
+  if (!img || img.status !== 'ok' || !img.bytes) return;
+  // The index exists in the FRESH parse — but an index alone does not say it
+  // is the picture whose cell was clicked. The model can be swapped while the
+  // grid is open, and image 2 of the new file is a different picture. The
+  // reader's own display name is the cheapest thing both parses agree on.
+  if (gltfImageFileName(read.model, src.image, mesh.name) !== src.fileName) return;
+
+  const ignore = before.ignoreImageLimits;
+  const deviceCap = resolveDeviceTextureDim(before.selectedHeadsetId, before.costProfiles);
+  const res = await encodeGltfImages(read.model, [{ image: src.image, slot: src.slot }], {
+    modelName: mesh.name,
+    // No extra cap: the slot's own policy is the size the import would have
+    // stored this picture at, and a pick is that import for one texture.
+    maxDim: null,
+    deviceMaxDim: deviceCap,
+    ignoreLimits: ignore,
+    // The budget is re-checked below against THIS node's payload, which is the
+    // per-instance rule a replace follows; letting the encoder also enforce a
+    // project total would shrink the picture for a limit that does not apply.
+    budgetChars: Infinity,
+    stash: (p) => stashImageOrigin(p, Date.now()),
+  });
+
+  const store = useAppStore.getState();
+  const language = store.language;
+  const enc = res.encoded.get(src.image);
+  const outcome = res.outcomes[0];
+  if (!enc) {
+    window.alert(
+      fillTemplate(t('Could not load {name} as an image.', language), {
+        name: `“${outcome && 'name' in outcome ? outcome.name : src.fileName}”`,
+      }),
+    );
+    return;
+  }
+
+  const live = store.nodes.find((n) => n.id === targetId);
+  if (!live || live.data.registryType !== 'imageNode') return;
+  const liveVals = getNodeValues(live);
+  const currentUrl = typeof liveVals.imageB64 === 'string' ? liveVals.imageB64 : '';
+  if (currentUrl === enc.payload.dataUrl) return;
+  if (
+    !ignore &&
+    enc.payload.dataUrl.length > currentUrl.length &&
+    imageCharsReplacing(store.nodes, targetId, enc.payload.dataUrl) > MAX_TOTAL_IMAGE_CHARS
+  ) {
+    store.enqueueLimitNotice({
+      id: generateId(),
+      kind: 'image-pick-cap',
+      fileName: displayImageFileName(enc.fileName, enc.payload.dataUrl),
+    });
+    return;
+  }
+  // The picture arrives with TWO facts about itself that only its origin knows,
+  // and the "Mesh with Materials" import writes both for exactly this reason —
+  // a pick is that import, for one texture, so it must agree or the same file
+  // looks different depending on how it got here:
+  //
+  //  - ORIENTATION. A glTF texture's first row is the TOP row (`flipY = false`,
+  //    `gltfTextureValues` writes `orientation: 'gltf'`), while the app's own
+  //    drops are uploaded the WebGL way. Without this the picture renders
+  //    upside down on the very model it came out of.
+  //  - COLOUR SPACE. `slotColorSpace` is the reader's own rule: baseColor and
+  //    emissive are sRGB, everything else is linear DATA. An absent key reads
+  //    as 'color', so a normal or ORM map picked from a model would be gamma
+  //    decoded — wrong normals, wrong roughness, and invisible until you look
+  //    at the lighting.
+  //
+  // What is NOT carried: the UV set and the KHR_texture_transform. Those live
+  // on the material's textureInfo, not on the picture — they describe how ONE
+  // material samples it, and this node may be sampling it for something else
+  // entirely. The settings menu's glTF-mapping block is where a user sets them.
+  const picked = withImagePayload(liveVals, {
+    dataUrl: enc.payload.dataUrl,
+    width: enc.payload.width,
+    height: enc.payload.height,
+    fileName: enc.fileName,
+    orientation: 'gltf',
+    ...(enc.origin
+      ? { originId: enc.origin.originId, srcWidth: enc.origin.srcWidth, srcHeight: enc.origin.srcHeight }
+      : {}),
+  });
+  store.updateNodeData(targetId, {
+    values: { ...picked, colorSpace: slotColorSpace(src.slot) },
+  });
+
+  // The device texture cap is a REAL downscale of what the user picked, and
+  // the drop path announces it — so does this. A 'slot' shrink is not
+  // announced: that is the import's own documented policy (1024 px colour,
+  // 512 px data) and a picked texture is stored exactly as an imported one,
+  // so saying so here would report the feature working as a problem.
+  if (
+    !ignore &&
+    !store.hideImageDownscaleWarning &&
+    outcome &&
+    outcome.status === 'downscaled' &&
+    outcome.reason === 'device'
+  ) {
+    store.enqueueLimitNotice({
+      id: generateId(),
+      kind: 'image-device-downscaled',
+      fileName: enc.fileName,
+      downscale: {
+        deviceLabel: resolveDeviceBudget(store.selectedHeadsetId, store.costProfiles).label,
+        cap: deviceCap,
+        sourceW: img.width ?? outcome.width,
+        sourceH: img.height ?? outcome.height,
+        finalW: outcome.width,
+        finalH: outcome.height,
       },
     });
   }
@@ -376,17 +543,23 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
    *  given a picture this way. */
   const pickTexture = (src: TextureSource) => {
     if (busy) return;
-    // The ONE place a source becomes node values. Phase 5's 'model' kind is
-    // not a value to copy — it needs materialising through the import
-    // pipeline, its own budget check and a display URL — so a new kind fails
-    // to compile here until it is handled.
+    // The ONE place a source becomes node values. A 'model' source is not a
+    // value to copy — there is no payload until the import pipeline has made
+    // one — so it leaves this synchronous path entirely; a new kind fails to
+    // compile here until it says which of the two it is.
     switch (src.kind) {
       case 'project':
         break;
+      case 'model': {
+        const targetId = nodeId;
+        setImportingFor(targetId);
+        void materialiseModelTexture(targetId, src).finally(() =>
+          setImportingFor((cur) => (cur === targetId ? null : cur)),
+        );
+        return;
+      }
       default: {
-        // `src.kind`, not `src`: a one-member "union" is a plain interface
-        // and does not narrow to never, while its discriminant does.
-        const unhandled: never = src.kind;
+        const unhandled: never = src;
         void unhandled;
         return;
       }
@@ -577,8 +750,17 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
 
   return (
     <>
+      {/* The divider alone, no heading. It said "Image" on a menu whose node
+          already says so twice on the card beside it — and the generic menu's
+          own node-label line above said it a third time. Both went on
+          2026-09-19; the rule is separation, not naming. The block's own rows
+          (Texture, Format, Resolution, Flip X/Y, Filtering…) are what it is
+          about, and none of them means anything on another node type.
+
+          A THIRD sticky `.context-menu__category` in one scrolling list also
+          overlapped the two above it as the list scrolled, which is what made
+          the duplicate visible in the first place. */}
       <div className="context-menu__divider" />
-      <div className="context-menu__category">{t('Image', language)}</div>
       {/* The texture picker: every image the project already holds, plus
           "From file…". Study sessions keep today's Image node (research §7),
           so it is hidden there — the gate is UI-only. Keyed by the node so a

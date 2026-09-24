@@ -30,6 +30,7 @@
  * `uv-approximated` note), and the sampler from `readImageTextureSpec`.
  */
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { valueNum, valueStr } from '@/utils/valueCoerce';
 import { drivingMarchOutput } from '@/utils/sdfPartition';
 import {
   channelHandle,
@@ -124,7 +125,7 @@ function snap(x: number): number {
 
 /** The codegen's own read: `Number()`, a non-finite value is the default. */
 function numVal(values: Readonly<Record<string, unknown>>, key: string, dflt: number): number {
-  const v = Number(values[key]);
+  const v = valueNum(values[key]);
   return Number.isFinite(v) ? v : dflt;
 }
 
@@ -240,7 +241,7 @@ export function planGlbExport(
     const v = getNodeValues(n);
     const asset = imageAssetFor(n.id, v);
     a = asset
-      ? { key: asset.key, src: asset.src, name: String(v.fileName ?? ''), width: Number(v.width), height: Number(v.height) }
+      ? { key: asset.key, src: asset.src, name: valueStr(v.fileName ?? ''), width: valueNum(v.width), height: valueNum(v.height) }
       : null;
     assetOfNode.set(n.id, a);
     return a;

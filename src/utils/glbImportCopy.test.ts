@@ -54,7 +54,8 @@ describe('lv.json coverage', () => {
   it('every dialog key (GLB_IMPORT_KEYS), and the object is frozen', () => {
     for (const key of Object.values(GLB_IMPORT_KEYS)) expectTranslated(key);
     expect(Object.isFrozen(GLB_IMPORT_KEYS)).toBe(true);
-    expect(GLB_IMPORT_KEYS.title).not.toContain('\u201c');
+    // No `title` key: the heading is the model's FILE NAME, which is data.
+    expect('title' in GLB_IMPORT_KEYS).toBe(false);
   });
 
   it('the owner\'s Latvian for ambient occlusion', () => {
@@ -151,32 +152,42 @@ describe('glbDialogCopy', () => {
       for (const lang of ['en', 'lv'] as const) {
         for (const opts of [ASK, { ...ASK, hasModel: true }, { hasModel: false, phase: 'building' as const, progress: { done: 2, total: 5 } }]) {
           const c = glbDialogCopy(plan, facts, opts, lang);
-          const all = [c.title, ...c.lines.map((l) => l.text), c.primaryLabel ?? '', c.modelOnlyLabel, c.cancelLabel, c.modelOnlyDisabledReason ?? '', c.progress ?? ''].join('\n');
+          const all = [c.title, ...c.facts, c.importHeading, ...c.lines.map((l) => l.text), c.primaryLabel ?? '', c.primaryTitle, c.modelOnlyLabel, c.modelOnlyTitle, c.cancelLabel, c.modelOnlyDisabledReason ?? '', c.restoreTitle ?? '', c.progress ?? ''].join('\n');
           expect(all, `${name} ${lang}`).not.toMatch(/\{[a-z]+\}/);
-          expect(c.title).toContain('\u201cm.glb\u201d');
+          // The heading is the bare file name now (a restore still asks a
+          // question and keeps its quoted one).
+          expect(c.title).toContain('m.glb');
         }
       }
     }
   });
 
-  it('the line order: summary, memory, N11, N9, replace/undo, then the model line', () => {
+  it('the header FACTS, then the WARNING lines only', () => {
     const c = glbDialogCopy(SHAPES.confirmOverMax.plan, SHAPES.confirmOverMax.facts, { ...ASK, hasModel: true }, 'en');
+    // The counts moved OUT of the prose and into the two header rows.
+    expect(c.facts).toEqual([
+      expect.stringMatching(/^Textures: 1 \(memory: .* MB\)$/),
+      `Materials: ${MAX_INDEX_MATERIALS + 3}`,
+    ]);
+    expect(c.importHeading).toBe('Import');
     const texts = c.lines.map((l) => l.text);
-    expect(texts[0]).toBe(`Materials: ${MAX_INDEX_MATERIALS + 3}, textures: 1.`);
-    expect(texts[1]).toMatch(/^Estimated texture memory on the headset: .* MB \(1 texture\)\.$/);
-    expect(texts[2]).toBe(`Import all ${MAX_INDEX_MATERIALS + 3} materials? Each adds an Output node, textures and draw calls.`);
-    expect(texts[3]).toBe(`The editor holds at most ${MAX_INDEX_MATERIALS} material sections; the remaining 3 keep the materials authored in the model.`);
-    expect(texts[4]).toBe('Building replaces the current shader. Undo (Ctrl+Z / ⌘Z) brings it back while this tab stays open.');
-    expect(texts[5]).toBe('The current 3D model is replaced either way, and undo does not bring it back.');
-    expect(c.lines.map((l) => l.tone)).toEqual(['normal', 'normal', 'warn', 'warn', 'normal', 'normal']);
+    // WARNINGS only — what each answer does is its own tooltip.
+    expect(texts[0]).toBe(`Import all ${MAX_INDEX_MATERIALS + 3} materials? Each adds an Output node, textures and draw calls.`);
+    expect(texts[1]).toBe(`The editor holds at most ${MAX_INDEX_MATERIALS} material sections; the remaining 3 keep the materials authored in the model.`);
+    expect(c.lines.map((l) => l.tone)).toEqual(['warn', 'warn']);
+    // What the button does, and what survives it. Both halves matter: it is
+    // the sentence that has to stop a user pressing it by reflex, and the one
+    // that stops them fearing for the palette library it does NOT touch.
+    expect(c.primaryTitle).toBe('The model\u2019s materials become the shader: the current nodes, connections and board drawings are replaced, and the shader takes the model\u2019s name. Your palettes and tuned values stay. Undo (Ctrl+Z / ⌘Z) brings back the nodes, connections and drawings while this tab stays open. The current 3D model is replaced either way, and undo does not bring it back.');
+    expect(c.modelOnlyTitle).toContain('Its materials and textures are discarded');
   });
 
-  it('blocked: the off text, no memory line, no primary', () => {
+  it('blocked: the off text, the counts still shown, no primary', () => {
     const c = glbDialogCopy(SHAPES.blocked.plan, SHAPES.blocked.facts, ASK, 'en');
+    // The facts are what EXPLAIN the block, so they stay even with no build.
+    expect(c.facts[1]).toBe('Materials: 12');
     expect(c.lines.map((l) => l.text)).toEqual([
-      'Materials: 12, textures: 1.',
       "This model has 12 materials. Imports are limited to 10 — each becomes an Output node with its own textures and draw calls. Turn on “Allow more than 10 materials” in the toolbar's right-click list to import them all.",
-      'Building replaces the current shader. Undo (Ctrl+Z / ⌘Z) brings it back while this tab stays open.',
     ]);
     expect(c.primaryLabel).toBeNull();
   });
@@ -187,10 +198,11 @@ describe('glbDialogCopy', () => {
     expect(heading.text).toBe("Textures exceed this project's image budget");
     const msg = c.lines[c.lines.indexOf(heading) + 1].text;
     expect(msg).toMatch(/^This model's 16 textures would take about \d[\d ]* KB of the \d[\d ]* KB still free\./);
-    expect(c.primaryLabel).toMatch(/^Import at (512|256|128) px$/);
+    // The resolution FOLDS INTO the one primary rather than adding a button.
+    expect(c.primaryLabel).toMatch(/^Mesh with Materials \((512|256|128) px\)$/);
     const one = glbDialogCopy(SHAPES.importAtOne.plan, SHAPES.importAtOne.facts, ASK, 'en');
     expect(one.lines.some((l) => l.text.startsWith("This model's texture would take about"))).toBe(true);
-    expect(one.primaryLabel).toBe('Import at 512 px');
+    expect(one.primaryLabel).toBe('Mesh with Materials (512 px)');
     const none = glbDialogCopy(SHAPES.nothingFits.plan, SHAPES.nothingFits.facts, ASK, 'en');
     expect(none.lines.some((l) => l.text.startsWith('Even at 128 px'))).toBe(true);
     expect(none.primaryLabel).toBeNull();
@@ -206,31 +218,34 @@ describe('glbDialogCopy', () => {
     expect(plan.textures).toBe(n);
     expect(plan.memory?.count).toBe(MAX_INDEX_MATERIALS);
     expect(plan.budget && !plan.budget.fits && plan.budget.importAt !== null).toBe(true);
-    const texts = glbDialogCopy(plan, f, ASK, 'en').lines.map((l) => l.text);
-    expect(texts.some((t) => t.startsWith('Estimated texture memory') && t.endsWith(`(${MAX_INDEX_MATERIALS} textures).`))).toBe(true);
+    const copy = glbDialogCopy(plan, f, ASK, 'en');
+    // The header names BOTH numbers when they differ: a MB figure beside a
+    // count it does not cover is a lie the reader cannot detect.
+    expect(copy.facts[0]).toMatch(new RegExp(`^Textures: ${n} \\(${MAX_INDEX_MATERIALS} imported, memory: .* MB\\)$`));
+    const texts = copy.lines.map((l) => l.text);
     expect(texts.some((t) => t.startsWith(`This model's ${MAX_INDEX_MATERIALS} textures would take about`))).toBe(true);
     expect(texts.some((t) => t.startsWith(`This model's ${n} textures`))).toBe(false);
     const lvTexts = glbDialogCopy(plan, f, ASK, 'lv').lines.map((l) => l.text);
     expect(lvTexts.some((t) => t.startsWith(`Šī modeļa tekstūras (${MAX_INDEX_MATERIALS}) aizņemtu`))).toBe(true);
   });
 
-  it('ignore-limits: no N9 at all, the plain Build label — exactly', () => {
+  it('ignore-limits: no N9 at all, the unfolded label — exactly', () => {
     const c = glbDialogCopy(SHAPES.ignoreLimits.plan, SHAPES.ignoreLimits.facts, ASK, 'en');
     expect(c.lines.some((l) => l.tone === 'heading')).toBe(false);
-    expect(c.primaryLabel).toBe("Build a shader from this model's materials (replaces the current shader)");
+    expect(c.primaryLabel).toBe('Mesh with Materials');
+    expect(c.modelOnlyLabel).toBe('Only Mesh');
   });
 
-  it('N12 uses the one-key at 1 and the other-key at 2 and 21; LV prints a decimal comma', () => {
+  it('the textures row counts them and carries the memory; LV prints a decimal comma', () => {
     const at = (n: number) => {
       const f = factsOf({ textures: Array.from({ length: n }, (_, i) => tex({ key: `k${i}`, width: 300, height: 300 })) });
-      return glbDialogCopy(planGlbImportDialog(f, CTX), f, ASK, 'en').lines[1].text;
+      return glbDialogCopy(planGlbImportDialog(f, CTX), f, ASK, 'en').facts[0];
     };
-    expect(at(1)).toMatch(/\(1 texture\)\.$/);
-    expect(at(2)).toMatch(/\(2 textures\)\.$/);
-    expect(at(21)).toMatch(/\(21 textures\)\.$/);
+    expect(at(1)).toMatch(/^Textures: 1 \(memory: .* MB\)$/);
+    expect(at(21)).toMatch(/^Textures: 21 \(memory: .* MB\)$/);
     const f = factsOf({ textures: [tex({ width: 300, height: 300 })] });
-    const lv = glbDialogCopy(planGlbImportDialog(f, CTX), f, ASK, 'lv').lines[1].text;
-    expect(lv).toMatch(/^Aptuvenais tekstūru atmiņas patēriņš brillēs: \d+,\d MB \(1 tekstūra\)\.$/);
+    const lv = glbDialogCopy(planGlbImportDialog(f, CTX), f, ASK, 'lv').facts[0];
+    expect(lv).toMatch(/^Tekstūras: 1 \(atmiņa: \d+,\d MB\)$/);
   });
 
   it('Model only carries the translated N3 sentence when the file is over the model cap', () => {
@@ -238,6 +253,8 @@ describe('glbDialogCopy', () => {
     expect(c.modelOnlyDisabledReason).toContain('64');
     expect(c.modelOnlyDisabledReason).not.toContain('{');
     expect(glbDialogCopy(SHAPES.ok.plan, SHAPES.ok.facts, ASK, 'en').modelOnlyDisabledReason).toBeNull();
+    // The refusal OUTRANKS the what-it-does tooltip on that button.
+    expect(c.modelOnlyTitle).toBe(c.modelOnlyDisabledReason);
   });
 
   it('the building phase carries the progress line', () => {

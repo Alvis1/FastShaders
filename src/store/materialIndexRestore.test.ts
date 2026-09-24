@@ -22,7 +22,7 @@ import {
   loadGraph,
   loadSavedGroupsReport,
 } from './useAppStore';
-import { makeNode, makeEdge } from '@/test-utils';
+import { HISTORY_IDLE, makeNode, makeEdge } from '@/test-utils';
 import {
   contributingOutputs,
   gltfIndexOf,
@@ -106,6 +106,7 @@ function reset() {
     edges: [],
     past: [],
     future: [],
+    ...HISTORY_IDLE,
     savedGroups: [],
     pendingLimitNotices: [],
     importNote: null,

@@ -20,27 +20,42 @@ interface Props {
 }
 
 /**
- * "Build a shader from this model's materials?" — the model-drop REPLACE
- * gate (GLB Phase 5 Step 9). Three answers, in this order on screen: Cancel
- * (changes nothing; aborts a build in flight), Model only (today's model
- * drop, exactly), and the primary — Build, or "Import at {res} px" when the
- * textures would not fit the image budget at their slot sizes. There is
- * deliberately NO checkbox, no "don't ask again" and no localStorage here:
- * replacing a shader is never remembered.
+ * The dropped-model dialog: the model's FILE NAME, what it holds (textures
+ * and their memory, materials), then ONE question — "Import" — with two equal
+ * answers and a red Cancel below (the owner's layout, 2026-09-19).
  *
- * Focus starts on Model only (when it is enabled), so Enter keeps the
- * historical one-gesture outcome; it never starts on the primary. Escape is
- * Cancel; every other key but Tab is swallowed in the CAPTURE phase, the
+ *   · Only Mesh — the model alone; its materials and textures are discarded.
+ *     The caller's own model drop over bytes it has already read, so this
+ *     branch writes nothing and fires nothing.
+ *   · Mesh with Materials — the model's materials REPLACE the graph (the
+ *     nodes, wires and board drawings) and the shader takes the model's name;
+ *     palettes and tuned values stay (engine/projectImport.ts'
+ *     `commitGlbImport`, the ONE commit path).
+ *
+ * There are TWO buttons whatever the plan says. The texture-budget case folds
+ * its reduced resolution INTO the second label ("Mesh with Materials
+ * (1024 px)") rather than standing as a third answer — a dialog that grows a
+ * button in the one case the user is least equipped to judge is the wrong
+ * shape. The only third button is "Restore the stored shader", which is not
+ * an import at all: it replaces the whole project with code that came out of
+ * someone else's model file, so it keeps its own row and its own wording.
+ * There is deliberately NO checkbox, no "don't ask again" and no localStorage:
+ * rewiring a shader is never remembered.
+ *
+ * WHAT each answer DOES is a `title` on the answer itself, never a paragraph
+ * in the panel: the body keeps only WARNINGS (`copy.lines` is filtered to
+ * them) — the things about THIS model that change what an answer will do.
+ * The refusal reason still outranks the Only Mesh tooltip when it cannot be
+ * pressed.
+ *
+ * Focus starts on Only Mesh (when it can be pressed), so Enter still means the
+ * answer that cannot surprise; it never starts on the build. Escape is Cancel;
+ * every other key but Tab is swallowed in the CAPTURE phase, the
  * NewShaderModal rule (the canvas binds its shortcuts on `window`). The
  * backdrop is Cancel only while asking — a click during a build is ignored —
  * and it swallows drag/drop so a file dropped on the dialog never navigates
- * the page. The words come from `glbDialogCopy`.
- *
- * GLB Phase 7: "Restore the stored shader" renders LAST when the plan offers
- * a restore (`plan.embeddedShader`), and then it — not Build — carries the
- * primary styling. It is a click-only gate: it replaces the whole project
- * with code that came out of someone's model file, so it is never the focused
- * default (Enter still means Model only) and no choice is ever remembered.
+ * the page. The words come from `glbDialogCopy`; nothing here branches on the
+ * plan.
  */
 export function GlbImportModal({ request, phase, progress, portalHost, onChoose }: Props) {
   const language = useAppStore((s) => s.language);
@@ -91,13 +106,21 @@ export function GlbImportModal({ request, phase, progress, portalHost, onChoose 
         role="dialog"
         aria-modal="true"
         aria-labelledby="glb-import-modal-title"
+        aria-describedby="glb-import-modal-facts"
         aria-busy={building || undefined}
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="csv-import-modal__title" id="glb-import-modal-title">
+        <div className="csv-import-modal__title glb-import-modal__name" id="glb-import-modal-title">
           {copy.title}
         </div>
+        {copy.facts.length > 0 && (
+          <div className="glb-import-modal__facts" id="glb-import-modal-facts">
+            {copy.facts.map((line, i) => (
+              <div key={i} className="csv-import-modal__message">{line}</div>
+            ))}
+          </div>
+        )}
         {copy.lines.map((line, i) =>
           line.tone === 'heading' ? (
             <div key={i} className="glb-import-modal__subtitle">{line.text}</div>
@@ -110,18 +133,20 @@ export function GlbImportModal({ request, phase, progress, portalHost, onChoose 
         {copy.progress && (
           <div className="glb-import-modal__progress" aria-live="polite">{copy.progress}</div>
         )}
-        <div className="csv-import-modal__buttons">
-          <button className="csv-import-modal__button" onClick={() => onChoose('cancel')}>
-            {copy.cancelLabel}
-          </button>
+        <div className="glb-import-modal__heading">{copy.importHeading}</div>
+        {/* DOM order IS visual order: the two answers, then the restore when
+            it is offered, then Cancel. Tab therefore walks the dialog the way
+            it reads, and Cancel — the one that changes nothing — is last
+            rather than first. */}
+        <div className="csv-import-modal__choices">
           <button
             ref={modelOnlyRef}
-            className="csv-import-modal__button"
+            className="csv-import-modal__button csv-import-modal__button--yes csv-import-modal__choice"
             // `aria-disabled`, never `disabled`, for the refused case: a truly
             // disabled control drops its native `title` in WebKit, and the
             // title is the only place the refusal is explained.
             aria-disabled={modelOnlyBlocked || undefined}
-            title={copy.modelOnlyDisabledReason ?? undefined}
+            title={copy.modelOnlyTitle}
             disabled={building}
             onClick={() => { if (!modelOnlyBlocked) onChoose('model'); }}
           >
@@ -129,24 +154,30 @@ export function GlbImportModal({ request, phase, progress, portalHost, onChoose 
           </button>
           {copy.primaryLabel && (
             <button
-              className={'csv-import-modal__button' + (copy.restoreLabel ? '' : ' csv-import-modal__button--primary')}
+              className="csv-import-modal__button csv-import-modal__button--yes csv-import-modal__choice"
+              title={copy.primaryTitle}
               disabled={building}
               onClick={() => onChoose('build')}
             >
               {copy.primaryLabel}
             </button>
           )}
-          {copy.restoreLabel && (
+        </div>
+        {copy.restoreLabel && (
+          <div className="csv-import-modal__choices">
             <button
-              className="csv-import-modal__button csv-import-modal__button--primary"
+              className="csv-import-modal__button csv-import-modal__button--primary csv-import-modal__choice"
               title={copy.restoreTitle ?? undefined}
               disabled={building}
               onClick={() => onChoose('restore')}
             >
               {copy.restoreLabel}
             </button>
-          )}
-        </div>
+          </div>
+        )}
+        <button className="csv-import-modal__cancel" disabled={building} onClick={() => onChoose('cancel')}>
+          {copy.cancelLabel}
+        </button>
       </div>
     </div>,
     portalHost ?? document.body,

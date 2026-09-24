@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { useAppStore } from '@/store/useAppStore';
-import { makeNode } from '@/test-utils';
+import { HISTORY_IDLE, makeNode } from '@/test-utils';
 
 const SOURCE = path.join(__dirname, 'DragNumberInput.tsx');
 
@@ -35,9 +35,7 @@ describe('endInteraction has no ownership — an unpaired close is destructive',
       edges: [],
       past: [],
       future: [],
-      isUndoRedo: false,
-      coalescingHistory: false,
-      interactionDepth: 0,
+      ...HISTORY_IDLE,
     });
   });
 

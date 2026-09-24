@@ -1,4 +1,4 @@
-import { useAppStore, resolveDeviceBudget } from '@/store/useAppStore';
+import { useAppStore } from '@/store/useAppStore';
 import { t, portLabel } from '@/i18n';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { OUTPUT_DEFAULT_EXPOSED } from '../nodes/OutputNode';
@@ -19,7 +19,6 @@ import {
   type OutputMaterial,
 } from '@/utils/outputMaterials';
 import { formatSectionLabel } from '../nodes/sectionLabelText';
-import { evalTask } from '@/eval/evalTask';
 import { isEvalMode } from '@/eval/evalMode';
 import { graphTextureMemory, textureMemoryLine, TEXTURE_MEMORY_HINT_KEY } from '@/utils/textureMemory';
 
@@ -45,16 +44,12 @@ function textureMemoryKey(nodes: AppNode[], edges: AppEdge[]): string {
 export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
   const language = useAppStore((s) => s.language);
-  const totalCost = useAppStore((s) => s.totalCost);
-  const selectedHeadsetId = useAppStore((s) => s.selectedHeadsetId);
-  const costProfiles = useAppStore((s) => s.costProfiles);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   // The Alpha Clip threshold is a range input: React's onChange on a range is
   // the native `input` event, so it fires per pointermove FRAME and each frame
   // reaches updateNodeData -> an unconditional pushHistory. Bracket the drag
   // so it lands as one undo entry (ColorNode.tsx:135-154 pattern).
   const { bracket, closeBracket } = useHistoryBracket();
-  const device = resolveDeviceBudget(selectedHeadsetId, costProfiles);
   // The texture-memory line is hidden in every study arm (a new
   // participant-visible element; if it is ever shown there it must also honour
   // `evalTask().pointsVisible`, since it is cost feedback).
@@ -244,47 +239,43 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
       {/* This menu is scoped to ONE Output NODE, which since the per-material
           split IS one material — its channels, its stored values, its exposed
           ports and its four emitted material settings are all that node's own
-          fields. The three figures below are the exception and say so under
-          their own heading: they are whole-DOCUMENT (the cost walk seeds every
-          contributing Output, and the budget is a device setting), so filing
-          them under "Material" would have been a lie about five rows. */}
+          fields. It is laid out by SHADER STAGE below — the pixel/fragment
+          side (which channels it writes, and the render state it writes them
+          with) and the vertex side (displacement) — because that is the
+          question a user arrives with. The texture figure is the one
+          whole-DOCUMENT row left, and it says "document" in its own words. */}
       <div className="context-menu__category">{t('Material Settings', language)}</div>
       <div className="context-menu__divider" />
-      <div className="context-menu__category">{t('Shader (whole document)', language)}</div>
-      <div
-        style={{
-          padding: 'var(--space-2) var(--space-3)',
-          fontSize: 'var(--font-size-sm)',
-          color: 'var(--text-secondary)',
-        }}
-      >
-        {/* The pointless study arm removes every point figure; these two are
-            prose, so they are gated here rather than by eval.css's sweep. */}
-        {evalTask().pointsVisible && (
-          <>
-            <div>{t('Total Cost:', language)} <strong style={{ color: 'var(--text-primary)' }}>{totalCost}</strong> {t('pts', language)}</div>
-            <div style={{ marginTop: 'var(--space-1)', fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}>
-              {t('Budget:', language)} {device.maxPoints} {t('pts max', language)} ({device.label})
-            </div>
-          </>
-        )}
-        {/* Texture MEMORY, the currency points do not price: a figure, not a
-            verdict. A plain `title`, so the app-wide TooltipLayer raises it. */}
-        {showTextureMemory && texCount > 0 && (
-          <div
-            title={t(TEXTURE_MEMORY_HINT_KEY, language)}
-            style={{ marginTop: 'var(--space-1)', fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}
-          >
-            {textureMemoryLine(texBytes, texCount, language)}
-          </div>
-        )}
-      </div>
+      {/* Texture MEMORY, the currency points do not price: a figure, not a
+          verdict, and the ONLY surface that carries it. Total Cost and the
+          device budget used to sit above it under a "Shader (whole document)"
+          heading; they are the CostBar's own two figures, shown at the top of
+          the app at all times, so here they were a third copy of a number the
+          user was already looking at. A plain `title`, so the app-wide
+          TooltipLayer raises it. */}
+      {showTextureMemory && texCount > 0 && (
+        <div
+          title={t(TEXTURE_MEMORY_HINT_KEY, language)}
+          style={{
+            padding: 'var(--space-1) var(--space-3) var(--space-2)',
+            fontSize: 'var(--font-size-xs)',
+            color: 'var(--text-muted)',
+          }}
+        >
+          {textureMemoryLine(texBytes, texCount, language)}
+        </div>
+      )}
 
-      {/* Output port visibility toggles */}
+      {/* THE PIXEL STAGE: which channels this material writes, and the render
+          state it writes them with. The two were "Output Ports" and
+          "Rendering" — one list of sockets and one list of material flags,
+          both describing the fragment shader, separated by a heading that
+          made them read as unrelated. `position` is deliberately NOT in
+          OPTIONAL_OUTPUT_PORTS, so nothing vertex-stage is listed here. */}
+      <div className="context-menu__divider" />
+      <div className="context-menu__category">{t('Pixel (Fragment) Shader', language)}</div>
       {outputDef && (
         <>
-          <div className="context-menu__divider" />
-          <div className="context-menu__category">{t('Output Ports', language)}</div>
           {OPTIONAL_OUTPUT_PORTS.map((portId) => {
             const port = outputDef.inputs.find((p) => p.id === portId);
             if (!port) return null;
@@ -306,52 +297,6 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
           })}
         </>
       )}
-
-      {/* Displacement mode — only relevant when position port is exposed, and
-          only on the Output that OWNS these two keys. Neither is a per-material
-          setting: `mergeVertices` is a module-level geometry directive the
-          loader reads off the return object, and `displacementMode` has no
-          loader key at all — `buildShaderModule` takes both from
-          `moduleSettingsOutput`, so on any OTHER node these checkboxes wrote a
-          field nothing read and the geometry went on following the default's.
-          A pre-existing gap CLAUDE.md admits; showing them where they apply is
-          what makes the "Material Settings" title above honest. */}
-      {exposedSet.has('position') && ownsModuleSettings && (
-        <>
-          <div className="context-menu__divider" />
-          <div className="context-menu__category">{t('Displacement', language)}</div>
-          <label style={labelStyle}>
-            <input
-              type="checkbox"
-              checked={(settings.displacementMode ?? 'normal') === 'normal'}
-              onChange={(e) =>
-                updateSettings({ displacementMode: e.target.checked ? 'normal' : 'offset' })
-              }
-              style={checkboxStyle}
-            />
-            {t('Along Normal', language)}
-          </label>
-          <label
-            style={labelStyle}
-            title={t("Weld shared vertices so the surface deforms as one skin. Off: a cube's faces split apart (each face displaces on its own).", language)}
-          >
-            <input
-              type="checkbox"
-              checked={settings.mergeVertices !== false}
-              onChange={(e) => updateSettings({ mergeVertices: e.target.checked })}
-              style={checkboxStyle}
-            />
-            {t('Merge Vertices', language)}
-          </label>
-        </>
-      )}
-
-      <div className="context-menu__divider" />
-      {/* "Rendering", not a third "Material": the title is Material Settings and
-          the scope LINE below already names which one, so a heading repeating
-          the word stacked three of them inside ~100px. These four keys are the
-          material's RENDER state (blending, facing, cutout, depth). */}
-      <div className="context-menu__category">{t('Rendering', language)}</div>
 
       {/* WHICH material these settings belong to — a static scope LINE, not a
           selector: the NODE is the scope now (one node, one material), and a
@@ -462,6 +407,45 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
         </label>
       )}
 
+      {/* THE VERTEX STAGE ("Displacement" until the stage rename) — only
+          relevant when position port is exposed, and
+          only on the Output that OWNS these two keys. Neither is a per-material
+          setting: `mergeVertices` is a module-level geometry directive the
+          loader reads off the return object, and `displacementMode` has no
+          loader key at all — `buildShaderModule` takes both from
+          `moduleSettingsOutput`, so on any OTHER node these checkboxes wrote a
+          field nothing read and the geometry went on following the default's.
+          A pre-existing gap CLAUDE.md admits; showing them where they apply is
+          what makes the "Material Settings" title above honest. */}
+      {exposedSet.has('position') && ownsModuleSettings && (
+        <>
+          <div className="context-menu__divider" />
+          <div className="context-menu__category">{t('Vertex Shader', language)}</div>
+          <label style={labelStyle}>
+            <input
+              type="checkbox"
+              checked={(settings.displacementMode ?? 'normal') === 'normal'}
+              onChange={(e) =>
+                updateSettings({ displacementMode: e.target.checked ? 'normal' : 'offset' })
+              }
+              style={checkboxStyle}
+            />
+            {t('Along Normal', language)}
+          </label>
+          <label
+            style={labelStyle}
+            title={t("Weld shared vertices so the surface deforms as one skin. Off: a cube's faces split apart (each face displaces on its own).", language)}
+          >
+            <input
+              type="checkbox"
+              checked={settings.mergeVertices !== false}
+              onChange={(e) => updateSettings({ mergeVertices: e.target.checked })}
+              style={checkboxStyle}
+            />
+            {t('Merge Vertices', language)}
+          </label>
+        </>
+      )}
 
       <div className="context-menu__divider" />
       <button className="context-menu__item" onClick={closeContextMenu}>

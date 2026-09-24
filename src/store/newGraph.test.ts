@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { useAppStore, cancelPendingGraphSave, DEFAULT_SHADER_NAME } from '@/store/useAppStore';
-import { makeNode, makeEdge } from '@/test-utils';
+import { HISTORY_IDLE, makeNode, makeEdge } from '@/test-utils';
 import type { DrawStroke } from '@/utils/drawings';
 import type { PreviewMesh } from '@/utils/previewMesh';
 import type { MeshInventory } from '@/utils/meshInventory';
@@ -31,7 +31,7 @@ beforeEach(() => {
     shaderPalettes: [{ id: 'pal-x', name: 'Sunset', colors: ['#ff0000'] }],
     past: [],
     future: [],
-    isUndoRedo: false,
+    ...HISTORY_IDLE,
   });
 });
 

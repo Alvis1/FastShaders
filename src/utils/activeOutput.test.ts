@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { makeNode, makeEdge } from '@/test-utils';
+import { HISTORY_IDLE, makeNode, makeEdge } from '@/test-utils';
 import type { AppNode } from '@/types';
 import {
   activeSink,
@@ -633,7 +633,7 @@ describe('carryInactiveSinks — an Apply keeps the inactive outputs and their w
 describe('store.setActiveOutput', () => {
   beforeEach(() => {
     cancelPendingGraphSave();
-    useAppStore.setState({ nodes: [], edges: [], past: [], future: [] });
+    useAppStore.setState({ nodes: [], edges: [], past: [], future: [], ...HISTORY_IDLE });
   });
 
   it('moves the flag in ONE history entry and ignores a non-sink id', () => {

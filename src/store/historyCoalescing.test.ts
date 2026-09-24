@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useAppStore } from '@/store/useAppStore';
-import { makeNode } from '@/test-utils';
+import { HISTORY_IDLE, makeNode } from '@/test-utils';
 
 /**
  * Regression suite for `beginInteraction` / `endInteraction`.
@@ -30,8 +30,7 @@ describe('history coalescing (begin/endInteraction)', () => {
       edges: [],
       past: [],
       future: [],
-      isUndoRedo: false,
-      coalescingHistory: false,
+      ...HISTORY_IDLE,
     });
   });
 

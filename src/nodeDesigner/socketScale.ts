@@ -47,9 +47,13 @@ export function symSnap(v: number): number {
  *
  * Deliberately LOOSE — half the body, not the designer's stricter
  * `(limH/2 − 5)` drag bound. The strict bound would be a regression the moment
- * anyone nudged a corner: `uv` is authored at `out: −52` on height 105, i.e. 8px
+ * anyone nudged a corner: `uv` WAS authored at `out: −52` on height 105, i.e. 8px
  * outside it, and would be yanked to −44. This bound leaves −52 untouched
- * (floor(52.5/4)*4 = 52) and only absorbs snap overshoot.
+ * (floor(52.5/4)*4 = 52) and only absorbs snap overshoot. That socket was
+ * re-authored to the body centre on 2026-09-19 (every `input`-category node
+ * centres its output now), so no SHIPPED design currently sits outside the
+ * strict bound — the loose one stays because the case it was measured on is a
+ * property of authoring, not of that one node.
  */
 export function clampToBody(off: number, h: number): number {
   const lim = Math.floor((h / 2) / SOCK_SNAP) * SOCK_SNAP;

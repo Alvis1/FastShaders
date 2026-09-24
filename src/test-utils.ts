@@ -28,6 +28,21 @@ export function makeNode(
 }
 
 /**
+ * The store flags that make `pushHistory` silently do nothing, at rest. Spread
+ * into every store-mutating suite's reset:
+ * `useAppStore.setState({ …, past: [], future: [], ...HISTORY_IDLE })`.
+ *
+ * The suite runs with `isolate: false`, so the store is SHARED by every file a
+ * worker runs. A file that calls `undo()` leaves `isUndoRedo` set (in the app
+ * the sync engine clears it; tests have no sync engine), and one that leaves a
+ * `beginInteraction` bracket open leaves `coalescingHistory` set — and the next
+ * file's "one undo entry" assertion fails at random, depending on which file
+ * the worker happened to run before it. `historyIdleReset.test.ts` holds every
+ * suite that resets the history to spreading this.
+ */
+export const HISTORY_IDLE = { isUndoRedo: false, coalescingHistory: false, interactionDepth: 0 } as const;
+
+/**
  * Build a minimal AppEdge for tests. Matches the shape `TypedEdge` expects:
  * deterministic id, typed edge, `dataType: 'any'` payload.
  */

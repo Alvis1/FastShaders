@@ -4,6 +4,8 @@
 // use as actual shading. Range conventions match the GPU side: Perlin/fBm in
 // [-1, 1] (mapped to [0, 1] for display), Worley/Cell in [0, 1].
 
+import { valueNum } from './valueCoerce';
+
 // Permutation table (Ken Perlin's original)
 const PERM = new Uint8Array(512);
 const P = [
@@ -153,7 +155,7 @@ export function renderNoisePreview(
   const imageData =
     reuse && reuse.width === size && reuse.height === size ? reuse : new ImageData(size, size);
   const data = imageData.data;
-  const userScale = Number(values.scale ?? 1);
+  const userScale = valueNum(values.scale ?? 1);
   const scale = 4.0 * userScale;
 
   // Time-driven position offset (when time feeds into pos)

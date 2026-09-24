@@ -16,7 +16,7 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useAppStore } from '@/store/useAppStore';
-import { makeNode, makeEdge } from '@/test-utils';
+import { HISTORY_IDLE, makeNode, makeEdge } from '@/test-utils';
 import type { AppNode } from '@/types';
 import {
   assignMeshTargetsAcross,
@@ -113,6 +113,7 @@ describe('the node commits that move as ONE history entry', () => {
       edges: [],
       past: [],
       future: [],
+      ...HISTORY_IDLE,
     });
   });
 

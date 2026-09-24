@@ -10,6 +10,7 @@ import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { uniformTypeFor, constantTypeFor, convertPropertyNode } from '@/utils/propertyConvert';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 import { ImageNodeSettings } from './ImageNodeSettings';
+import { PreviewChannelRow } from './PreviewChannelRow';
 import { SoundNodeSettings } from './SoundNodeSettings';
 import { NoiseNodeSettings } from './NoiseNodeSettings';
 import { WireframeNodeSettings } from './WireframeNodeSettings';
@@ -42,6 +43,11 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
   if (!node) return null;
 
   const def = NODE_REGISTRY.get(node.data.registryType);
+  /** The Image (Texture) node — this menu's one shape-changing special case:
+   *  its preview control is a row of channel buttons at the TOP rather than
+   *  the shared footer's five `Preview <socket>` rows, and the two lines that
+   *  spelled "Image" under the headings are gone with them. */
+  const imageNode = node.data.registryType === 'imageNode';
 
   const exposedPorts: string[] = getNodeExposedPorts(node);
   // Only opt-in-socket nodes get expose/hide checkboxes. Everywhere else the
@@ -82,11 +88,24 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
   return (
     <div className="context-menu__list">
       <div className="context-menu__category">{t('Node Settings', language)}</div>
-      <div style={{ padding: 'var(--space-2) var(--space-3)' }}>
-        <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--text-secondary)', marginBottom: 'var(--space-2)' }}>
-          {def ? formatNodeLabel(def.label, node.data.registryType, language) : node.data.registryType}
+      {/* The node's own name, under the heading — the only thing saying WHICH
+          node this menu is about, for ~90 types.
+
+          The Image node is the exception: its name is already on the card
+          right beside the menu, in the header AND (with a picture) as the
+          filename under it, so the line said "Image" a second time and the
+          block below said it a third. Both were dropped on 2026-09-19 at the
+          owner's request; what takes this slot instead is the control that
+          brought them to the menu — the channel preview. */}
+      {imageNode ? (
+        <PreviewChannelRow nodeId={nodeId} />
+      ) : (
+        <div style={{ padding: 'var(--space-2) var(--space-3)' }}>
+          <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--text-secondary)', marginBottom: 'var(--space-2)' }}>
+            {def ? formatNodeLabel(def.label, node.data.registryType, language) : node.data.registryType}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* MODE — one def, several emitted helper variants (engine/moduleHelpers.ts).
           Lives in values.mode, never defaultValues (the socket list); one
@@ -253,7 +272,10 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
         );
       })()}
 
-      <NodeActions nodeId={nodeId} />
+      {/* `preview={false}` on the Image node ONLY: PreviewChannelRow above is
+          the same act in one line, and two controls for one store field is
+          two ways to be looking at a different channel than you think. */}
+      <NodeActions nodeId={nodeId} preview={!imageNode} />
     </div>
   );
 }

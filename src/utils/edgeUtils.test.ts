@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
-import { makeNode, makeEdge } from '@/test-utils';
+import { HISTORY_IDLE, makeNode, makeEdge } from '@/test-utils';
 import {
   makeTypedEdge,
   bridgeEdgesAcrossDeletedNodes,
@@ -266,9 +266,7 @@ describe('removeEdgesForPort', () => {
       ],
       past: [],
       future: [],
-      coalescingHistory: false,
-      interactionDepth: 0,
-      isUndoRedo: false,
+      ...HISTORY_IDLE,
     });
   });
 

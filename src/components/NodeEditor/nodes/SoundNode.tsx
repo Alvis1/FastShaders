@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useSyncExternalStore, type CSSProperties } from 'react';
+import { valueNum } from '@/utils/valueCoerce';
 import { Position, useStore, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import type { ShaderFlowNode, NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
@@ -209,7 +210,7 @@ export const SoundNode = memo(function SoundNode({ id, data, selected }: NodePro
                 ) : (
                   <DragNumberInput
                     compact
-                    value={Number(data.values?.[inp.id] ?? SOUND_DEFAULT_VALUES[inp.id] ?? 0)}
+                    value={valueNum(data.values?.[inp.id] ?? SOUND_DEFAULT_VALUES[inp.id] ?? 0)}
                     onChange={(v) => updateNodeData(id, { values: { ...data.values, [inp.id]: String(v) } })}
                   />
                 )}

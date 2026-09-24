@@ -107,9 +107,9 @@ describe('nearestByCy', () => {
     // A palette tile plans every output at the cursor (phantomPorts), so all
     // five tie; the strict `<` keeps the first — `out`, i.e. RGB. A REAL Image
     // node dragged onto another pairs by vertical alignment instead and may
-    // pick Alpha/R/G/B — the Data-node precedent.
+    // pick R/G/B/Alpha — the Data-node precedent.
     const outs = NODE_REGISTRY.get('imageNode')!.outputs.map((p) => h(p.id, 12));
-    expect(outs.map((o) => o.id)).toEqual(['out', 'alpha', 'r', 'g', 'b']);
+    expect(outs.map((o) => o.id)).toEqual(['out', 'r', 'g', 'b', 'alpha']);
     expect(nearestByCy(12, outs)?.id).toBe('out');
     expect(nearestByCy(-500, outs)?.id).toBe('out');
   });

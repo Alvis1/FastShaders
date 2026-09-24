@@ -15,7 +15,7 @@
  */
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 import { useAppStore, cancelPendingGraphSave } from '@/store/useAppStore';
-import { makeNode, makeEdge } from '@/test-utils';
+import { HISTORY_IDLE, makeNode, makeEdge } from '@/test-utils';
 import { buildProjectState } from './exportShader';
 import { embedProjectState, extractProjectState, type FastShadersProject } from './fastShadersProject';
 import { importShaderText, preloadShaderImport } from './projectImport';
@@ -139,7 +139,7 @@ beforeEach(() => {
   cancelPendingGraphSave();
   useAppStore.setState({
     nodes: [], edges: [], drawings: [], shaderPalettes: [],
-    past: [], future: [], isUndoRedo: false, coalescingHistory: false, interactionDepth: 0,
+    past: [], future: [], ...HISTORY_IDLE,
   });
 });
 

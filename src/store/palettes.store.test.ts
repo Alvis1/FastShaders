@@ -17,7 +17,7 @@ import {
   MAX_COLOR_NAME,
   type Palette,
 } from '@/utils/palettes';
-import { makeNode } from '@/test-utils';
+import { HISTORY_IDLE, makeNode } from '@/test-utils';
 import { getNodeValues } from '@/types';
 
 const ids = () => useAppStore.getState().shaderPalettes.map((p) => p.id);
@@ -58,7 +58,7 @@ describe('store palette slice', () => {
     // could leave a bracket open.
     useAppStore.setState({
       shaderPalettes: [], drawings: [], nodes: [], edges: [], past: [], future: [],
-      isUndoRedo: false, coalescingHistory: false, interactionDepth: 0,
+      ...HISTORY_IDLE,
     });
   });
 

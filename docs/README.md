@@ -5,6 +5,13 @@ in `public/` — that directory is "everything the app serves", and it is copied
 into `dist/` on every build and uploaded on every deploy. Nothing here ships
 with the app.
 
+## `dev/`
+
+The reasoning behind `CLAUDE.md`'s rules — the measurements, browser results and
+rejected approaches — moved out of the always-loaded context. See
+[dev/README.md](dev/README.md) for the index. These are prose, not images, but they
+belong here for the same reason: nothing in `docs/` ships with the app.
+
 ## `fastshaders-function-diagram.{png,svg}`
 
 The architecture / data-flow diagram in the root [README](../README.md):

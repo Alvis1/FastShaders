@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { parse } from '@babel/parser';
 import { graphToCode } from '@/engine/graphToCode';
 import { codeToGraph } from '@/engine/codeToGraph';
@@ -8,6 +7,7 @@ import { buildShaderModule } from '@/engine/tslCodeProcessor';
 import { computeReachableCost, getCost } from '@/utils/nodeCost';
 import { makeNode, makeEdge } from '@/test-utils';
 import type { AppNode } from '@/types';
+import { projectDocs } from '../projectDocs';
 
 /**
  * Image nodes holding the same payload share ONE texture (engine/imageTexturePlan.ts).
@@ -134,7 +134,7 @@ describe('two Image nodes holding the same payload under different texture setti
   });
 
   it('CLAUDE.md says ONE texture only when the settings match (the test above builds two)', () => {
-    const doc = readFileSync(new URL('../../CLAUDE.md', import.meta.url), 'utf8');
+    const doc = projectDocs();
     expect(doc).not.toContain('while the module builds them ONE texture;');
     expect(doc).toContain(
       'the module builds them ONE texture when their texture settings (colour space, filter, repeat, flipY) match, and one image element either way',

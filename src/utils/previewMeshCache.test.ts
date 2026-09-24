@@ -11,6 +11,7 @@ import {
   MESH_CACHE_FULL_EVENT,
 } from './previewMeshCache';
 import { createPreviewMesh, MESH_MAX_BYTES, type PreviewMesh } from './previewMesh';
+import { projectDocs } from '../projectDocs';
 
 const GLB_MAGIC = [0x67, 0x6c, 0x54, 0x46]; // "glTF"
 
@@ -311,7 +312,7 @@ describe('savePreviewMeshToCache (fake IndexedDB)', () => {
 });
 
 describe('CLAUDE.md states the mesh-cache notice honestly', () => {
-  const doc = readFileSync(resolve(__dirname, '../../CLAUDE.md'), 'utf8');
+  const doc = projectDocs();
   const line = doc.split('\n').find((l) => l.includes('previewMeshCache.ts —')) ?? '';
 
   it('does not claim a private window stays silent (nothing detects one)', () => {

@@ -50,7 +50,7 @@ describe('the Image node is a registry definition', () => {
   it('keeps the output contract: Color first, then the channel table', () => {
     expect(def.outputs[0]).toMatchObject({ id: 'out', label: 'Color', dataType: 'vec3' });
     expect(def.outputs.map((o) => o.id)).toEqual(['out', ...IMAGE_CHANNEL_COMPONENTS.keys()]);
-    expect(def.outputs.map((o) => o.label)).toEqual(['Color', 'Alpha', 'R', 'G', 'B']);
+    expect(def.outputs.map((o) => o.label)).toEqual(['Color', 'R', 'G', 'B', 'Alpha']);
   });
 });
 

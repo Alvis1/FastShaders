@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import complexityData from './complexity.json';
+import { projectDocs } from '../projectDocs';
 
 /**
  * The Quest 3 texture run (ShaderCarousel/benchData/METHODS.md §6) is done by
@@ -71,7 +72,7 @@ describe('the texture atoms as the docs describe them', () => {
   const quarter = reg.TEX_OPS.filter(([op]) => op.endsWith('q'));
   const lut = reg.TEX_OPS.filter(([, , key]) => reg.TEX_CONFIGS[key].kind === 'lut');
   const registrySource = read('../../ShaderCarousel/lib/bench-registry.js');
-  const claudeBullet = read('../../CLAUDE.md').split('\n').find((l) => l.includes('`bench-registry.js` (baseline'))!;
+  const claudeBullet = projectDocs().split('\n').find((l) => l.includes('`bench-registry.js` (baseline'))!;
   const docs: Record<string, string> = {
     'CLAUDE.md (ShaderCarousel lib bullet)': claudeBullet,
     'ShaderCarousel/README.md': read('../../ShaderCarousel/README.md'),

@@ -1,4 +1,5 @@
 import { useAppStore } from '@/store/useAppStore';
+import { valueNum } from '@/utils/valueCoerce';
 import { t, portLabel } from '@/i18n';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { getNodeValues } from '@/types';
@@ -74,7 +75,7 @@ export function RaymarchSettingsMenu({ nodeId }: { nodeId: string }) {
     }
     const setting = config.settings[portId];
     if (!setting) return null;
-    const raw = Number(values[portId]);
+    const raw = valueNum(values[portId]);
     const shown = Number.isFinite(raw) && values[portId] !== undefined ? raw : Number(def.defaultValues?.[portId] ?? 0);
     return (
       <NumberRow

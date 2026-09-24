@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { HISTORY_IDLE } from '@/test-utils';
 import { useAppStore, loadGraph, setGraphPersistence, cancelPendingGraphSave } from './useAppStore';
 import type { DrawStroke } from '@/utils/drawings';
 import { MAX_STROKES } from '@/utils/drawings';
@@ -31,7 +32,7 @@ describe('store drawings slice', () => {
     // true, which (correctly) suppresses the next pushHistory.
     useAppStore.setState({
       drawings: [], nodes: [], edges: [], past: [], future: [],
-      isUndoRedo: false, coalescingHistory: false,
+      ...HISTORY_IDLE,
     });
   });
 

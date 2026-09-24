@@ -53,6 +53,12 @@ export type ImportNoteLine =
    *  `project` = its node graph, `script` = its module as shader code. The
    *  `glb-` prefix gives the note the report's 30 s. `fileName` is sanitized. */
   | { kind: 'glb-restored'; fileName: string; imported: 'project' | 'script' }
+  /** A dropped shader was ADDED beside the graph instead of replacing it
+   *  (the dialog's second answer). `droppedSinks` counts the Output nodes the
+   *  add left out — the thing it did without asking, and the reason the
+   *  arriving group drives nothing. `name` is the group's label, already
+   *  bounded by `sanitizeDroppedName`. */
+  | { kind: 'shader-added'; name: string; nodes: number; droppedSinks: number }
   /** GLB Phase 7: what a DELIVERED single-GLB export reports — textures
    *  written WebP-only, slots other viewers will show untextured, an
    *  approximated placement (utils/glbExportCopy.ts). The `glb-` prefix gives
@@ -124,6 +130,18 @@ export function importNoteLineText(line: ImportNoteLine, lang: Language): string
     case 'glb-export-ktx2':
     case 'glb-export-ktx2-skipped':
       return glbExportNoteLineText(line, lang);
+    case 'shader-added':
+      // Two sentences in one line, because the second is the surprise: the
+      // arriving chain is on the canvas but drives nothing until it is wired.
+      return line.droppedSinks > 0
+        ? fillTemplate(
+            t('Added {name} — {n} nodes. Its Output was left out, so it is not connected yet.', lang),
+            { name: '\u201c' + line.name + '\u201d', n: line.nodes },
+          )
+        : fillTemplate(t('Added {name} — {n} nodes, not connected yet.', lang), {
+            name: '\u201c' + line.name + '\u201d',
+            n: line.nodes,
+          });
     case 'export-desktop-only':
       return fillTemplate(
         t('Saved ({size} MB). Only the desktop editor can open it again — Podest and the web editor open up to {limit} MB.', lang),

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { valueNum } from '@/utils/valueCoerce';
 import { useAppStore, cloneNodeSharingPayloads } from '@/store/useAppStore';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 import { t, portLabel, type Language } from '@/i18n';
@@ -188,7 +189,7 @@ interface RadialRowsProps {
  * Record<string, string | number> and the flag rides codegen as a number.
  */
 export function RadialRows({ labelKey, language, values, onChange }: RadialRowsProps) {
-  const radial = Number(values.radial ?? 0) >= 0.5;
+  const radial = valueNum(values.radial ?? 0) >= 0.5;
   return (
     <>
       <label style={{ ...rowStyle, cursor: 'pointer' }}>
@@ -204,17 +205,17 @@ export function RadialRows({ labelKey, language, values, onChange }: RadialRowsP
         <>
           <NumberRow
             label={t('center X', language)}
-            value={Number(values.center_x ?? 0.5)}
+            value={valueNum(values.center_x ?? 0.5)}
             onCommit={(n) => onChange({ center_x: n })}
           />
           <NumberRow
             label={t('center Y', language)}
-            value={Number(values.center_y ?? 0.5)}
+            value={valueNum(values.center_y ?? 0.5)}
             onCommit={(n) => onChange({ center_y: n })}
           />
           <NumberRow
             label={t('radius', language)}
-            value={Number(values.radius ?? 0.5)}
+            value={valueNum(values.radius ?? 0.5)}
             onCommit={(n) => onChange({ radius: n })}
             min={0.05}
           />
@@ -262,8 +263,16 @@ export function duplicateNodeWithinBudget(node: AppNode): boolean {
  * specialized menus (Stripes/Data Viz/Colormap/Data Range) keep the same
  * mouse-only actions the generic NodeSettingsMenu offers — not just the
  * keyboard shortcuts.
+ *
+ * `preview` is an OPT-OUT, defaulting to today's behaviour, for a menu that
+ * offers preview mode in its own shape instead (the Image node's
+ * `PreviewChannelRow`, a single line of channel buttons at the top). It is a
+ * prop passed from ONE call site rather than a predicate worked out here on
+ * purpose: six menus render this footer, and a rule like "hide the rows when
+ * there are several outputs" would silently strip Preview from toHsl, Split
+ * and every Data node column — the nodes the multi-row branch exists for.
  */
-export function NodeActions({ nodeId }: { nodeId: string }) {
+export function NodeActions({ nodeId, preview = true }: { nodeId: string; preview?: boolean }) {
   // The per-id selector every menu in this directory uses, not `s.nodes`.
   // `s.nodes` is a NEW array on every graph notify — a drag, a scrub, a value
   // typed into some unrelated node — so subscribing to it re-rendered this
@@ -310,7 +319,7 @@ export function NodeActions({ nodeId }: { nodeId: string }) {
 
   return (
     <>
-      {previewPorts.length > 0 && (
+      {preview && previewPorts.length > 0 && (
         <>
           <div className="context-menu__divider" />
           {previewPorts.map((port) => {

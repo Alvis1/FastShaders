@@ -23,8 +23,9 @@ import { NodeGlyph, hasNodeGlyph, usesOperatorLayout, nodeJustify, nodeScale, no
 import { evaluateNodeOutput, evaluateEdgeSource, evaluateEdgeRange, getEdgeOutputShape, getTargetEdges, getTimeUpstreamSet, getFieldUpstreamSet } from '@/engine/cpuEvaluator';
 import { edgeRangeText } from '@/utils/edgeValueText';
 import { LiveEdgeValue } from './LiveEdgeValue';
-import { makeConnectionRevealSelector } from './connectionReveal';
+import { makeConnectionRevealSelector, REVEAL_TEMP_OPACITY } from './connectionReveal';
 import { RevealSockets } from './RevealSockets';
+import { edgePortOffset, edgePortRailHeight, usesEdgePorts } from './edgePorts';
 import { effectiveNodeDef } from '@/utils/exposedPorts';
 import { displayImageFileName, validImageDataUrl } from '@/utils/imageNode';
 import { getColormap, colormapGradientCss } from '@/utils/colormaps';
@@ -32,6 +33,7 @@ import { parseFormula, hasCustomFormula } from '@/utils/dataRangeFormula';
 import { modeOf } from '@/engine/moduleHelpers';
 import './ShaderNode.css';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
+import { plainStr, valueNum, valueStr } from '@/utils/valueCoerce';
 
 // (fmtNum/rangeText moved to utils/edgeValueText.ts — shared with the
 // animated LiveEdgeValue span so both paths format identically.)
@@ -217,21 +219,30 @@ export interface PortRow {
  * - Property nodes hide the `name` key (shown in the header instead)
  */
 /**
- * The node types whose OUTPUT sockets are labelled — the recorded exceptions to
- * NODE_DESIGN_REQUIREMENTS #8 ("output sockets show no text/label"). Both are
- * nodes whose outputs are several same-typed sockets told apart only by
- * meaning:
+ * The node types whose OUTPUT sockets are labelled ON THE CARD — the recorded
+ * exceptions to NODE_DESIGN_REQUIREMENTS #8 ("output sockets show no
+ * text/label").
+ *
+ * It is EMPTY, and that is the contract, not an oversight. One exception
+ * survives and it is not expressible here:
  *  - 8a, the Data node: each column carries its CSV header. It has no entry
  *    here because it is recognised by its per-instance `dynamicOutputs`, and
- *    its labels are USER DATA — printed verbatim, never translated.
- *  - 8b, the Image node: Color / Alpha / R / G / B, translated through
- *    `portLabel`. Four float sockets beside a vec3 are indistinguishable by
- *    colour, and reading an ORM map (roughness in G, metalness in B) depends on
- *    picking the right one at a glance.
+ *    its labels are USER DATA — printed verbatim, never translated. They are
+ *    the only thing telling N identical float sockets apart, so they stay.
+ *  - 8b, the Image node: held this set from 2026-09-11 to 2026-09-19. Its
+ *    Color / R / G / B / Alpha sockets now ride the card's border with no text
+ *    (nodes/edgePorts.ts) and name themselves the way every other node's
+ *    sockets do — hover, a touch tap, or the double-click label pin. Removing
+ *    the text RESTORED rule #8 rather than bending it, so do not re-add it
+ *    here: the request was explicitly to take the names off the card
+ *    ("leave that for the double click tooltip").
  *
- * `imageOutputRows.test.ts` fails if a third type joins by accident.
+ * Kept as an empty set rather than deleted because it is the NEGATIVE guard:
+ * `imageEdgePorts.test.ts` fails the moment any type joins it, which is the
+ * one cheap way to notice a third node quietly growing on-card port text.
+ * (That file replaced `imageOutputRows.test.ts`, which pinned the labels.)
  */
-export const LABELLED_OUTPUT_TYPES: ReadonlySet<string> = new Set(['imageNode']);
+export const LABELLED_OUTPUT_TYPES: ReadonlySet<string> = new Set<string>();
 
 /**
  * The label a row prints beside its OUTPUT socket, or null — THE predicate
@@ -591,7 +602,7 @@ export const ShaderNode = memo(function ShaderNode({
   // so a long name must stay readable on hover.
   const headerText =
     (data.registryType === 'property_float' || data.registryType === 'property_color') && data.values?.name
-      ? String(data.values.name)
+      ? valueStr(data.values.name)
       : varName ?? data.label;
   const language = useAppStore((s) => s.language);
   const costColorLow = useAppStore((s) => s.costColorLow);
@@ -620,12 +631,21 @@ export const ShaderNode = memo(function ShaderNode({
   // landing the connection makes the exposure permanent (onConnect), releasing
   // elsewhere hides them again.
   const revealHidden = near && data.registryType === 'imageNode';
+  /**
+   * EDGE PORTS (nodes/edgePorts.ts) — the Image node. Its sockets ride the
+   * port region's border, spread evenly and centred on the picture, carrying
+   * no text; the rows they replace drew nothing but their own labels (the
+   * tile/offset numbers are context-menu-only), so there is nothing left for a
+   * row to hold. Read this early: the handle re-measure key below depends on
+   * it, and that runs long before the rows branch.
+   */
+  const edgePorts = usesEdgePorts(data.registryType);
   // Image node thumbnail: render ONLY the validated data: URL — the stored
   // value comes from adversarial graph JSON and must never reach <img src>
   // raw (a remote URL there is a tracking beacon).
   /** Image node: does the card draw the picture mirrored? See the thumbnail. */
-  const flipThumbX = Number(data.values?.flipX ?? 0) >= 0.5;
-  const flipThumbY = Number(data.values?.flipY ?? 0) >= 0.5;
+  const flipThumbX = valueNum(data.values?.flipX ?? 0) >= 0.5;
+  const flipThumbY = valueNum(data.values?.flipY ?? 0) >= 0.5;
   // Nearest filtering is shown too: the browser would otherwise smooth a small
   // stored image (an 8 px rung) into a blur the shader never draws.
   const nearestThumb = data.values?.filter === 'nearest';
@@ -825,10 +845,33 @@ export const ShaderNode = memo(function ShaderNode({
   // The exposed set is part of the key: soundNode keeps all its inputs in
   // effDef, so without this React Flow would never re-measure when a socket
   // is ticked on or off and the new handle would report a stale position.
+  // An EDGE-PORT node adds the thing its sockets are centred ON. Their
+  // positions are offsets from the port region's centre, so the region
+  // CHANGING HEIGHT moves every one of them — swapping the picture (a pick, a
+  // resolution change, Revert) or going from the 48px empty slot to a 120px
+  // photo does exactly that. React Flow measures handles once per
+  // `updateNodeInternals`, so without this the edges keep drawing to where the
+  // sockets used to be and a reload "fixes" it: the documented failure mode.
+  // The stored dimensions are the cheap stand-in for the rendered height (the
+  // thumbnail is drawn at them when they exist), plus the payload's length and
+  // tail — `textureSourcesKey`'s trick, and the same reason it is not a hash.
+  // Every read goes through `plainStr` (utils/valueCoerce.ts): these entries
+  // are untrusted, `String()` on a tampered one THROWS inside this render body
+  // with no error boundary above it, and the strict variant also refuses the
+  // quieter variant — a huge array coerces without throwing and would build a
+  // multi-megabyte key twice a frame.
+  const geomPayload = plainStr(data.values?.imageB64);
+  const imageGeomKey = edgePorts
+    ? `|I${geomPayload.length}:${geomPayload.slice(-16)}` +
+      `:${plainStr(data.values?.srcWidth)}x${plainStr(data.values?.srcHeight)}` +
+      `:${plainStr(data.values?.width)}x${plainStr(data.values?.height)}` +
+      `:${plainStr(data.values?.fileName).length}`
+    : '';
   const exposedKey =
     effDef.inputs.map((inp) => inp.id).join('|') +
     '#' + [...exposedInputs].sort().join(',') +
-    (revealHidden ? '|R' : '');
+    (revealHidden ? '|R' : '') +
+    imageGeomKey;
   useEffect(() => {
     updateNodeInternals(id);
   }, [id, opSocketCount, exposedKey, updateNodeInternals]);
@@ -937,7 +980,7 @@ export const ShaderNode = memo(function ShaderNode({
     <PaletteColorPicker
       className="shader-node__input-color"
       history="bracket"
-      value={String(data.values[key] ?? def.defaultValues?.[key] ?? '#ff0000')}
+      value={valueStr(data.values[key] ?? def.defaultValues?.[key] ?? '#ff0000')}
       onPick={(hex) => handleChange(key, hex)}
     />
   );
@@ -1003,7 +1046,7 @@ export const ShaderNode = memo(function ShaderNode({
               list identifies the op by its header name instead. */}
           {!chainListMode && hasNodeGlyph(data.registryType) && (
             <div className="shader-node__op-glyph">
-              <NodeGlyph type={data.registryType} value={Number(data.values?.value ?? 0)} size={34} />
+              <NodeGlyph type={data.registryType} value={valueNum(data.values?.value ?? 0)} size={34} />
             </div>
           )}
           {ins.map((inp, i) => {
@@ -1024,7 +1067,7 @@ export const ShaderNode = memo(function ShaderNode({
                 connected={connected}
                 edge={info && <LiveEdgeValue className="shader-node__edge-val" {...info} />}
                 swatch={colorSwatch(inp.id)}
-                value={Number(data.values[inp.id] ?? def.defaultValues?.[inp.id] ?? identity)}
+                value={valueNum(data.values[inp.id] ?? def.defaultValues?.[inp.id] ?? identity)}
                 onNumber={(v) => handleChange(inp.id, String(v))}
               />
             );
@@ -1073,12 +1116,14 @@ export const ShaderNode = memo(function ShaderNode({
   const outDetached = rowsOutOff != null;
   const rowsJustify = nodeJustify(data.registryType);
   const calcTop = (off: number) => `calc(50% ${off < 0 ? '-' : '+'} ${Math.abs(off)}px)`;
-  /** Rows that still draw something — see {@link visiblePortRows}. */
-  const visibleRows = visiblePortRows(rows, sockOv, def.outputs);
+  /** Rows that still draw something — see {@link visiblePortRows}. An
+   *  edge-port node has none: emptying the list rather than branching around
+   *  the body is one expression, and `.node-base__body` collapses to nothing. */
+  const visibleRows = edgePorts ? [] : visiblePortRows(rows, sockOv, def.outputs);
   /**
    * A row's right half: its output socket, preceded by the socket's label
-   * where NODE_DESIGN_REQUIREMENTS #8 records an exception (8a Data columns,
-   * 8b Image channels — {@link outputRowLabel}). ONE condition covers both, so
+   * where NODE_DESIGN_REQUIREMENTS #8 records an exception (8a, the Data
+   * node's CSV columns — {@link outputRowLabel}). ONE condition covers it, so
    * a label never sits beside a socket the designer moved out of its row.
    */
   const rowOutput = (output: PortDefinition | null) => {
@@ -1113,56 +1158,15 @@ export const ShaderNode = memo(function ShaderNode({
         <NodeTitle text={headerText} style={{ color: headerTextColor }} />
       </div>
 
-      {/* Data/Image node: source filename under the header (wraps if long).
-          For an Image node the EXTENSION is the stored payload's, not the
-          dropped file's — a re-encode routinely leaves a `.png` name on WebP
-          or JPEG bytes, and the card must not assert a format the node
-          doesn't hold. The title keeps the name as dropped. */}
-      {(data.registryType === 'dataNode' || data.registryType === 'imageNode') && data.values?.fileName && (
-        <div className="shader-node__file-name" title={String(data.values.fileName)}>
-          {data.registryType === 'imageNode'
-            ? displayImageFileName(data.values.fileName, data.values.imageB64)
-            : String(data.values.fileName)}
+      {/* Data node: source filename under the header (wraps if long).
+          The Image node draws its own filename INSIDE the port region below
+          (`imageBody`), because its sockets are centred on that region and the
+          picture has to be part of what they are centred on. */}
+      {data.registryType === 'dataNode' && data.values?.fileName && (
+        <div className="shader-node__file-name" title={valueStr(data.values.fileName)}>
+          {valueStr(data.values.fileName)}
         </div>
       )}
-
-      {/* Image node: embedded-image thumbnail (validated URL only — see the
-          imageThumbUrl memo). Sized by CSS, no shadow/hover of its own, so it
-          never fights the socket-static or stack-shadow rules. */}
-      {imageThumbUrl && (
-        <img
-          className="shader-node__image-thumb"
-          src={imageThumbUrl}
-          alt=""
-          draggable={false}
-          // Drop-time power-of-two snapping changes the stored pixel aspect
-          // (1920×1080 → 2048×1024). That is invisible on the mesh — uv()
-          // maps any texture across [0,1] — so the CARD must not be the one
-          // place that shows a stretched picture. When the pre-snap
-          // dimensions are recorded, the thumbnail is drawn at THEM.
-          style={{
-            ...(Number(data.values.srcWidth) > 0 && Number(data.values.srcHeight) > 0
-              ? { aspectRatio: `${Number(data.values.srcWidth)} / ${Number(data.values.srcHeight)}`, objectFit: 'fill' as const }
-              : null),
-            // Flip X / Flip Y are shown, not just stored — a checkbox in a
-            // menu you have to close to see the result of is a guess. The
-            // sign convention comes straight from graphToCode: the DEFAULT
-            // (both unchecked) is the corrected, file-matching orientation
-            // (`mirrorX = flipX < 0.5` bakes the 1-u fix in), so each ticked
-            // box mirrors the picture on that axis relative to what is drawn
-            // here. `transform` is safe on this element — the card's own
-            // hover lift is a `scale:` on `.node-base`, not on the image.
-            ...(flipThumbX || flipThumbY
-              ? { transform: `scale(${flipThumbX ? -1 : 1}, ${flipThumbY ? -1 : 1})` }
-              : null),
-            ...(nearestThumb ? { imageRendering: 'pixelated' as const } : null),
-          }}
-        />
-      )}
-      {/* No valid payload (added empty, or stripped on restore): the ONE empty
-          slot, the same element every NodeVisual surface draws. */}
-      {!imageThumbUrl && data.registryType === 'imageNode' && <ImageThumbEmpty language={language} />}
-
       {/* Colormap node: the ramp it is currently set to. Reads the same
           gradient helper the settings menu and the picker use, so the card,
           the preview and the baked LUT can never show three different maps.
@@ -1175,8 +1179,8 @@ export const ShaderNode = memo(function ShaderNode({
           style={{
             background: colormapGradientCss(
               getColormap(data.values?.map),
-              Number(data.values?.reverse ?? 0) >= 0.5,
-              Math.floor(Number(data.values?.levels ?? 0)),
+              valueNum(data.values?.reverse ?? 0) >= 0.5,
+              Math.floor(valueNum(data.values?.levels ?? 0)),
             ),
             ...nodeArtStyle(data.registryType),
           }}
@@ -1219,13 +1223,132 @@ export const ShaderNode = memo(function ShaderNode({
           Node Designer queries `.shader-node__region` to place its gesture
           overlays, and a hook that exists on only one half of a pair the spec
           says to change together is how the two drift. No CSS targets it. */}
-      <div className="shader-node__region" style={{ position: 'relative', ...(box.height ? { height: box.height } : null) }}>
+      <div
+        className={`shader-node__region${edgePorts ? ' shader-node__edge-region' : ''}`}
+        style={{
+          position: 'relative',
+          // The FLOOR that keeps a column of edge ports inside the body when
+          // the node's own content is shorter than the column — an Image node
+          // showing the 48px empty slot. A real picture is taller and the
+          // floor does nothing. An authored designer height still wins: it is
+          // EXACT in both layouts (NODE_DESIGN_REQUIREMENTS, "Height").
+          ...(edgePorts ? { minHeight: edgePortRailHeight(def.inputs.length, def.outputs.length) } : null),
+          ...(box.height ? { height: box.height } : null),
+        }}
+      >
       {/* Glyph icon for the node, above the port rows. Values are never drawn on
           top of it — they live in the rows below, aligned with their sockets. */}
       {hasNodeGlyph(data.registryType) && (
         <div className="shader-node__glyph">
-          <NodeGlyph type={data.registryType} value={Number(data.values?.value ?? 0)} size={30} />
+          <NodeGlyph type={data.registryType} value={valueNum(data.values?.value ?? 0)} size={30} />
         </div>
+      )}
+
+      {/* Image node: filename + picture, INSIDE the port region — the sockets
+          are centred on this region, so the thing they belong to has to be in
+          it. (On every other node the region holds the rows, which is the same
+          relationship.) The filename's EXTENSION is the stored payload's, not
+          the dropped file's: a re-encode routinely leaves a `.png` name on WebP
+          or JPEG bytes and the card must not assert a format the node doesn't
+          hold. The title keeps the name as dropped. */}
+      {data.registryType === 'imageNode' && (
+        <>
+          {/* `plainStr`, not `String()`: a tampered `{"fileName":{"toString":1}}`
+              out of a shared `.fastshader` throws on coercion, in a render body,
+              with no error boundary above it (utils/valueCoerce.ts). */}
+          {plainStr(data.values?.fileName) ? (
+            <div className="shader-node__file-name" title={plainStr(data.values.fileName)}>
+              {displayImageFileName(data.values.fileName, data.values.imageB64)}
+            </div>
+          ) : null}
+          {/* Embedded-image thumbnail (validated URL only — see the
+              imageThumbUrl memo). Sized by CSS, no shadow/hover of its own, so
+              it never fights the socket-static or stack-shadow rules. */}
+          {imageThumbUrl ? (
+            <img
+              className="shader-node__image-thumb"
+              src={imageThumbUrl}
+              alt=""
+              draggable={false}
+              // The belt to imageGeomKey's braces: the sockets are centred on
+              // this region, so the picture settling at its real height moves
+              // every one of them. The key covers the cases we can predict
+              // from the stored values; this covers the decode itself.
+              onLoad={() => updateNodeInternals(id)}
+              // Drop-time power-of-two snapping changes the stored pixel aspect
+              // (1920×1080 → 2048×1024). That is invisible on the mesh — uv()
+              // maps any texture across [0,1] — so the CARD must not be the one
+              // place that shows a stretched picture. When the pre-snap
+              // dimensions are recorded, the thumbnail is drawn at THEM.
+              style={{
+                ...(valueNum(data.values.srcWidth) > 0 && valueNum(data.values.srcHeight) > 0
+                  ? { aspectRatio: `${valueNum(data.values.srcWidth)} / ${valueNum(data.values.srcHeight)}`, objectFit: 'fill' as const }
+                  : null),
+                // Flip X / Flip Y are shown, not just stored — a checkbox in a
+                // menu you have to close to see the result of is a guess. The
+                // sign convention comes straight from graphToCode: the DEFAULT
+                // (both unchecked) is the corrected, file-matching orientation
+                // (`mirrorX = flipX < 0.5` bakes the 1-u fix in), so each ticked
+                // box mirrors the picture on that axis relative to what is drawn
+                // here. `transform` is safe on this element — the card's own
+                // hover lift is a `scale:` on `.node-base`, not on the image.
+                ...(flipThumbX || flipThumbY
+                  ? { transform: `scale(${flipThumbX ? -1 : 1}, ${flipThumbY ? -1 : 1})` }
+                  : null),
+                ...(nearestThumb ? { imageRendering: 'pixelated' as const } : null),
+              }}
+            />
+          ) : (
+            /* No valid payload (added empty, or stripped on restore): the ONE
+               empty slot, the same element every NodeVisual surface draws. */
+            <ImageThumbEmpty language={language} />
+          )}
+        </>
+      )}
+
+      {/* EDGE PORTS — every socket of an edge-port node, both edges, placed
+          from the region centre in the SAME px units an authored designer
+          offset uses, so `sockOv[id]` simply replaces the computed one.
+
+          Indexed against the node's FULL port lists, never the drawn subset:
+          exposing a parameter, or a drag-reveal mounting the hidden ones,
+          must not slide a socket that was already on screen out from under
+          the wire aiming at it. A hidden parameter renders here too while a
+          wire hunts nearby (the RevealSockets job, done in place so the two
+          cannot land on top of each other), dimmed and with its name forced
+          visible — landing the connection makes the exposure permanent. */}
+      {edgePorts && (
+        <>
+          {def.inputs.map((inp, i) => {
+            const exposed = exposedInputs.has(inp.id);
+            if (!exposed && !revealHidden) return null;
+            const off = sockOv[inp.id] ?? edgePortOffset(i, def.inputs.length);
+            return (
+              <TypedHandle
+                key={`ep-in-${inp.id}`}
+                type="target"
+                position={Position.Left}
+                id={inp.id}
+                dataType={inp.dataType}
+                label={inp.label}
+                reveal={near}
+                channels={inputChannels.get(inp.id)}
+                style={{ top: calcTop(off), ...(exposed ? null : { opacity: REVEAL_TEMP_OPACITY }) }}
+              />
+            );
+          })}
+          {def.outputs.map((out, i) => (
+            <TypedHandle
+              key={`ep-out-${out.id}`}
+              type="source"
+              position={Position.Right}
+              id={out.id}
+              dataType={out.dataType}
+              label={out.label}
+              style={{ top: calcTop(sockOv[out.id] ?? edgePortOffset(i, def.outputs.length)) }}
+            />
+          ))}
+        </>
       )}
 
       {/* Port rows */}
@@ -1265,12 +1388,12 @@ export const ShaderNode = memo(function ShaderNode({
                     channels={inputChannels.get(row.input.id)}
                   />
                 )}
-                {/* Image node: sockets are identified by their port label — the
-                    editable numbers live in the context menu only (four bare
-                    number boxes under the thumbnail read as noise). */}
-                {row.input && data.registryType === 'imageNode' && (
-                  <span className="shader-node__in-label">{portLabel(row.input.label, language)}</span>
-                )}
+                {/* (The Image node's input rows carried their port label here
+                    until 2026-09-19. It never reaches this branch any more —
+                    the node is an edge-port layout and renders no rows — and
+                    the names live in the socket's own tooltip, like every
+                    other node's. `.shader-node__in-label` went with it: no
+                    node draws text beside an INPUT socket.) */}
                 {/* Connected input → show the value(s) on the edge next to its socket */}
                 {row.input && inputConnected && (() => {
                   const info = graphInfo.labelByHandle.get(row.input!.id) ?? null;
@@ -1283,10 +1406,10 @@ export const ShaderNode = memo(function ShaderNode({
                   <input
                     type="range"
                     className="shader-node__slider nodrag"
-                    min={Number(data.values.min ?? def.defaultValues?.min ?? 0)}
-                    max={Number(data.values.max ?? def.defaultValues?.max ?? 1)}
+                    min={valueNum(data.values.min ?? def.defaultValues?.min ?? 0)}
+                    max={valueNum(data.values.max ?? def.defaultValues?.max ?? 1)}
                     step={0.01}
-                    value={Number(data.values.value ?? def.defaultValues?.value ?? 0.5)}
+                    value={valueNum(data.values.value ?? def.defaultValues?.value ?? 0.5)}
                     // bracket() FIRST: beginInteraction snapshots the state
                     // BEFORE the first mutation, so undo lands on the
                     // pre-scrub value (same order as DragNumberInput's own
@@ -1304,7 +1427,7 @@ export const ShaderNode = memo(function ShaderNode({
                     onPointerCancel={closeBracket}
                     onKeyUp={closeBracket}
                     onBlur={closeBracket}
-                    title={String(Number(data.values.value ?? 0.5).toFixed(2))}
+                    title={String(valueNum(data.values.value ?? 0.5).toFixed(2))}
                   />
                 )}
                 {/* Inline setting from defaultValues (imageNode: numbers live
@@ -1313,7 +1436,7 @@ export const ShaderNode = memo(function ShaderNode({
                   <DragNumberInput
                     compact
                     step={row.input?.dataType === 'int' ? 1 : undefined}
-                    value={Number(data.values[row.settingKey] ?? def.defaultValues?.[row.settingKey] ?? 0)}
+                    value={valueNum(data.values[row.settingKey] ?? def.defaultValues?.[row.settingKey] ?? 0)}
                     onChange={(v) => handleChange(row.settingKey!, String(row.input?.dataType === 'int' ? Math.round(v) : v))}
                   />
                 )}
@@ -1327,7 +1450,7 @@ export const ShaderNode = memo(function ShaderNode({
                         <DragNumberInput
                           key={axis}
                           compact
-                          value={Number(data.values[k] ?? def.defaultValues?.[k] ?? 0)}
+                          value={valueNum(data.values[k] ?? def.defaultValues?.[k] ?? 0)}
                           onChange={(v) => handleChange(k, String(v))}
                         />
                       );
@@ -1342,7 +1465,7 @@ export const ShaderNode = memo(function ShaderNode({
                         <DragNumberInput
                           key={axis}
                           compact
-                          value={Number(data.values[k] ?? def.defaultValues?.[k] ?? 0)}
+                          value={valueNum(data.values[k] ?? def.defaultValues?.[k] ?? 0)}
                           onChange={(v) => handleChange(k, String(v))}
                         />
                       );
@@ -1354,7 +1477,7 @@ export const ShaderNode = memo(function ShaderNode({
                   <DragNumberInput
                     compact
                     step={row.input?.dataType === 'int' ? 1 : undefined}
-                    value={Number(data.values[row.input!.id] ?? 0)}
+                    value={valueNum(data.values[row.input!.id] ?? 0)}
                     onChange={(v) => handleChange(row.input!.id, String(row.input?.dataType === 'int' ? Math.round(v) : v))}
                   />
                 )}
@@ -1376,7 +1499,9 @@ export const ShaderNode = memo(function ShaderNode({
           palette tile and the Node Designer hid them. Measured 2026-09-03. */}
       {effDef.inputs.map((inp) => {
         const off = sockOv[inp.id];
-        if (off == null) return null;
+        // An edge-port node placed every socket above, designer override
+        // included — reaching here too would mount the same handle twice.
+        if (edgePorts || off == null) return null;
         const top = calcTop(off);
         const connected = connectedInputs.has(inp.id);
         const info = connected ? graphInfo.labelByHandle.get(inp.id) ?? null : null;
@@ -1391,7 +1516,7 @@ export const ShaderNode = memo(function ShaderNode({
               connected={connected}
               edge={info && <LiveEdgeValue className="shader-node__edge-val" {...info} />}
               swatch={colorSwatch(inp.id)}
-              value={Number(data.values[inp.id] ?? def.defaultValues?.[inp.id] ?? 0)}
+              value={valueNum(data.values[inp.id] ?? def.defaultValues?.[inp.id] ?? 0)}
               onNumber={(v) => handleChange(inp.id, String(v))}
             />
             <TypedHandle
@@ -1406,7 +1531,7 @@ export const ShaderNode = memo(function ShaderNode({
           </div>
         );
       })}
-      {rowsOutOff != null && def.outputs[0] && (
+      {!edgePorts && rowsOutOff != null && def.outputs[0] && (
         <TypedHandle
           type="source"
           position={Position.Right}
@@ -1417,10 +1542,18 @@ export const ShaderNode = memo(function ShaderNode({
         />
       )}
       </div>
-      {/* Image node drag-reveal: hidden param sockets float on the left edge
-          of the card (anchored to .node-base, NOT the rows region — the card
-          layout never changes), named by their forced tooltips. */}
-      {revealHidden && (
+      {/* Drag-reveal: hidden param sockets float on the left edge of the card
+          (anchored to .node-base, NOT the rows region — the card layout never
+          changes), named by their forced tooltips.
+
+          `!edgePorts` because an edge-port node reveals its hidden ports IN
+          ITS OWN RAIL, at the slot each one permanently occupies: two
+          independent placements of the same six sockets is how they end up
+          drawn on top of each other. The Image node is the only reveal client
+          today, so this branch is currently unreachable — it is kept because
+          the reveal is a per-node OPT-IN (`revealHidden`), not an Image-node
+          feature, and the next node to want it will not be an edge-port one. */}
+      {revealHidden && !edgePorts && (
         <RevealSockets
           ports={def.inputs.filter((inp) => !exposedInputs.has(inp.id))}
         />

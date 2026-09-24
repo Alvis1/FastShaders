@@ -19,15 +19,20 @@
 export type ImageChannelComponent = 'r' | 'g' | 'b' | 'a';
 
 /** socket id → the swizzle graphToCode emits on the wide sample. Insertion
- *  order is the registry's output order after `out`: alpha, r, g, b. */
+ *  order is the registry's output order after `out`: r, g, b, alpha — the
+ *  order every format the user already reads writes them in (RGBA,
+ *  `#rrggbbaa`, an ORM map). It was alpha-first until 2026-09-19; nothing in
+ *  production iterates this Map (every read is `.get`/`.has`), so the move
+ *  changes no emitted byte — it is the registry order this table is pinned
+ *  against, and the on-node socket order that follows from it. */
 export const IMAGE_CHANNEL_COMPONENTS: ReadonlyMap<string, ImageChannelComponent> = new Map<
   string,
   ImageChannelComponent
 >([
-  ['alpha', 'a'],
   ['r', 'r'],
   ['g', 'g'],
   ['b', 'b'],
+  ['alpha', 'a'],
 ]);
 
 /** socket id → that channel's index in the sample's rgba vector (the CPU

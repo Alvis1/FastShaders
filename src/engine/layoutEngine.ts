@@ -6,6 +6,7 @@ import { NODE_REGISTRY, growsOperands, getFlowNodeType } from '@/registry/nodeRe
 import { nodeBox, hasNodeGlyph, usesOperatorLayout, nodeScale } from '@/components/NodeEditor/nodes/glyphs/NodeGlyph';
 import { COLOR_NODE_SIZE } from '@/components/NodeEditor/nodes/ColorNode';
 import { SOUND_W, SOUND_HEADER_H, SOUND_BODY_H } from '@/components/NodeEditor/nodes/soundGeometry';
+import { edgePortRailHeight } from '@/components/NodeEditor/nodes/edgePorts';
 
 // ── Node-size estimation ─────────────────────────────────────────────────────
 // autoLayout usually runs BEFORE React Flow measures a node (on import/paste/
@@ -156,20 +157,29 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
     }
   }
 
-  // The Image node: the raw def's six opt-in params never draw unless EXPOSED
-  // (effectiveNodeDef), the five outputs always do, and the thumbnail — or the
-  // empty "No image" slot — plus the filename sit ABOVE the rows. The generic
-  // estimate above described none of that (six raw inputs, no picture).
-  // Deliberately over-estimates: overlap avoidance prefers too big. In memory
-  // `imageB64` is always the resolved payload (storage refs never reach it).
+  // The Image node draws NO port rows: its sockets ride the card's border
+  // (`usesEdgePorts`, nodes/edgePorts.ts), so the body is the filename plus the
+  // thumbnail — or the empty "No image" slot — floored by the rail the sockets
+  // need. That floor is `edgePortRailHeight` itself, read from the renderer's
+  // own module rather than restated, the COLOR_NODE_SIZE precedent: an
+  // estimate that restates a constant is an estimate that goes stale silently.
+  //
+  // It used to add one ROW_H per output on top, from the labelled-rows era
+  // (retired 2026-09-19). That never overlapped anything — the estimate is only
+  // ever consumed when `measured` is absent — but it over-stated an empty node
+  // by ~56% and a pictured one by ~64%, and a PBR GLB import mints one Image
+  // node per texture, so dagre spread a four-texture import hundreds of px
+  // wider than the nodes need and over-sized the group frame around them.
+  // In memory `imageB64` is always the resolved payload (storage refs never
+  // reach it).
   if (type === 'imageNode' && def) {
-    const d = node.data as { values?: Record<string, unknown>; exposedPorts?: unknown };
-    const exposed = Array.isArray(d.exposedPorts) ? d.exposedPorts : [];
-    const nExposed = def.inputs.filter((i) => exposed.includes(i.id)).length;
+    const d = node.data as { values?: Record<string, unknown> };
     const hasImage = typeof d.values?.imageB64 === 'string' && d.values.imageB64 !== '';
     const thumb = hasImage ? IMAGE_THUMB_H : IMAGE_EMPTY_H;
     const fileRow = typeof d.values?.fileName === 'string' && d.values.fileName ? FILE_NAME_H : 0;
-    if (box.height == null) bodyH = fileRow + thumb + Math.max(nExposed, def.outputs.length) * ROW_H + 8;
+    if (box.height == null) {
+      bodyH = Math.max(edgePortRailHeight(def.inputs.length, def.outputs.length), fileRow + thumb + 8);
+    }
     if (box.width == null) width = Math.max(width, hasImage ? IMAGE_THUMB_W : MIN_W);
   }
 

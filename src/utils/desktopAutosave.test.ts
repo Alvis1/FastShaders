@@ -34,7 +34,7 @@ import {
   bootDesktopAutosave,
   registerDesktopCloseFlush,
 } from '@/store/desktopAutosaveBoot';
-import { makeNode } from '@/test-utils';
+import { HISTORY_IDLE, makeNode } from '@/test-utils';
 import { getNodeValues, type AppNode } from '@/types';
 import { safeJsonReviver } from './safeJson';
 import {
@@ -76,7 +76,7 @@ beforeEach(() => {
     },
   });
   setGraphPersistence(true);
-  useAppStore.setState({ nodes: [], edges: [], pendingLimitNotices: [] });
+  useAppStore.setState({ nodes: [], edges: [], pendingLimitNotices: [], ...HISTORY_IDLE });
   cancelPendingGraphSave();
 });
 

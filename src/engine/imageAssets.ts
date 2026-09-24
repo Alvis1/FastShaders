@@ -1,5 +1,6 @@
 import { getNodeValues } from '@/types';
 import type { AppNode } from '@/types';
+import { valueStr, valueNum } from '@/utils/valueCoerce';
 import { decodeImageNode } from '@/utils/imageNode';
 import { bytesToBase64 } from '@/utils/binaryCodec';
 import { fnv1a32Hex } from '@/utils/payloadDigest';
@@ -98,7 +99,7 @@ function safeKeyPart(id: string): string {
  * substitution runs so a hostile name degrades to something still readable.
  */
 function safeFileName(v: unknown): string {
-  return String(v ?? '')
+  return valueStr(v)
     .replace(/[^A-Za-z0-9._ -]+/g, '_')
     .replace(/_{2,}/g, '_')
     .replace(/\s+/g, ' ')
@@ -224,7 +225,11 @@ export function imageAssetFor(
   nodeId: string,
   values: Record<string, string | number>,
 ): ImageAsset | null {
-  const raw = String(values.imageB64 ?? '');
+  // `valueStr`, not `String()`: `values` is adversarial and ToPrimitive
+  // THROWS on a tampered entry — here that means inside graphToCode, inside
+  // the sync engine, inside a render, with no error boundary above it. See
+  // utils/valueCoerce.ts for what that costs.
+  const raw = valueStr(values.imageB64);
   // Hashed outside the memo because the digest IS the cache key. No extra pass:
   // a raw-string key had to be flattened, hashed and compared in full on every
   // lookup anyway — this replaces that with one hash and a short key. The hash
@@ -232,7 +237,7 @@ export function imageAssetFor(
   // payload runs no FNV round at all.
   const payloadHash = hashPayload(raw);
   const decoded = memoPayload(
-    `${Number(values.width)}x${Number(values.height)}|${raw.length}|${payloadHash}`,
+    `${valueNum(values.width)}x${valueNum(values.height)}|${raw.length}|${payloadHash}`,
     () => {
       counters.decodes++;
       const d = decodeImageNode(values);
@@ -248,8 +253,8 @@ export function imageAssetFor(
 
   const key = `${safeKeyPart(nodeId)}-${payloadHash}`;
   const name = safeFileName(values.fileName);
-  const w = Number(values.width);
-  const h = Number(values.height);
+  const w = valueNum(values.width);
+  const h = valueNum(values.height);
   const dims = Number.isFinite(w) && Number.isFinite(h) ? `${w}x${h} ` : '';
   const comment = `// ${name ? `${name}, ` : ''}${dims}${decoded.mime}, ${formatBytes(decoded.bytes)}`;
 

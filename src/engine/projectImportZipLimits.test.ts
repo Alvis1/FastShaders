@@ -9,6 +9,7 @@
  * with later files — hence the resets on both sides.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { HISTORY_IDLE } from '@/test-utils';
 import { buildZip, type ZipEntry } from '@/utils/zipWriter';
 import { createPreviewMesh, MESH_MAX_BYTES, MESH_BAD_GLB_KEY } from '@/utils/previewMesh';
 import { ZipLimitError, MAX_ARCHIVE_BYTES, MAX_TOTAL_UNCOMPRESSED } from '@/utils/zipReader';
@@ -59,7 +60,7 @@ async function rejectionOf(p: Promise<unknown>): Promise<unknown> {
 
 function reset(): void {
   useAppStore.getState().setPreviewMesh(null);
-  useAppStore.setState({ pendingLimitNotices: [], importNote: null });
+  useAppStore.setState({ pendingLimitNotices: [], importNote: null, ...HISTORY_IDLE });
 }
 beforeEach(reset);
 afterEach(reset);
