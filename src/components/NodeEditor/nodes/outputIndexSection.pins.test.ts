@@ -120,7 +120,7 @@ describe('every module path passes the mirror plan (R7)', () => {
     // Every module path reads the mirror plan off the ONE Output-set resolver
     // (`contributingOutputs`), so none of them can contribute a different set.
     expect(src('../../../engine/exportShader.ts'))
-      .toContain('materialPartsMirrorPlanAcross(contributingOutputs(state.nodes)),');
+      .toContain('materialPartsMirrorPlanAcross(contributingOutputs(graph.nodes)),');
     const codeEditor = src('../../CodeEditor/CodeEditor.tsx');
     expect(codeEditor).toContain('materialPartsMirror,\n      );');
     expect(codeEditor).toContain('[settledCode, activeTab, materialSettings, properties, materialPartsMirror]');

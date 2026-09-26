@@ -336,8 +336,14 @@ export function parseHexList(text: unknown, name = 'Pasted'): Palette | null {
 
 export interface PaletteParseResult {
   palettes: Palette[];
-  /** Non-fatal notes for the UI (truncation, skipped entries). */
+  /**
+   * Refusals for the UI, as fixed English sentences — each is also an lv.json
+   * `ui` key, so the dialog shows it with `t(note, lang)`. Nothing variable goes
+   * in here: a count rides `skipped` instead, or the sentence could not be a key.
+   */
   notes: string[];
+  /** Palettes in the file that were dropped or truncated by the sanitizer. */
+  skipped?: number;
 }
 
 /**
@@ -380,10 +386,9 @@ export function parsePaletteFile(text: string): PaletteParseResult {
 
   const before = Array.isArray(rec.palettes) ? rec.palettes.length : 0;
   const palettes = sanitizePalettes(rec.palettes);
-  if (before > palettes.length) {
-    notes.push(`${before - palettes.length} palette(s) skipped or truncated.`);
-  }
-  return { palettes, notes };
+  return before > palettes.length
+    ? { palettes, notes, skipped: before - palettes.length }
+    : { palettes, notes };
 }
 
 /**

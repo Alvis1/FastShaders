@@ -139,7 +139,7 @@ describe('every string this package added is translated', () => {
     'Could not import {name}: {reason}',
     'Loaded {name}. {n} other dropped file(s) were ignored — drop a project on its own.',
     'Could not import {name} — the file appears corrupted.',
-    '{name} is not a shader script (.js / .mjs / .tsl), a FastShaders .zip, a 3D model (.obj / .glb / .gltf), or a benchmark complexity .json.',
+    '{name} is not a shader script (.js / .mjs / .tsl), a FastShaders .zip, a 3D model (.obj / .glb / .gltf), a Gaussian splat (.splat / .spz / .ply / .ksplat), or a benchmark complexity .json.',
     'Could not load {name}:\n{error}',
     'Could not read {name}.',
     "Could not load {name}:\nSVG images can't be imported — export it as PNG or WebP first.",

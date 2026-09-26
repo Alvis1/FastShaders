@@ -299,12 +299,6 @@
   min-width: 264px;
 }
 
-/* The shared note caps at 220px, tuned for the 236px popovers — widen it to
-   fill this one (264px − 2×12px padding). */
-.toolbar__export-popover .toolbar__local-note {
-  max-width: 240px;
-}
-
 .toolbar__export-check {
   display: flex;
   align-items: flex-start;
@@ -320,14 +314,16 @@
   accent-color: var(--text-accent);
 }
 
-/* No mesh loaded: the checkbox is disabled, so the row reads as inert. */
+/* An inactive row (no model to include, no .glb on offer): its input is
+   aria-disabled, never `disabled`, so the row's tooltip — which says why —
+   still opens. This only makes it READ as inert. */
 .toolbar__export-check--off {
   color: var(--text-secondary);
   cursor: default;
 }
 
 /* The EXPORT popover's Format radio group — its rows ARE .toolbar__export-check,
-   so only the group's own spacing, heading and reason line live here. Two-class
+   so only the group's own spacing and heading live here. Two-class
    selectors where a rule could tie with .toolbar__local-note (this file's own
    trap), --text-* tokens so dark mode follows, and no z-index: the popover
    stays in the toolbar's own stacking context. */
@@ -343,15 +339,6 @@
   font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--text-primary);
-}
-
-/* Why one .glb is not on offer — VISIBLE text, because WebKit drops the
-   native tooltip of a disabled control. Indented under the radio's label. */
-.toolbar__export-popover .toolbar__export-format-reason {
-  margin-left: 22px;
-  max-width: 218px;
-  font-size: var(--font-size-xs);
-  color: var(--text-secondary);
 }
 
 /* Work-folder control (desktop builds) — a split button beside EXPORT:

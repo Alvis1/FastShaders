@@ -24,6 +24,7 @@ the matching file below.
 | [canvas-interaction.md](canvas-interaction.md) | Navigation model, node placement, edges, drag-connect, groups, Preview mode |
 | [preview-and-runtime.md](preview-and-runtime.md) | The sandboxed preview, shaderloader 0.8, podest, XR, preview geometries, `fit-bounds` |
 | [models-and-gltf.md](models-and-gltf.md) | Dropped models, the trusted-side glTF reader, GLB import/export, decoders, zip limits |
+| [splats.md](splats.md) | Gaussian splats: the `fs-splat-0.1.js` runtime, the no-fork vertex hook, loader 0.8's `splat` key, the Splat Output, splat ingest and caps |
 | [discovery-and-i18n.md](discovery-and-i18n.md) | Node search ranking, editor visibility, optional categories, the Latvian overlay |
 | [project-structure.md](project-structure.md) | The full annotated source tree — several rules exist only in these annotations |
 | [testing.md](testing.md) | Test harness contracts (`isolate: false`, the shared factories, the loader harness) and the coverage inventory |

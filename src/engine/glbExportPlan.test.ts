@@ -316,6 +316,57 @@ describe('sections and the signature', () => {
   });
 });
 
+describe('a driving custom sink', () => {
+  // A Splat Output's module is `return { splat: … }` — loader 0.8 applies it to
+  // Gaussian splats only, so a .glb of mesh would carry a shader that does
+  // nothing. The plan refuses, and the export shows the reason (glbExportCopy).
+  const splatSink = (extra: Record<string, unknown> = {}) => {
+    const n = makeNode('sp', 'splatOutput');
+    Object.assign(n.data as Record<string, unknown>, extra);
+    return n;
+  };
+
+  it('a driving Splat Output refuses the plan with its own reason', () => {
+    const { nodes, edges } = builderGraph();
+    // Wired: the first wired custom sink drives when nothing is flagged.
+    expect(planGlbExport([...nodes, splatSink(), c('tint')], [...edges, makeEdge('tint', 'out', 'sp', 'color')], '', SIGNATURE))
+      .toEqual({ ok: false, reason: 'splat-driven' });
+    // Flagged and unwired drives too.
+    expect(planGlbExport([...nodes, splatSink({ activeOutput: true })], edges, '', SIGNATURE))
+      .toEqual({ ok: false, reason: 'splat-driven' });
+    // Decided on the UNWRAPPED graph: a wire into the sink through a collapsed group still drives.
+    const group = {
+      id: 'g',
+      type: 'group',
+      position: { x: 0, y: 0 },
+      data: {
+        collapsed: true,
+        collapsedOutputs: [{ socketId: 's-tint', originalNodeId: 'tint', originalHandleId: 'out' }],
+        collapsedInputs: [],
+      },
+    } as unknown as AppNode;
+    expect(planGlbExport([...nodes, splatSink(), c('tint'), group], [...edges, makeEdge('g', 's-tint', 'sp', 'color')], '', SIGNATURE))
+      .toEqual({ ok: false, reason: 'splat-driven' });
+  });
+
+  it('a Splat Output that does NOT drive changes nothing', () => {
+    const { nodes, edges } = builderGraph();
+    // Unwired and unflagged: the plain Output stays the sink.
+    expect(brief(plan([...nodes, splatSink()], edges))).toEqual(brief(plan(nodes, edges)));
+    // The plain Output carries the flag: the wired splat is parked.
+    const flagged = nodes.map((n) => (n.id === 'out' ? out([{ gltfMaterialIndex: 0 }, { gltfMaterialIndex: 1 }], { activeOutput: true }) : n));
+    const r = planGlbExport([...flagged, splatSink(), c('tint')], [...edges, makeEdge('tint', 'out', 'sp', 'color')], '', SIGNATURE);
+    expect(r.ok).toBe(true);
+  });
+
+  it('a driving Raymarch Output is NOT refused (it marches on any mesh) — it just maps no slot', () => {
+    const { nodes, edges } = builderGraph();
+    const march = makeNode('rm', 'raymarchOutput');
+    const r = planGlbExport([...nodes, march, f('d')], [...edges, makeEdge('d', 'out', 'rm', 'field')], '', SIGNATURE);
+    expect(r.ok && r.plan.slots).toEqual([]);
+  });
+});
+
 describe('moduleAssets', () => {
   it('module-text order, deduped, unknown keys skipped, then one key per slot payload the module does not name', () => {
     const { nodes, edges } = builderGraph();

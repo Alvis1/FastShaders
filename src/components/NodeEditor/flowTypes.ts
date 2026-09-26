@@ -28,6 +28,7 @@ import { ClockNode } from '@/components/NodeEditor/nodes/ClockNode';
 import { SoundNode } from '@/components/NodeEditor/nodes/SoundNode';
 import { OutputNode } from '@/components/NodeEditor/nodes/OutputNode';
 import { RaymarchOutputNode } from '@/components/NodeEditor/nodes/RaymarchOutputNode';
+import { SplatOutputNode } from '@/components/NodeEditor/nodes/SplatOutputNode';
 import { GroupNode } from '@/components/NodeEditor/nodes/GroupNode';
 import { NoteNode } from '@/components/NodeEditor/nodes/NoteNode';
 import { TypedEdge } from '@/components/NodeEditor/edges/TypedEdge';
@@ -41,6 +42,7 @@ export const nodeTypes = {
   sound: SoundNode,
   output: OutputNode,
   raymarchOutput: RaymarchOutputNode,
+  splatOutput: SplatOutputNode,
   group: GroupNode,
   note: NoteNode,
 };

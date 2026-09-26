@@ -1,5 +1,5 @@
 import type { AppEdge, AppNode } from '@/types';
-import { isSinkNode, isUntargetedOutput, isMarchOutput } from '@/utils/sdfPartition';
+import { isSinkNode, isUntargetedOutput, isCustomSink } from '@/utils/sdfPartition';
 
 /**
  * The code→graph resync's carry of PARKED OUTPUT NODES: a node that emits
@@ -23,10 +23,10 @@ import { isSinkNode, isUntargetedOutput, isMarchOutput } from '@/utils/sdfPartit
  *
  * `parseHasPlainOutput` is the second rule, and it exists because that premise
  * — the module holds an entry to rebuild the node from — is false in one
- * state: a DRIVING Raymarch Output. `graphToCode` gates the whole Output
- * pass on it (`outputs = marchNode ? [] : contributingOutputs(nodes)`), so a
- * marching module carries no `parts`, no `materialParts` and no top-level
- * channels at all. Nothing pairs, and every targeted Output plus its incoming
+ * state: a DRIVING custom sink (Raymarch or Splat Output). `graphToCode`
+ * gates the whole Output pass on it (`outputs = customNode ? [] :
+ * contributingOutputs(nodes)`), so a marching or splat module carries no
+ * `parts`, no `materialParts` and no top-level channels at all. Nothing pairs, and every targeted Output plus its incoming
  * edges was DELETED on Apply — silently, and only PARTIALLY, since the
  * untargeted default came back through this very carry, so the graph went on
  * working with some materials simply gone.
@@ -70,7 +70,7 @@ export function carryInactiveSinks(
 ): { nodes: AppNode[]; edges: AppEdge[] } {
   const nodes = oldNodes.filter(
     (n) => isSinkNode(n)
-      && (isMarchOutput(n) || isUntargetedOutput(n) || !parseHasPlainOutput)
+      && (isCustomSink(n) || isUntargetedOutput(n) || !parseHasPlainOutput)
       && n.id !== activeOldId
       && !survivingIds.has(n.id),
   );

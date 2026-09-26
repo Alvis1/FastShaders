@@ -5,11 +5,12 @@ import type { ShaderFlowNode } from '@/types';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
-import { t, portLabel, formatNodeLabel } from '@/i18n';
+import { t, portLabel } from '@/i18n';
 import { isActiveSinkSelector } from './activeSinkSelector';
 import { effectiveExposedPorts } from '@/utils/exposedPorts';
 import { getCostColor, getCostTextColor, getContrastColor } from '@/utils/colorUtils';
 import { TypedHandle } from '../handles/TypedHandle';
+import { OutputTitle } from './OutputTitle';
 import { useWiredLabels } from './ShaderNode';
 import { LiveEdgeValue } from './LiveEdgeValue';
 import { DragNumberInput } from '../inputs/DragNumberInput';
@@ -45,6 +46,9 @@ interface NumberSetting {
 
 export interface MarchNodeConfig {
   title: string;
+  /** The technique's ORIGINAL name, printed under a TRANSLATED title as the
+   *  header's second line (OutputTitle.tsx): "(Raymarching)" under "SDF Izvade". */
+  original: string;
   sections: { label: string; ports: string[] }[];
   /** Per-setting step, display precision and clamp. A loop count is an integer
    *  of at least 1; distances and radii stay positive. */
@@ -54,7 +58,8 @@ export interface MarchNodeConfig {
 }
 
 export const MARCH_NODE_CONFIG: MarchNodeConfig = {
-  title: 'Raymarch Output',
+  title: 'SDF Output',
+  original: 'Raymarching',
   sections: [
     { label: 'Surface', ports: ['field', 'color', 'emissive'] },
     { label: 'Volume', ports: ['density', 'glow'] },
@@ -202,7 +207,7 @@ export const RaymarchOutputNode = memo(function RaymarchOutputNode({ id, data, s
         </span>
       )}
       <div className="output-node__header" style={{ background: costColor }}>
-        <span className="output-node__title" style={{ color: headerTextColor }}>{formatNodeLabel(config.title, 'raymarchOutput', language, false)}</span>
+        <OutputTitle title={config.title} type="raymarchOutput" original={config.original} language={language} color={headerTextColor} />
       </div>
       <div className="output-node__material">
         {/* The activation control, exactly the Output's: solid while this node

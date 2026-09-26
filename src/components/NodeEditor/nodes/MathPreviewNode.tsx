@@ -14,6 +14,7 @@ import { evaluateEdgeSource, getTargetEdges, getTimeUpstreamSet } from '@/engine
 import './MathPreviewNode.css';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
 import { NodeTitle } from './NodeTitle';
+import { useHeaderTip } from './headerTip';
 
 /** Map registryType to its math function. */
 const MATH_FUNCTIONS: Record<string, (x: number) => number> = {
@@ -36,6 +37,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   // below the hooks is NOT a mechanical edit here (ShaderNode/PreviewNode hooks
   // dereference `def`) — see CLEAN-3.
   if (!def) return null;
+  const headerTip = useHeaderTip(def);
 
   // The animated loop's visibility probe. It has to be an HTML element:
   // `offsetParent` lives on HTMLElement, so reading it off any of the SVG refs
@@ -196,8 +198,8 @@ export const MathPreviewNode = memo(function MathPreviewNode({
       {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}
 
       {/* Header */}
-      <div className="node-base__header" style={{ background: costColor }}>
-        <NodeTitle text={varName ?? data.label} style={{ color: headerTextColor }} />
+      <div className="node-base__header" style={{ background: costColor }} {...headerTip}>
+        <NodeTitle text={varName ?? data.label} style={{ color: headerTextColor }} bare={headerTip !== null} />
       </div>
 
       {/* Waveform plot (SVG — crisp under viewport zoom, unlike the old

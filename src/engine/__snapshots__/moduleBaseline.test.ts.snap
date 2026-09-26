@@ -374,3 +374,55 @@ export default function() {
 ",
 }
 `;
+
+exports[`the exported shaderloader module is byte-stable > the Splat Output module (its own entry — see \`splatCase\`) 1`] = `
+"// TSL Shader Module — for use with a-frame-shaderloader
+//
+// HTML setup — these two scripts are all you need (no import map, no shim):
+//   a-frame-180-a-01.min.js = A-Frame 1.8.0 + Three.js r184 (WebGPU) bundle
+//   a-frame-shaderloader-0.8.js rewrites the three/tsl import to that bundle
+//   <script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/a-frame-180-a-01.min.js"></script>
+//   <script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/a-frame-shaderloader-0.8.js"></script>
+//   <a-entity shader="src: shader.js"></a-entity>
+//
+// Plain Three.js r184 (no A-Frame): put the same loader script on the page,
+// then FastShaders.use(THREE) with the three/webgpu namespace and
+// FastShaders.apply(mesh, await FastShaders.load('shader.js')). The loader
+// builds the uniforms and the material, applies \`parts\`, the weld and corners.
+// Without the loader the module still imports THREE and every TSL function it
+// calls, and you redo that material work by hand. Recipe:
+// https://github.com/Alvis1/FastShaders#using-the-shader-module-with-plain-threejs
+//
+// GAUSSIAN SPLATS — this shader shades a Gaussian splat scene, not a mesh.
+// Add the splat runtime AFTER the two scripts above and give the entity a
+// splat file (.splat, .spz, .ply or .ksplat) instead of a geometry:
+//   <script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/fs-splat-0.1.js"></script>
+//   <a-entity splat-model="src: url(scene.splat); kind: splat" shader="src: shader.js"></a-entity>
+// splat-model scales the scene to a longest side of 1.6 (its \`size\`), the frame
+// FastShaders previewed it in; size: 0 keeps the file's own units.
+
+import { color, length, positionLocal, positionWorld, sub, vec4, Fn } from 'three/tsl';
+
+export const threeRevision = '184';
+
+const sdCircle = Fn(([p, r]) => {
+  return sub(length(p), r);
+});
+
+export default function() {
+  const positionLocal1 = positionLocal;
+  const positionWorld1 = positionWorld;
+  const sp1Shade = Fn(([p, pw, n, c]) => {
+  const positionWorld1 = pw;
+  const length1 = length(positionWorld1);
+  return vec4(color(0x2d6cdf), length1);
+  });
+  const sp1Shape = Fn(([p, pw, n, c]) => {
+  const positionLocal1 = p;
+  const sdCircle1 = sdCircle(positionLocal1, 0.5);
+  return vec4(0, 0, 0, sdCircle1);
+  });
+  return { splat: { shade: sp1Shade, shape: sp1Shape, size: 1.5, feather: 0.1, invert: true } };
+}
+"
+`;

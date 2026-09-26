@@ -1,9 +1,27 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { gzipSync } from 'node:zlib';
+import lv from '@/i18n/lv.json';
 import {
   countMeshVertices,
   detectMeshKind,
+  formatSplatCount,
+  isBinaryKind,
+  isGltfKind,
+  isSplatKind,
+  isTextKind,
+  splatCountRefusal,
+  splatEvalRefusal,
+  MESH_EXTENSIONS,
+  MESH_DROP_HINT_KEY,
+  MESH_GLTF_SPLAT_KEY,
+  MESH_SPLAT_EVAL_KEY,
+  MESH_BAD_SPLAT_KEY,
+  MESH_SPLAT_COUNT_KEY,
+  MESH_PLY_SH_KEY,
+  MESH_SPZ_VERSION_KEY,
+  SPLAT_KINDS,
   validateMeshBytes,
   sanitizeMeshFileName,
   checkMeshBytes,
@@ -28,7 +46,8 @@ import { MESH_TOO_LARGE_LIMIT_KEY } from './gltfCompression';
 import { safeJsonReviver } from './safeJson';
 import { readGlbFsExtras } from './glbShaderExtras';
 import { decodeDataUri } from './glbContainer';
-import { recordToMesh } from './previewMeshCache';
+import { meshToRecord, recordToMesh } from './previewMeshCache';
+import { SPLAT_MAX_COUNT, SPZ_MAGIC } from './splatLimits';
 import { FS_FIXTURE_MODULE_MARKER, makeFastShadersGlb, makeFastShadersGltfJson, type FsGlbFixture } from '@/test-utils';
 
 const GLB_HEADER = new Uint8Array([0x67, 0x6c, 0x54, 0x46, 2, 0, 0, 0, 12, 0, 0, 0]);
@@ -40,12 +59,65 @@ describe('previewMesh: detectMeshKind', () => {
     expect(detectMeshKind('scene.glTF')).toBe('gltf');
   });
 
+  it('classifies the four Gaussian-splat extensions case-insensitively', () => {
+    expect(detectMeshKind('garden.splat')).toBe('splat');
+    expect(detectMeshKind('Garden.SPZ')).toBe('spz');
+    expect(detectMeshKind('point_cloud.Ply')).toBe('ply');
+    expect(detectMeshKind('bonsai.KSPLAT')).toBe('ksplat');
+    // SuperSplat's compressed form is a .ply by extension; the sniff refuses it.
+    expect(detectMeshKind('scene.compressed.ply')).toBe('ply');
+  });
+
   it('rejects non-model files and extension tricks', () => {
     expect(detectMeshKind('shader.js')).toBeNull();
     expect(detectMeshKind('archive.zip')).toBeNull();
     expect(detectMeshKind('model.glb.js')).toBeNull();
+    expect(detectMeshKind('garden.splat.js')).toBeNull();
+    expect(detectMeshKind('garden.splats')).toBeNull();
     expect(detectMeshKind('noext')).toBeNull();
     expect(detectMeshKind('')).toBeNull();
+  });
+});
+
+describe('previewMesh: the seven kinds and their predicates', () => {
+  it('MESH_EXTENSIONS lists seven kinds, the splat kinds last', () => {
+    expect([...MESH_EXTENSIONS]).toEqual(['obj', 'glb', 'gltf', 'splat', 'spz', 'ply', 'ksplat']);
+    expect(MESH_EXTENSIONS.slice(3)).toEqual([...SPLAT_KINDS]);
+  });
+
+  it('every kind is exactly one of text or binary; only glb/gltf are glTF; only the four are splats', () => {
+    for (const k of MESH_EXTENSIONS) {
+      expect(isTextKind(k) !== isBinaryKind(k), k).toBe(true);
+      expect(isGltfKind(k), k).toBe(k === 'glb' || k === 'gltf');
+      expect(isSplatKind(k), k).toBe((SPLAT_KINDS as readonly string[]).includes(k));
+      if (isSplatKind(k)) expect(isBinaryKind(k), k).toBe(true);
+    }
+    expect(MESH_EXTENSIONS.filter(isTextKind)).toEqual(['obj', 'gltf']);
+    expect(MESH_EXTENSIONS.filter(isBinaryKind)).toEqual(['glb', 'splat', 'spz', 'ply', 'ksplat']);
+    for (const junk of ['OBJ', 'Glb', '', null, undefined, 3, {}, 'toString']) {
+      expect(isTextKind(junk) || isBinaryKind(junk) || isGltfKind(junk) || isSplatKind(junk)).toBe(false);
+    }
+  });
+
+  it('the unsupported-file sentence and the drop hint name every extension, in both languages', () => {
+    const UI = lv.ui as Record<string, string>;
+    for (const key of [MESH_UNSUPPORTED_KEY, MESH_DROP_HINT_KEY]) {
+      expect(typeof UI[key], key).toBe('string');
+      for (const ext of MESH_EXTENSIONS) {
+        expect(key, ext).toContain(`.${ext}`);
+        expect(UI[key], ext).toContain(`.${ext}`);
+      }
+    }
+    // The retired three-extension wordings are gone from the Latvian table too.
+    expect(UI['Not a supported model file (.obj / .glb / .gltf).']).toBeUndefined();
+    expect(UI['Drop a 3D model (.obj / .glb / .gltf) or a shader (.js / .zip)']).toBeUndefined();
+  });
+
+  it('the preview reads its drop hint through the constant (no inline copy left)', () => {
+    const src = readFileSync(join(__dirname, '../components/Preview/ShaderPreview.tsx'), 'utf8');
+    // The drop veil and the nothing-to-take notice.
+    expect(src.match(/t\(MESH_DROP_HINT_KEY, language\)/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+    expect(src).not.toContain("'Drop a 3D model (");
   });
 });
 
@@ -587,5 +659,232 @@ describe('createPreviewMesh drops a FastShaders payload from every copy', () => 
     const named = makeFastShadersGlb({ omitExtras: true, omitSceneExtras: true, module: null, materials: ['"fastshaders"', 'B'] });
     const r2 = createPreviewMesh('m.glb', named);
     expect('mesh' in r2 && r2.mesh.bytes.length).toBe(named.length);
+  });
+});
+
+/* ── Gaussian splats: the per-kind constructor ────────────────────────────── */
+
+/** Minimal valid splat files, one per kind (splatSniff.test.ts pins each rule at its edge). */
+const SPLAT_FILES = {
+  splat: (): Uint8Array => new Uint8Array(32 * 3),
+  // The header and the two rows it declares (14 floats each): a body shorter
+  // than its rows is refused as cut short.
+  ply: (): Uint8Array => {
+    const head = new TextEncoder().encode([
+      'ply', 'format binary_little_endian 1.0', 'element vertex 2',
+      ...['x', 'y', 'z', 'f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity', 'scale_0', 'scale_1', 'scale_2', 'rot_0', 'rot_1', 'rot_2', 'rot_3']
+        .map((p) => `property float ${p}`),
+      'end_header', '',
+    ].join('\n'));
+    const file = new Uint8Array(head.length + 2 * 14 * 4);
+    file.set(head);
+    return file;
+  },
+  spz: (): Uint8Array => {
+    const raw = new Uint8Array(16 + 19);
+    new DataView(raw.buffer).setUint32(0, SPZ_MAGIC, true);
+    return new Uint8Array(gzipSync(raw));
+  },
+  ksplat: (): Uint8Array => {
+    const b = new Uint8Array(4096 + 1024 + 44 * 2);
+    const v = new DataView(b.buffer);
+    v.setUint8(1, 1);
+    v.setUint32(4, 1, true);
+    v.setUint32(16, 2, true);
+    v.setUint32(4096, 2, true);
+    v.setUint32(4096 + 4, 2, true);
+    return b;
+  },
+} as const;
+
+describe('previewMesh: createPreviewMesh for the splat kinds', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ['splat', { count: 3, shDegree: 0, container: 'splat' }],
+    ['ply', { count: 2, shDegree: 0, container: 'ply-binary-le' }],
+    ['spz', { count: null, shDegree: null, container: 'spz-gzip' }],
+    ['ksplat', { count: 2, shDegree: 0, container: 'ksplat' }],
+  ] as const)('loads a .%s with its sniffed facts, its bytes untouched, and nothing glTF', (kind, facts) => {
+    const bytes = SPLAT_FILES[kind]() as Uint8Array<ArrayBuffer>;
+    const r = createPreviewMesh(`My Garden!.${kind.toUpperCase()}`, bytes);
+    expect('mesh' in r).toBe(true);
+    if (!('mesh' in r)) return;
+    expect(r.mesh.name).toBe(`My-Garden.${kind}`);
+    expect(r.mesh.kind).toBe(kind);
+    expect(r.mesh.splat).toEqual(facts);
+    // A splat is bytes: never decoded, never scanned for a FastShaders payload.
+    expect(r.mesh.bytes).toBe(bytes);
+    expect(r.mesh.text).toBeUndefined();
+    for (const key of ['decoders', 'gltf', 'gltfReadRefusal'] as const) expect(key in r.mesh, key).toBe(false);
+    expect(r.ktx2Fallback).toBe(false);
+  });
+
+  it('never TextDecodes a splat, of any kind (a 30 MiB .splat must not become a string)', () => {
+    const decode = vi.spyOn(TextDecoder.prototype, 'decode');
+    for (const kind of SPLAT_KINDS) expect('mesh' in createPreviewMesh(`a.${kind}`, SPLAT_FILES[kind]())).toBe(true);
+    expect(decode).not.toHaveBeenCalled();
+    // The control: a text kind does decode.
+    createPreviewMesh('a.obj', new TextEncoder().encode('v 0 0 0'));
+    expect(decode).toHaveBeenCalled();
+  });
+
+  it('a splat whose bytes spell a FastShaders payload is not read as a glTF', () => {
+    const rows = new Uint8Array(32 * 4);
+    rows.set(new TextEncoder().encode('{"extras":{"fastshaders":{"module":1}},"extensionsUsed":["KHR_draco_mesh_compression"]}').subarray(0, 128));
+    const r = createPreviewMesh('x.splat', rows);
+    expect('mesh' in r && r.mesh.bytes).toBe(rows);
+    expect('mesh' in r && 'decoders' in r.mesh).toBe(false);
+  });
+
+  it('hands every sniff refusal through, English sentence included, without burning an id', () => {
+    const a = createPreviewMesh('a.splat', new Uint8Array(32));
+    const bad = createPreviewMesh('b.splat', new Uint8Array(33));
+    expect('error' in bad && bad.refusal).toEqual({ reason: 'bad-splat', key: MESH_BAD_SPLAT_KEY });
+    expect('error' in bad && bad.error).toBe(MESH_BAD_SPLAT_KEY);
+    const sh = new TextEncoder().encode(new TextDecoder().decode(SPLAT_FILES.ply()).replace('end_header', 'property float f_rest_0\nend_header'));
+    const rsh = createPreviewMesh('sh.ply', sh);
+    expect('error' in rsh && rsh.refusal).toEqual({ reason: 'ply-sh', key: MESH_PLY_SH_KEY });
+    const v4 = new Uint8Array(16);
+    new DataView(v4.buffer).setUint32(0, SPZ_MAGIC, true);
+    new DataView(v4.buffer).setUint32(4, 4, true);
+    const r4 = createPreviewMesh('v4.spz', v4);
+    expect('error' in r4 && r4.error).toBe(MESH_SPZ_VERSION_KEY.replace('{version}', '4'));
+    const b = createPreviewMesh('c.splat', new Uint8Array(32));
+    if (!('mesh' in a) || !('mesh' in b)) throw new Error('expected meshes');
+    expect(b.mesh.id).toBe(a.mesh.id + 1);
+  });
+
+  it('refuses an empty splat as an empty model file, before the sniff', () => {
+    for (const kind of SPLAT_KINDS) {
+      const r = createPreviewMesh(`e.${kind}`, new Uint8Array(0));
+      expect('error' in r && r.refusal.reason, kind).toBe('empty');
+    }
+  });
+
+  it('a .splat over the 64 MiB cap names its splat count (the pre-read gate says the same)', () => {
+    const size = MESH_MAX_BYTES + 32;
+    const r = createPreviewMesh('huge.splat', new Uint8Array(size));
+    expect('error' in r && r.refusal).toEqual(splatCountRefusal(size / 32));
+    expect('error' in r && r.refusal).toEqual(preReadModelGate('splat', size, false));
+  });
+
+  it('a .ply over the 64 MiB cap is too large before its header is sniffed', () => {
+    const big = new Uint8Array(MESH_MAX_BYTES + 1);
+    big.set(SPLAT_FILES.ply());
+    expect(checkMeshBytes('ply', big)).toEqual(modelTooLargeRefusal(MESH_MAX_BYTES + 1));
+  });
+
+  it('checkMeshBytes runs the sniff for a splat kind, and validateMeshBytes renders it', () => {
+    expect(checkMeshBytes('splat', new Uint8Array(64))).toBeNull();
+    expect(checkMeshBytes('ksplat', new Uint8Array(100))?.reason).toBe('bad-splat');
+    expect(validateMeshBytes('splat', new Uint8Array(33))).toContain('32-byte splats');
+  });
+
+  it('the facts are a fresh object per load', () => {
+    const a = createPreviewMesh('a.splat', new Uint8Array(32));
+    const b = createPreviewMesh('b.splat', new Uint8Array(32));
+    if (!('mesh' in a) || !('mesh' in b)) throw new Error('expected meshes');
+    expect(a.mesh.splat).not.toBe(b.mesh.splat);
+  });
+
+  it('the facts are derived, never persisted: the record is name + bytes, the restore re-sniffs', () => {
+    const r = createPreviewMesh('garden.ksplat', SPLAT_FILES.ksplat());
+    if (!('mesh' in r)) throw new Error('expected a mesh');
+    const rec = meshToRecord(r.mesh);
+    expect(Object.keys(rec).sort()).toEqual(['bytes', 'name']);
+    const restored = recordToMesh(rec);
+    expect(restored?.kind).toBe('ksplat');
+    expect(restored?.splat).toEqual(r.mesh.splat);
+    expect(restored?.splat).not.toBe(r.mesh.splat);
+  });
+});
+
+describe('previewMesh: a glTF-wrapped splat is refused', () => {
+  const SPLAT_EXT = 'KHR_gaussian_splatting';
+
+  it.each([
+    ['a .glb that uses it', 'g.glb', () => glb(JSON.stringify({ extensionsUsed: [SPLAT_EXT] }))],
+    ['a .gltf that requires it', 'g.gltf', () => new TextEncoder().encode(JSON.stringify({ extensionsRequired: [SPLAT_EXT] }))],
+    ['one that is Draco-compressed too', 'g.glb', () => glb(JSON.stringify({ extensionsUsed: ['KHR_draco_mesh_compression', SPLAT_EXT] }))],
+  ])('%s', (_why, name, bytes) => {
+    const r = createPreviewMesh(`My ${name}`, bytes());
+    expect('error' in r && r.refusal).toEqual({ reason: 'gltf-splat', key: MESH_GLTF_SPLAT_KEY, name: `My-${name}` });
+    expect('error' in r && r.error).toContain(`“My-${name}” stores Gaussian splats`);
+  });
+
+  it('a glTF that merely MENTIONS the name elsewhere loads', () => {
+    const r = createPreviewMesh('m.glb', glb(JSON.stringify({ asset: { generator: SPLAT_EXT }, extensionsUsed: [] })));
+    expect('mesh' in r).toBe(true);
+  });
+});
+
+describe('previewMesh: splat refusal wording', () => {
+  it('fills {count} and {maxCount} as grouped whole numbers, per language', () => {
+    const r = splatCountRefusal(1_234_567);
+    expect(fillMeshRefusal(r, r.key, 'en')).toBe(
+      'Too many splats (1,234,567 — max 1,000,000). Reduce the scene in SuperSplat (or splat-transform) and export it again.',
+    );
+    const lvText = fillMeshRefusal(r, (lv.ui as Record<string, string>)[MESH_SPLAT_COUNT_KEY], 'lv');
+    expect(lvText.replace(/\s/g, ' ')).toContain('(1 234 567 — maks. 1 000 000)');
+  });
+
+  it('a non-default cap fills {maxCount} with that cap', () => {
+    const r = splatCountRefusal(12, 10);
+    expect(fillMeshRefusal(r, r.key, 'en')).toContain('(12 — max 10)');
+  });
+
+  it('fills {version}, and never prints a count or version it was not given', () => {
+    expect(fillMeshRefusal({ reason: 'spz-version', key: MESH_SPZ_VERSION_KEY, version: 4 }, MESH_SPZ_VERSION_KEY, 'en'))
+      .toContain('version 4 (zstd');
+    expect(fillMeshRefusal({ reason: 'spz-version', key: MESH_SPZ_VERSION_KEY }, MESH_SPZ_VERSION_KEY, 'en'))
+      .toContain('version  (zstd');
+    expect(fillMeshRefusal({ reason: 'splat-count', key: MESH_SPLAT_COUNT_KEY }, MESH_SPLAT_COUNT_KEY, 'en'))
+      .toContain('( — max 1,000,000)');
+  });
+
+  it('a count placeholder is filled in the same single pass: a name spelling {count} stays text', () => {
+    const r = { reason: 'gltf-splat' as const, key: MESH_GLTF_SPLAT_KEY, name: '{count}{maxCount}.glb', count: 5 };
+    expect(fillMeshRefusal(r, r.key, 'en')).toContain('“{count}{maxCount}.glb”');
+  });
+
+  it('formatSplatCount prints nothing for a number that is not a count', () => {
+    expect(formatSplatCount(SPLAT_MAX_COUNT, 'en')).toBe('1,000,000');
+    expect(formatSplatCount(0, 'en')).toBe('0');
+    for (const bad of [Number.NaN, -1, Number.POSITIVE_INFINITY, '5' as unknown as number]) expect(formatSplatCount(bad, 'en')).toBe('');
+  });
+
+  it('the study-session refusal is its own reason and key, a fresh object per call', () => {
+    expect(splatEvalRefusal()).toEqual({ reason: 'splat-eval', key: MESH_SPLAT_EVAL_KEY });
+    expect(splatEvalRefusal()).not.toBe(splatEvalRefusal());
+  });
+
+  it('the .ply SH sentence names the conversion', () => {
+    expect(MESH_PLY_SH_KEY).toContain('.splat');
+    expect(MESH_PLY_SH_KEY).toContain('f_rest_');
+  });
+});
+
+describe('previewMesh: countMeshVertices counts splats for the splat kinds', () => {
+  const splatMesh = (kind: PreviewMesh['kind'], bytes: Uint8Array): PreviewMesh => ({
+    name: `m.${kind}`,
+    kind,
+    bytes: bytes as Uint8Array<ArrayBuffer>,
+    id: 1,
+  });
+
+  it('reads the facts the constructor derived', () => {
+    const r = createPreviewMesh('a.splat', new Uint8Array(32 * 5));
+    expect('mesh' in r && countMeshVertices(r.mesh)).toBe(5);
+    expect(countMeshVertices({ ...splatMesh('ply', new Uint8Array(0)), splat: { count: 42, shDegree: 0, container: 'ply-ascii' } })).toBe(42);
+  });
+
+  it('sniffs a mesh assembled without facts, and says null when the count is unknowable', () => {
+    expect(countMeshVertices(splatMesh('ksplat', SPLAT_FILES.ksplat()))).toBe(2);
+    expect(countMeshVertices(splatMesh('ply', SPLAT_FILES.ply()))).toBe(2);
+    expect(countMeshVertices(splatMesh('spz', SPLAT_FILES.spz()))).toBeNull();
+    expect(countMeshVertices(splatMesh('splat', new Uint8Array(33)))).toBeNull();
   });
 });

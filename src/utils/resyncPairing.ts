@@ -8,7 +8,7 @@
  */
 import type { AppNode } from '@/types';
 import { PART_SETTING_KEYS } from '@/engine/materialSettingsCode';
-import { isMarchOutput, isSinkNode, isUntargetedOutput } from './sdfPartition';
+import { isCustomSink, isSinkNode, isUntargetedOutput } from './sdfPartition';
 import { absoluteNodePosition } from './groupFrame';
 import {
   UNFOLD_DY,
@@ -60,16 +60,17 @@ export function matchKey(n: AppNode): string {
  * per contributing material (`contributingOutputs`): the untargeted default,
  * and every TARGETED Output whatever the active flag says.
  *
- * `contributingOutputs` is march-BLIND — graphToCode gates it separately
- * (`outputs = marchNode ? [] : contributingOutputs(nodes)`) — so under a
- * DRIVING Raymarch Output such a node stays pairable while contributing
- * nothing to the module. Harmless, and deliberately not special-cased here:
- * the parse mints no plain Output to pair it with, pass 2 keys on
- * `registryType` and `'output'` never matches `'raymarchOutput'`, so it falls
- * through to `carryInactiveSinks`, which is exactly where that state belongs.
+ * `contributingOutputs` is custom-sink-BLIND — graphToCode gates it
+ * separately (`outputs = customNode ? [] : contributingOutputs(nodes)`) — so
+ * under a DRIVING Raymarch or Splat Output such a node stays pairable while
+ * contributing nothing to the module. Harmless, and deliberately not
+ * special-cased here: the parse mints no plain Output to pair it with, pass 2
+ * keys on `registryType` and `'output'` never matches `'raymarchOutput'` or
+ * `'splatOutput'`, so it falls through to `carryInactiveSinks`, which is
+ * exactly where that state belongs.
  *
- * A PARKED sink is not — an inactive Raymarch Output, or an untargeted Output
- * that is not the active one. It emits nothing, so it is absent from the code
+ * A PARKED sink is not — an inactive Raymarch or Splat Output, or an
+ * untargeted Output that is not the active one. It emits nothing, so it is absent from the code
  * BY CONSTRUCTION and `carryInactiveSinks` brings it back whole; leaving it in
  * the buckets would let it absorb the wiring of the node the parse really did
  * produce while the real one came back as a stranger.
@@ -172,7 +173,7 @@ export function placeParsedOutputs(
   unpaired: readonly AppNode[],
   oldNodes: readonly AppNode[],
 ): { placed: AppNode[]; rest: AppNode[] } {
-  const newOutputs = unpaired.filter((n) => isOutputNode(n) && !isMarchOutput(n));
+  const newOutputs = unpaired.filter((n) => isOutputNode(n) && !isCustomSink(n));
   if (newOutputs.length === 0) return { placed: [], rest: [...unpaired] };
   const anchors = positioned.filter(isOutputNode);
   if (anchors.length === 0) return { placed: [], rest: [...unpaired] };

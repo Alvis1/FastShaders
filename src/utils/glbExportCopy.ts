@@ -28,6 +28,10 @@ import { FS_EMBED_ASSET_BYTES_MAX, FS_EMBED_ASSETS_MAX, FS_EMBED_TOTAL_BYTES_MAX
 export const GLB_EXPORT_KEYS = {
   noModel: 'The 3D preview shows a built-in shape. Load a .glb or .gltf model onto it first — the .glb is built from that model.',
   notGltf: '{name} is an .obj file, which cannot carry textures or a shader. Load a .glb or .gltf to export one .glb.',
+  notGltfSplat:
+    '{name} is a Gaussian splat scene, which one .glb cannot hold. Export the shader file instead: its .zip carries the scene and the page snippet that shows the shader on it.',
+  splatDriven:
+    'The Splat Output drives this shader, and it shades Gaussian splats only; a .glb model holds none, so the shader would do nothing there. Export as .zip, or make a plain Output active.',
   externalData:
     '{name} keeps its data in separate files, so it cannot be packed into one .glb. Export it again from your 3D software as .glb or as a .gltf with embedded data.',
   moduleError: 'The shader code has an error, so there is nothing to export.',
@@ -69,7 +73,7 @@ export const GLB_EXPORT_KEYS = {
   formatBundle: 'Shader file (.js — a .zip when it carries images or the model)',
   formatGlb: 'One .glb: the 3D model with its textures and this shader inside',
   unavailableUnreadable: '{name} could not be read for packing, so it can only be exported inside a .zip.',
-  meshNoteGlb: 'The .glb is the model itself — this setting applies to the shader-file format.',
+  meshNoteGlb: 'The .glb is the model itself, so it always carries it — untick to export the shader file without the model instead.',
   popoverNoteGlb:
     'Exports {file}. Any 3D viewer opens it as an ordinary model; in A-Frame, a-frame-shaderloader 0.8 runs the shader inside with shader="src: model". Use src: model only for files you trust.',
   exportTitleGlb:
@@ -104,6 +108,8 @@ const REFUSAL_TEXT: { readonly [R in SingleGlbRefusalReason]: ((lang: Language, 
   study: null,
   'no-model': (lang) => t(K.noModel, lang),
   'not-gltf': (lang, name) => fillTemplate(t(K.notGltf, lang), { name: name ?? '.obj' }),
+  'splat-model': (lang, name) => fillTemplate(t(K.notGltfSplat, lang), { name: name ?? '.splat' }),
+  'splat-driven': (lang) => t(K.splatDriven, lang),
   'external-data': (lang, name) => fillTemplate(t(K.externalData, lang), { name: name ?? '.gltf' }),
   'module-error': (lang) => t(K.moduleError, lang),
   unreadable: (lang) => t(K.unreadable, lang),
@@ -260,6 +266,8 @@ export function glbUnavailableText(a: GlbExportAvailability, lang: Language): st
       return t(K.noModel, lang);
     case 'obj':
       return fillTemplate(t(K.notGltf, lang), { name: name ?? '.obj' });
+    case 'splat':
+      return fillTemplate(t(K.notGltfSplat, lang), { name: name ?? '.splat' });
     case 'external-data':
       return fillTemplate(t(K.externalData, lang), { name: name ?? '.gltf' });
     case 'unreadable':

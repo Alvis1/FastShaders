@@ -19,6 +19,7 @@
 
 import type { AppEdge, AppNode } from '@/types';
 import { unwrapCollapsedGroupEdges } from './edgeUtils';
+import { isSplatKind } from './splatSniff';
 
 export type FeedbackKind = 'bug' | 'idea' | 'comment';
 
@@ -72,8 +73,19 @@ export interface FeedbackProject {
   budget: number;
   /** Preview geometry setting ('sphere', 'teapot', 'custom', …). */
   geometry: string;
-  /** Present only when a custom model is loaded. */
+  /**
+   * Present only when a custom model is loaded. For a Gaussian splat (the
+   * name — sanitized at the store boundary, so it always ends in its kind's
+   * extension — says which) `vertices` is the SPLAT count `countMeshVertices`
+   * returns, and the report labels it as splats.
+   */
   mesh: { name: string; bytes: number; vertices: number | null } | null;
+}
+
+/** Is this stored model name a Gaussian splat's? `sanitizeMeshFileName` always ends it in `.<kind>`. */
+function isSplatMeshName(name: string): boolean {
+  const m = /\.([a-z0-9]+)$/i.exec(name);
+  return m !== null && isSplatKind(m[1].toLowerCase());
 }
 
 /** Human label for a feedback kind, used in the subject line and heading. */
@@ -149,7 +161,12 @@ function projectRows(p: FeedbackProject): [string, string][] {
   ];
 
   if (p.mesh) {
-    const verts = p.mesh.vertices == null ? 'vertex count unavailable' : `${group(p.mesh.vertices)} vertices`;
+    // A splat file's number is a splat count (and a gzip .spz has none until
+    // the sandbox inflates it) — "vertices" would misdescribe it.
+    const unit = isSplatMeshName(p.mesh.name) ? 'splat' : 'vertex';
+    const verts = p.mesh.vertices == null
+      ? `${unit} count unavailable`
+      : `${group(p.mesh.vertices)} ${unit === 'splat' ? 'splats' : 'vertices'}`;
     rows.push(['Mesh', `${p.mesh.name} · ${verts} · ${formatBytes(p.mesh.bytes)}`]);
   } else {
     rows.push(['Mesh', `${p.geometry} (built-in)`]);

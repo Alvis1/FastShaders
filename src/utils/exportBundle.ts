@@ -14,6 +14,8 @@
 
 import { buildZip, type ZipEntry } from './zipWriter';
 import type { PreviewMesh } from './previewMesh';
+import { isSplatKind } from './splatSniff';
+import { CDN_BASE, SPLAT_RUNTIME_FILE } from '@/engine/tslToShaderModule';
 
 export interface ExportImageFile {
   name: string;
@@ -62,9 +64,23 @@ export type ExportBundle = (
  * The A-Frame pairing snippet for a bundled model (README + docs use it).
  * `0 1.6 -3` is eye height, three metres out — the same placement the A-Frame
  * tab's page uses (OBJECT_POSITION in engine/tslToAFrameHTML.ts; kept a
- * literal here so this pure util doesn't pull in the engine chain).
+ * literal here, the A-Frame tab being a whole page generator this pure util
+ * has no business importing).
+ *
+ * A Gaussian splat is TWO lines: A-Frame knows no splat format, so the page
+ * needs the splat runtime (`fs-splat-0.1.js`, from the same CDN folder as the
+ * loader the module's header names), loaded AFTER the A-Frame bundle, and its
+ * `splat-model` component, which normalises the scene into the same 1.6-unit
+ * frame the preview showed (`size: 1.6`). The runtime is the file the preview
+ * itself ran, so the shader's splat program meets the same object.
  */
 export function meshPairingSnippet(mesh: ExportMesh, jsName: string): string {
+  if (isSplatKind(mesh.kind)) {
+    return [
+      `<script src="${CDN_BASE}/${SPLAT_RUNTIME_FILE}"></script>`,
+      `<a-entity splat-model="src: url(models/${mesh.name}); kind: ${mesh.kind}; size: 1.6" shader="src: ${jsName}" position="0 1.6 -3"></a-entity>`,
+    ].join('\n');
+  }
   return mesh.kind === 'obj'
     ? `<a-entity obj-model="obj: url(models/${mesh.name})" shader="src: ${jsName}" position="0 1.6 -3"></a-entity>`
     : `<a-entity gltf-model="url(models/${mesh.name})" shader="src: ${jsName}" position="0 1.6 -3"></a-entity>`;
@@ -95,7 +111,18 @@ export function buildExportReadme(
       '',
     );
   }
-  if (mesh) {
+  if (mesh && isSplatKind(mesh.kind)) {
+    lines.push(
+      `models/${mesh.name} — the Gaussian splat scene the shader was previewed on.`,
+      'Pair them in an A-Frame page: load the splat runtime AFTER the A-Frame',
+      'bundle, then give the entity the splat-model component:',
+      '',
+      ...meshPairingSnippet(mesh, `${baseName}.js`).split('\n').map((l) => `  ${l}`),
+      '',
+      'or drop this whole .zip into Podest to see the shader on the splats.',
+      '',
+    );
+  } else if (mesh) {
     lines.push(
       `models/${mesh.name} — the 3D model the shader was previewed on.`,
       'Pair them in an A-Frame page:',
@@ -108,7 +135,7 @@ export function buildExportReadme(
   }
   lines.push(
     'Tip: dragging this whole .zip into the FastShaders editor loads the',
-    `project too (it reads the .js inside${mesh ? ' and reloads the model into the preview' : ''}).`,
+    `project too (it reads the .js inside${mesh ? ` and reloads the ${isSplatKind(mesh.kind) ? 'splats' : 'model'} into the preview` : ''}).`,
     '',
   );
   return lines.join('\n');

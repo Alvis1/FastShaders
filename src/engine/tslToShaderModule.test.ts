@@ -507,3 +507,37 @@ export default shader;
     expect(out).toContain('colorNode:');
   });
 });
+
+describe('tslToShaderModule — the Gaussian-splat header block', () => {
+  // A Splat Output graph: a Local Position → Split.x chain on Cut.
+  const splatGraph = () => {
+    const pos = makeNode('pos1', 'positionLocal');
+    const split = makeNode('split1', 'split');
+    const sink = makeNode('sp', 'splatOutput');
+    return {
+      nodes: [pos, split, sink],
+      edges: [makeEdge('pos1', 'out', 'split1', 'v'), makeEdge('split1', 'x', 'sp', 'cut')],
+    };
+  };
+  const headerOf = (module: string) => module.split('\n').filter((l) => l.startsWith('//')).join('\n');
+
+  it('a splat module names the splat runtime and a splat-model entity; other modules do not', () => {
+    const { nodes, edges } = splatGraph();
+    const code = graphToCode(nodes, edges).code;
+    expect(code).toMatch(/return \{ splat: \{/);
+    const header = headerOf(tslToShaderModule(code));
+    expect(header).toContain('GAUSSIAN SPLATS');
+    expect(header).toContain('/fs-splat-0.1.js"></script>');
+    expect(header).toContain('splat-model="src: url(scene.splat); kind: splat" shader="src: shader.js"');
+    expect(headerOf(tslToShaderModule(COLOR_POS_DISCARD))).not.toContain('GAUSSIAN SPLATS');
+    expect(headerOf(tslToShaderModule(COLOR_POS_DISCARD))).not.toContain('fs-splat');
+  });
+
+  it("the splat block keeps the header's wording rules (no import brace, params member or uniform declaration)", () => {
+    const { nodes, edges } = splatGraph();
+    const header = headerOf(tslToShaderModule(graphToCode(nodes, edges).code));
+    expect(header).not.toMatch(/import\s*\{/);
+    expect(header).not.toMatch(/params\.[A-Za-z_$]/);
+    expect(header).not.toMatch(/const\s+\w+\s*=\s*uniform\(/);
+  });
+});

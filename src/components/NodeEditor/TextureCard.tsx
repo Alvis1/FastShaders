@@ -1,7 +1,8 @@
 import { useCallback, useRef, useEffect, memo } from 'react';
 import type { BuiltinTexture } from '@/registry/builtinTextures';
 import { useAppStore } from '@/store/useAppStore';
-import { t } from '@/i18n';
+import { assetText, t } from '@/i18n';
+import { fillTemplate } from '@/utils/fillTemplate';
 import { perlin2D } from '@/utils/noisePreview';
 import { startTileDrag, tileGhostZoom, tileActivationProps, setHtml5TileDrag } from './tileDrag';
 import { useAssetTooltip } from './AssetTooltip';
@@ -253,8 +254,10 @@ export const TextureCard = memo(function TextureCard({ texture }: TextureCardPro
   // separate lv.json entries rather than an "s" appended to one — the same
   // reason CostBar keeps a whole sentence per plural branch.
   const countLabel = `${memberCount} ${t(memberCount === 1 ? 'node' : 'nodes', language)}`;
+  // Built-in text, shown in Latvian through `assetText` (keyed by the English).
+  const name = assetText(texture.name, language);
   const { tooltip, tooltipHandlers } = useAssetTooltip(
-    `${texture.description} Click, or drag onto the canvas, to add it.`,
+    `${assetText(texture.description, language)} ${t('Click, or drag onto the canvas, to add it.', language)}`,
   );
 
   return (
@@ -263,7 +266,7 @@ export const TextureCard = memo(function TextureCard({ texture }: TextureCardPro
       draggable
       onDragStart={onDragStart}
       onPointerDown={onPointerDown}
-      {...tileActivationProps({ kind: 'texture', id: texture.id }, `Add ${texture.name} texture`)}
+      {...tileActivationProps({ kind: 'texture', id: texture.id }, fillTemplate(t('Add {name} texture', language), { name }))}
       {...tooltipHandlers}
     >
       {tooltip}
@@ -279,7 +282,7 @@ export const TextureCard = memo(function TextureCard({ texture }: TextureCardPro
           className="saved-group-card__header"
           style={{ background: texture.color }}
         >
-          <span className="saved-group-card__title">{texture.name}</span>
+          <span className="saved-group-card__title">{name}</span>
         </div>
         <div className="saved-group-card__body">
           <canvas

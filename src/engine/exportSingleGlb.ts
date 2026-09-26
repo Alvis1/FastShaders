@@ -32,6 +32,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { isEvalMode } from '@/eval/evalMode';
 import { getNodeValues } from '@/types';
 import { readGltfModel } from '@/utils/gltfReader';
+import { isSplatKind } from '@/utils/splatSniff';
 import {
   measureGlbRepack,
   prepareRepackBase,
@@ -56,17 +57,26 @@ import {
   type Ktx2Slot,
 } from '@/utils/ktx2Encoder';
 import { payloadToRgba, type Ktx2Pixels } from '@/utils/ktx2Pixels';
-import { EXPORT_ERROR_PREFIX, buildExportModule, buildProjectState, shaderBaseName } from './exportShader';
+import { EXPORT_ERROR_PREFIX, buildExportModule, buildProjectState, exportGraphFor, shaderBaseName } from './exportShader';
+import type { ExportGraph } from './exportGraph';
 import { embedProjectState } from './fastShadersProject';
 import { planGlbExport, type GlbExportPlan, type GlbSlotProblem } from './glbExportPlan';
 import { imageAssetFor } from './imageAssets';
 import { referenceImagesInSet } from './projectImageRefs';
 
-/** Why a single `.glb` could not be prepared. `study` and `aborted` are never shown. */
+/**
+ * Why a single `.glb` could not be prepared. `study` and `aborted` are never shown.
+ * `splat-model`: the loaded model is a Gaussian splat scene (EXPORT's format
+ * choice already falls back to the bundle for it — `glbExportAvailability` —
+ * so this is the build's own guard). `splat-driven`: a Splat Output drives the
+ * graph, so the module is a splat program a `.glb` has nothing to run on.
+ */
 export type SingleGlbRefusalReason =
   | 'study'
   | 'no-model'
   | 'not-gltf'
+  | 'splat-model'
+  | 'splat-driven'
   | 'external-data'
   | 'module-error'
   | RepackRefusalReason;
@@ -167,7 +177,12 @@ function nameForAssetKey(plan: GlbExportPlan, detail: string): string | undefine
  * module header for the flow; every failure is a RESULT.
  */
 export async function prepareSingleGlb(
-  opts: { signal?: AbortSignal; ktx2?: SingleGlbKtx2Options | null } = {},
+  opts: {
+    signal?: AbortSignal;
+    ktx2?: SingleGlbKtx2Options | null;
+    /** What the file carries (exportShader's exportGraphFor); absent = the whole canvas. */
+    graph?: ExportGraph;
+  } = {},
 ): Promise<SingleGlbPrepareResult> {
   if (isEvalMode()) return { ok: false, reason: 'study' };
   if (opts.signal?.aborted) return { ok: false, reason: 'aborted' };
@@ -176,10 +191,12 @@ export async function prepareSingleGlb(
   const state = useAppStore.getState();
   const mesh = state.previewMesh;
   if (!mesh) return { ok: false, reason: 'no-model' };
+  if (isSplatKind(mesh.kind)) return { ok: false, reason: 'splat-model', name: mesh.name };
   if (mesh.kind !== 'glb' && mesh.kind !== 'gltf') return { ok: false, reason: 'not-gltf', name: mesh.name };
   const fileName = `${shaderBaseName(state.shaderName)}.glb`;
+  const graph = opts.graph ?? exportGraphFor('whole');
 
-  const moduleText = buildExportModule({ inlineImages: false, glbFile: fileName });
+  const moduleText = buildExportModule({ inlineImages: false, glbFile: fileName, graph });
   if (moduleText.startsWith(EXPORT_ERROR_PREFIX)) return { ok: false, reason: 'module-error' };
 
   const read = readGltfModel(mesh.bytes, mesh.kind);
@@ -189,8 +206,8 @@ export async function prepareSingleGlb(
     return { ok: false, reason: r === 'too-complex' ? 'too-complex' : 'unreadable', detail: read.refusal.detail };
   }
 
-  const planned = planGlbExport(state.nodes, state.edges, moduleText, read.model.signature);
-  if (!planned.ok) return { ok: false, reason: 'model-mismatch' };
+  const planned = planGlbExport(graph.nodes, graph.edges, moduleText, read.model.signature);
+  if (!planned.ok) return { ok: false, reason: planned.reason };
   const plan = planned.plan;
 
   const base = prepareRepackBase(read.model, plan.indexMaterials);
@@ -199,7 +216,7 @@ export async function prepareSingleGlb(
   // The project block, ref-only for every payload the file carries (the
   // `assets` targets): no build older than the single-GLB import opens one.
   const written = new Set(plan.moduleAssets.map((a) => a.src));
-  const project = referenceImagesInSet(buildProjectState(), written, (n) => imageAssetFor(n.id, getNodeValues(n))?.src ?? null);
+  const project = referenceImagesInSet(buildProjectState(graph), written, (n) => imageAssetFor(n.id, getNodeValues(n))?.src ?? null);
   const projectText = embedProjectState('', project).trim();
 
   // The fallbacks: each distinct WebP a slot uses, in slot order, one at a time.

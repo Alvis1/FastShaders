@@ -1,7 +1,7 @@
 import dagre from '@dagrejs/dagre';
 import type { AppNode, AppEdge } from '@/types';
 import { getCostScale } from '@/utils/colorUtils';
-import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
+import { OUTPUT_DEFAULT_EXPOSED, SPLAT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import { NODE_REGISTRY, growsOperands, getFlowNodeType } from '@/registry/nodeRegistry';
 import { nodeBox, hasNodeGlyph, usesOperatorLayout, nodeScale } from '@/components/NodeEditor/nodes/glyphs/NodeGlyph';
 import { COLOR_NODE_SIZE } from '@/components/NodeEditor/nodes/ColorNode';
@@ -116,6 +116,16 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
       // Output's 18px row pitch and chrome.
       const rows = Math.max(13, inDegree);
       return { width: 150, height: 34 + 3 * 14 + rows * 18 };
+    }
+    case 'splatOutput': {
+      // SplatOutputNode: the same chrome, three labelled sections (Shade /
+      // Cut / Shape, two subdividers) and one 18px row per EXPOSED socket —
+      // four by default (SPLAT_DEFAULT_EXPOSED), at most the def's six. The
+      // `inDegree` floor stands in for rows a wire auto-exposed.
+      const listed = (node.data as { exposedPorts?: unknown }).exposedPorts;
+      const shown = Math.min(Array.isArray(listed) ? listed.length : SPLAT_DEFAULT_EXPOSED.length, def?.inputs.length ?? 6);
+      const rows = Math.max(shown, inDegree, 1);
+      return { width: 150, height: 34 + 2 * 14 + rows * 18 };
     }
     case 'group':
     case 'note': {

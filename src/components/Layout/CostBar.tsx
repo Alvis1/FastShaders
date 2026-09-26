@@ -17,7 +17,13 @@ import {
 // belt-and-braces rather than the mechanism.
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { placePopover, pickPortalHost } from '@/components/inputs/colorPickerModel';
+import { formatSplatCount } from '@/utils/previewMesh';
 import './CostBar.css';
+
+/** The splat figure and its tooltip. Each English sentence IS its lv.json key. */
+const SPLAT_FIGURE_KEY = 'Gaussian splats: {count}';
+const SPLAT_FIGURE_HINT_KEY =
+  'How many Gaussian splats the 3D preview is drawing. Shown for information only — splats are not priced in points: their cost depends on how much of the screen they cover and on depth sorting, not on the node graph.';
 
 /**
  * Action rows in the device dropdown. Sentinels rather than ids so a real
@@ -79,6 +85,11 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
   const importCostProfiles = useAppStore((s) => s.importCostProfiles);
   const createCostProfile = useAppStore((s) => s.createCostProfile);
   const deleteCostProfile = useAppStore((s) => s.deleteCostProfile);
+  // The loaded Gaussian splat's count, as the preview's sandbox reported it —
+  // a FIGURE beside the points, never points: the report is forgeable and a
+  // splat's cost is screen coverage and sorting, which no node price models.
+  // Only while the preview SHOWS the model (a parked splat draws nothing).
+  const splatFacts = useAppStore((s) => (s.previewShowsModel ? s.previewSplatFacts : null));
   const [dragOver, setDragOver] = useState(false);
   const [modal, setModal] = useState<CostProfileModalMode | null>(null);
   // Stable: it is the modal's Escape-listener dependency, and an inline arrow
@@ -694,6 +705,14 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
           title={t('High impact color', language)}
         />
       </div>
+      {splatFacts && (
+        <div className="cost-bar__override">
+          <span className="cost-bar__override-tag" title={t(SPLAT_FIGURE_HINT_KEY, language)}>
+            {'◇ '}
+            {fillTemplate(t(SPLAT_FIGURE_KEY, language), { count: formatSplatCount(splatFacts.count, language) })}
+          </span>
+        </div>
+      )}
       {activeProfile && (
         <div className={`cost-bar__override${invalid ? ' cost-bar__override--warn' : ''}`}>
           <span

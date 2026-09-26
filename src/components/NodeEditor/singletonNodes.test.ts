@@ -40,7 +40,9 @@ describe('the singleton set', () => {
   });
 
   it('says no to every ordinary type', () => {
-    for (const t of ['float', 'time', 'output', 'imageNode', 'dataNode', 'raymarchOutput']) {
+    // Several sinks may coexist (exactly one ACTIVE), so no output node is a
+    // singleton — the Splat Output included.
+    for (const t of ['float', 'time', 'output', 'imageNode', 'dataNode', 'raymarchOutput', 'splatOutput']) {
       expect(isSingletonNodeType(t), t).toBe(false);
     }
   });

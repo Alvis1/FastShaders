@@ -10,6 +10,7 @@ import { DragNumberInput } from '../inputs/DragNumberInput';
 import { makeConnectionRevealSelector, REVEAL_TEMP_OPACITY } from './connectionReveal';
 import { SoundNodeButton } from './SoundNodeButton';
 import { NodeTitle } from './NodeTitle';
+import { useHeaderTip } from './headerTip';
 // One label rule for "what is arriving on this input", shared with ShaderNode
 // (whose stylesheet also owns .shader-node__edge-val and the arm light). The
 // hook carries the whole two-step subscription — including the unwrapped-edge
@@ -75,6 +76,7 @@ export const SoundNode = memo(function SoundNode({ id, data, selected }: NodePro
   // below the hooks is NOT a mechanical edit here (ShaderNode/PreviewNode hooks
   // dereference `def`) — see CLEAN-3.
   if (!def) return null;
+  const headerTip = useHeaderTip(def);
 
   const varName = useAppStore((s) => s.nodeVarNames[id]);
   const language = useAppStore((s) => s.language);
@@ -167,8 +169,8 @@ export const SoundNode = memo(function SoundNode({ id, data, selected }: NodePro
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>
       )}
 
-      <div className="node-base__header" style={{ background: costColor }}>
-        <NodeTitle text={varName ?? data.label} style={{ color: headerTextColor }} />
+      <div className="node-base__header" style={{ background: costColor }} {...headerTip}>
+        <NodeTitle text={varName ?? data.label} style={{ color: headerTextColor }} bare={headerTip !== null} />
       </div>
 
       <div className="sound-node__body" style={{ width: SOUND_BODY_W, height: SOUND_BODY_H }}>

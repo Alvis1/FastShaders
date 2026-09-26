@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import type { SavedGroup } from '@/store/useAppStore';
-import { t } from '@/i18n';
+import { assetText, t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { getGroupFrameColors } from '@/utils/colorUtils';
 import { startTileDrag, tileGhostZoom, tileActivationProps, setHtml5TileDrag } from './tileDrag';
@@ -72,9 +72,12 @@ export function SavedGroupCard({ group }: SavedGroupCardProps) {
   // interpolates the finished phrase, so one key covers both counts and the
   // sentence never comes out half-Latvian.
   const countLabel = `${memberCount} ${t(memberCount === 1 ? 'node' : 'nodes', language)}`;
+  // A saved group is user data; its name shows in Latvian only when it is
+  // still a built-in preset/texture name (a dropped preset, saved as-is).
+  const name = assetText(group.name, language);
   const { tooltip, tooltipHandlers } = useAssetTooltip(
     fillTemplate(t('Saved group “{name}” ({count}) — click, or drag onto the canvas, to add a copy.', language), {
-      name: group.name,
+      name,
       count: countLabel,
     }),
   );
@@ -85,7 +88,7 @@ export function SavedGroupCard({ group }: SavedGroupCardProps) {
       draggable
       onDragStart={onDragStart}
       onPointerDown={onPointerDown}
-      {...tileActivationProps({ kind: 'savedGroup', id: group.id }, `Add saved group ${group.name}`)}
+      {...tileActivationProps({ kind: 'savedGroup', id: group.id }, fillTemplate(t('Add saved group {name}', language), { name }))}
       {...tooltipHandlers}
     >
       {tooltip}
@@ -98,7 +101,7 @@ export function SavedGroupCard({ group }: SavedGroupCardProps) {
           className="saved-group-card__header"
           style={{ background: group.color }}
         >
-          <span className="saved-group-card__title">{group.name}</span>
+          <span className="saved-group-card__title">{name}</span>
         </div>
         <div className="saved-group-card__body">
           <span className="saved-group-card__count">{countLabel}</span>
@@ -108,8 +111,8 @@ export function SavedGroupCard({ group }: SavedGroupCardProps) {
         type="button"
         className="saved-group-card__delete"
         onClick={onDelete}
-        title="Remove from library"
-        aria-label="Remove saved group"
+        title={t('Remove from library', language)}
+        aria-label={t('Remove saved group', language)}
       >
         ×
       </button>

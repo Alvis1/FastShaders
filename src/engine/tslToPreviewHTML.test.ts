@@ -1,7 +1,16 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { MARCH_WINDOW_GEOMETRY, decoderAssetUrl, tslToPreviewHTML } from './tslToPreviewHTML';
-import { LOADER_FILE } from './tslToShaderModule';
+import {
+  FIT_BOUNDS_SCRIPT,
+  MARCH_WINDOW_GEOMETRY,
+  MODEL_FEED_KINDS,
+  decoderAssetUrl,
+  tslToPreviewHTML,
+  type PreviewOptions,
+} from './tslToPreviewHTML';
+import { LOADER_FILE, SPLAT_RUNTIME_FILE } from './tslToShaderModule';
 import { DECODER_FILES, MAX_DECODER_FILE_BYTES } from '@/utils/meshDecoders';
+import { MESH_EXTENSIONS, isBinaryKind, isTextKind } from '@/utils/previewMesh';
+import { SPLAT_KINDS } from '@/utils/splatSniff';
 import { safeJsonReviver } from '@/utils/safeJson';
 import vm from 'node:vm';
 import { LoadingManager } from 'three/webgpu';
@@ -500,6 +509,240 @@ describe('tslToPreviewHTML — mesh decoders (loader 0.8 FastShaders.decoders)',
       fill({ [DECODER_FILES.meshopt]: 'export const x = 1;' });
       expect(table[DECODER_FILES.meshopt]).toBe(first);
       minted.push(first);
+    });
+  });
+});
+
+/* ── Gaussian-splat documents ─────────────────────────────────────────────── */
+
+/** Every document shape that shows NO splat — sandbox and XR, primitives and meshes. */
+const NON_SPLAT_DOCS: Array<[string, PreviewOptions]> = [
+  ['sphere', { geometry: 'sphere' }],
+  ['cube', { geometry: 'cube', subdivision: 12 }],
+  ['plane', { geometry: 'plane', animate: true }],
+  ['teapot', { geometry: 'teapot', subdivision: 24 }],
+  ['bunny', { geometry: 'bunny' }],
+  ['march window', { geometry: MARCH_WINDOW_GEOMETRY, marchWindow: 2 }],
+  ['custom glb', { geometry: 'custom', customModel: { kind: 'glb', id: 7 } }],
+  ['custom gltf', { geometry: 'custom', customModel: { kind: 'gltf', id: 8 } }],
+  ['custom obj', { geometry: 'custom', customModel: { kind: 'obj', id: 3 } }],
+  ['custom, no descriptor', { geometry: 'custom' }],
+  ['forced WebGL2', { geometry: 'sphere', forceWebGL2: true }],
+  ['xr sphere', { geometry: 'sphere', xr: true }],
+  ['xr teapot', { geometry: 'teapot', xr: true }],
+  ['xr bunny', { geometry: 'bunny', xr: true }],
+  ['xr glb', { geometry: 'custom', xr: true, customModel: { kind: 'glb', id: 2, url: 'blob:https://example/abc' } }],
+  ['xr obj', { geometry: 'custom', xr: true, customModel: { kind: 'obj', id: 2, url: 'blob:https://example/abc' } }],
+];
+
+const splatDoc = (kind: (typeof SPLAT_KINDS)[number] = 'splat', id = 11) =>
+  tslToPreviewHTML(TSL, { geometry: 'custom', customModel: { kind, id } });
+const xrSplatDoc = (kind: (typeof SPLAT_KINDS)[number] = 'ply') =>
+  tslToPreviewHTML(TSL, { geometry: 'custom', xr: true, customModel: { kind, id: 4, url: 'blob:https://example/splat' } });
+
+/** The document's `<script src>` lines, in order. */
+const scriptSrcLines = (html: string) => html.split('\n').filter((l) => l.includes('<script src='));
+
+describe('tslToPreviewHTML — the model feed kind table', () => {
+  it('lists every model kind exactly once', () => {
+    expect(Object.keys(MODEL_FEED_KINDS).sort()).toEqual([...MESH_EXTENSIONS].sort());
+  });
+
+  it('is the table the parent posts by: bytes iff isBinaryKind, text iff isTextKind', () => {
+    for (const kind of MESH_EXTENSIONS) {
+      expect(MODEL_FEED_KINDS[kind] === 'bytes', kind).toBe(isBinaryKind(kind));
+      expect(MODEL_FEED_KINDS[kind] === 'text', kind).toBe(isTextKind(kind));
+    }
+    // Every splat kind rides as bytes — a splat is never TextDecoded.
+    for (const kind of SPLAT_KINDS) expect(MODEL_FEED_KINDS[kind]).toBe('bytes');
+  });
+
+  it('is carried verbatim by a splat document’s feed', () => {
+    for (const kind of SPLAT_KINDS) {
+      const m = /var FEED_KINDS = (\{.*?\});/.exec(splatDoc(kind));
+      expect(m, kind).toBeTruthy();
+      expect(JSON.parse(m![1], safeJsonReviver)).toEqual(MODEL_FEED_KINDS);
+      expect(splatDoc(kind)).toContain(`var EXPECTED_KIND = "${kind}";`);
+    }
+  });
+});
+
+describe('tslToPreviewHTML — Gaussian-splat documents', () => {
+  it('loads the splat runtime right after the A-Frame bundle, before the loader — sandbox and XR', () => {
+    for (const html of [...SPLAT_KINDS.map((k) => splatDoc(k)), ...SPLAT_KINDS.map((k) => xrSplatDoc(k))]) {
+      const srcs = scriptSrcLines(html);
+      const bundle = srcs.findIndex((l) => l.includes('js/a-frame-180-a-01.min.js'));
+      expect(bundle).toBeGreaterThan(-1);
+      expect(srcs[bundle + 1]).toContain(`js/${SPLAT_RUNTIME_FILE}"`);
+      expect(srcs[bundle + 2]).toContain(`js/${LOADER_FILE}"`);
+      // A 404 names itself like every vendored script's does.
+      expect(srcs[bundle + 1]).toContain("__fsShowStickyError('Failed to load the Gaussian splat runtime')");
+      expect(html.split(SPLAT_RUNTIME_FILE)).toHaveLength(2);
+    }
+  });
+
+  it('no other document references the runtime or anything splat — only the shared fit-bounds guard', () => {
+    for (const [name, opts] of NON_SPLAT_DOCS) {
+      const html = tslToPreviewHTML(TSL, opts);
+      expect(html, name).not.toContain(SPLAT_RUNTIME_FILE);
+      // FIT_BOUNDS_SCRIPT is registered in EVERY document (a primitive can
+      // hot-swap into a model), so its GaussianSplat guard is the one splat
+      // line a non-splat document carries; everything else stays as it was.
+      expect(html.split(FIT_BOUNDS_SCRIPT), name).toHaveLength(2);
+      expect(html.replace(FIT_BOUNDS_SCRIPT, ''), name).not.toMatch(/splat/i);
+    }
+  });
+
+  it('never carries an A-Frame `material` — it would replace the splat’s own material on load', () => {
+    // A-Frame's material component assigns its MeshStandardMaterial to the
+    // FIRST mesh set on the entity; for a splat that is the GaussianSplat, whose
+    // quads then draw as flat grey squares (measured in Chrome, both backends).
+    for (const html of [splatDoc('splat'), splatDoc('ply'), xrSplatDoc('spz')]) {
+      expect(html).not.toContain(esc('material="color: #808080"'));
+      expect(html).toMatch(/<a-entity id=\\"preview-entity\\" [^>]*position=\\"0 0 0\\"/);
+    }
+    // Every other model and primitive keeps it.
+    for (const [name, opts] of NON_SPLAT_DOCS) {
+      if (opts.geometry === 'custom' && !opts.customModel) continue;
+      expect(tslToPreviewHTML(TSL, opts), name).toContain(esc('material="color: #808080"'));
+    }
+  });
+
+  it('sandboxed: fit-bounds with regen off, and no model attribute until the feed sets splat-model', () => {
+    const html = splatDoc('spz', 11);
+    expect(html).toContain(esc('<a-entity id="preview-entity" fit-bounds="size: 1.6; regen: false" position="0 0 0" rotation="0 0 0">'));
+    expect(html).not.toContain(esc('splat-model="'));
+    expect(html).toContain('var __fsExpectedObj = "custom:11";');
+    expect(html).toContain('entity.setAttribute("splat-model", "src: url(" + url + "); kind: " + kind + "; size: 1.6");');
+  });
+
+  it('carries no gltf-anim, no decoder configuration, no KTX2 report and no glTF/OBJ model attribute', () => {
+    for (const html of [splatDoc('splat'), splatDoc('ksplat'), xrSplatDoc('spz')]) {
+      expect(html).not.toContain('gltf-anim');
+      expect(html).not.toContain('FastShaders.decoders');
+      expect(html).not.toContain('__fsDecoderUrls');
+      expect(html).not.toContain('fs:model-ktx2');
+      expect(html).not.toContain('gltf-model');
+      expect(html).not.toContain(esc('obj-model="'));
+    }
+  });
+
+  it('XR popup: splat-model with the parent-minted blob URL, fit-bounds regen off, no feed', () => {
+    const html = xrSplatDoc('ply');
+    expect(html).toContain(esc(
+      'splat-model="src: url(blob:https://example/splat); kind: ply; size: 1.6" fit-bounds="size: 1.6; regen: false"',
+    ));
+    expect(html).not.toContain('fs:obj-model');
+    expect(html).not.toContain('FEED_KINDS');
+    expect(html).not.toContain('fs:model-splat');
+    // Same adversarial-model allowlist as every XR model document.
+    expect(html).toContain('setURLModifier');
+  });
+
+  it('the kind spliced into the attribute is the one the document was built for — one of four literals', () => {
+    for (const kind of SPLAT_KINDS) {
+      expect(xrSplatDoc(kind)).toContain(esc(`; kind: ${kind}; size: 1.6"`));
+    }
+  });
+
+  describe('the splat feed, executed', () => {
+    /** Run a document's model-feed <script> against stubs; returns the handles. */
+    function runFeed(html: string) {
+      const start = html.indexOf('  var __fsExpectedObj = ');
+      const end = html.indexOf('</script>', start);
+      expect(start).toBeGreaterThan(-1);
+      const body = html.slice(start, end);
+      const onMessage: Array<(e: { source: unknown; data: unknown }) => void> = [];
+      const posted: unknown[] = [];
+      const parent = { postMessage: (m: unknown) => posted.push(m) };
+      const attrs: Record<string, string> = {};
+      const entityOn: Record<string, Array<(ev: unknown) => void>> = {};
+      const entity = {
+        setAttribute: (k: string, v: string) => { attrs[k] = v; },
+        addEventListener: (t: string, fn: (ev: unknown) => void) => { (entityOn[t] ??= []).push(fn); },
+      };
+      const blobs: Blob[] = [];
+      const win = {
+        parent,
+        addEventListener: (t: string, fn: (e: { source: unknown; data: unknown }) => void) => { if (t === 'message') onMessage.push(fn); },
+        __fsWhenSceneBooted: (fn: () => void) => fn(),
+      };
+      const doc = { getElementById: (id: string) => (id === 'preview-entity' ? entity : null) };
+      const url = { createObjectURL: (b: Blob) => { blobs.push(b); return `blob:test/${blobs.length}`; } };
+      const errors: string[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-implied-eval
+      new Function('window', 'document', 'URL', 'Blob', '__fsShowStickyError', body)(
+        win, doc, url, Blob, (m: string) => errors.push(m),
+      );
+      const send = (data: unknown, source: unknown = parent) => { for (const fn of onMessage) fn({ source, data }); };
+      const emit = (type: string, detail: unknown) => { for (const fn of entityOn[type] ?? []) fn({ detail }); };
+      return { send, emit, attrs, posted, blobs, errors };
+    }
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+
+    it('applies the bytes it was built for as splat-model, once', async () => {
+      const f = runFeed(splatDoc('spz', 11));
+      f.send({ type: 'fs:obj-model', geometry: 'custom:11', kind: 'spz', bytes });
+      expect(f.attrs['splat-model']).toBe('src: url(blob:test/1); kind: spz; size: 1.6');
+      expect(new Uint8Array(await f.blobs[0].arrayBuffer())).toEqual(bytes);
+      // A second post (a duplicate load event) is ignored.
+      f.send({ type: 'fs:obj-model', geometry: 'custom:11', kind: 'spz', bytes });
+      expect(f.blobs).toHaveLength(1);
+    });
+
+    it('ignores a foreign sender, another model key, another kind, and a text payload', () => {
+      const f = runFeed(splatDoc('spz', 11));
+      f.send({ type: 'fs:obj-model', geometry: 'custom:11', kind: 'spz', bytes }, { postMessage() {} });
+      f.send({ type: 'fs:obj-model', geometry: 'custom:12', kind: 'spz', bytes });
+      for (const kind of ['splat', 'ply', 'ksplat', 'glb', 'obj', 'gltf', '__proto__', 'constructor', 'toString', 7, null]) {
+        f.send({ type: 'fs:obj-model', geometry: 'custom:11', kind, bytes });
+      }
+      f.send({ type: 'fs:obj-model', geometry: 'custom:11', kind: 'spz', text: 'not bytes' });
+      f.send({ type: 'fs:obj-model', geometry: 'custom:11', kind: 'spz', bytes: 'not bytes' });
+      expect(f.attrs).toEqual({});
+      expect(f.blobs).toHaveLength(0);
+    });
+
+    it('reports splat-loaded up as fs:model-splat, keyed to its model', () => {
+      const f = runFeed(splatDoc('splat', 5));
+      f.send({ type: 'fs:obj-model', geometry: 'custom:5', kind: 'splat', bytes });
+      f.emit('splat-loaded', { count: 100000, shDropped: 2 });
+      expect(f.posted).toEqual([{ type: 'fs:model-splat', geometry: 'custom:5', count: 100000, shDropped: 2 }]);
+      f.emit('splat-loaded', undefined);
+      expect(f.posted[1]).toEqual({ type: 'fs:model-splat', geometry: 'custom:5', count: null, shDropped: null });
+    });
+
+    it('shows the runtime’s own sentence on model-error, and the parent’s on fs:obj-model-error', () => {
+      const f = runFeed(splatDoc('ply', 5));
+      f.send({ type: 'fs:obj-model', geometry: 'custom:5', kind: 'ply', bytes });
+      f.emit('model-error', { src: 'blob:x', message: 'This .ply file holds no splats.' });
+      expect(f.errors).toEqual(['Failed to load the Gaussian splat: This .ply file holds no splats.']);
+      f.emit('model-error', { message: 42 });
+      expect(f.errors[1]).toBe('Failed to load the Gaussian splat: the file could not be parsed.');
+      f.emit('model-error', { message: 'x'.repeat(5000) });
+      expect(f.errors[2].length).toBeLessThan(500);
+      const g = runFeed(splatDoc('ply', 5));
+      g.send({ type: 'fs:obj-model-error', geometry: 'custom:5', message: 'read failed' });
+      expect(g.errors).toEqual(['Failed to load the Gaussian splat: read failed']);
+    });
+
+    it('a MESH document’s feed gives the answers MODEL_FEED_KINDS gives for glb, gltf and obj', () => {
+      const html = tslToPreviewHTML(TSL, { geometry: 'custom', customModel: { kind: 'glb', id: 7 } });
+      const cases: Array<[kind: string, payload: 'bytes' | 'text', attr: string | null]> = [
+        ['glb', 'bytes', 'gltf-model'],
+        ['glb', 'text', null],
+        ['gltf', 'text', 'gltf-model'],
+        ['gltf', 'bytes', null],
+        ['obj', 'text', 'obj-model'],
+        ['obj', 'bytes', null],
+      ];
+      for (const [kind, payload, attr] of cases) {
+        const f = runFeed(html);
+        f.send({ type: 'fs:obj-model', geometry: 'custom:7', kind, ...(payload === 'bytes' ? { bytes } : { text: 'v 0 0 0' }) });
+        // Accepted exactly when the payload form is the table's form.
+        expect(payload === MODEL_FEED_KINDS[kind as 'glb' | 'gltf' | 'obj'], `${kind} as ${payload}`).toBe(attr !== null);
+        expect(Object.keys(f.attrs), `${kind} as ${payload}`).toEqual(attr ? [attr] : []);
+      }
     });
   });
 });

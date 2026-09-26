@@ -184,6 +184,25 @@ describe("the 'export-desktop-only' line", () => {
   });
 });
 
+/** A `'connected'` EXPORT left nodes out (engine/exportGraph.ts): say so, with the way back. */
+describe("the 'export-left-out' line", () => {
+  const line = { kind: 'export-left-out' as const, count: 3 };
+
+  it('ends the clause on the count (no "1 nodes") and names the row that keeps them', () => {
+    expect(importNoteLineText(line, 'en')).toBe(
+      'Nodes left out of the export because they feed no Output: 3. To keep them, right-click EXPORT and tick “Include unconnected nodes”.',
+    );
+  });
+
+  it('renders in LV, naming the row by its Latvian label', () => {
+    const lv = importNoteLineText(line, 'lv');
+    expect(lv).not.toBe(importNoteLineText(line, 'en'));
+    expect(lv).toContain(': 3.');
+    expect(lv).toContain('Iekļaut nesavienotos mezglus');
+    expect(lv).not.toContain('{');
+  });
+});
+
 describe('announceExportDelivered runs only after delivery', () => {
   /** The body of the first `const NAME = useCallback(` / `function NAME(` up to `until`. */
   const slice = (src: string, from: string, until: string): string => {

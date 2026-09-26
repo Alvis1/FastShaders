@@ -13,13 +13,37 @@ import {
   MESH_DECODER_LOAD_KEY,
   MESH_DECODER_EMPTY_KEY,
   MESH_DECODER_TOO_LARGE_KEY,
+  MESH_SPLAT_HEADSET_KEY,
+  MESH_SPLAT_SH_DROPPED_KEY,
   GLTF_BUILD_REFUSED_KEY,
   GLTF_IMAGE_SKIP_KEYS,
   GLTF_READ_REASON_KEYS,
   gltfBuildRefusalMessage,
   gltfImageSkipReason,
+  splatHeadsetMessage,
+  splatShDroppedMessage,
   type GltfImageSkip,
 } from './previewMeshMessage';
+import {
+  MESH_BAD_KSPLAT_KEY,
+  MESH_BAD_PLY_KEY,
+  MESH_BAD_SPLAT_KEY,
+  MESH_BAD_SPZ_KEY,
+  MESH_DROP_HINT_KEY,
+  MESH_GLTF_SPLAT_KEY,
+  MESH_PLY_COMPRESSED_KEY,
+  MESH_PLY_NOT_SPLAT_KEY,
+  MESH_PLY_SH_KEY,
+  MESH_SPLAT_COUNT_KEY,
+  MESH_SPLAT_EVAL_KEY,
+  MESH_SPZ_TOO_LARGE_KEY,
+  MESH_SPZ_VERSION_KEY,
+  MESH_UNSUPPORTED_KEY,
+  sniffSplat,
+  splatCountRefusal,
+  type MeshRefusal,
+} from './previewMesh';
+import { SPLAT_HEADSET_ADVISORY_COUNT, SPZ_MAX_DECODED_BYTES } from './splatLimits';
 import { GLTF_IMAGE_MAX_BYTES, type GltfReadRefusalReason } from './gltfReader';
 import {
   modelTooLargeRefusal,
@@ -103,6 +127,82 @@ describe('model notice keys in lv.json', () => {
 
   it('dropped the dead short key the old interpolated notice used', () => {
     expect(Object.prototype.hasOwnProperty.call(UI, 'Model too large')).toBe(false);
+  });
+});
+
+describe('Gaussian-splat notice keys in lv.json', () => {
+  it.each([
+    MESH_UNSUPPORTED_KEY,
+    MESH_DROP_HINT_KEY,
+    MESH_BAD_SPLAT_KEY,
+    MESH_SPLAT_COUNT_KEY,
+    MESH_BAD_SPZ_KEY,
+    MESH_BAD_PLY_KEY,
+    MESH_BAD_KSPLAT_KEY,
+    MESH_PLY_NOT_SPLAT_KEY,
+    MESH_PLY_SH_KEY,
+    MESH_PLY_COMPRESSED_KEY,
+    MESH_SPZ_VERSION_KEY,
+    MESH_SPZ_TOO_LARGE_KEY,
+    MESH_GLTF_SPLAT_KEY,
+    MESH_SPLAT_EVAL_KEY,
+    MESH_SPLAT_HEADSET_KEY,
+    MESH_SPLAT_SH_DROPPED_KEY,
+  ])('has a Latvian entry that differs from the English, same placeholders: %s', (key) => {
+    expect(typeof UI[key]).toBe('string');
+    expect(UI[key]).not.toBe(key);
+    expect(placeholders(UI[key])).toEqual(placeholders(key));
+  });
+
+  it('renders every sniff refusal in both languages with no placeholder left over', () => {
+    const v4 = new Uint8Array(16);
+    new DataView(v4.buffer).setUint32(0, 0x5053474e, true);
+    new DataView(v4.buffer).setUint32(4, 4, true);
+    const gz = new Uint8Array([0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    new DataView(gz.buffer).setUint32(gz.length - 4, SPZ_MAX_DECODED_BYTES + 1, true);
+    const refusalOf = (bytes: Uint8Array): MeshRefusal => {
+      const r = sniffSplat('spz', bytes);
+      if (!('refusal' in r)) throw new Error('expected a refusal');
+      return r.refusal;
+    };
+    const refusals = [splatCountRefusal(1_500_000), refusalOf(v4), refusalOf(gz)];
+    for (const r of refusals) {
+      for (const lang of ['en', 'lv'] as const) {
+        const msg = meshRefusalMessage(r, lang);
+        expect(msg, `${r.key} (${lang})`).not.toMatch(/\{[a-zA-Z]+\}/);
+      }
+    }
+    expect(meshRefusalMessage(refusals[1], 'en')).toContain('version 4');
+    // The size the trailer claims rounds UP, the cap to NEAREST — one byte over never reads "96 — max 96".
+    expect(meshRefusalMessage(refusals[2], 'en')).toContain('unpacks to 96.1 MB — max 96 MB.');
+    expect(meshRefusalMessage(refusals[2], 'lv')).toContain('96,1 MB — maks. 96 MB.');
+  });
+});
+
+describe('the splat info lines', () => {
+  it('the headset advisory speaks only ABOVE the advisory count, with both numbers grouped', () => {
+    expect(splatHeadsetMessage({ count: SPLAT_HEADSET_ADVISORY_COUNT }, 'en')).toBeNull();
+    expect(splatHeadsetMessage({ count: SPLAT_HEADSET_ADVISORY_COUNT + 1 }, 'en')).toBe(
+      'This scene has 250,001 splats. Above 250,000, a standalone VR headset may not keep a smooth frame rate.',
+    );
+    const lvMsg = splatHeadsetMessage({ count: 400_000 }, 'lv')!;
+    expect(lvMsg.replace(/\s/g, ' ')).toContain('400 000');
+    expect(lvMsg.replace(/\s/g, ' ')).toContain('250 000');
+    expect(lvMsg).not.toMatch(/\{[a-z]+\}/i);
+  });
+
+  it('the headset advisory says nothing for unknown or forged counts', () => {
+    for (const f of [null, undefined, { count: null }, { count: Number.NaN }, { count: 1e300 }, { count: '900000' as unknown as number }]) {
+      expect(splatHeadsetMessage(f, 'en')).toBeNull();
+    }
+  });
+
+  it('the dropped-SH line prints only degree 1, 2 or 3', () => {
+    expect(splatShDroppedMessage(1, 'en')).toBe(
+      "This scene's view-dependent colour (spherical harmonics, degree 1) is not shown — FastShaders draws each splat's base colour.",
+    );
+    expect(splatShDroppedMessage(3, 'lv')).toContain('3. pakāpe');
+    for (const d of [0, 4, -1, 1.5, '2', null, undefined, Number.NaN]) expect(splatShDroppedMessage(d, 'en')).toBeNull();
   });
 });
 

@@ -72,6 +72,21 @@ export const CDN_BASE = 'https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader
 export const LOADER_FILE = 'a-frame-shaderloader-0.8.js';
 
 /**
+ * The Gaussian-splat runtime beside the loader (`js/fs-splat-0.1.js`): three
+ * r186's GaussianSplat addon, its four splat file loaders and the `splat-model`
+ * A-Frame component, as one IIFE that must load AFTER the A-Frame bundle. A
+ * document references it only when it shows a splat model, so every other
+ * document stays byte-identical. Same CDN rule as LOADER_FILE: additive-only
+ * after its first push, and real for a recipient only once the submodule is
+ * pushed and jsdelivr purged.
+ */
+export const SPLAT_RUNTIME_FILE = 'fs-splat-0.1.js';
+
+/** The editor TSL's return for a driving Splat Output (graphToCode's splat
+ *  emission): `return { splat: { … } };`. */
+const SPLAT_RETURN_RE = /\breturn\s*\{\s*splat\s*:/;
+
+/**
  * Schema keys the `shader` component already owns, so a property that
  * sanitizes to one of them can never be set from an `<a-entity>` attribute.
  *
@@ -160,6 +175,20 @@ function buildHeader(props: PropertyInfo[], tslCode = '', opts: ShaderModuleOpti
   header.push('// Without the loader the module still imports THREE and every TSL function it');
   header.push('// calls, and you redo that material work by hand. Recipe:');
   header.push('// https://github.com/Alvis1/FastShaders#using-the-shader-module-with-plain-threejs');
+  // A Splat Output module shades a Gaussian splat scene through loader 0.8's
+  // `splat` key, and the two scripts above cannot load a splat file: say so,
+  // and name the third script. Keyed on the editor TSL's return, so every
+  // other export stays byte-identical. Same wording rules as above.
+  if (SPLAT_RETURN_RE.test(tslCode)) {
+    header.push('//');
+    header.push('// GAUSSIAN SPLATS — this shader shades a Gaussian splat scene, not a mesh.');
+    header.push('// Add the splat runtime AFTER the two scripts above and give the entity a');
+    header.push('// splat file (.splat, .spz, .ply or .ksplat) instead of a geometry:');
+    header.push(`//   <script src="${CDN_BASE}/${SPLAT_RUNTIME_FILE}"><${''}/script>`);
+    header.push('//   <a-entity splat-model="src: url(scene.splat); kind: splat" shader="src: shader.js"></a-entity>');
+    header.push('// splat-model scales the scene to a longest side of 1.6 (its `size`), the frame');
+    header.push('// FastShaders previewed it in; size: 0 keeps the file\'s own units.');
+  }
   if (tslCode.includes('data:image/')) {
     header.push('//');
     header.push('// This shader embeds image texture(s) as data: URLs. If the host page sets a');

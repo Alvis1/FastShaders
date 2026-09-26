@@ -10,11 +10,15 @@ const nb = (s: string) => s.replace(/ /g, ' ');
  * and the designer stage) wraps by the same rule: at most two lines, at the
  * seam `splitTitle` picks. The full text stays on `title` for hover, since the
  * CSS clamp can still ellipsize a name whose halves both overflow.
+ *
+ * `bare` drops that title: a canvas header carrying its own name label
+ * (`useHeaderTip` — the Latvian name, drawn above the header) must not also
+ * open the tooltip layer's bubble with the varName over it.
  */
-export function NodeTitle({ text, style }: { text: string; style?: CSSProperties }) {
+export function NodeTitle({ text, style, bare = false }: { text: string; style?: CSSProperties; bare?: boolean }) {
   const split = useMemo(() => splitTitle(text), [text]);
   return (
-    <span className="node-base__title" title={text} style={style}>
+    <span className="node-base__title" title={bare ? undefined : text} style={style}>
       {split ? (
         <>
           {nb(split.head)}

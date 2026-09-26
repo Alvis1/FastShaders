@@ -31,6 +31,13 @@
  * `meshToRecord` writes only the name and the bytes, so a restore recomputes
  * them from the bytes it re-validates.
  *
+ * The third, equally narrow exception is the Gaussian-splat HEADER SNIFF
+ * (`splatSniff.ts`, for `.splat` / `.spz` / `.ply` / `.ksplat`): fixed-offset
+ * integers and at most 64 KiB of ASCII `.ply` header, no geometry, no inflate.
+ * Its facts ride the mesh as `PreviewMesh.splat`, session-only like `gltf`.
+ * A splat kind never reaches the glTF readers, the payload drop or a
+ * `TextDecoder`: every per-kind step below asks `isGltfKind` / `isTextKind`.
+ *
  * Every refusal is a structured `MeshRefusal`, not a finished sentence, so each
  * surface can translate it (`previewMeshMessage.ts` renders it). This module
  * takes no i18n VALUE import: the store, the engine and FeedbackModal import it.
@@ -63,6 +70,11 @@ import { planTextureStrip, stripGltfTextures } from './gltfStrip';
 import { dropFastShadersPayload, fsJsonMayCarry } from './glbShaderExtras';
 import { hasFsExtras } from '@/engine/glbShaderContract';
 import type { Language } from '@/i18n';
+import { splatSizeRefusal } from './gltfCompression';
+import { SPLAT_MAX_COUNT } from './splatLimits';
+// The splat sniff imports the gltfCompression leaf and the limits leaf, never
+// this module, so this is not a cycle.
+import { isSplatKind, sniffSplat, type SplatFacts, type SplatKind } from './splatSniff';
 
 // The caps and the compressed-glTF pre-check moved to the `gltfCompression.ts`
 // leaf (so the glTF reader can use them without an import cycle through this
@@ -78,13 +90,39 @@ export {
   inspectParsedGltf,
   modelTooLargeRefusal,
   preReadModelGate,
+  MESH_BAD_SPLAT_KEY,
+  MESH_SPLAT_COUNT_KEY,
+  splatCountRefusal,
+  splatSizeRefusal,
   type CompressionName,
   type GltfCompressionReport,
   type MeshRefusal,
   type MeshRejectReason,
 } from './gltfCompression';
+export {
+  SPLAT_KINDS,
+  isSplatKind,
+  sniffSplat,
+  MESH_BAD_KSPLAT_KEY,
+  MESH_BAD_PLY_KEY,
+  MESH_BAD_SPZ_KEY,
+  MESH_PLY_COMPRESSED_KEY,
+  MESH_PLY_NOT_SPLAT_KEY,
+  MESH_PLY_SH_KEY,
+  MESH_SPZ_TOO_LARGE_KEY,
+  MESH_SPZ_VERSION_KEY,
+  type SplatContainer,
+  type SplatFacts,
+  type SplatKind,
+  type SplatSniffResult,
+} from './splatSniff';
 
-export type PreviewMeshKind = 'obj' | 'glb' | 'gltf';
+/**
+ * Every model file kind, by extension. The four splat kinds (`SplatKind`) are
+ * Gaussian splats: bytes-only, sniffed rather than read, rendered by the
+ * sandbox's `splat-model` component.
+ */
+export type PreviewMeshKind = 'obj' | 'glb' | 'gltf' | 'splat' | 'spz' | 'ply' | 'ksplat';
 
 export interface PreviewMesh {
   /** Sanitized file name — safe as a zip entry name and a UI label. */
@@ -92,9 +130,10 @@ export interface PreviewMesh {
   kind: PreviewMeshKind;
   bytes: Uint8Array<ArrayBuffer>;
   /**
-   * Decoded text for the text formats (obj/gltf), decoded ONCE at load time —
-   * the model feed re-posts on every iframe rebuild, and re-decoding megabytes
-   * per rebuild would be pure waste. Absent for glb (binary).
+   * Decoded text for the text formats (obj/gltf — `isTextKind`), decoded ONCE
+   * at load time — the model feed re-posts on every iframe rebuild, and
+   * re-decoding megabytes per rebuild would be pure waste. Absent for the
+   * binary kinds (glb and every splat kind): a 30 MiB `.splat` is never decoded.
    */
   text?: string;
   /**
@@ -133,10 +172,33 @@ export interface PreviewMesh {
    * — from a file that simply could not be read.
    */
   gltfReadRefusal?: GltfReadRefusalReason;
+  /**
+   * The splat header facts (`splatSniff.ts`): the declared count, the SH
+   * degree and the container. DERIVED by `createPreviewMesh` for every splat
+   * kind and never persisted (`meshToRecord` keeps only the name and bytes; the
+   * IndexedDB restore re-runs the sniff). Absent for every other kind.
+   * Display-only session state — emission never reads it.
+   */
+  splat?: SplatFacts;
 }
 
 /** Extensions accepted by every custom-mesh surface (drop, picker, zip import). */
-export const MESH_EXTENSIONS: readonly PreviewMeshKind[] = ['obj', 'glb', 'gltf'];
+export const MESH_EXTENSIONS: readonly PreviewMeshKind[] = ['obj', 'glb', 'gltf', 'splat', 'spz', 'ply', 'ksplat'];
+
+/** A glTF kind — the only kinds the glTF reader, the payload drop and the compression pre-check run on. */
+export function isGltfKind(kind: unknown): kind is 'glb' | 'gltf' {
+  return kind === 'glb' || kind === 'gltf';
+}
+
+/** A text kind — the only kinds `createPreviewMesh` decodes into `PreviewMesh.text`. */
+export function isTextKind(kind: unknown): kind is 'obj' | 'gltf' {
+  return kind === 'obj' || kind === 'gltf';
+}
+
+/** A binary kind — the model feed posts its BYTES (glb and every splat kind), never text. */
+export function isBinaryKind(kind: unknown): kind is 'glb' | SplatKind {
+  return kind === 'glb' || isSplatKind(kind);
+}
 
 /** Classify a file name by extension; null when it isn't a model file. */
 export function detectMeshKind(name: string): PreviewMeshKind | null {
@@ -154,15 +216,48 @@ export function detectMeshKind(name: string): PreviewMeshKind | null {
  */
 export const MESH_EMPTY_KEY = 'The model file is empty.';
 export const MESH_BAD_GLB_KEY = 'Not a valid .glb file (missing glTF header).';
-export const MESH_UNSUPPORTED_KEY = 'Not a supported model file (.obj / .glb / .gltf).';
+/** Lists every MESH_EXTENSIONS entry (previewMesh.test.ts pins it, in both languages). */
+export const MESH_UNSUPPORTED_KEY = 'Not a supported model file (.obj / .glb / .gltf / .splat / .spz / .ply / .ksplat).';
+/**
+ * The preview's drop hint (the drop veil, and the notice for a drop holding
+ * nothing it can take). Lists every MESH_EXTENSIONS entry, like the key above.
+ */
+export const MESH_DROP_HINT_KEY =
+  'Drop a 3D model (.obj / .glb / .gltf), a Gaussian splat (.splat / .spz / .ply / .ksplat) or a shader (.js / .zip)';
 // MESH_TOO_LARGE_KEY lives in gltfCompression.ts with the pre-read gate.
 /** `{ext}` occurs TWICE — `fillMeshRefusal`'s single pass fills both. */
 export const MESH_COMPRESSED_KEY =
   '“{name}” uses {ext} compression, which FastShaders cannot read yet. Re-export it from Blender (or gltf-transform) without {ext}.';
+/** A glTF naming KHR_gaussian_splatting (`GltfCompressionReport.gltfSplat`). */
+export const MESH_GLTF_SPLAT_KEY =
+  '“{name}” stores Gaussian splats inside glTF (KHR_gaussian_splatting), which FastShaders cannot read yet. Export the splats as .ply, .splat or .spz.';
+/**
+ * A splat dropped in a study session. Splats are refused there outright
+ * (before the pre-read gate), so the study host never serves the splat
+ * runtime; the drop surface and the zip import build this refusal.
+ */
+export const MESH_SPLAT_EVAL_KEY = 'Gaussian splats are not available in a study session.';
+
+/** The study-session refusal for a splat kind (`MESH_SPLAT_EVAL_KEY`) — a fresh object per call. */
+export function splatEvalRefusal(): MeshRefusal {
+  return { reason: 'splat-eval', key: MESH_SPLAT_EVAL_KEY };
+}
 
 // `MeshRejectReason`, `MeshRefusal` and `modelTooLargeRefusal` live in
 // gltfCompression.ts, beside the pre-read size gate that builds one; they are
-// re-exported above.
+// re-exported above. So do the two `.splat` refusals the gate builds from a
+// size alone (MESH_BAD_SPLAT_KEY, MESH_SPLAT_COUNT_KEY); the other splat keys
+// live in splatSniff.ts, which builds them.
+
+/**
+ * A splat count as a notice prints it: a whole number, grouped in the reader's
+ * language ("1,000,000" / "1 000 000"). A count that is not a finite
+ * non-negative number prints as nothing rather than as "NaN".
+ */
+export function formatSplatCount(n: number, lang: Language): string {
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return '';
+  return Math.round(n).toLocaleString(lang === 'lv' ? 'lv' : 'en', { useGrouping: true, maximumFractionDigits: 0 });
+}
 
 /**
  * Fill a refusal's placeholders into `template` (its English key, or the
@@ -186,6 +281,11 @@ export const MESH_COMPRESSED_KEY =
  * of those paths would ship a literal `{limit}` to the user. An absent
  * `limitBytes` is the 64 MiB model gate, which is what `modelTooLargeRefusal`
  * means by omitting it.
+ *
+ * The splat placeholders ride the same pass: `{count}` (a count the file
+ * declares) and `{maxCount}` (the cap applied — `limitCount`, else
+ * SPLAT_MAX_COUNT) are grouped whole numbers, and `{version}` is a container
+ * version. All three are numbers, so nothing they insert can spell a placeholder.
  */
 export function fillMeshRefusal(r: MeshRefusal, template: string, lang: Language): string {
   return fillTemplate(template, {
@@ -193,26 +293,54 @@ export function fillMeshRefusal(r: MeshRefusal, template: string, lang: Language
     ext: r.ext ?? '',
     size: formatMiB(r.sizeBytes ?? 0, lang, 'up'),
     limit: formatMiB(r.limitBytes ?? MESH_MAX_BYTES, lang, 'nearest'),
+    count: r.count === undefined ? '' : formatSplatCount(r.count, lang),
+    maxCount: formatSplatCount(r.limitCount ?? SPLAT_MAX_COUNT, lang),
+    version: typeof r.version === 'number' && Number.isSafeInteger(r.version) ? String(r.version) : '',
   });
+}
+
+/**
+ * The per-kind byte check behind `checkMeshBytes` and `createPreviewMesh`: the
+ * refusal, or what a splat sniff learnt (so the constructor never sniffs twice).
+ *
+ * ORDER: empty, then a `.splat`'s size rules (BEFORE the byte cap, exactly as
+ * the pre-read gate orders them, so a file refused pre-read on a drop and the
+ * same file refused post-read from a zip read the same sentence), then the
+ * 64 MiB cap, then the per-kind container checks.
+ */
+function inspectMeshBytes(
+  kind: PreviewMeshKind,
+  bytes: Uint8Array,
+): { refusal: MeshRefusal; splat?: undefined } | { refusal?: undefined; splat?: SplatFacts } {
+  if (bytes.length === 0) return { refusal: { reason: 'empty', key: MESH_EMPTY_KEY } };
+  if (kind === 'splat') {
+    const r = splatSizeRefusal(bytes.length);
+    if (r) return { refusal: r };
+  }
+  if (bytes.length > MESH_MAX_BYTES) return { refusal: modelTooLargeRefusal(bytes.length) };
+  if (kind === 'glb') {
+    // GLB container magic: ASCII "glTF" as the first uint32.
+    if (bytes.length < 12 ||
+        bytes[0] !== 0x67 || bytes[1] !== 0x6c || bytes[2] !== 0x54 || bytes[3] !== 0x46) {
+      return { refusal: { reason: 'bad-glb', key: MESH_BAD_GLB_KEY } };
+    }
+  }
+  if (isSplatKind(kind)) {
+    const s = sniffSplat(kind, bytes);
+    return 'refusal' in s ? { refusal: s.refusal } : { splat: s.facts };
+  }
+  return {};
 }
 
 /**
  * Bound + sanity-check model bytes before they enter the store. Returns the
  * refusal, or null when acceptable. Deliberately shallow — real parsing
  * happens inside the sandboxed iframe, where a malformed file surfaces as the
- * loader's error overlay.
+ * loader's error overlay. A splat kind also gets its bounded header sniff
+ * (`sniffSplat`).
  */
 export function checkMeshBytes(kind: PreviewMeshKind, bytes: Uint8Array): MeshRefusal | null {
-  if (bytes.length === 0) return { reason: 'empty', key: MESH_EMPTY_KEY };
-  if (bytes.length > MESH_MAX_BYTES) return modelTooLargeRefusal(bytes.length);
-  if (kind === 'glb') {
-    // GLB container magic: ASCII "glTF" as the first uint32.
-    if (bytes.length < 12 ||
-        bytes[0] !== 0x67 || bytes[1] !== 0x6c || bytes[2] !== 0x54 || bytes[3] !== 0x46) {
-      return { reason: 'bad-glb', key: MESH_BAD_GLB_KEY };
-    }
-  }
-  return null;
+  return inspectMeshBytes(kind, bytes).refusal ?? null;
 }
 
 /** `checkMeshBytes` as an English sentence (or null) — kept for callers that
@@ -291,6 +419,17 @@ function dropPreviewPayload(
  * and its module/project views) never survives into a preview copy
  * (`dropPreviewPayload`): the XR popup runs at the app's real origin, and
  * every export and the IndexedDB mirror ship these bytes.
+ *
+ * PER KIND: the payload drop, the compression pre-check and the glTF facts run
+ * for the glTF kinds only (`isGltfKind`), the text decode for the text kinds
+ * only (`isTextKind`), and a splat kind gets its header sniff instead — its
+ * facts become `PreviewMesh.splat`. A glTF naming KHR_gaussian_splatting is
+ * refused ('gltf-splat') ahead of any compression refusal.
+ *
+ * NOT here: the study-session refusal of a splat kind (`splatEvalRefusal`).
+ * The IndexedDB restore and the zip import come through this constructor too,
+ * and a restore must never decide the session's mode — so the surfaces that
+ * know it (the preview drop, the zip import) refuse before calling this.
  */
 let nextPreviewMeshId = 1;
 export function createPreviewMesh(
@@ -299,26 +438,28 @@ export function createPreviewMesh(
 ): CreatePreviewMeshResult {
   const kind = detectMeshKind(rawName);
   if (!kind) return refuse({ reason: 'unsupported', key: MESH_UNSUPPORTED_KEY });
-  const bad = checkMeshBytes(kind, bytes);
-  if (bad) return refuse(bad);
+  const checked = inspectMeshBytes(kind, bytes);
+  if (checked.refusal) return refuse(checked.refusal);
   // Normalize to a plain-ArrayBuffer view — Blob construction and postMessage
   // need it, and zip-reader output is only typed over ArrayBufferLike.
   let owned = (bytes.buffer instanceof ArrayBuffer ? bytes : bytes.slice()) as Uint8Array<ArrayBuffer>;
   // L1: before anything is derived from the bytes, so the facts, the stored
   // bytes, the IndexedDB record, the XR blob and a zip's models/ entry all see
-  // the payload-free copy.
-  if (kind !== 'obj') {
+  // the payload-free copy. Only a glTF can carry the payload (it lives in
+  // `extras`), so OBJ and the splat kinds are never scanned for one.
+  if (isGltfKind(kind)) {
     const cleaned = dropPreviewPayload(kind, owned);
     if (!cleaned.ok) return refuse({ reason: 'bad-glb', key: MESH_BAD_GLB_KEY });
     owned = cleaned.bytes;
   }
   const name = sanitizeMeshFileName(rawName, kind);
-  const text = kind === 'glb' ? undefined : new TextDecoder().decode(owned);
-  // OBJ has no extension lists (and a token in its text means nothing), so it
-  // is never inspected.
-  const comp: GltfCompressionReport = kind === 'obj'
-    ? notInspectedCompression()
-    : inspectGltfCompression(kind === 'glb' ? extractGlbJsonChunk(owned) : text);
+  const text = isTextKind(kind) ? new TextDecoder().decode(owned) : undefined;
+  // OBJ has no extension lists (and a token in its text means nothing), and a
+  // splat is not a glTF, so only the glTF kinds are inspected.
+  const comp: GltfCompressionReport = isGltfKind(kind)
+    ? inspectGltfCompression(kind === 'glb' ? extractGlbJsonChunk(owned) : text)
+    : notInspectedCompression();
+  if (comp.gltfSplat) return refuse({ reason: 'gltf-splat', key: MESH_GLTF_SPLAT_KEY, name });
   if (comp.refused) {
     return refuse({ reason: 'compressed', key: MESH_COMPRESSED_KEY, name, ext: comp.refused });
   }
@@ -331,7 +472,7 @@ export function createPreviewMesh(
   // refusal is `null` facts (the index sections then hide nothing) plus its
   // REASON, which the single-GLB export's availability line needs. It also
   // runs in eval mode — harmless, no index section can arise there.
-  if (kind !== 'obj') {
+  if (isGltfKind(kind)) {
     const read = gltfPreviewFactsOrRefusal(owned, kind);
     if (read && 'facts' in read) mesh.gltf = read.facts;
     else if (read) {
@@ -339,6 +480,9 @@ export function createPreviewMesh(
       mesh.gltfReadRefusal = read.refusal;
     }
   }
+  // The sniff's facts (a fresh object per sniff), from the same pass that let
+  // the bytes in.
+  if (checked.splat) mesh.splat = checked.splat;
   return { mesh, ktx2Fallback: comp.ktx2Fallback };
 }
 
@@ -363,9 +507,18 @@ export function createPreviewMesh(
  * It is not what THREE ends up with — the OBJ loader emits non-indexed
  * geometry and `fit-bounds` then welds duplicates — so don't use it to reason
  * about GPU cost.
+ *
+ * For a splat kind it is the SPLAT count the header declares (`mesh.splat`,
+ * or a fresh bounded sniff for a mesh assembled without it), and null for a
+ * gzip `.spz`, whose count only the sandbox learns.
  */
 export function countMeshVertices(mesh: PreviewMesh): number | null {
   try {
+    if (isSplatKind(mesh.kind)) {
+      if (mesh.splat) return mesh.splat.count;
+      const s = sniffSplat(mesh.kind, mesh.bytes);
+      return 'facts' in s ? s.facts.count : null;
+    }
     if (mesh.kind === 'obj') return mesh.text ? countObjVertices(mesh.text) : null;
     const json = mesh.kind === 'gltf' ? mesh.text : extractGlbJsonChunk(mesh.bytes);
     if (!json || json.length > GLTF_JSON_PARSE_LIMIT) return null;

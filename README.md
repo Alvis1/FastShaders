@@ -140,6 +140,27 @@ What other tools show:
 
 Drag the `.glb` back onto FastShaders and the import dialog offers **Restore** — the graph, its stored values and the model come back.
 
+## Gaussian splats
+
+Drop a `.splat`, `.spz`, `.ply` (a Gaussian-splat PLY without spherical harmonics) or `.ksplat` file on the preview, then add a **Splat Output** from the Output tab and wire it:
+
+- **Cut** removes every splat where the value is above zero. A distance field wired to Cut keeps its inside; **Invert** keeps the outside, and **Feather** softens the edge.
+- **Color** and **Opacity** recolour and fade each splat.
+- **Move** displaces each splat. Keep it to small, smooth fields: splats are still depth-sorted by their original position.
+- **Size** scales each splat.
+
+Up to 1,000,000 splats. View-dependent colour (spherical harmonics) is not shown. This shades splats; it does not edit the file. To crop, delete or clean splats use [SuperSplat](https://superspl.at/editor), then drop its export here. Opening a shader clears a loaded model, so open the shader first and drop the splat after it, or drop both together.
+
+An exported splat shader needs the splat runtime after the two scripts above, and a `splat-model` entity instead of a geometry:
+
+```html
+<script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/fs-splat-0.1.js"></script>
+
+<a-entity splat-model="src: url(scene.splat); kind: splat" shader="src: myshader.js" position="0 1.6 -3"></a-entity>
+```
+
+`splat-model` scales the scene to a longest side of 1.6 units, the frame the shader was authored in; `size: 0` keeps the file's own units.
+
 ## Tech Stack
 
 - React 18 + TypeScript + Vite

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
-import { t } from '@/i18n';
+import { paletteText, t } from '@/i18n';
+import { fillTemplate } from '@/utils/fillTemplate';
 import { BUILTIN_PALETTES } from '@/registry/builtinPalettes';
 import { swatchTitle } from '@/components/inputs/colorPickerModel';
 import {
@@ -320,7 +321,15 @@ export function PalettesModal({ open, onClose }: Props) {
       for (const p of plan.accept) {
         if (addPalette({ name: p.name, colors: p.colors, names: p.names })) added += 1;
       }
-      const notes = [...extraNotes, ...plan.notes];
+      // The parser's notes are fixed English sentences (lv.json keys); its one
+      // count rides `skipped` so the sentence around it can be translated whole.
+      const notes = [
+        ...extraNotes,
+        ...(parsed.skipped
+          ? [fillTemplate(t('{n} palette(s) skipped or truncated.', language), { n: parsed.skipped })]
+          : []),
+        ...plan.notes.map((n) => t(n, language)),
+      ];
       setReport({
         outcome: importOutcome(added, plan.overflow, notes.length > 0),
         added,
@@ -328,7 +337,7 @@ export function PalettesModal({ open, onClose }: Props) {
         notes,
       });
     },
-    [addPalette],
+    [addPalette, language],
   );
 
   const refuse = useCallback((note: string) => {
@@ -426,8 +435,10 @@ export function PalettesModal({ open, onClose }: Props) {
 
   if (!open) return null;
 
-  /** One palette's swatches: ONE non-wrapping row that scrolls if it must. */
-  const strip = (p: Palette) => (
+  /** One palette's swatches: ONE non-wrapping row that scrolls if it must.
+   *  `builtin` shows the swatch names in Latvian (`paletteText`); a shader's own
+   *  palette is data and keeps the names it was saved with. */
+  const strip = (p: Palette, builtin = false) => (
     <div className="palettes-modal__strip">
       {p.colors.map((hex, i) => (
         // The key carries the index because a palette may legitimately repeat a
@@ -438,7 +449,7 @@ export function PalettesModal({ open, onClose }: Props) {
           // Only ever a value that came out of the sanitizer — every colour in
           // the store passed `normalizeHex`, so nothing user-typed reaches CSS.
           style={{ background: hex }}
-          title={swatchTitle(hex, p.names?.[i])}
+          title={swatchTitle(hex, builtin && p.names?.[i] ? paletteText(p.names[i], language) : p.names?.[i])}
         />
       ))}
     </div>
@@ -832,10 +843,10 @@ export function PalettesModal({ open, onClose }: Props) {
             {BUILTIN_PALETTES.map((p) => (
               <li key={p.id} className="palettes-modal__row palettes-modal__row--builtin">
                 <div className="palettes-modal__line">
-                  <span className="palettes-modal__builtin-name" title={p.name}>
-                    {p.name}
+                  <span className="palettes-modal__builtin-name" title={paletteText(p.name, language)}>
+                    {paletteText(p.name, language)}
                   </span>
-                  {strip(p)}
+                  {strip(p, true)}
                   <div className="palettes-modal__actions">
                     <button
                       type="button"

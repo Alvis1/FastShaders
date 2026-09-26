@@ -106,7 +106,7 @@ describe('source pins', () => {
     // `contributingOutputs` is where the set widens when per-material Output
     // nodes land; a local `nodes.filter(...)` here is how emission and the cost
     // walk drift apart (B2).
-    expect(src).toContain('const outputs = marchNode ? [] : contributingOutputs(nodes);');
+    expect(src).toContain('const outputs = customNode ? [] : contributingOutputs(nodes);');
   });
 });
 

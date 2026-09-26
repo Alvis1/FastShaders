@@ -53,6 +53,7 @@ import './eval/eval.css';
  * rides the very chunk that did not load.
  */
 function EvalGateUnavailable() {
+  const language = useAppStore((s) => s.language);
   return (
     <div
       role="alert"
@@ -69,8 +70,7 @@ function EvalGateUnavailable() {
         zIndex: 'var(--z-overlay)',
       }}
     >
-      The study consent screen could not be loaded, so nothing is being recorded. Reload the page to
-      start the session.
+      {t('The study consent screen could not be loaded, so nothing is being recorded. Reload the page to start the session.', language)}
     </div>
   );
 }

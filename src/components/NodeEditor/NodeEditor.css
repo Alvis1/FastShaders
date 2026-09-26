@@ -354,7 +354,11 @@
   right: calc(var(--ctl-size) + var(--space-2) + 290px);
   margin: 0 auto;
   width: max-content;
-  max-width: 100%;
+  /* The space BETWEEN the two insets, not the whole canvas: `max-width: 100%`
+     let a long line (a sink/model fit note, the desktop-only export line) run
+     under the cost pill and clip at the canvas edge instead of wrapping. The
+     floor keeps a very narrow pane readable rather than zero-width. */
+  max-width: max(160px, calc(100% - 90px - var(--ctl-size) - var(--space-2) - 290px));
   z-index: var(--z-controls);
   display: flex;
   align-items: center;

@@ -14,6 +14,8 @@
  * consumer (DataTexture bake, min/max, phase ramp) works one column at a time.
  */
 
+import { fillTemplate, type TemplateValues } from '@/utils/fillTemplate';
+
 export interface ParsedCsv {
   /** Display labels, one per column (from the header row, or synthesized). */
   columnNames: string[];
@@ -22,9 +24,26 @@ export interface ParsedCsv {
   rowCount: number;
 }
 
+/**
+ * A refusal. `error` is the English sentence; `errorKey` + `errorParams` are
+ * the same sentence as an lv.json `ui` key and its values, so a caller shows it
+ * in the reader's language with `fillTemplate(t(errorKey, lang), errorParams)`
+ * (this module stays free of the i18n layer).
+ */
+export interface CsvFailure {
+  ok: false;
+  error: string;
+  errorKey: string;
+  errorParams: TemplateValues;
+}
+
+function fail(errorKey: string, errorParams: TemplateValues = {}): CsvFailure {
+  return { ok: false, error: fillTemplate(errorKey, errorParams), errorKey, errorParams };
+}
+
 export type CsvParseResult =
   | { ok: true; data: ParsedCsv }
-  | { ok: false; error: string };
+  | CsvFailure;
 
 /** Hard caps — generous for real datasets, tight enough to refuse abuse. */
 export const MAX_COLUMNS = 16;
@@ -44,19 +63,17 @@ export const COLUMN_WARN_THRESHOLD = 10;
  */
 export function transposeCsv(
   parsed: ParsedCsv,
-): { ok: true; data: ParsedCsv } | { ok: false; error: string } {
+): { ok: true; data: ParsedCsv } | CsvFailure {
   const { columns, rowCount } = parsed; // columns[c][r], column-major
   const newColumnCount = rowCount; // each old row → a new column
   const newRowCount = columns.length; // each old column → a new row
 
-  if (newColumnCount < 1) return { ok: false, error: 'Nothing to transpose.' };
+  if (newColumnCount < 1) return fail('Nothing to transpose.');
   if (newColumnCount > MAX_COLUMNS) {
-    return {
-      ok: false,
-      error:
-        `Transposing would produce ${newColumnCount} columns (max ${MAX_COLUMNS}). ` +
-        `This CSV has too many rows to convert to columns.`,
-    };
+    return fail(
+      'Transposing would produce {n} columns (max {max}). This CSV has too many rows to convert to columns.',
+      { n: newColumnCount, max: MAX_COLUMNS },
+    );
   }
 
   const newColumns: number[][] = Array.from({ length: newColumnCount }, (_, nc) =>
@@ -105,7 +122,7 @@ export function parseCsv(text: string): CsvParseResult {
   for (const l of rawLines) {
     if (l.trim() !== '') lines.push(l);
   }
-  if (lines.length === 0) return { ok: false, error: 'CSV is empty.' };
+  if (lines.length === 0) return fail('CSV is empty.');
 
   const delimiter = detectDelimiter(lines);
   const splitRow = (line: string) => line.split(delimiter).map((c) => c.trim());
@@ -125,17 +142,17 @@ export function parseCsv(text: string): CsvParseResult {
     dataStart++;
   }
   if (dataStart >= lines.length) {
-    return { ok: false, error: 'No numeric data rows found.' };
+    return fail('No numeric data rows found.');
   }
 
   const columnCount = splitRow(lines[dataStart]).length; // ≥ 1 (splitRow always yields a cell)
   if (columnCount > MAX_COLUMNS) {
-    return { ok: false, error: `Too many columns (${columnCount}); max ${MAX_COLUMNS}.` };
+    return fail('Too many columns ({n}); max {max}.', { n: columnCount, max: MAX_COLUMNS });
   }
 
   const rowCount = lines.length - dataStart;
   if (rowCount > MAX_ROWS) {
-    return { ok: false, error: `Too many rows (${rowCount}); max ${MAX_ROWS}.` };
+    return fail('Too many rows ({n}); max {max}.', { n: rowCount, max: MAX_ROWS });
   }
 
   // Column names: join each column's cells across ALL header rows (a name row +
@@ -155,18 +172,20 @@ export function parseCsv(text: string): CsvParseResult {
   for (let r = dataStart; r < lines.length; r++) {
     const cells = splitRow(lines[r]);
     if (cells.length !== columnCount) {
-      return {
-        ok: false,
-        error: `Row ${r + 1} has ${cells.length} columns; expected ${columnCount}.`,
-      };
+      return fail('Row {row} has {n} columns; expected {expected}.', {
+        row: r + 1,
+        n: cells.length,
+        expected: columnCount,
+      });
     }
     for (let c = 0; c < columnCount; c++) {
       const cell = cells[c];
       if (!isFiniteNumberCell(cell)) {
-        return {
-          ok: false,
-          error: `Row ${r + 1}, column ${c + 1} ("${cell}") is not a finite number.`,
-        };
+        return fail('Row {row}, column {col} ("{cell}") is not a finite number.', {
+          row: r + 1,
+          col: c + 1,
+          cell,
+        });
       }
       columns[c].push(Number(cell));
     }

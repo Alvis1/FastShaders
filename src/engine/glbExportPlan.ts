@@ -31,7 +31,7 @@
  */
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { valueNum, valueStr } from '@/utils/valueCoerce';
-import { drivingMarchOutput } from '@/utils/sdfPartition';
+import { drivingCustomSink, drivingSplatOutput } from '@/utils/sdfPartition';
 import {
   channelHandle,
   contributingOutputs,
@@ -222,14 +222,21 @@ function payloadOf(src: string): RepackPayload | null {
  * With index sections, the Output's signature must match the model
  * (`model-mismatch` otherwise) — without any, nothing is checked and no slot
  * is written (a model-only drop keeps its own textures).
+ *
+ * A driving SPLAT Output is refused outright (`splat-driven`): its module is
+ * `return { splat: … }`, which loader 0.8 applies to Gaussian splats only, so
+ * a `.glb` of mesh would carry a shader that silently does nothing (the
+ * loader keeps the authored materials and warns in a console nobody reads).
+ * A driving Raymarch Output is NOT refused — it marches on any mesh.
  */
 export function planGlbExport(
   nodes: AppNode[],
   edges: AppEdge[],
   moduleText: string,
   baseSignature: ModelSignature,
-): { ok: true; plan: GlbExportPlan } | { ok: false; reason: 'model-mismatch' } {
+): { ok: true; plan: GlbExportPlan } | { ok: false; reason: 'model-mismatch' | 'splat-driven' } {
   const E = unwrapCollapsedGroupEdges(nodes, edges);
+  if (drivingSplatOutput(nodes, E) !== null) return { ok: false, reason: 'splat-driven' };
   const byId = new Map<string, AppNode>();
   for (const n of nodes) if (!byId.has(n.id)) byId.set(n.id, n);
 
@@ -247,16 +254,18 @@ export function planGlbExport(
     return a;
   };
 
-  // A march drives: the module is the march's, so no material slot maps.
+  // A custom sink drives (a Raymarch or Splat Output): the module is that
+  // sink's own program, so no material slot maps.
   //
   // The CROSS-NODE plan over `contributingOutputs`, so this reads exactly the
   // `materialParts` table graphToCode emits — same claim set, same cap counter,
   // same order. Each entry names the NODE its section lives on, which is what
   // `edgeInto` below needs now that the materials no longer share one node. The
-  // march check stays here (see `contributingOutputs`: `activeSink`'s fallbacks
-  // are array-order dependent, so it must be asked over the caller's own list).
-  const marchDrives = drivingMarchOutput(nodes, E) !== null;
-  const outputs = marchDrives ? [] : contributingOutputs(nodes);
+  // custom-sink check stays here (see `contributingOutputs`: `activeSink`'s
+  // fallbacks are array-order dependent, so it must be asked over the caller's
+  // own list).
+  const customDrives = drivingCustomSink(nodes, E) !== null;
+  const outputs = customDrives ? [] : contributingOutputs(nodes);
   // The signature comes off the LOWEST-RANKED contributing Output carrying an
   // index section — graphToCode's own read, so the plan and the module can
   // never describe two different models.

@@ -18,7 +18,8 @@
  * generated TSL variable name (`mul1`, `perlin1`) so the graph mirrors the code.
  * The bilingual "Latviešu (English)" labels live where you PICK and read about a
  * node — the Add-node menu, the content browser, tooltips, the Node-Settings
- * menu, and the node designer.
+ * menu, and the node designer — and, in Latvian mode, in the hover tooltip that
+ * opens ABOVE a canvas node's header (`nodeHeaderTip`).
  *
  * `lv.ui`/`lv.ports` are keyed by the ENGLISH TEXT, so a reword at the call site
  * silently ORPHANS its translation — the key stops being asked for, `t()` falls
@@ -54,6 +55,8 @@ const CATEGORY_LABELS = nodeI18n.categories as Record<string, string>;
 const DESCRIPTIONS = lv.descriptions as Record<string, string>;
 const PORTS = lv.ports as Record<string, string>;
 const UI = lv.ui as Record<string, string>;
+const ASSETS = lv.assets as Record<string, string>;
+const PALETTES = lv.palettes as Record<string, string>;
 
 /** Raw Latvian label for a node type ('' if none). */
 export function nodeLabelLV(type: string): string {
@@ -100,6 +103,8 @@ export function formatCategoryLabel(
   if (lang !== 'lv') return enLabel;
   const lvLabel = CATEGORY_LABELS[id];
   if (!lvLabel) return enLabel;
+  // A name both languages share ("SDF") must not print as "SDF (SDF)".
+  if (lvLabel === enLabel) return enLabel;
   return bilingual ? `${lvLabel} (${enLabel})` : lvLabel;
 }
 
@@ -127,6 +132,50 @@ export function portLabel(enLabel: string, lang: Language): string {
 export function t(enKey: string, lang: Language): string {
   if (lang !== 'lv') return enKey;
   return UI[enKey] || enKey;
+}
+
+/**
+ * Built-in PRESET and TEXTURE text — names, descriptions, and the explainer
+ * note a preset pins inside its frame — keyed by the ENGLISH text, like `ui`.
+ * A reword in builtinPresets.ts/builtinTextures.ts therefore orphans the
+ * Latvian (English shows), and `builtinAssetsI18n.test.ts` fails on it — unlike
+ * a key by asset id, which would keep showing a stale translation silently.
+ *
+ * Its own map rather than `ui` because this lookup also runs over text the USER
+ * owns: a dropped preset's group label and note are ordinary node data, stored
+ * in English (a `.fastshader` never carries the UI language of whoever made
+ * it) and translated only at display, so a sticky note that happens to read
+ * "Save" must not come back as "Saglabāt". Text the user has edited no longer
+ * matches and simply shows as typed.
+ */
+export function assetText(en: string, lang: Language): string {
+  // The argument is often node data from a file: never let the lookup's own
+  // ToPropertyKey run on a crafted object (`{"toString":1}` throws).
+  if (lang !== 'lv' || typeof en !== 'string') return en;
+  return (Object.prototype.hasOwnProperty.call(ASSETS, en) && ASSETS[en]) || en;
+}
+
+/**
+ * Names of the BUILT-IN palettes and their swatches (`builtinPalettes.ts`),
+ * keyed by the English text. Display-only and only for the built-ins — a
+ * duplicated palette belongs to the shader and keeps the names it was saved
+ * with (PalettesModal: the names are data in an exported file).
+ */
+export function paletteText(en: string, lang: Language): string {
+  if (lang !== 'lv' || typeof en !== 'string') return en;
+  return (Object.prototype.hasOwnProperty.call(PALETTES, en) && PALETTES[en]) || en;
+}
+
+/**
+ * The hover tooltip of a CANVAS node's header in Latvian mode: the node's
+ * bilingual name, "Reizināt (Multiply)". The header itself keeps showing the
+ * generated varName (the graph mirrors the code), so this is where a Latvian
+ * user reads what the node IS. `null` in English — the header's title then
+ * stays the full header text, as before.
+ */
+export function nodeHeaderTip(enLabel: string, type: string, lang: Language): string | null {
+  if (lang !== 'lv') return null;
+  return formatNodeLabel(enLabel, type, lang);
 }
 
 /**

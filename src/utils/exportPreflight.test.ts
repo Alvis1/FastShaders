@@ -247,7 +247,8 @@ describe('export pre-flight: the three user surfaces are wired, the study is not
     const fn = src.slice(src.indexOf('export async function buildShaderBundleChecked'));
     const body = fn.slice(0, fn.indexOf('\n}\n'));
     expect(body).toContain('isEvalMode()');
-    expect(body).toContain('buildShaderBundle({ includeMesh: false })');
+    // The rebuild without the model keeps the SAME graph (the export's scope).
+    expect(body).toContain('buildShaderBundle({ includeMesh: false, graph })');
     expect(src).toContain('opts.includeMesh ?? state.exportIncludeMesh');
     // The override is never written back to the session flag.
     expect(src).not.toContain('setExportIncludeMesh');

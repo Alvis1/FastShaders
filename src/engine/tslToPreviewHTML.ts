@@ -9,11 +9,12 @@
  */
 
 import { buildShaderModule, type MaterialPartsMirrorEntry } from './tslCodeProcessor';
-import { LOADER_FILE } from './tslToShaderModule';
+import { LOADER_FILE, SPLAT_RUNTIME_FILE } from './tslToShaderModule';
 import { TEAPOT_RES_MAX, TEAPOT_RES_MIN, TEAPOT_SCRIPT } from './teapotGeometry.ts';
 import { PREVIEW_ASSET_RESOLVER_SCRIPT, type PreviewAssetEntry } from './previewAssetFeed';
 import type { MaterialSettings } from '@/types';
 import type { PreviewMeshKind } from '@/utils/previewMesh';
+import { isSplatKind, type SplatKind } from '@/utils/splatSniff';
 import { DECODER_DIR, DECODER_FILES, MAX_DECODER_FILE_BYTES, type DecoderFile } from '@/utils/meshDecoders';
 
 // 'env' = environment-map lighting: NO analytic lights — the material's own
@@ -68,6 +69,37 @@ export function isModelGeometry(geometry: GeometryType): boolean {
  * Exported so the parent and `SHADER_HOT_SWAP_SCRIPT` name it once.
  */
 export const SHADER_SWAP_MESSAGE = 'fs:shader';
+
+/**
+ * How the model feed (`fs:obj-model`, parent → sandboxed preview) carries each
+ * model kind across the sandbox boundary: its BYTES (a structured-cloned
+ * Uint8Array view — the glb and every Gaussian-splat kind, which are never
+ * TextDecoded) or its pre-decoded TEXT (obj, gltf).
+ *
+ * ONE table for both halves. The parent posts by `isBinaryKind` (previewMesh.ts
+ * — tslToPreviewHTML.test.ts pins the two equal for every model kind), and a
+ * splat document's feed carries this very object as `FEED_KINDS`. The obj /
+ * glb / gltf documents keep their original three-kind lines byte for byte —
+ * the same answers, pinned against this table — so no document that shows no
+ * splat changed when the splat kinds arrived.
+ */
+export const MODEL_FEED_KINDS: Readonly<Record<PreviewMeshKind, 'bytes' | 'text'>> = Object.freeze({
+  glb: 'bytes',
+  gltf: 'text',
+  obj: 'text',
+  splat: 'bytes',
+  spz: 'bytes',
+  ply: 'bytes',
+  ksplat: 'bytes',
+});
+
+/**
+ * The normalisation size the `splat-model` component bakes a splat scene to —
+ * the same 1.6 `fit-bounds` bakes a mesh to, so SDF cutters and position-driven
+ * presets keep their units on a splat (the component normalises the SOURCE
+ * arrays; `fit-bounds` returns early on a GaussianSplat).
+ */
+const SPLAT_MODEL_SIZE = '1.6';
 
 /**
  * Build the ES module the preview document runs, for a given TSL body and
@@ -171,7 +203,9 @@ export interface PreviewOptions {
    * BYTES never ride in the generated HTML — the sandboxed preview receives
    * them via the postMessage model feed (same security model as podest.html);
    * only the same-origin XR popup loads directly via `url` (a parent-minted
-   * blob URL, omitted in the sandboxed case).
+   * blob URL, omitted in the sandboxed case). A Gaussian-splat `kind` makes a
+   * SPLAT document: the splat runtime tag, `splat-model` in place of
+   * gltf-model/obj-model, no gltf-anim, no decoders, no A-Frame `material`.
    */
   customModel?: { kind: PreviewMeshKind; id: number; url?: string } | null;
   /**
@@ -412,6 +446,9 @@ function getScriptUrls() {
     iife: resolveAssetUrl('js/a-frame-180-a-01.min.js'),
     shaderloader: resolveAssetUrl(`js/${LOADER_FILE}`),
     orbitControls: resolveAssetUrl('js/aframe-orbit-controls.min.js'),
+    // The Gaussian-splat runtime (the `splat-model` component). Referenced
+    // only by a document that shows a splat model — see tslToPreviewHTML.
+    splatRuntime: resolveAssetUrl(`js/${SPLAT_RUNTIME_FILE}`),
   };
 }
 
@@ -675,9 +712,43 @@ export const STATS_REPORT_SCRIPT = `<script>
  * real `three` import and a stubbed AFRAME to pin the normalization maths — the
  * function body is otherwise untested (the HTML tests only assert the emitted
  * attribute string, so a body rewrite would pass silently).
+ *
+ * A Gaussian splat (`isGaussianSplat`, anywhere in the subtree) makes `fit`
+ * return before it touches anything. The `splat-model` component has already
+ * normalised the SOURCE arrays into this same ±size/2 frame, and the Mesh it
+ * hands over is ONE instanced ±2 quad: cloning and baking it would bake the
+ * template, and `Box3.setFromObject` would measure the template, not the cloud.
+ * The guard is the one splat line every document carries — fit-bounds is
+ * registered unconditionally.
  */
 export const FIT_BOUNDS_SCRIPT = `<script>
   if (window.AFRAME && !AFRAME.components["fit-bounds"]) {
+    // three's OBJLoader INVENTS a flat per-face normal for every face written
+    // without a vn index, so a bare v/f file — the built-in Stanford bunny —
+    // arrived with normals the regen path below took for AUTHORED ones, and
+    // splitByAuthored split every corner apart again (208,567 vertices for the
+    // bunny's 34,834 positions, measured): any displacement tore the mesh into
+    // loose triangles, whatever "Merge Vertices" said. A file with no vn line
+    // has no normals of its own, so the invented ones are dropped at the
+    // parse and the regen path welds the mesh smooth. Installed once per
+    // document, beside the component that depends on it. The loader obj-model
+    // constructs hangs off AFRAME.THREE — in the vendored bundle that is NOT
+    // window.THREE, which has no OBJLoader at all (measured).
+    var objLoaderClass = (AFRAME.THREE && AFRAME.THREE.OBJLoader) || THREE.OBJLoader;
+    var objProto = objLoaderClass && objLoaderClass.prototype;
+    if (objProto && typeof objProto.parse === "function" && !objProto.__fsBareObjNormals) {
+      var objParse = objProto.parse;
+      objProto.parse = function (text) {
+        var group = objParse.apply(this, arguments);
+        if (typeof text === "string" && group && typeof group.traverse === "function" && !/^[ \\t]*vn[ \\t]/m.test(text)) {
+          group.traverse(function (o) {
+            if (o.isMesh && o.geometry && o.geometry.attributes && o.geometry.attributes.normal) o.geometry.deleteAttribute("normal");
+          });
+        }
+        return group;
+      };
+      objProto.__fsBareObjNormals = true;
+    }
     // Merge vertices that share a quantized position. Discards old normals/UVs
     // (they index into the old layout and we recompute both anyway) and
     // returns a freshly indexed BufferGeometry.
@@ -992,13 +1063,18 @@ export const FIT_BOUNDS_SCRIPT = `<script>
         var pre = new THREE.Matrix4().multiplyMatrices(root.matrix, rootInv);
         var entries = [];
         var skinned = false;
+        // A Gaussian splat is left as splat-model built it (already normalised;
+        // its Mesh is one instanced quad, so no clone, bake or setFromObject).
+        var splatSeen = false;
         root.traverse(function (node) {
+          if (node.isGaussianSplat) { splatSeen = true; return; }
           if (!node.isMesh || !node.geometry) return;
           // Baking would desync a skeleton's bind matrices and would miss an
           // InstancedMesh's per-instance transforms — fall back for those.
           if (node.isSkinnedMesh || node.isInstancedMesh) { skinned = true; return; }
           entries.push({ node: node, m: new THREE.Matrix4().multiplyMatrices(pre, node.matrixWorld) });
         });
+        if (splatSeen) return;
 
         // A rigged, instanced or ANIMATED model keeps the legacy Object3D
         // normalization: baking would desync a skeleton's bind matrices, would
@@ -1963,6 +2039,168 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
   });
 <\/script>`;
 
+/**
+ * The model feed's IIFE for a MESH document (obj / glb / gltf, built-in or
+ * dropped): payload by kind, decoder slots, the model-error and KTX2 reports.
+ * Emitted between `__fsExpectedLabel` and the closing tag; see the feed
+ * comment in tslToPreviewHTML. Its text is exactly what every mesh document
+ * carried before the splat kinds existed — its three-kind lines give the same
+ * answers MODEL_FEED_KINDS gives for glb / gltf / obj (tslToPreviewHTML.test.ts).
+ */
+function pushMeshModelFeed(lines: string[]): void {
+  lines.push('  (function () {');
+  lines.push('    var applied = false;');
+  lines.push('    var ktx2Reported = false;');
+  // The decoder bytes the parent pushed with a compressed model become blob:
+  // URLs in the table the configure script above reads. Only the known names
+  // (generated from DECODER_FILES, never retyped), only the declared types —
+  // an ArrayBuffer for a `.wasm`, a string otherwise — at most
+  // MAX_DECODER_FILE_BYTES each; a slot already filled keeps its URL.
+  lines.push(`    var DEC_FILES = ${FEED_DECODER_FILES};`);
+  lines.push(`    var DEC_MAX = ${MAX_DECODER_FILE_BYTES};`);
+  lines.push('    function fillDecoders(dec) {');
+  lines.push('      var table = window.__fsDecoderUrls;');
+  lines.push('      if (!table || !dec) return;');
+  lines.push('      for (var i = 0; i < DEC_FILES.length; i++) {');
+  lines.push('        var name = DEC_FILES[i][0], type = DEC_FILES[i][1];');
+  lines.push('        if (table[name] || !Object.prototype.hasOwnProperty.call(dec, name)) continue;');
+  lines.push('        var v = dec[name];');
+  lines.push('        var ok = type === "application/wasm"');
+  lines.push('          ? v instanceof ArrayBuffer && v.byteLength > 0 && v.byteLength <= DEC_MAX');
+  lines.push('          : typeof v === "string" && v.length > 0 && v.length <= DEC_MAX;');
+  lines.push('        if (!ok) continue;');
+  lines.push('        try { table[name] = URL.createObjectURL(new Blob([v], { type: type })); } catch (e) {}');
+  lines.push('      }');
+  lines.push('    }');
+  lines.push('    function decoderError() {');
+  lines.push('      try {');
+  lines.push('        var d = typeof FastShaders === "object" && FastShaders ? FastShaders.decoders : null;');
+  lines.push('        return d && typeof d.lastError === "string" ? d.lastError : "";');
+  lines.push('      } catch (e) { return ""; }');
+  lines.push('    }');
+  lines.push('    function apply(kind, payload, dec) {');
+  lines.push('      if (applied) return;');
+  lines.push('      var entity = document.getElementById("preview-entity");');
+  lines.push('      if (!entity) return;');
+  lines.push('      applied = true;');
+  lines.push('      // A model that fails to PARSE (corrupt bytes, or a compression whose');
+  lines.push('      // decoder is missing or refused it) must surface, not die in the');
+  lines.push('      // console. A decoder cap names itself through lastError.');
+  lines.push('      entity.addEventListener("model-error", function () {');
+  lines.push('        __fsShowStickyError("Failed to load 3D model (" + __fsExpectedLabel + "): " + (decoderError() || "the file could not be parsed (corrupt, or compressed in a way FastShaders cannot decode)."));');
+  lines.push('      });');
+  // A KTX2 texture that did not transcode is NOT a model error — the model
+  // loads, wearing its fallback image or none at all. The loader counts both
+  // (FastShaders.decoders.ktx2Stats), so the parent is told once per
+  // document and raises an info line. Forgeable like everything posted from
+  // here, which is why it can only ever raise a line.
+  lines.push('      entity.addEventListener("model-loaded", function () {');
+  lines.push('        if (ktx2Reported) return;');
+  lines.push('        ktx2Reported = true;');
+  lines.push('        try {');
+  lines.push('          var st = window.FastShaders && FastShaders.decoders ? FastShaders.decoders.ktx2Stats : null;');
+  lines.push('          if (!st) return;');
+  lines.push('          var fb = Math.min(Math.max(st.fallbacks | 0, 0), 1024);');
+  lines.push('          var ms = Math.min(Math.max(st.missing | 0, 0), 1024);');
+  lines.push('          if (fb <= 0 && ms <= 0) return;');
+  lines.push('          window.parent.postMessage({ type: "fs:model-ktx2", geometry: __fsExpectedObj, fallbacks: fb, missing: ms }, "*");');
+  lines.push('        } catch (e) {}');
+  lines.push('      });');
+  lines.push('      if (dec) fillDecoders(dec);');
+  lines.push('      var blob = kind === "glb" ? new Blob([payload], { type: "model/gltf-binary" }) : new Blob([payload]);');
+  lines.push('      var url = URL.createObjectURL(blob);');
+  lines.push('      if (kind === "glb" || kind === "gltf") entity.setAttribute("gltf-model", "url(" + url + ")");');
+  lines.push('      else entity.setAttribute("obj-model", "obj: url(" + url + ")");');
+  lines.push('    }');
+  lines.push('    window.addEventListener("message", function (e) {');
+  lines.push('      if (e.source !== window.parent) return;');
+  lines.push('      var msg = e.data;');
+  lines.push('      if (!msg || msg.geometry !== __fsExpectedObj) return;');
+  lines.push('      if (msg.type === "fs:obj-model-error") {');
+  lines.push('        // Sticky, like a vendored-script 404: a later successful shader');
+  lines.push('        // apply must not clear it — there is still no mesh to shade.');
+  lines.push('        __fsShowStickyError("Failed to load 3D model (" + __fsExpectedLabel + "): " + msg.message);');
+  lines.push('        return;');
+  lines.push('      }');
+  lines.push('      if (msg.type !== "fs:obj-model") return;');
+  lines.push('      // obj/gltf ride as text; glb as binary. Anything else is dropped.');
+  lines.push('      var kind = msg.kind === "glb" || msg.kind === "gltf" ? msg.kind : "obj";');
+  lines.push('      var payload = kind === "glb" ? msg.bytes : msg.text;');
+  lines.push('      if (kind === "glb") {');
+  lines.push('        if (!(payload instanceof ArrayBuffer) && !ArrayBuffer.isView(payload)) return;');
+  lines.push('      } else if (typeof payload !== "string") return;');
+  lines.push('      // Decoder bytes ride only with a model that needs them (see fillDecoders).');
+  lines.push('      var dec = msg.decoders && typeof msg.decoders === "object" ? msg.decoders : null;');
+  lines.push('      window.__fsWhenSceneBooted(function () { apply(kind, payload, dec); });');
+  lines.push('    });');
+  lines.push('  })();');
+}
+
+/**
+ * The model feed's IIFE for a Gaussian-SPLAT document. The same handshake as
+ * the mesh feed (the payload is held until the scene boots; only the model key
+ * this document was built for is accepted), with three differences:
+ *
+ *  - The payload is always BYTES, read through `FEED_KINDS` (this module's
+ *    MODEL_FEED_KINDS, carried verbatim), and the document takes exactly the
+ *    splat kind it was built for — the kind is spliced into the `splat-model`
+ *    attribute, so it must be one of four literals, never the message's word.
+ *  - The bytes become a blob: URL minted HERE (same-origin inside the sandbox,
+ *    so the runtime's FileLoader — which goes through the document's
+ *    setURLModifier allow-list — can read it), set as
+ *    `splat-model="src: url(<blob>); kind: <kind>; size: 1.6"`.
+ *  - A `model-error` shows the RUNTIME's own sentence (FastShadersSplat's
+ *    parseBytes throws an English sentence for every refusal), and
+ *    `splat-loaded` is reported up as `fs:model-splat {geometry, count,
+ *    shDropped}` — forgeable like everything posted from here, so the parent
+ *    validates it and treats it as display-only.
+ */
+function pushSplatModelFeed(lines: string[], kind: SplatKind): void {
+  lines.push('  (function () {');
+  lines.push('    var applied = false;');
+  lines.push(`    var FEED_KINDS = ${JSON.stringify(MODEL_FEED_KINDS)};`);
+  lines.push(`    var EXPECTED_KIND = ${JSON.stringify(kind)};`);
+  lines.push('    function apply(kind, payload) {');
+  lines.push('      if (applied) return;');
+  lines.push('      var entity = document.getElementById("preview-entity");');
+  lines.push('      if (!entity) return;');
+  lines.push('      applied = true;');
+  lines.push('      // The runtime names every refusal in a sentence of its own (a count');
+  lines.push('      // over the cap, spherical-harmonic bands, a damaged header, …).');
+  lines.push('      entity.addEventListener("model-error", function (ev) {');
+  lines.push('        var d = ev && ev.detail;');
+  lines.push('        var m = d && typeof d.message === "string" && d.message ? d.message.slice(0, 400) : "the file could not be parsed.";');
+  lines.push('        __fsShowStickyError("Failed to load the Gaussian splat: " + m);');
+  lines.push('      });');
+  lines.push('      entity.addEventListener("splat-loaded", function (ev) {');
+  lines.push('        var d = ev && ev.detail;');
+  lines.push('        try {');
+  lines.push('          window.parent.postMessage({ type: "fs:model-splat", geometry: __fsExpectedObj, count: d ? d.count : null, shDropped: d ? d.shDropped : null }, "*");');
+  lines.push('        } catch (e) {}');
+  lines.push('      });');
+  lines.push('      var url = URL.createObjectURL(new Blob([payload]));');
+  lines.push(`      entity.setAttribute("splat-model", "src: url(" + url + "); kind: " + kind + "; size: ${SPLAT_MODEL_SIZE}");`);
+  lines.push('    }');
+  lines.push('    window.addEventListener("message", function (e) {');
+  lines.push('      if (e.source !== window.parent) return;');
+  lines.push('      var msg = e.data;');
+  lines.push('      if (!msg || msg.geometry !== __fsExpectedObj) return;');
+  lines.push('      if (msg.type === "fs:obj-model-error") {');
+  lines.push('        __fsShowStickyError("Failed to load the Gaussian splat: " + msg.message);');
+  lines.push('        return;');
+  lines.push('      }');
+  lines.push('      if (msg.type !== "fs:obj-model") return;');
+  lines.push('      var kind = typeof msg.kind === "string" && Object.prototype.hasOwnProperty.call(FEED_KINDS, msg.kind) ? msg.kind : "";');
+  lines.push('      if (kind !== EXPECTED_KIND) return;');
+  lines.push('      var payload = FEED_KINDS[kind] === "bytes" ? msg.bytes : msg.text;');
+  lines.push('      if (FEED_KINDS[kind] === "bytes") {');
+  lines.push('        if (!(payload instanceof ArrayBuffer) && !ArrayBuffer.isView(payload)) return;');
+  lines.push('      } else if (typeof payload !== "string") return;');
+  lines.push('      window.__fsWhenSceneBooted(function () { apply(kind, payload); });');
+  lines.push('    });');
+  lines.push('  })();');
+}
+
 export function tslToPreviewHTML(
   tslCode: string,
   options: PreviewOptions = {},
@@ -2003,7 +2241,13 @@ export function tslToPreviewHTML(
   // Dropped OBJs get the full normals/UV regen (OBJLoader output is
   // non-indexed, like the built-ins); GLB/glTF keep their authored data.
   const customRegen = customModel?.kind === 'obj';
-  const { iife, shaderloader, orbitControls } = getScriptUrls();
+  // A Gaussian-splat document: the dropped model is a splat scene, rendered by
+  // the `splat-model` component of the splat runtime (fs-splat-0.1.js), which
+  // ONLY such a document loads. Everything splat-specific below hangs off this
+  // one value, so every other document stays byte-identical.
+  const splatKind: SplatKind | null =
+    isCustom && customModel && isSplatKind(customModel.kind) ? customModel.kind : null;
+  const { iife, shaderloader, orbitControls, splatRuntime } = getScriptUrls();
 
   // NB welding coincident primitive vertices (so a displaced box does not split
   // into floating faces) is NOT done here any more: shaderloader 0.8 owns it
@@ -2077,7 +2321,20 @@ export function tslToPreviewHTML(
     // the XR popup wants, and the editor's parent corrects them with one
     // `fs:anim-set` the moment the model reports in.
     const animAttr = 'gltf-anim';
-    if (xr) {
+    if (splatKind) {
+      // A splat scene: the `splat-model` component parses and normalises it
+      // (to the same 1.6 box fit-bounds bakes a mesh into), and fit-bounds —
+      // regen off, like every non-OBJ model — returns early on the
+      // GaussianSplat it then sees. No gltf-anim (a splat has no clips) and no
+      // decoder configuration (no glTF loader is involved).
+      //   - XR popup: same-origin, so the attribute carries the parent-minted
+      //     blob URL directly.
+      //   - Sandbox: the feed below sets the attribute with a blob URL it mints
+      //     from the bytes the parent posts (fs:obj-model).
+      entityAttrs = xr
+        ? `splat-model="src: url(${customModel?.url ?? ''}); kind: ${splatKind}; size: ${SPLAT_MODEL_SIZE}" ${fitBoundsAttr}`
+        : fitBoundsAttr;
+    } else if (xr) {
       // Top-level XR page: same-origin, CORS never applies — load directly.
       // Custom meshes use the parent-minted blob URL (same-origin here too).
       const url = isCustom
@@ -2161,11 +2418,19 @@ export function tslToPreviewHTML(
   // #error div exists, so a direct lookup would null-deref). Sticky: a load
   // failure stays visible even if a shader later applies successfully.
   lines.push(`  <script src="${iife}" onerror="__fsShowStickyError('Failed to load A-Frame bundle')"><${''}/script>`);
+  // The Gaussian-splat runtime: one IIFE that reads the bundle's THREE global
+  // (so it must come AFTER it) and registers `splat-model` on AFRAME before the
+  // scene is injected. Only a splat document loads it — every other document
+  // is byte-identical, and the study host (which refuses splats) never serves it.
+  if (splatKind) {
+    lines.push(`  <script src="${splatRuntime}" onerror="__fsShowStickyError('Failed to load the Gaussian splat runtime')"><${''}/script>`);
+  }
   lines.push(`  <script src="${shaderloader}" onerror="__fsShowStickyError('Failed to load shaderloader')"><${''}/script>`);
   // Mesh decoders (loader 0.8's FastShaders.decoders), configured before any
   // gltf-model initialises. Model documents only: a primitive, the teapot and
-  // the march window never load a glTF, so they stay byte-identical.
-  if (isModel) {
+  // the march window never load a glTF, so they stay byte-identical — and
+  // neither does a splat document, which loads no glTF either.
+  if (isModel && !splatKind) {
     lines.push(`  <script>${xr ? xrDecoderConfig() : SANDBOX_DECODER_CONFIG}<${''}/script>`);
   }
   lines.push(`  <script src="${orbitControls}" onerror="__fsShowStickyError('Failed to load orbit controls')"><${''}/script>`);
@@ -2282,8 +2547,8 @@ export function tslToPreviewHTML(
   // Register the glTF animation mixer. Only attached (via entityAttrs) to model
   // geometries, so primitives never see it. A-Frame core ships no
   // animation-mixer, which is why an animated GLB used to load as a static
-  // mesh — see GLTF_ANIM_SCRIPT.
-  if (isModel) {
+  // mesh — see GLTF_ANIM_SCRIPT. A splat scene has no clips and no gltf-anim.
+  if (isModel && !splatKind) {
     lines.push(GLTF_ANIM_SCRIPT);
     lines.push('');
   }
@@ -2358,7 +2623,14 @@ export function tslToPreviewHTML(
   // because that's where the shader component lives (the bridge looks it up
   // by id), and `fit-bounds` needs the OBJ entity for `model-loaded`.
   sceneLines.push(`  <a-entity id="spin-parent"${spinAttr}>`);
-  sceneLines.push(`    <a-entity id="preview-entity" ${entityAttrs} material="color: #808080" position="0 0 0" rotation="${rotationAttr}"></a-entity>`);
+  // NO `material` on a splat entity. A-Frame's material component, finding no
+  // mesh at init, arms a one-shot `object3dset` listener that assigns its
+  // MeshStandardMaterial to the FIRST mesh set — which for a splat is the
+  // GaussianSplat itself, so the addon's own NodeMaterial is replaced and every
+  // splat draws as a flat grey 4x4 quad (measured in Chrome, both backends).
+  // A glTF/OBJ root is a Group, where that assignment is inert.
+  const materialAttr = splatKind ? '' : ' material="color: #808080"';
+  sceneLines.push(`    <a-entity id="preview-entity" ${entityAttrs}${materialAttr} position="0 0 0" rotation="${rotationAttr}"></a-entity>`);
   sceneLines.push('  </a-entity>');
 
   // Emit the light rig from LIGHT_PRESETS so the initial HTML and the
@@ -2505,95 +2777,14 @@ export function tslToPreviewHTML(
     // document accepts ONLY the model key it was built for (built-ins key on
     // the geometry name, dropped meshes on their custom:<id> identity) — a
     // late-resolving feed for the previous model can never apply here.
+    // Two feeds share this handshake: the MESH feed (obj / glb / gltf,
+    // pushMeshModelFeed) and the SPLAT feed (pushSplatModelFeed), which sets
+    // `splat-model` instead and reports the built splat up as fs:model-splat.
     lines.push('<script>');
     lines.push(`  var __fsExpectedObj = ${JSON.stringify(customKey ?? geometry)};`);
     lines.push(`  var __fsExpectedLabel = ${JSON.stringify(isCustom ? 'custom model' : geometry)};`);
-    lines.push('  (function () {');
-    lines.push('    var applied = false;');
-    lines.push('    var ktx2Reported = false;');
-    // The decoder bytes the parent pushed with a compressed model become blob:
-    // URLs in the table the configure script above reads. Only the known names
-    // (generated from DECODER_FILES, never retyped), only the declared types —
-    // an ArrayBuffer for a `.wasm`, a string otherwise — at most
-    // MAX_DECODER_FILE_BYTES each; a slot already filled keeps its URL.
-    lines.push(`    var DEC_FILES = ${FEED_DECODER_FILES};`);
-    lines.push(`    var DEC_MAX = ${MAX_DECODER_FILE_BYTES};`);
-    lines.push('    function fillDecoders(dec) {');
-    lines.push('      var table = window.__fsDecoderUrls;');
-    lines.push('      if (!table || !dec) return;');
-    lines.push('      for (var i = 0; i < DEC_FILES.length; i++) {');
-    lines.push('        var name = DEC_FILES[i][0], type = DEC_FILES[i][1];');
-    lines.push('        if (table[name] || !Object.prototype.hasOwnProperty.call(dec, name)) continue;');
-    lines.push('        var v = dec[name];');
-    lines.push('        var ok = type === "application/wasm"');
-    lines.push('          ? v instanceof ArrayBuffer && v.byteLength > 0 && v.byteLength <= DEC_MAX');
-    lines.push('          : typeof v === "string" && v.length > 0 && v.length <= DEC_MAX;');
-    lines.push('        if (!ok) continue;');
-    lines.push('        try { table[name] = URL.createObjectURL(new Blob([v], { type: type })); } catch (e) {}');
-    lines.push('      }');
-    lines.push('    }');
-    lines.push('    function decoderError() {');
-    lines.push('      try {');
-    lines.push('        var d = typeof FastShaders === "object" && FastShaders ? FastShaders.decoders : null;');
-    lines.push('        return d && typeof d.lastError === "string" ? d.lastError : "";');
-    lines.push('      } catch (e) { return ""; }');
-    lines.push('    }');
-    lines.push('    function apply(kind, payload, dec) {');
-    lines.push('      if (applied) return;');
-    lines.push('      var entity = document.getElementById("preview-entity");');
-    lines.push('      if (!entity) return;');
-    lines.push('      applied = true;');
-    lines.push('      // A model that fails to PARSE (corrupt bytes, or a compression whose');
-    lines.push('      // decoder is missing or refused it) must surface, not die in the');
-    lines.push('      // console. A decoder cap names itself through lastError.');
-    lines.push('      entity.addEventListener("model-error", function () {');
-    lines.push('        __fsShowStickyError("Failed to load 3D model (" + __fsExpectedLabel + "): " + (decoderError() || "the file could not be parsed (corrupt, or compressed in a way FastShaders cannot decode)."));');
-    lines.push('      });');
-    // A KTX2 texture that did not transcode is NOT a model error — the model
-    // loads, wearing its fallback image or none at all. The loader counts both
-    // (FastShaders.decoders.ktx2Stats), so the parent is told once per
-    // document and raises an info line. Forgeable like everything posted from
-    // here, which is why it can only ever raise a line.
-    lines.push('      entity.addEventListener("model-loaded", function () {');
-    lines.push('        if (ktx2Reported) return;');
-    lines.push('        ktx2Reported = true;');
-    lines.push('        try {');
-    lines.push('          var st = window.FastShaders && FastShaders.decoders ? FastShaders.decoders.ktx2Stats : null;');
-    lines.push('          if (!st) return;');
-    lines.push('          var fb = Math.min(Math.max(st.fallbacks | 0, 0), 1024);');
-    lines.push('          var ms = Math.min(Math.max(st.missing | 0, 0), 1024);');
-    lines.push('          if (fb <= 0 && ms <= 0) return;');
-    lines.push('          window.parent.postMessage({ type: "fs:model-ktx2", geometry: __fsExpectedObj, fallbacks: fb, missing: ms }, "*");');
-    lines.push('        } catch (e) {}');
-    lines.push('      });');
-    lines.push('      if (dec) fillDecoders(dec);');
-    lines.push('      var blob = kind === "glb" ? new Blob([payload], { type: "model/gltf-binary" }) : new Blob([payload]);');
-    lines.push('      var url = URL.createObjectURL(blob);');
-    lines.push('      if (kind === "glb" || kind === "gltf") entity.setAttribute("gltf-model", "url(" + url + ")");');
-    lines.push('      else entity.setAttribute("obj-model", "obj: url(" + url + ")");');
-    lines.push('    }');
-    lines.push('    window.addEventListener("message", function (e) {');
-    lines.push('      if (e.source !== window.parent) return;');
-    lines.push('      var msg = e.data;');
-    lines.push('      if (!msg || msg.geometry !== __fsExpectedObj) return;');
-    lines.push('      if (msg.type === "fs:obj-model-error") {');
-    lines.push('        // Sticky, like a vendored-script 404: a later successful shader');
-    lines.push('        // apply must not clear it — there is still no mesh to shade.');
-    lines.push('        __fsShowStickyError("Failed to load 3D model (" + __fsExpectedLabel + "): " + msg.message);');
-    lines.push('        return;');
-    lines.push('      }');
-    lines.push('      if (msg.type !== "fs:obj-model") return;');
-    lines.push('      // obj/gltf ride as text; glb as binary. Anything else is dropped.');
-    lines.push('      var kind = msg.kind === "glb" || msg.kind === "gltf" ? msg.kind : "obj";');
-    lines.push('      var payload = kind === "glb" ? msg.bytes : msg.text;');
-    lines.push('      if (kind === "glb") {');
-    lines.push('        if (!(payload instanceof ArrayBuffer) && !ArrayBuffer.isView(payload)) return;');
-    lines.push('      } else if (typeof payload !== "string") return;');
-    lines.push('      // Decoder bytes ride only with a model that needs them (see fillDecoders).');
-    lines.push('      var dec = msg.decoders && typeof msg.decoders === "object" ? msg.decoders : null;');
-    lines.push('      window.__fsWhenSceneBooted(function () { apply(kind, payload, dec); });');
-    lines.push('    });');
-    lines.push('  })();');
+    if (splatKind) pushSplatModelFeed(lines, splatKind);
+    else pushMeshModelFeed(lines);
     lines.push(`<${''}/script>`);
     lines.push('');
 
@@ -2635,6 +2826,17 @@ export function tslToPreviewHTML(
     lines.push('      var payload = [];');
     lines.push('      for (var i = 0; i < list.length; i++) {');
     lines.push('        var n = list[i];');
+    if (splatKind) {
+      // A Gaussian splat is ONE row, and a row that can never be a part
+      // target: no name (the parent's sanitizer keeps it out of the mesh list
+      // every target is picked from, and loader 0.8 never gives a splat a
+      // plain material anyway), no material, and its splat COUNT in place of a
+      // vertex count — the instanced quad's 4 vertices mean nothing to anyone.
+      lines.push('        if (n.isGaussianSplat) {');
+      lines.push('          payload.push({ index: i, name: "", materialName: "", vertexCount: 0, splat: true, splats: n.geometry && typeof n.geometry.instanceCount === "number" ? n.geometry.instanceCount : 0 });');
+      lines.push('          continue;');
+      lines.push('        }');
+    }
     lines.push('        // The AUTHORED material name. By now the shaderloader has usually');
     lines.push('        // already stamped its own material over every mesh, so ask it for the');
     lines.push('        // original it kept by uuid first and only then look at the mesh.');
@@ -2705,6 +2907,9 @@ export function tslToPreviewHTML(
     lines.push('      if (!hlMat) return;');
     lines.push('      var list = meshList();');
     lines.push('      for (var i = 0; i < list.length; i++) {');
+    // Never onto a splat: a flat material on its instanced quad would draw
+    // every splat as an opaque 4x4 square.
+    if (splatKind) lines.push('        if (list[i].isGaussianSplat) continue;');
     lines.push('        if (Object.prototype.hasOwnProperty.call(wanted, list[i].name)) { list[i].material = hlMat; lit.push(list[i]); }');
     lines.push('      }');
     lines.push('    }');

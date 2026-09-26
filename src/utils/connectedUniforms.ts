@@ -1,5 +1,5 @@
 import type { AppNode, AppEdge } from '@/types';
-import { activeSink, isMarchOutput } from '@/utils/sdfPartition';
+import { activeSink, isCustomSink } from '@/utils/sdfPartition';
 import { contributingOutputs } from '@/utils/outputMaterials';
 import { getNodeValues } from '@/types';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
@@ -69,10 +69,11 @@ export function connectedUniformNamesKey(
   // the one Output, so one walk covered them all. Since the Output split each
   // targeted material is its own NODE, and a single-sink walk would list only
   // the default's sliders — silently, on exactly the multimesh documents this
-  // matters most for. A driving Raymarch Output still emits alone, and the
-  // march check stays here for the reason `contributingOutputs` documents.
+  // matters most for. A driving custom sink (Raymarch or Splat Output) still
+  // emits alone, and that check stays here for the reason
+  // `contributingOutputs` documents.
   const sink = activeSink(nodes, real);
-  const emitting = sink && isMarchOutput(sink) ? [sink] : contributingOutputs(nodes);
+  const emitting = sink && isCustomSink(sink) ? [sink] : contributingOutputs(nodes);
   /** Nodes that feed an emitting Output, walking edges BACKWARDS from each. */
   const live = new Set<string>();
   if (emitting.length > 0) {

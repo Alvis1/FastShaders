@@ -15,7 +15,21 @@ import { moduleStringLiteral } from './partKeyLiteral';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { MODULE_HELPERS, MODULE_HELPER_NAMES, HELPER_OWNER_TYPES, helperNameFor, helperCallPorts } from './moduleHelpers';
-import { marchPartition, drivingMarchOutput, isMarchOutput, MARCH_OUTPUT_TYPE, MARCH_SCOPES, type MarchScopeSpec } from '@/utils/sdfPartition';
+import {
+  marchPartition,
+  drivingCustomSink,
+  isMarchOutput,
+  isSplatOutput,
+  isCustomSink,
+  bindingOfRoot,
+  noisePosIdentifier,
+  MARCH_OUTPUT_TYPE,
+  MARCH_SCOPES,
+  SPLAT_OUTPUT_TYPE,
+  SPLAT_SCOPES,
+  SPLAT_FN_PARAMS,
+  type ScopeSpec,
+} from '@/utils/sdfPartition';
 import { effectiveExposedPorts, OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
 import { isUnsignedNoise } from '@/utils/noiseRange';
@@ -179,8 +193,12 @@ function numericParam(
  *
  * Returns the flag as well as the expression: `vec2` only needs importing on
  * the radial path, and that decision belongs to the caller's import collector.
+ *
+ * `uvBase` is the coordinate the ramp is read along — `uv()` everywhere but a
+ * Splat Output Fn, which passes the splat's own sample point (the emission
+ * loop's `implicitBinding`).
  */
-function rampCoord(nv: Record<string, string | number>): { radial: boolean; expr: string } {
+function rampCoord(nv: Record<string, string | number>, uvBase = 'uv()'): { radial: boolean; expr: string } {
   const radial = valueNum(nv.radial ?? 0) >= 0.5;
   const cx = valueNum(nv.center_x ?? 0.5);
   const cy = valueNum(nv.center_y ?? 0.5);
@@ -188,8 +206,8 @@ function rampCoord(nv: Record<string, string | number>): { radial: boolean; expr
   return {
     radial,
     expr: radial
-      ? `uv().sub(vec2(${num(cx)}, ${num(cy)})).length().div(${num(radius)}).clamp(0.0, 1.0)`
-      : 'uv().x',
+      ? `${uvBase}.sub(vec2(${num(cx)}, ${num(cy)})).length().div(${num(radius)}).clamp(0.0, 1.0)`
+      : `${uvBase}.x`,
   };
 }
 
@@ -218,18 +236,6 @@ export const VALID_SWIZZLE = new Set(['x', 'y', 'z', 'w']);
  */
 export const TOHSL_HANDLE_TO_COMPONENT = new Map<string, string>([['h', 'x'], ['s', 'y'], ['l', 'z']]);
 export const TOHSL_COMPONENT_TO_HANDLE = new Map<string, string>([['x', 'h'], ['y', 's'], ['z', 'l']]);
-
-/**
- * A bare JS identifier — the only NON-NUMERIC shape allowed to reach the
- * emitted module out of stored `values` (the noise `pos` key; see
- * resolveExposedParam). Deliberately shape-based rather than a membership
- * whitelist: codeToGraph stores whatever variable name a pasted shader used for
- * a noise position (`extractedValues.pos = posArg.name`), so a membership test
- * would silently rewrite those graphs. The SHAPE is what makes it safe — it can
- * hold no `(`, `)`, `;` or quote, so the worst it can produce is the bare
- * reference the old `String()` already produced (a ReferenceError at load).
- */
-const TSL_IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 /**
  * `#rrggbb` → the `0xrrggbb` literal the colour constructors take.
@@ -438,6 +444,22 @@ export function graphToCode(
     return name;
   };
 
+  // The custom sink that DRIVES — resolved here, before any name is claimed,
+  // because it decides which names are free (below), and used again when the
+  // body is planned. It depends only on the nodes and the unwrapped edges.
+  const customNode = drivingCustomSink(sorted, edges);
+
+  // A Splat Output's Fns are `Fn(([p, pw, n, c]) => …)`: a PROPERTY named `c`
+  // (the only way a node gets a bare, unnumbered name) would be shadowed by the
+  // parameter inside them, and a chain reading it there would silently read
+  // the splat's colour instead. So the parameter names are reserved — but ONLY
+  // while a Splat Output DRIVES, since only then do those Fns exist. A
+  // property's name is its public API (schema key, A-Frame attribute,
+  // persisted-uniform key), so a parked or unwired Splat Output renames
+  // nothing; a property named `p`/`pw`/`n`/`c` is renamed (`n2`) exactly while
+  // the splat program is the module.
+  if (customNode && isSplatOutput(customNode)) for (const name of SPLAT_FN_PARAMS) usedNames.add(name);
+
   // Property nodes claim their user-defined names FIRST, before any other node
   // gets a variable. A property's name is its public API — the schema key, the
   // <a-entity> attribute, the setAttribute() key — while every other var name
@@ -520,6 +542,16 @@ export function graphToCode(
       // recognises them by name AND declarator shape.
       varNames.set(node.id, claimName('rm', {
         aliases: (n) => [`${n}Field`, `${n}Density`, `${n}Color`, `${n}Emissive`, `${n}Glow`, `${n}Background`, `${n}Col`, `${n}N`],
+      }));
+      continue;
+    }
+    if (def.type === SPLAT_OUTPUT_TYPE) {
+      // The splat's four Fns share one base (`sp1Shade`, `sp1Shape`,
+      // `sp1Size`, `sp1Feather`), reserved together like the march's;
+      // codeToGraph recognises them by name AND by the `Fn(…)` declarator
+      // shape.
+      varNames.set(node.id, claimName('sp', {
+        aliases: (n) => [`${n}Shade`, `${n}Shape`, `${n}Size`, `${n}Feather`],
       }));
       continue;
     }
@@ -651,13 +683,49 @@ export function graphToCode(
     return `color(${hexLiteral(storedHex ?? fallbackHex)})`;
   };
 
+  /**
+   * The value an edge into a CUSTOM SINK's colour-like socket carries, WIDENED
+   * with `vec3()` where `widen(shape)` says so — or null when nothing
+   * resolvable is wired. The march widens a SCALAR only (`=== 1`, its rule
+   * since the node shipped); the Splat Output widens anything that is not
+   * already three channels, because its value lands in a `vec4(rgb, a)` join,
+   * where a vec4 source would make five components and a vec2 two too few.
+   * Shared by both sinks' emitters so the widening is one piece of code.
+   */
+  const widenedRefOf = (
+    edge: AppEdge | undefined,
+    widen: (shape: number) => boolean = (shape) => shape === 1,
+  ): string | null => {
+    if (!edge) return null;
+    const ref = resolveEdgeRef(edge, varNames, gidx);
+    if (!ref) return null;
+    if (!widen(shapeOfEdgeSource(edge))) return ref;
+    addImport('three/tsl', 'vec3');
+    return `vec3(${ref})`;
+  };
+
+  /**
+   * One custom-sink scope Fn: `const <name> = Fn(([<params>]) => {`, the
+   * scope's chain one level deeper, `return <ret>;`, `});`. The chain CAPTURES
+   * everything outside its scope from the flat body by closure (measured to
+   * type-check and render on r184). Shared by the march's per-step Fns and the
+   * splat's shade/shape/size.
+   */
+  const pushScopeFn = (out: string[], name: string, params: string, chainLines: readonly string[], ret: string): void => {
+    out.push(`  const ${name} = Fn(([${params}]) => {`);
+    for (const l of chainLines) out.push(`  ${l}`);
+    out.push(`    return ${ret};`);
+    out.push('  });');
+  };
+
   // Build body lines. `bodyLines` is the CURRENT target: the flat shader body
-  // for every node of an ordinary graph, and — when a Raymarch Output DRIVES —
-  // one of the per-step function bodies for the nodes its partition puts there
-  // (utils/sdfPartition.ts, MARCH_SCOPES). A node can appear in the plan twice
-  // (feeding two per-step sockets), which is why this is a plan rather than a
-  // plain loop; with no driving march the plan IS `sorted`, so emission is
-  // byte-identical to what it was before the node existed.
+  // for every node of an ordinary graph, and — when a custom sink (Raymarch
+  // or Splat Output) DRIVES — one of its scope Fn bodies for the nodes its
+  // partition puts there (utils/sdfPartition.ts, MARCH_SCOPES / SPLAT_SCOPES).
+  // A node can appear in the plan twice (feeding two scopes), which is why
+  // this is a plan rather than a plain loop; with no driving custom sink the
+  // plan IS `sorted`, so emission is byte-identical to what it was before
+  // either node existed.
   const mainLines: string[] = [];
   let bodyLines: string[] = mainLines;
   // Module-scope setup emitted BEFORE the shader Fn — the Data/Stripes nodes
@@ -670,19 +738,25 @@ export function graphToCode(
   // declaring its setup twice (a duplicate module-scope const).
   const imagePlanner = createImageTexturePlanner();
   const imageSetupEmitted = new Set<string>();
+  /** Nodes whose module-scope setup lines are already out (`firstSetup`). */
+  const setupEmittedFor = new Set<string>();
 
-  // The march output and its per-step scopes: one line array per per-step
-  // socket, each a function of ONE parameter (`p`, the ray position, or
-  // `dir`, the ray direction) that stands in for that scope's root nodes. See
+  // The custom sink and its scopes: one line array per scope, each the body
+  // of a Fn whose PARAMETERS stand in for that scope's root nodes. For the
+  // march that is one per-step socket and one parameter (`p`, the ray
+  // position, or `dir`, the ray direction); for the Splat Output it is one Fn
+  // per role (shade, shape, size) of `(p, pw, n, c)`. See
   // utils/sdfPartition.ts. ONLY THE ACTIVE SINK is partitioned: an inactive
-  // Raymarch Output emits nothing, and its feeders then land in the flat body
-  // as ordinary consts (which is what lets the resync carry the node and its
-  // wiring across an Apply — see useSyncEngine).
-  const marchNode = drivingMarchOutput(sorted, edges);
-  const specs: readonly MarchScopeSpec[] = marchNode ? MARCH_SCOPES : [];
-  const part = marchNode ? marchPartition(sorted, edges, marchNode.id, specs) : null;
+  // custom sink emits nothing, and its feeders then land in the flat body as
+  // ordinary consts (which is what lets the resync carry the node and its
+  // wiring across an Apply — see useSyncEngine). `customNode` was resolved
+  // before the naming pass.
+  const marchNode = customNode && isMarchOutput(customNode) ? customNode : null;
+  const splatNode = customNode && isSplatOutput(customNode) ? customNode : null;
+  const specs: readonly ScopeSpec[] = marchNode ? MARCH_SCOPES : splatNode ? SPLAT_SCOPES : [];
+  const part = customNode ? marchPartition(sorted, edges, customNode.id, specs) : null;
   const scopeLines = new Map<string, string[]>(specs.map((sp) => [sp.handle, []]));
-  const specOfLines = new Map<string[], MarchScopeSpec>(specs.map((sp) => [scopeLines.get(sp.handle)!, sp]));
+  const specOfLines = new Map<string[], ScopeSpec>(specs.map((sp) => [scopeLines.get(sp.handle)!, sp]));
   const plan: [AppNode, string[]][] = [];
   for (const node of sorted) {
     if (!part) { plan.push([node, mainLines]); continue; }
@@ -696,13 +770,40 @@ export function graphToCode(
     bodyLines = target;
     const def = registry.get(node.data.registryType);
     if (!def || node.data.registryType === 'output' || node.data.registryType === 'split') continue;
-    if (isMarchOutput(node)) continue;
-    // Inside a per-step function the scope's root IS the parameter.
+    if (isCustomSink(node)) continue;
+    // Inside a scope Fn a root IS its parameter (or, for a splat's per-corner
+    // sources, a per-splat constant — see SPLAT_CONSTANTS).
     const scopeSpec = bodyLines === mainLines ? undefined : specOfLines.get(bodyLines);
-    if (scopeSpec && scopeSpec.roots.has(def.type)) {
-      bodyLines.push(`  const ${varNames.get(node.id)!} = ${scopeSpec.param};`);
+    const rootBinding = scopeSpec ? bindingOfRoot(scopeSpec, def.type) : null;
+    if (rootBinding) {
+      for (const name of rootBinding.imports) addImport('three/tsl', name);
+      bodyLines.push(`  const ${varNames.get(node.id)!} = ${rootBinding.expr};`);
       continue;
     }
+    /**
+     * An IMPLICIT geometry read — an unwired input whose default is
+     * `positionGeometry`, `uv()` and the like (utils/sdfPartition.ts,
+     * implicitRootOf) — emitted HERE: inside a scope with `implicitRoots` (a
+     * Splat Output Fn, which runs in the splat's vertex stage, where the
+     * geometry is the quad CORNER) it is bound to the same parameter or
+     * per-splat constant a wired root would be, and its imports are added;
+     * everywhere else — the flat body, a march Fn, a root type the scope does
+     * not bind — it is null, and the branch emits its ordinary text. So the
+     * flat copy of a node that is ALSO in a splat scope keeps today's text.
+     */
+    const implicitBinding = (root: string): string | null => {
+      if (!scopeSpec?.implicitRoots) return null;
+      const b = bindingOfRoot(scopeSpec, root);
+      if (!b) return null;
+      for (const name of b.imports) addImport('three/tsl', name);
+      return b.expr;
+    };
+    /** Emit a node's module-scope setup (a baked texture) ONCE, however many
+     *  scope Fns — or a scope Fn and the flat body — emit the node itself: a
+     *  second copy would redeclare the same module-scope `const`, a
+     *  SyntaxError that fails the whole module. */
+    const firstSetup = !setupEmittedFor.has(node.id);
+    setupEmittedFor.add(node.id);
 
     // See isOrphanedProperty. The name is still CLAIMED in the pre-pass above,
     // deliberately: an unemitted property keeps its reservation, so wiring it up
@@ -789,22 +890,27 @@ export function graphToCode(
         // truncated payload never crashes the shader.
         addImport('three/tsl', 'float');
         let bakedAny = false;
+        // Inside a splat Fn the sample row is the splat's own (implicitBinding).
+        let uvBase: string | null = null;
         for (const ci of [...usedCols].sort((a, b) => a - b)) {
           const col = decoded?.columns[ci];
           if (col && col.length > 0) {
             if (!bakedAny) {
               addImport('three/tsl', 'texture');
-              addImport('three/tsl', 'uv');
+              uvBase = implicitBinding('uv');
+              if (!uvBase) addImport('three/tsl', 'uv');
               addImport('three/tsl', 'vec2');
               bakedAny = true;
             }
             const capped = capToWidth(col, MAX_TEXTURE_WIDTH);
             const texVar = `_${varName}_tex${ci}`;
-            setupLines.push(
-              `const ${texVar} = new globalThis.THREE.DataTexture(${f32Decode(float32ToBase64(capped))}, ${capped.length}, 1, globalThis.THREE.RedFormat, globalThis.THREE.FloatType);`,
-            );
-            setupLines.push(`${texVar}.needsUpdate = true;`);
-            bodyLines.push(`  const ${varName}_col${ci} = texture(${texVar}, vec2(uv().x, 0.5)).x;`);
+            if (firstSetup) {
+              setupLines.push(
+                `const ${texVar} = new globalThis.THREE.DataTexture(${f32Decode(float32ToBase64(capped))}, ${capped.length}, 1, globalThis.THREE.RedFormat, globalThis.THREE.FloatType);`,
+              );
+              setupLines.push(`${texVar}.needsUpdate = true;`);
+            }
+            bodyLines.push(`  const ${varName}_col${ci} = texture(${texVar}, vec2(${uvBase ?? 'uv()'}.x, 0.5)).x;`);
           } else {
             bodyLines.push(`  const ${varName}_col${ci} = float(0.0);`);
           }
@@ -889,7 +995,13 @@ export function graphToCode(
         addImport('three/tsl', 'texture');
         const uvEdge = inEdge(gidx, node.id, 'uv');
         const uvRef = uvEdge ? resolveEdgeRef(uvEdge, varNames, gidx) : null;
-        if (!uvRef) addImport('three/tsl', 'uv');
+        // A wired Direction replaces the whole uv path (below).
+        const dirEdge = inEdge(gidx, node.id, 'dir');
+        const dirRef = dirEdge ? resolveEdgeRef(dirEdge, varNames, gidx) : null;
+        // Unwired inside a splat Fn: the splat's own sample point, never the
+        // quad's (absent) uv attribute — see implicitBinding.
+        const scopedUv = !uvRef && !dirRef ? implicitBinding('uv') : null;
+        if (!uvRef && !scopedUv) addImport('three/tsl', 'uv');
         // UV-space transform settings (NodeSettingsMenu). All Number-coerced —
         // never interpolate stored strings. The raw sample renders mirrored
         // left-right in the preview pipeline, so the CORRECTED orientation
@@ -928,7 +1040,7 @@ export function graphToCode(
         const offsetY = paramExpr('offsetY', 0);
         // A wired UV input wins over the UV set; the literal digit comes from
         // the reader's closed 1..3 table, never from the stored value.
-        let uvExpr = uvRef ?? (mapping.uvSet > 0 ? `uv(${mapping.uvSet})` : 'uv()');
+        let uvExpr = uvRef ?? scopedUv ?? (mapping.uvSet > 0 ? `uv(${mapping.uvSet})` : 'uv()');
         // Every step below that writes a `vec2(` sets this, so vec2 is
         // imported exactly when used (a rotation-only transform needs only
         // mat2). On the legacy path it is the old `uvExpr !== base` test.
@@ -981,8 +1093,6 @@ export function graphToCode(
         }
         // A wired Direction samples the image as a SKY (equirect) and replaces
         // the UV path entirely — tile/offset/flip are UV notions.
-        const dirEdge = inEdge(gidx, node.id, 'dir');
-        const dirRef = dirEdge ? resolveEdgeRef(dirEdge, varNames, gidx) : null;
         if (dirRef) {
           addImport('three/tsl', 'equirectUV');
           uvExpr = `equirectUV(${dirRef})`;
@@ -1016,13 +1126,14 @@ export function graphToCode(
       const hi = colorRefOf(inEdge(gidx, node.id, 'highColor'), nv.highColor, def.defaultValues?.highColor);
       // Radial ("target"/tree-ring) mode: index the data by distance from a
       // choosable center instead of uv.x, so the bands become concentric rings.
-      const { radial, expr: coordExpr } = rampCoord(nv);
+      const scopedUv = implicitBinding('uv');
+      const { radial, expr: coordExpr } = rampCoord(nv, scopedUv ?? undefined);
       // How strongly the stripes darken the value-color. 0 = a clean value
       // heatmap (no stripes, colour alone shows the data); ~0.75 = bold stripes.
       const lineStrength = Math.min(Math.max(valueNum(nv.lineStrength ?? 0.75), 0), 1);
       addImport('three/tsl', 'float');
       addImport('three/tsl', 'color');
-      addImport('three/tsl', 'uv');
+      if (!scopedUv) addImport('three/tsl', 'uv');
       addImport('three/tsl', 'mix');
       addImport('three/tsl', 'dFdx');
       addImport('three/tsl', 'dFdy');
@@ -1045,8 +1156,10 @@ export function graphToCode(
         addImport('three/tsl', 'vec2');
         phaseTexVar = `_${varName}_phase`;
         valueTexVar = `_${varName}_value`;
-        bakeHalfFloatTexture(setupLines, phaseTexVar, ramp.phase01);
-        bakeHalfFloatTexture(setupLines, valueTexVar, traced.cnorm);
+        if (firstSetup) {
+          bakeHalfFloatTexture(setupLines, phaseTexVar, ramp.phase01);
+          bakeHalfFloatTexture(setupLines, valueTexVar, traced.cnorm);
+        }
       }
 
       const coord = `_${varName}_coord`;
@@ -1107,9 +1220,10 @@ export function graphToCode(
       // see the Stripes branch above for why it is not a literal here.
       const lo = colorRefOf(inEdge(gidx, node.id, 'lowColor'), nv.lowColor, def.defaultValues?.lowColor);
       const hi = colorRefOf(inEdge(gidx, node.id, 'highColor'), nv.highColor, def.defaultValues?.highColor);
-      const { radial, expr: coordExpr } = rampCoord(nv);
+      const scopedUv = implicitBinding('uv');
+      const { radial, expr: coordExpr } = rampCoord(nv, scopedUv ?? undefined);
       addImport('three/tsl', 'color');
-      addImport('three/tsl', 'uv');
+      if (!scopedUv) addImport('three/tsl', 'uv');
       addImport('three/tsl', 'mix');
       if (radial) addImport('three/tsl', 'vec2');
 
@@ -1122,7 +1236,7 @@ export function graphToCode(
         addImport('three/tsl', 'texture');
         addImport('three/tsl', 'vec2');
         valueTexVar = `_${varName}_value`;
-        bakeHalfFloatTexture(setupLines, valueTexVar, traced.cnorm);
+        if (firstSetup) bakeHalfFloatTexture(setupLines, valueTexVar, traced.cnorm);
       }
 
       const coord = `_${varName}_coord`;
@@ -1175,7 +1289,7 @@ export function graphToCode(
       const lutVar = `_${varName}_lut`;
       // `reverse` is baked into the table, so it costs nothing per fragment and
       // the emitted TSL is identical either way.
-      bakeColormapTexture(setupLines, lutVar, buildColormapLut(cmap, reverse));
+      if (firstSetup) bakeColormapTexture(setupLines, lutVar, buildColormapLut(cmap, reverse));
       addImport('three/tsl', 'texture');
       addImport('three/tsl', 'vec2');
 
@@ -1183,9 +1297,11 @@ export function graphToCode(
       let tExpr = scalarRefOf(valueEdge);
       if (!tExpr) {
         // Unwired: ramp across uv.x, so a freshly dropped Colormap node shows
-        // the map it is set to instead of a flat colour.
-        addImport('three/tsl', 'uv');
-        tExpr = 'uv().x';
+        // the map it is set to instead of a flat colour. (Inside a splat Fn,
+        // across the splat's own sample point — implicitBinding.)
+        const scopedUv = implicitBinding('uv');
+        if (!scopedUv) addImport('three/tsl', 'uv');
+        tExpr = `${scopedUv ?? 'uv()'}.x`;
       }
 
       if (levels >= 2) {
@@ -1221,8 +1337,9 @@ export function graphToCode(
 
       let src = scalarRefOf(valueEdge);
       if (!src) {
-        addImport('three/tsl', 'uv');
-        src = 'uv().x';
+        const scopedUv = implicitBinding('uv');
+        if (!scopedUv) addImport('three/tsl', 'uv');
+        src = `${scopedUv ?? 'uv()'}.x`;
       }
 
       // A user-authored formula, when there is one. Reached ONLY when
@@ -1309,8 +1426,9 @@ export function graphToCode(
       const valueEdge = inEdge(gidx, node.id, 'value');
       let src = scalarRefOf(valueEdge);
       if (!src) {
-        addImport('three/tsl', 'uv');
-        src = 'uv().x';
+        const scopedUv = implicitBinding('uv');
+        if (!scopedUv) addImport('three/tsl', 'uv');
+        src = `${scopedUv ?? 'uv()'}.x`;
       }
 
       const p = `_${varName}_p`;
@@ -1380,8 +1498,9 @@ export function graphToCode(
       } else {
         addImport('three/tsl', 'vec2');
         const densityExpr = numericParam(node, 'density', 10, varNames, gidx);
-        addImport('three/tsl', 'uv');
-        bodyLines.push(`  const ${p} = uv().mul(${densityExpr});`);
+        const scopedUv = implicitBinding('uv');
+        if (!scopedUv) addImport('three/tsl', 'uv');
+        bodyLines.push(`  const ${p} = ${scopedUv ?? 'uv()'}.mul(${densityExpr});`);
       }
 
       // Distance to the nearest line, per axis (grid) or per edge (edges).
@@ -1529,9 +1648,18 @@ export function graphToCode(
       // generic branch can't express.
       const nv = getNodeValues(node);
 
-      // Resolve position: from exposed port edge, or default positionGeometry
+      // Resolve position: from exposed port edge, or default positionGeometry.
+      // UNWIRED inside a splat Fn, the stored identifier is an implicit read
+      // of that root and is bound like one — `mx_noise_float(p)`, the splat's
+      // centre, never the quad corner `positionGeometry` is in that vertex
+      // stage (implicitBinding; the flat copy keeps today's text).
+      const posEdge = inEdge(gidx, node.id, 'pos');
+      const posWired = !!posEdge && resolveEdgeRef(posEdge, varNames, gidx) !== null;
       let posExpr = resolveExposedParam(node, 'pos', varNames, nv, gidx);
-      if (/^\d+(\.\d+)?$/.test(posExpr) || posExpr === 'positionGeometry') {
+      const scopedPos = posWired ? null : implicitBinding(posExpr);
+      if (scopedPos) {
+        posExpr = scopedPos;
+      } else if (/^\d+(\.\d+)?$/.test(posExpr) || posExpr === 'positionGeometry') {
         posExpr = 'positionGeometry';
         addImport('three/tsl', 'positionGeometry');
       }
@@ -1671,26 +1799,20 @@ export function graphToCode(
         const v = valueNum(nv[key]);
         return num(Number.isFinite(v) ? v : dflt);
       };
-      const indent = (l: string) => `  ${l}`;
       const lines: string[] = [];
       // A per-step chain (Field/Density scalar, or Color/Emissive/Glow colour),
       // a function of the ray POSITION `p`.
       const posFn = (handle: string, suffix: string, chainLines: string[], set: ReadonlySet<string>): string | null => {
         const edge = inEdge(gidx, node.id, handle);
-        if (!edge) return null;
-        const ref = resolveEdgeRef(edge, varNames, gidx);
-        if (!ref) return null;
-        const widened = shapeOfEdgeSource(edge) === 1 ? `vec3(${ref})` : ref;
+        const widened = widenedRefOf(edge);
+        if (!edge || !widened) return null;
         if (!set.has(edge.source)) {
           // Captured (not p-dependent): still its own declarator, so codeToGraph
           // reads the edge back off `const rm1Color = color1;`.
           lines.push(`  const ${base}${suffix} = ${widened};`);
           return `@CAP@${base}${suffix}`;
         }
-        lines.push(`  const ${base}${suffix} = Fn(([p]) => {`);
-        lines.push(...chainLines.map(indent));
-        lines.push(`    return ${widened};`);
-        lines.push('  });');
+        pushScopeFn(lines, `${base}${suffix}`, 'p', chainLines, widened);
         return `${base}${suffix}`;
       };
       // Field: scalar distance.
@@ -1699,10 +1821,7 @@ export function graphToCode(
         const scoped = part.scopes.get('field')!.has(fieldEdge!.source);
         const scalarRef = shapeOfEdgeSource(fieldEdge!) === 1 ? fieldRef : `${fieldRef}.x`;
         if (scoped) {
-          lines.push(`  const ${base}Field = Fn(([p]) => {`);
-          lines.push(...scopeLines.get('field')!.map(indent));
-          lines.push(`    return ${scalarRef};`);
-          lines.push('  });');
+          pushScopeFn(lines, `${base}Field`, 'p', scopeLines.get('field')!, scalarRef);
           fieldName = `${base}Field`;
         } else {
           // Not p-dependent — a constant field. Wrap so the march can call it.
@@ -1714,10 +1833,7 @@ export function graphToCode(
       if (densityRef) {
         const scoped = part.scopes.get('density')!.has(densityEdge!.source);
         const scalarRef = shapeOfEdgeSource(densityEdge!) === 1 ? densityRef : `${densityRef}.x`;
-        lines.push(`  const ${base}Density = Fn(([p]) => {`);
-        if (scoped) lines.push(...scopeLines.get('density')!.map(indent));
-        lines.push(`    return ${scalarRef};`);
-        lines.push('  });');
+        pushScopeFn(lines, `${base}Density`, 'p', scoped ? scopeLines.get('density')! : [], scalarRef);
         densityName = `${base}Density`;
       }
       // Colour/Emissive/Glow: p-functions, or captured refs (marked @CAP@), or
@@ -1737,20 +1853,14 @@ export function graphToCode(
       let bgName: string | null = null;
       {
         const edge = inEdge(gidx, node.id, 'background');
-        if (edge) {
-          const ref = resolveEdgeRef(edge, varNames, gidx);
-          if (ref) {
-            const widened = shapeOfEdgeSource(edge) === 1 ? `vec3(${ref})` : ref;
-            if (part.scopes.get('background')!.has(edge.source)) {
-              lines.push(`  const ${base}Background = Fn(([dir]) => {`);
-              lines.push(...scopeLines.get('background')!.map(indent));
-              lines.push(`    return ${widened};`);
-              lines.push('  });');
-              bgName = `@FN@${base}Background`;
-            } else {
-              lines.push(`  const ${base}Background = ${widened};`);
-              bgName = `${base}Background`;
-            }
+        const widened = widenedRefOf(edge);
+        if (edge && widened) {
+          if (part.scopes.get('background')!.has(edge.source)) {
+            pushScopeFn(lines, `${base}Background`, 'dir', scopeLines.get('background')!, widened);
+            bgName = `@FN@${base}Background`;
+          } else {
+            lines.push(`  const ${base}Background = ${widened};`);
+            bgName = `${base}Background`;
           }
         }
       }
@@ -1758,14 +1868,10 @@ export function graphToCode(
       // swatch, or NOTHING (the literal default is then inlined below, so an
       // untouched socket emits no declarator and round-trips as untouched).
       const capColor = (handle: string, suffix: string): string | null => {
-        const edge = inEdge(gidx, node.id, handle);
-        if (edge) {
-          const ref = resolveEdgeRef(edge, varNames, gidx);
-          if (ref) {
-            const widened = shapeOfEdgeSource(edge) === 1 ? `vec3(${ref})` : ref;
-            lines.push(`  const ${base}${suffix} = ${widened};`);
-            return `${base}${suffix}`;
-          }
+        const widened = widenedRefOf(inEdge(gidx, node.id, handle));
+        if (widened) {
+          lines.push(`  const ${base}${suffix} = ${widened};`);
+          return `${base}${suffix}`;
         }
         const stored = typeof nv[handle] === 'string' && /^#[0-9a-fA-F]{6}$/.test(nv[handle] as string) ? (nv[handle] as string) : null;
         if (stored) {
@@ -1924,6 +2030,126 @@ export function graphToCode(
     }
   }
 
+  // ===== Splat Output =====
+  // The module's return is `{ splat: { shade, shape, size, feather, invert } }`
+  // — NOT a material. Loader 0.8 finds the Gaussian-splat objects the module
+  // is applied to and, inside each one's own vertex stage, calls the Fns once
+  // per SPLAT with `(p, pw, n, c)` (utils/sdfPartition.ts, SPLAT_SCOPES):
+  //
+  //   shade(p, pw, n, c) → vec4(rgb, opacity)   Color (unwired: the splat's
+  //                                             own `c.rgb`, or the stored
+  //                                             swatch) and Opacity
+  //   shape(p, pw, n, c) → vec4(move, cut)      Move and Cut
+  //   size(p, pw, n, c)  → float                a Size that depends on the splat
+  //   feather(p, pw, n, c) → float              a Feather that depends on the splat
+  //
+  // r184's `Fn` cannot return a struct, hence the two vec4s. Everything else
+  // rides the return line as a VALUE: a stored Size / Feather as a number, a
+  // wired one that does not depend on the splat as the captured node, Invert
+  // as the literal `true`. Each Fn and key is OMITTED when it is the identity,
+  // so an active sink with nothing to say emits `return { splat: {} };` and
+  // the loader draws the splats exactly as the file has them.
+  //
+  // NEVER a `Discard(`: a statement-level Discard inside a nested Fn body is
+  // lifted into the module-scope `__pixel` wrapper by `extractDiscards`, and
+  // a cut is the loader's VALUE test anyway (`cut > 0` removes, a sign test —
+  // so a distance field wired to Cut keeps its inside; the quad collapses off
+  // screen and costs no raster).
+  let splatEmission: { lines: string[]; discardLine: null; returnLine: string } | null = null;
+  if (splatNode && part) {
+    const node = splatNode;
+    const base = varNames.get(node.id)!;
+    const nv = getNodeValues(node);
+    const rawValues = (node.data as { values?: unknown }).values;
+    const lines: string[] = [];
+    const params = SPLAT_FN_PARAMS.join(', ');
+    const edgeOf = (handle: string) => inEdge(gidx, node.id, handle);
+    /** A stored number, strictly: a finite number or a numeric string —
+     *  never `''` or a boolean, which `Number()` would read as 0 / 1. */
+    const storedNumber = (key: string, dflt: number): number => {
+      const raw = nv[key];
+      if (typeof raw === 'number') return Number.isFinite(raw) ? raw : dflt;
+      if (typeof raw === 'string' && raw.trim() !== '') {
+        const v = valueNum(raw);
+        return Number.isFinite(v) ? v : dflt;
+      }
+      return dflt;
+    };
+    const notVec3 = (shape: number) => shape !== 3;
+    const entries: string[] = [];
+
+    // shade → vec4(rgb, opacity)
+    const colorRef = widenedRefOf(edgeOf('color'), notVec3);
+    const opacityRef = scalarRefOf(edgeOf('opacity'));
+    const storedColor = typeof nv.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(nv.color) ? nv.color : null;
+    const opacity = storedNumber('opacity', 1);
+    if (colorRef || storedColor || opacityRef || opacity !== 1) {
+      let rgb = colorRef;
+      if (!rgb && storedColor) {
+        addImport('three/tsl', 'color');
+        rgb = `color(${hexLiteral(storedColor)})`;
+      }
+      addImport('three/tsl', 'vec4');
+      pushScopeFn(lines, `${base}Shade`, params, scopeLines.get('shade')!, `vec4(${rgb ?? 'c.rgb'}, ${opacityRef ?? num(opacity)})`);
+      entries.push(`shade: ${base}Shade`);
+    }
+
+    // shape → vec4(move, cut)
+    const moveRef = widenedRefOf(edgeOf('move'), notVec3);
+    const cutRef = scalarRefOf(edgeOf('cut'));
+    if (moveRef || cutRef) {
+      addImport('three/tsl', 'vec4');
+      pushScopeFn(lines, `${base}Shape`, params, scopeLines.get('shape')!, `vec4(${moveRef ?? '0, 0, 0'}, ${cutRef ?? '0'})`);
+      entries.push(`shape: ${base}Shape`);
+    }
+
+    // size → a Fn when it depends on the splat, the captured node when it
+    // does not, the stored number when it is not 1.
+    const sizeEdge = edgeOf('size');
+    const sizeRef = scalarRefOf(sizeEdge);
+    if (sizeEdge && sizeRef) {
+      if (part.scopes.get('size')!.has(sizeEdge.source)) {
+        pushScopeFn(lines, `${base}Size`, params, scopeLines.get('size')!, sizeRef);
+        entries.push(`size: ${base}Size`);
+      } else {
+        entries.push(`size: ${sizeRef}`);
+      }
+    } else {
+      const size = storedNumber('size', 1);
+      if (size !== 1) entries.push(`size: ${num(size)}`);
+    }
+
+    // feather → exactly like size: a Fn when it depends on the splat, the
+    // captured node when it does not, the stored number when it is not 0 (a
+    // hard cut). The loader reads it per VERTEX, inside its cut test and fade,
+    // so a splat-dependent Feather emitted flat would be read at each quad
+    // CORNER — a different value per corner tears the quad.
+    const featherEdge = edgeOf('feather');
+    const featherRef = scalarRefOf(featherEdge);
+    if (featherEdge && featherRef) {
+      if (part.scopes.get('feather')!.has(featherEdge.source)) {
+        pushScopeFn(lines, `${base}Feather`, params, scopeLines.get('feather')!, featherRef);
+        entries.push(`feather: ${base}Feather`);
+      } else {
+        entries.push(`feather: ${featherRef}`);
+      }
+    } else {
+      const feather = storedNumber('feather', 0);
+      if (feather !== 0) entries.push(`feather: ${num(feather)}`);
+    }
+
+    // invert → only the literal `true` counts (node data is untrusted).
+    if (rawValues && typeof rawValues === 'object' && (rawValues as Record<string, unknown>).invert === true) {
+      entries.push('invert: true');
+    }
+
+    splatEmission = {
+      lines,
+      discardLine: null,
+      returnLine: entries.length > 0 ? `  return { splat: { ${entries.join(', ')} } };` : '  return { splat: {} };',
+    };
+  }
+
   // Handle output node — resolve all connected channels.
   //
   // Picked from the NODES array, not from `sorted`. `topologicalSort` seeds
@@ -1934,11 +2160,12 @@ export function graphToCode(
   //
   // The node supplying the module's TOP-LEVEL channels — `defaultOutput`: the
   // flagged-and-untargeted Output, else the first untargeted one, else NULL —
-  // and NONE while a Raymarch Output is the active sink: then the plain
-  // Output's wiring is ignored outright, and an active Raymarch Output with
-  // nothing wired falls through to the "nothing wired" sentinel below exactly
-  // as an empty plain Output does, rather than silently handing the picture to
-  // a node the user did not choose.
+  // and NONE while a custom sink (Raymarch or Splat Output) is the active
+  // sink: then the plain Output's wiring is ignored outright, and an active
+  // Raymarch Output with nothing wired falls through to the "nothing wired"
+  // sentinel below exactly as an empty plain Output does, rather than silently
+  // handing the picture to a node the user did not choose. (An active Splat
+  // Output always has its own return, `{ splat: {} }` at the least.)
   //
   // NULL IS A REAL ANSWER and needs no `material0Target` test beside it: a
   // document whose every Output is targeted has no default material, so the
@@ -1951,7 +2178,7 @@ export function graphToCode(
   // targeted Output ahead of an untargeted one in the array the module silently
   // lost its top-level channels, and `liftChildrenAfterParents` can put it
   // there with an ordinary drag-into-a-group.
-  const defaultNode = marchNode ? null : defaultOutput(nodes);
+  const defaultNode = customNode ? null : defaultOutput(nodes);
   /**
    * THE Output nodes whose `parts` / `materialParts` entries reach the module,
    * in the module's own (emitRank, id) order — `contributingOutputs`, the ONE
@@ -1959,12 +2186,12 @@ export function graphToCode(
    * every TARGETED Output, each supplying its own entry whatever the active
    * flag says.
    *
-   * The march check stays HERE rather than inside `contributingOutputs`,
-   * because `marchNode` was resolved over `sorted` — the topologically sorted
+   * The custom-sink check stays HERE rather than inside `contributingOutputs`,
+   * because `customNode` was resolved over `sorted` — the topologically sorted
    * list — and `activeSink`'s fallbacks are array-order dependent, so asking
    * the same question over `nodes` could elect a different sink.
    */
-  const outputs = marchNode ? [] : contributingOutputs(nodes);
+  const outputs = customNode ? [] : contributingOutputs(nodes);
   const outputById = new Map(outputs.map((n) => [n.id, n] as const));
   /** `outputMaterials` per node, memoised: it synthesizes material 0 into a
    *  fresh array on every call, and the loops below ask per entry. */
@@ -2443,8 +2670,16 @@ export function graphToCode(
     returnLine = `  return { ${props} };`;
   }
 
-  // Ensure vec3 is imported if used in fallback return
-  if (returnLine.includes('vec3(')) {
+  // The custom sink's own program, when one drives — its lines, its cutout
+  // (the march's; a splat never has one) and its return REPLACE the plain
+  // Output's.
+  const customEmission = sdfEmission ?? splatEmission;
+  const effectiveReturnLine = customEmission ? customEmission.returnLine : returnLine;
+
+  // Ensure vec3 is imported if used in fallback return. Asked of the return
+  // line that is actually EMITTED: the plain sentinel computed beside an
+  // active Splat Output never reaches the module, and neither may its import.
+  if (effectiveReturnLine.includes('vec3(')) {
     addImport('three/tsl', 'vec3');
   }
 
@@ -2467,10 +2702,10 @@ export function graphToCode(
     ...(setupLines.length ? [...setupLines, ''] : []),
     'const shader = Fn(() => {',
     ...mainLines,
-    ...(sdfEmission ? sdfEmission.lines : []),
-    ...(sdfEmission ? (sdfEmission.discardLine ? [sdfEmission.discardLine] : []) : discardLine ? [discardLine] : []),
+    ...(customEmission ? customEmission.lines : []),
+    ...(customEmission ? (customEmission.discardLine ? [customEmission.discardLine] : []) : discardLine ? [discardLine] : []),
     '',
-    sdfEmission ? sdfEmission.returnLine : returnLine,
+    effectiveReturnLine,
     '});',
     '',
     'export default shader;',
@@ -2757,10 +2992,9 @@ function resolveExposedParam(
   // `positionGeometry` — or any other identifier a pasted shader used. The
   // noise branch then normalizes a non-identifier back to positionGeometry and
   // adds the import, byte-identically to the old numeric fallback.
-  if (key === 'pos') {
-    const s = String(raw);
-    return TSL_IDENTIFIER_RE.test(s) ? s : 'positionGeometry';
-  }
+  // The ONE rule (utils/sdfPartition.ts noisePosIdentifier), shared with the
+  // partition that decides whether the noise reads a splat root implicitly.
+  if (key === 'pos') return noisePosIdentifier(raw);
   // Every other key here (noise `scale`, uv `channel`/`tilingU`/`tilingV`/
   // `rotation`) is numeric. Garbage degrades to the SAME `1` an absent key
   // already degrades to, so this function keeps a single documented fallback.

@@ -219,12 +219,12 @@ export function MeshTargetPicker({
         language,
       )
     : shadowed
-      ? `"${first}" is already shaded by a material above — this one does nothing`
+      ? fillTemplate(t('"{mesh}" is already shaded by a material above — this one does nothing', language), { mesh: first })
       : selected.length > 1
         ? `${t('Shades', language)}: ${selected.join(', ')}`
         : isMissing
-          ? `Shades "${first}", which the loaded model does not contain`
-          : `Shades the mesh "${first}"`;
+          ? fillTemplate(t('Shades "{mesh}", which the loaded model does not contain', language), { mesh: first })
+          : fillTemplate(t('Shades the mesh "{mesh}"', language), { mesh: first });
 
   return (
     <>
@@ -278,7 +278,7 @@ export function MeshTargetPicker({
             // unticking is never refused.
             const capped = !selectedSet.has(name) && selected.length >= maxNames;
             const also = indexClaimed?.get(name);
-            const base = meshNames.includes(name) ? name : `${name} — not in the loaded model`;
+            const base = meshNames.includes(name) ? name : fillTemplate(t('{mesh} — not in the loaded model', language), { mesh: name });
             const lines = [base];
             if (also !== undefined) {
               lines.push(fillTemplate(t('Also in material section “{material}” — a mesh section wins', language), { material: also }));

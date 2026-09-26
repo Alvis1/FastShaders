@@ -16,9 +16,10 @@ import { ShaderPreview } from '@/components/Preview/ShaderPreview';
 // React.lazy with no boundary and unmount the whole live app — degrade to a
 // broken code pane instead.
 function CodeEditorLoadError() {
+  const language = useAppStore((s) => s.language);
   return (
     <div style={{ padding: 'var(--space-3)', color: 'var(--text-secondary)' }}>
-      Code editor failed to load — reload the app to retry.
+      {t('Code editor failed to load — reload the app to retry.', language)}
     </div>
   );
 }
@@ -74,6 +75,7 @@ import { LimitModal } from '@/components/Modals/LimitModal';
 import { ShaderImportModal } from '@/components/Modals/ShaderImportModal';
 import { TooltipLayer } from '@/components/Tooltip/TooltipLayer';
 import { useAppStore } from '@/store/useAppStore';
+import { t } from '@/i18n';
 import './AppLayout.css';
 
 export function AppLayout() {

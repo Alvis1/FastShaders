@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef } from 'react';
 import { useAppStore } from '@/store/useAppStore';
-import { findDefaultOutput } from '@/utils/outputMaterials';
 import { PREVIEW_CHANNEL } from '@/utils/nodePreview';
+import { previewRouteTargetId } from './nodes/activeSinkSelector';
 import './PreviewRoute.css';
 
 /**
@@ -20,8 +20,10 @@ import './PreviewRoute.css';
  * dimmed nor covered.
  *
  * Anchors: the source's `.react-flow__handle.source[data-handleid]` and the
- * Output's Color input handle — falling back to the card's right / left edge
- * midpoint when a handle is not mounted (the user may have hidden Color in
+ * target's Color input handle (the Output's — or, while a Splat Output is the
+ * active sink, the Splat Output's, which is where the module routes it) —
+ * falling back to the card's right / left edge midpoint when a handle is not
+ * mounted (the user may have hidden Color in
  * the Output's settings; the module still routes to it). Nothing is drawn
  * when the graph has no plain Output on the canvas: the module then feeds a
  * synthesized one (PREVIEW_OUTPUT_ID) and there is no socket to draw to.
@@ -29,7 +31,15 @@ import './PreviewRoute.css';
 export const PreviewRoute = memo(function PreviewRoute() {
   const srcId = useAppStore((s) => s.nodePreview?.nodeId ?? null);
   const srcHandle = useAppStore((s) => s.nodePreview?.handleId ?? null);
-  const dstId = useAppStore((s) => (s.nodePreview ? findDefaultOutput(s.nodes)?.id ?? null : null));
+  // The node the derived graph routes to — the same answer `previewGraph`
+  // follows (`previewTargetId`, utils/nodePreview.ts), so the line and the 3D
+  // view cannot name two different nodes: the active Splat Output while a
+  // splat drives, else the plain Output. Asked through the MEMOISED form
+  // (`previewRouteTargetId`, pinned equal to it): this component is always
+  // mounted and the selector runs on every store notify, so it must not
+  // repeat the election the Output cards already paid for. A string, so a
+  // notify that does not move it re-renders nothing.
+  const dstId = useAppStore((s) => (s.nodePreview ? previewRouteTargetId(s.nodes, s.edges) : null));
   const svgRef = useRef<SVGSVGElement>(null);
 
   useEffect(() => {

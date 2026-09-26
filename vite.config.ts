@@ -427,6 +427,11 @@ const VENDOR_TARGETS: { file: string; dests: string[] }[] = [
   { file: 'decoders/basis_transcoder.wasm', dests: ['public/js'] },
   { file: 'decoders/README.md', dests: ['public/js'] },
   { file: 'aframe-orbit-controls.min.js', dests: ['public/js'] },
+  // The Gaussian-splat runtime (three r186's GaussianSplat addon + its loaders,
+  // built by the submodule's build/build-splat.mjs). Top-level js/, never under
+  // decoders/: a page loads it with a <script> tag after the A-Frame bundle,
+  // and only a document showing a splat model emits that tag.
+  { file: 'fs-splat-0.1.js', dests: ['public/js'] },
 ];
 const vendorSyncPlugin = (): Plugin => ({
   name: 'fs-vendor-sync',

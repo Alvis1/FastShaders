@@ -23,8 +23,22 @@
  * A node in two sets (feeding Field AND Color, say) is emitted into both Fns
  * — separate function scopes, same var name. On a code-panel Apply that parses
  * back as two nodes; accepted for v1.
+ *
+ * The SPLAT OUTPUT (`splatOutput`) is the second custom sink and the same
+ * mechanism over a different set of roots: its four Fns — shade (Color,
+ * Opacity), shape (Move, Cut), size and feather — are called ONCE PER SPLAT by loader
+ * 0.8's vertex wrapper with `(p, pw, n, c)`: the splat's object-space centre,
+ * that centre in world space, the direction from it toward the camera (a splat
+ * has no normal) and the splat's own colour. A spec is therefore a
+ * `ScopeSpec`: the SOCKETS whose feeders it evaluates and the PARAMETERS (each
+ * standing in for a set of root types) its Fn takes. The march's specs are the
+ * one-socket, one-parameter case, and emit exactly what they did.
  */
 import type { AppNode, AppEdge } from '@/types';
+// `getNodeValues` lives in types/node.types.ts, which imports nothing at run
+// time; wireframeMode.ts imports nothing at all. Both keep this a leaf.
+import { getNodeValues } from '@/types';
+import { isWireframeEdges } from './wireframeMode';
 // Both LEAVES. This module is itself a leaf that `nodeCost` — and through it
 // the store — imports, so it must never reach into the store-coupled utils
 // graph (utils/outputMaterials.ts -> exposedPorts -> edgeUtils -> useAppStore):
@@ -34,44 +48,294 @@ import { emitRank, isGltfMaterialIndex } from '@/engine/materialPartsContract';
 import { isUsableMeshName } from './meshInventory';
 
 export const MARCH_OUTPUT_TYPE = 'raymarchOutput';
+export const SPLAT_OUTPUT_TYPE = 'splatOutput';
 
 /** Registry types the POSITION parameter substitutes for. Object space only. */
 export const MARCH_ROOT_TYPES: ReadonlySet<string> = new Set(['positionLocal', 'positionGeometry']);
 /** Registry types the DIRECTION parameter substitutes for (world space). */
 export const DIR_ROOT_TYPES: ReadonlySet<string> = new Set(['rayDirection']);
 
-/** What each per-step socket is a function OF. */
-export interface MarchScopeSpec {
-  handle: string;
-  /** The Fn parameter name and the roots it stands in for. */
-  param: 'p' | 'dir';
+/** One Fn parameter and the root types it stands in for. */
+export interface ScopeParam {
+  name: string;
   roots: ReadonlySet<string>;
 }
 
+/**
+ * A root that is NOT a parameter but must not be read where the Fn runs
+ * either: inside the scope it is bound to a fixed expression. Only the splat
+ * has any (see `SPLAT_CONSTANTS`).
+ */
+export interface ScopeConstant {
+  /** The emitted binding, verbatim: `const uv1 = <expr>;`. */
+  expr: string;
+  /** The three/tsl names `expr` calls. */
+  imports: readonly string[];
+  roots: ReadonlySet<string>;
+}
+
+/**
+ * What a scope Fn is a function OF. `handle` is the scope's key — the socket
+ * itself for the march, the Fn's role (`shade` / `shape` / `size` / `feather`) for the
+ * splat; `sockets` are the sink sockets whose feeders it evaluates; `params`
+ * are its Fn parameters in signature order.
+ */
+export interface ScopeSpec {
+  handle: string;
+  sockets: readonly string[];
+  params: readonly ScopeParam[];
+  constants?: readonly ScopeConstant[];
+  /**
+   * A node that reads one of this scope's roots IMPLICITLY — through an input
+   * it leaves unwired, whose default is a geometry read (`implicitRootOf`) —
+   * belongs to the scope as if that root were wired in, and is emitted there
+   * with the default bound to the same parameter or constant. Only the splat
+   * sets it: its Fns run in a VERTEX stage where the geometry is the quad
+   * corner. The march leaves it unset, so its partition and emission are
+   * exactly what they were.
+   */
+  implicitRoots?: true;
+}
+
+const MARCH_POSITION: readonly ScopeParam[] = [{ name: 'p', roots: MARCH_ROOT_TYPES }];
+const MARCH_DIRECTION: readonly ScopeParam[] = [{ name: 'dir', roots: DIR_ROOT_TYPES }];
+
 /** The per-step sockets, in emission order. */
-export const MARCH_SCOPES: readonly MarchScopeSpec[] = [
-  { handle: 'field', param: 'p', roots: MARCH_ROOT_TYPES },
-  { handle: 'density', param: 'p', roots: MARCH_ROOT_TYPES },
-  { handle: 'color', param: 'p', roots: MARCH_ROOT_TYPES },
-  { handle: 'emissive', param: 'p', roots: MARCH_ROOT_TYPES },
-  { handle: 'glow', param: 'p', roots: MARCH_ROOT_TYPES },
-  { handle: 'background', param: 'dir', roots: DIR_ROOT_TYPES },
+export const MARCH_SCOPES: readonly ScopeSpec[] = [
+  { handle: 'field', sockets: ['field'], params: MARCH_POSITION },
+  { handle: 'density', sockets: ['density'], params: MARCH_POSITION },
+  { handle: 'color', sockets: ['color'], params: MARCH_POSITION },
+  { handle: 'emissive', sockets: ['emissive'], params: MARCH_POSITION },
+  { handle: 'glow', sockets: ['glow'], params: MARCH_POSITION },
+  { handle: 'background', sockets: ['background'], params: MARCH_DIRECTION },
 ];
 
 /** The node DRIVES the shader when either march socket is wired. */
 export const MARCH_PRIMARY_SOCKETS: readonly string[] = ['field', 'density'];
 
+/**
+ * The splat Fns' parameters, in the order loader 0.8 passes them: `p` the
+ * splat's object-space centre, `pw` that centre in world space, `n` the
+ * direction from it toward the camera — a splat has no normal, so both normal
+ * nodes read the direction it faces — and `c` the splat's own colour (a vec4:
+ * rgb, and alpha after the file's opacity), which the Vertex Color node stands
+ * for.
+ */
+export const SPLAT_PARAMS: readonly ScopeParam[] = [
+  { name: 'p', roots: new Set(['positionLocal', 'positionGeometry']) },
+  { name: 'pw', roots: new Set(['positionWorld']) },
+  { name: 'n', roots: new Set(['normalLocal', 'normalWorld']) },
+  { name: 'c', roots: new Set(['vertexColor']) },
+];
+
+/** The splat Fns' parameter list as emitted: `Fn(([p, pw, n, c]) => …)`. */
+export const SPLAT_FN_PARAMS: readonly string[] = SPLAT_PARAMS.map((p) => p.name);
+
+/**
+ * Sources that would make a value differ between the four CORNERS of one
+ * splat's quad inside the vertex stage — the quad has no UV attribute, a
+ * screen coordinate there is a fragment-only builtin that does not compile,
+ * and every position-derived reading is taken at the corner. Inside a splat
+ * scope they are bound to the splat's centre instead, so every value the Fns
+ * return stays a per-SPLAT value (a per-corner Move or Cut would tear the
+ * quad apart).
+ */
+export const SPLAT_CONSTANTS: readonly ScopeConstant[] = [
+  { expr: 'vec2(0.5)', imports: ['vec2'], roots: new Set(['uv', 'screenUV']) },
+  // The view- and world-space readings three derives from `positionLocal` —
+  // which in this vertex stage is the quad CORNER too — restated over the
+  // centre: `setupPositionView` is `modelViewMatrix.mul(positionLocal).xyz`,
+  // the view direction its negation normalised, the world direction
+  // `positionLocal.transformDirection(modelWorldMatrix)`, and the Ray
+  // Direction helper's `normalize(positionWorld − cameraPosition)` is exactly
+  // `−n`.
+  { expr: 'modelViewMatrix.mul(vec4(p, 1)).xyz', imports: ['modelViewMatrix', 'vec4'], roots: new Set(['positionView']) },
+  {
+    expr: 'modelViewMatrix.mul(vec4(p, 1)).xyz.negate().normalize()',
+    imports: ['modelViewMatrix', 'vec4'],
+    roots: new Set(['positionViewDirection']),
+  },
+  { expr: 'p.transformDirection(modelWorldMatrix)', imports: ['modelWorldMatrix'], roots: new Set(['positionWorldDirection']) },
+  { expr: 'n.negate()', imports: [], roots: new Set(['rayDirection']) },
+];
+
+/**
+ * The splat's four Fns, in emission order. Feather is a scope like Size: the
+ * loader reads it per VERTEX (its cut test and fade run in the wrapper), so a
+ * Feather that depends on the splat must be a Fn of the splat's own centre —
+ * a flat node would be read at each quad CORNER and tear the quad.
+ */
+export const SPLAT_SCOPES: readonly ScopeSpec[] = [
+  { handle: 'shade', sockets: ['color', 'opacity'], params: SPLAT_PARAMS, constants: SPLAT_CONSTANTS, implicitRoots: true },
+  { handle: 'shape', sockets: ['move', 'cut'], params: SPLAT_PARAMS, constants: SPLAT_CONSTANTS, implicitRoots: true },
+  { handle: 'size', sockets: ['size'], params: SPLAT_PARAMS, constants: SPLAT_CONSTANTS, implicitRoots: true },
+  { handle: 'feather', sockets: ['feather'], params: SPLAT_PARAMS, constants: SPLAT_CONSTANTS, implicitRoots: true },
+];
+
+/**
+ * The noise family — every registry def in the `noise` category
+ * (sdfPartition.test.ts pins the two lists against each other). Its position
+ * is an exposed PARAMETER, `pos`, whose unwired default is not a number but a
+ * stored IDENTIFIER: `positionGeometry`, or whatever bare global a pasted
+ * shader named (codeToGraph stores `posArg.name`).
+ */
+export const NOISE_TYPES: ReadonlySet<string> = new Set([
+  'perlin', 'perlinVec3', 'fbm', 'fbmVec3', 'cellNoise', 'voronoi', 'voronoiVec2', 'voronoiVec3',
+]);
+
+/** The noise family's registry default for `pos`. */
+export const NOISE_POS_DEFAULT = 'positionGeometry';
+
+/**
+ * A bare JS identifier — the only NON-NUMERIC shape allowed to reach the
+ * emitted module out of stored `values` (the noise `pos` key). Deliberately
+ * shape-based rather than a membership whitelist: codeToGraph stores whatever
+ * variable name a pasted shader used for a noise position
+ * (`extractedValues.pos = posArg.name`), so a membership test would silently
+ * rewrite those graphs. The SHAPE is what makes it safe — it can hold no `(`,
+ * `)`, `;` or quote, so the worst it can produce is the bare reference the old
+ * `String()` already produced (a ReferenceError at load). Moved here from
+ * graphToCode.ts with `noisePosIdentifier`, its one reader.
+ */
+const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+/**
+ * The identifier an UNWIRED noise `pos` emits, from its stored value (already
+ * through `getNodeValues`, so it coerces without throwing): the value itself
+ * when it is a bare identifier, else the registry default. THE one rule —
+ * graphToCode's `resolveExposedParam` calls it for the flat text and
+ * `implicitRootOf` for the partition, so the two cannot disagree about which
+ * root a noise reads.
+ */
+export function noisePosIdentifier(raw: unknown): string {
+  const s = String(raw ?? NOISE_POS_DEFAULT);
+  return IDENTIFIER_RE.test(s) ? s : NOISE_POS_DEFAULT;
+}
+
+/**
+ * THE IMPLICIT READS — the root type a node reads from the GEOMETRY through an
+ * input it leaves unwired, or null. `wired(handle)` answers whether that input
+ * has a wire.
+ *
+ * An unwired input normally emits a NUMBER (resolveArguments: the stored value,
+ * the registry default, the chain identity), and a number is the same in every
+ * stage. A handful emit a geometry read instead — and inside a Splat Output's
+ * Fns, which run in the splat renderer's VERTEX stage, the geometry is the
+ * instanced QUAD: `positionGeometry` is its corner (±2, the same for every
+ * splat and different per corner) and `uv()` does not exist. Such a read makes
+ * a Cut or Move different at the four corners of ONE splat — the collapse is
+ * per vertex, so the quad tears — and a noise on Color the same for every
+ * splat. The complete list, enumerated from the registry and graphToCode's
+ * emitter branches (resolveArguments and numericParam never read geometry):
+ *
+ *   noise family (8)  `pos`     → its stored identifier (`positionGeometry`)
+ *   imageNode         `uv`      → `uv()` / `uv(n)`, unless Direction is wired
+ *   colormap, dataRange, isolines  `value` → `uv().x`
+ *   dataviz           `signal`  → samples at `uv()` (a traced Data column is
+ *                                 an edge from the Data node, itself below)
+ *   stripes, dataNode, wireframe (grid)   always sample at `uv()`
+ *
+ * A scope with `implicitRoots` binds the returned type like a wired root
+ * (`bindingOfRoot`): `p` for a position, `pw`, `n`, and the per-splat
+ * `vec2(0.5)` for a uv. A type the scope does not bind — a pasted
+ * `cameraPosition`, the edges wireframe's `bary` attribute — is no implicit
+ * root, and the node stays where its wires put it.
+ *
+ * Root nodes themselves (Local Position, UV, …) are not here: they ARE roots.
+ */
+export function implicitRootOf(node: AppNode, wired: (handle: string) => boolean): string | null {
+  const type = node.data.registryType;
+  if (NOISE_TYPES.has(type)) return wired('pos') ? null : noisePosIdentifier(getNodeValues(node).pos);
+  switch (type) {
+    case 'imageNode':
+      return wired('uv') || wired('dir') ? null : 'uv';
+    case 'colormap':
+    case 'dataRange':
+    case 'isolines':
+      return wired('value') ? null : 'uv';
+    case 'dataviz':
+      return wired('signal') ? null : 'uv';
+    case 'stripes':
+    case 'dataNode':
+      return 'uv';
+    case 'wireframe':
+      return isWireframeEdges(getNodeValues(node)) ? null : 'uv';
+    default:
+      return null;
+  }
+}
+
+/**
+ * The stored identifier a splat binding parses back to, when it stands where a
+ * noise's `pos` would be — the inverse codeToGraph needs so that
+ * `mx_noise_float(p)` inside a splat Fn is an UNWIRED position again rather
+ * than a stored `p` (which would re-emit a bare `p` outside the Fn: a
+ * ReferenceError at load). The registry default where the binding covers it,
+ * else the one bare-global root it stands for; null for anything that is not
+ * one of the scope's bindings.
+ */
+export function implicitIdentifierOf(spec: ScopeSpec, expr: string): string | null {
+  const pick = (roots: ReadonlySet<string>): string =>
+    roots.has(NOISE_POS_DEFAULT) ? NOISE_POS_DEFAULT : roots.has('screenUV') ? 'screenUV' : [...roots][0];
+  for (const p of spec.params) if (p.name === expr) return pick(p.roots);
+  for (const c of spec.constants ?? []) if (c.expr === expr) return pick(c.roots);
+  return null;
+}
+
+/** A Splat Output with any of these wired drives an unflagged document. */
+export const SPLAT_PRIMARY_SOCKETS: readonly string[] = ['color', 'opacity', 'cut', 'move', 'size'];
+
+/** Every root type a spec binds — its parameters' and its constants'. */
+export function scopeRootTypes(spec: ScopeSpec): Set<string> {
+  const out = new Set<string>();
+  for (const p of spec.params) for (const r of p.roots) out.add(r);
+  for (const c of spec.constants ?? []) for (const r of c.roots) out.add(r);
+  return out;
+}
+
+/** The Fn parameter a root type is bound to inside this scope, or null. */
+export function paramOfRoot(spec: ScopeSpec, type: string): string | null {
+  for (const p of spec.params) if (p.roots.has(type)) return p.name;
+  return null;
+}
+
+/**
+ * What a root node is bound to inside this scope — its parameter, else its
+ * constant — or null when the type is not one of the scope's roots. The
+ * emitter writes `const <var> = <expr>;` and adds `imports`.
+ */
+export function bindingOfRoot(spec: ScopeSpec, type: string): { expr: string; imports: readonly string[] } | null {
+  const param = paramOfRoot(spec, type);
+  if (param !== null) return { expr: param, imports: [] };
+  for (const c of spec.constants ?? []) if (c.roots.has(type)) return { expr: c.expr, imports: c.imports };
+  return null;
+}
+
 export function isMarchOutput(node: AppNode): boolean {
   return node.data.registryType === MARCH_OUTPUT_TYPE;
+}
+
+export function isSplatOutput(node: AppNode): boolean {
+  return node.data.registryType === SPLAT_OUTPUT_TYPE;
+}
+
+/**
+ * A sink that emits its OWN program instead of the plain Output's material
+ * channels — the Raymarch Output or the Splat Output. While one is the active
+ * sink every plain Output is silenced.
+ */
+export function isCustomSink(node: AppNode): boolean {
+  return isMarchOutput(node) || isSplatOutput(node);
 }
 
 /** The node-data key that marks the ACTIVE sink. Absent everywhere on a
  *  document that never had a choice made — see `activeSink`. */
 export const ACTIVE_OUTPUT_KEY = 'activeOutput';
 
-/** An output-type node of EITHER kind: the plain Output or a Raymarch Output. */
+/** An output-type node of ANY kind: the plain Output, a Raymarch Output or a
+ *  Splat Output. */
 export function isSinkNode(node: AppNode): boolean {
-  return node.data.registryType === 'output' || isMarchOutput(node);
+  return node.data.registryType === 'output' || isCustomSink(node);
 }
 
 /** The active flag, read strictly: only the literal `true` counts. Node data
@@ -112,16 +376,20 @@ export function isUntargetedOutput(node: AppNode): boolean {
 }
 
 /**
- * The first Raymarch Output whose Field or Density is WIRED — the rule every
- * surface followed before a sink could be chosen by hand, kept as the
- * FALLBACK for a document that carries no active flag. Pass UNWRAPPED edges
- * (unwrapCollapsedGroupEdges): a feeder inside a collapsed group must still
- * count as wired.
+ * The first custom sink, in array order, with a PRIMARY socket wired — a
+ * Raymarch Output's Field or Density, any of a Splat Output's Color, Opacity,
+ * Cut, Move or Size. It was the rule every surface followed before a sink
+ * could be chosen by hand, and is kept as the FALLBACK for a document that
+ * carries no active flag (no document before the Splat Output could hold one,
+ * so for every older graph this is exactly the old first-wired-march rule).
+ * Pass UNWRAPPED edges (unwrapCollapsedGroupEdges): a feeder inside a
+ * collapsed group must still count as wired.
  */
-function firstWiredMarchOutput(nodes: readonly AppNode[], edges: readonly AppEdge[]): AppNode | null {
+function firstWiredCustomSink(nodes: readonly AppNode[], edges: readonly AppEdge[]): AppNode | null {
   for (const n of nodes) {
-    if (!isMarchOutput(n)) continue;
-    if (edges.some((e) => e.target === n.id && MARCH_PRIMARY_SOCKETS.includes(e.targetHandle ?? ''))) return n;
+    if (!isCustomSink(n)) continue;
+    const primary = isMarchOutput(n) ? MARCH_PRIMARY_SOCKETS : SPLAT_PRIMARY_SOCKETS;
+    if (edges.some((e) => e.target === n.id && primary.includes(e.targetHandle ?? ''))) return n;
   }
   return null;
 }
@@ -131,12 +399,13 @@ function firstWiredMarchOutput(nodes: readonly AppNode[], edges: readonly AppEdg
  * preview's wire and window, the cost total, the Uniforms overlay, the export
  * and the A-Frame page all follow it, so it is resolved in exactly one place.
  *
- * Several output nodes (any mix of Output and Raymarch Output) may coexist;
- * the user picks one by clicking its preview socket, which writes
+ * Several output nodes (any mix of Output, Raymarch Output and Splat Output)
+ * may coexist; the user picks one by clicking its preview socket, which writes
  * `data.activeOutput = true` on that node and clears it on every other sink
  * (`setActiveOutput`). A document that has never had a choice made carries NO
- * flag, and then the historical rule decides: the first WIRED Raymarch Output,
- * else the LOWEST-RANKED untargeted plain Output (`lowestRankedUntargeted`).
+ * flag, and then the historical rule decides: the first WIRED custom sink
+ * (`firstWiredCustomSink`), else the LOWEST-RANKED untargeted plain Output
+ * (`lowestRankedUntargeted`).
  * That absent-key default is what keeps every saved graph, every built-in and
  * every exported `.js` emitting byte-identically — the `materials` /
  * noise-`signed` precedent: a document that has never been split carries no
@@ -182,10 +451,10 @@ function firstWiredMarchOutput(nodes: readonly AppNode[], edges: readonly AppEdg
 export function activeSink(nodes: readonly AppNode[], edges: readonly AppEdge[]): AppNode | null {
   for (const n of nodes) {
     if (!isSinkNode(n) || !hasActiveFlag(n)) continue;
-    if (!isMarchOutput(n) && !isUntargetedOutput(n)) continue;
+    if (!isCustomSink(n) && !isUntargetedOutput(n)) continue;
     return n;
   }
-  return firstWiredMarchOutput(nodes, edges)
+  return firstWiredCustomSink(nodes, edges)
     ?? lowestRankedUntargeted(nodes)
     ?? null;
 }
@@ -227,8 +496,9 @@ function lowestRankedUntargeted(nodes: readonly AppNode[]): AppNode | null {
  * every restore path beside `sanitizeOutputMaterials`, on the resync's final
  * list, and after a paste (which strips the flag outright, see NodeEditor).
  *
- * ELIGIBLE is `activeSink`'s own rule: a Raymarch Output, or a plain Output
- * whose own binding is empty. A flag on a TARGETED plain Output is stripped
+ * ELIGIBLE is `activeSink`'s own rule: a custom sink (Raymarch or Splat
+ * Output), or a plain Output whose own binding is empty. A flag on a TARGETED
+ * plain Output is stripped
  * like any other stray — it cannot be honoured (see `activeSink`), and
  * leaving it in data would mean the choice was obeyed in-session and silently
  * reverted by the next restore.
@@ -240,7 +510,7 @@ export function normalizeActiveOutput(nodes: AppNode[]): AppNode[] {
     if (!isSinkNode(n)) return n;
     const data = n.data as Record<string, unknown>;
     if (!(ACTIVE_OUTPUT_KEY in data)) return n;
-    const eligible = isMarchOutput(n) || isUntargetedOutput(n);
+    const eligible = isCustomSink(n) || isUntargetedOutput(n);
     const keep = data[ACTIVE_OUTPUT_KEY] === true && !seen && eligible;
     if (keep) { seen = true; return n; }
     changed = true;
@@ -280,6 +550,28 @@ export function drivingMarchOutput(nodes: readonly AppNode[], edges: readonly Ap
   return s && isMarchOutput(s) ? s : null;
 }
 
+/**
+ * The Splat Output that DRIVES the shader: the ACTIVE sink when it is a Splat
+ * Output, else null — `drivingMarchOutput`'s twin, with the same rules (a
+ * flagged one drives with nothing wired and then emits the identity program
+ * `return { splat: {} };`). Pass UNWRAPPED edges.
+ */
+export function drivingSplatOutput(nodes: readonly AppNode[], edges: readonly AppEdge[]): AppNode | null {
+  const s = activeSink(nodes, edges);
+  return s && isSplatOutput(s) ? s : null;
+}
+
+/**
+ * The custom sink — Raymarch or Splat Output — that DRIVES the shader, else
+ * null. Every surface that asks "is the module a plain material, or a program
+ * of its own" (the Output suppression in emission, the cost seeds, the
+ * Uniforms scope, the preview's wire) asks THIS. Pass UNWRAPPED edges.
+ */
+export function drivingCustomSink(nodes: readonly AppNode[], edges: readonly AppEdge[]): AppNode | null {
+  const s = activeSink(nodes, edges);
+  return s && isCustomSink(s) ? s : null;
+}
+
 /** The driving node's Window radius (the preview sphere), or null when nothing drives. */
 export function marchWindowRadius(nodes: readonly AppNode[], edges: readonly AppEdge[]): number | null {
   const n = drivingMarchOutput(nodes, edges);
@@ -291,9 +583,11 @@ export function marchWindowRadius(nodes: readonly AppNode[], edges: readonly App
 export interface MarchPartition {
   /** Per-step sets keyed by socket handle (roots included). */
   scopes: ReadonlyMap<string, ReadonlySet<string>>;
-  /** Nodes that must ALSO be emitted in the flat body: roots, and set members
-   *  with a consumer outside every set (a dangling branch would otherwise
-   *  reference a name that only exists inside a Fn). */
+  /** Nodes that must ALSO be emitted in the flat body: roots, set members
+   *  with a consumer outside every set — another node, or a sink socket no
+   *  scope declaring them reads (a dangling branch would otherwise reference
+   *  a name that only exists inside a Fn) — and every set member one of
+   *  THOSE reads, transitively (a flat line names its inputs). */
   mainAlso: ReadonlySet<string>;
 }
 
@@ -309,28 +603,65 @@ function closure(seed: Iterable<string>, next: (id: string) => readonly string[]
   return out;
 }
 
+/**
+ * Partition the graph for the custom sink `sinkId`: per spec, the nodes that
+ * depend on one of its roots AND feed one of its sockets. Named for the march
+ * it was written for; the Splat Output runs the same function over
+ * `SPLAT_SCOPES`, whose `implicitRoots` also count a node that reads a root
+ * through an UNWIRED input (`implicitRootOf`) as depending on it. Such a node
+ * is an ordinary member, not a root: it is kept in the flat body only when
+ * something outside every scope consumes it, directly or through a flat copy
+ * of a member it feeds.
+ */
 export function marchPartition(
   nodes: readonly AppNode[],
   edges: readonly AppEdge[],
   sinkId: string,
-  specs: readonly MarchScopeSpec[] = MARCH_SCOPES,
+  specs: readonly ScopeSpec[] = MARCH_SCOPES,
 ): MarchPartition {
   const outgoing = new Map<string, string[]>();
   const incoming = new Map<string, string[]>();
+  /** source → the sink sockets it feeds directly. */
+  const intoSink = new Map<string, string[]>();
   for (const e of edges) {
     (outgoing.get(e.source) ?? outgoing.set(e.source, []).get(e.source)!).push(e.target);
     (incoming.get(e.target) ?? incoming.set(e.target, []).get(e.target)!).push(e.source);
+    if (e.target === sinkId) (intoSink.get(e.source) ?? intoSink.set(e.source, []).get(e.source)!).push(e.targetHandle ?? '');
   }
   const typeOf = new Map(nodes.map((n) => [n.id, n.data.registryType]));
+  // The implicit reads (`implicitRootOf`), asked only when a spec wants them —
+  // never for the march, whose partition this leaves exactly as it was. An
+  // input counts as wired when a wire from a node that EXISTS reaches it (a
+  // dangling edge out of a hand-edited file resolves to nothing in emission
+  // either, and the node then emits its default).
+  const implicitRoot = new Map<string, string>();
+  if (specs.some((s) => s.implicitRoots)) {
+    const wiredHandles = new Map<string, Set<string>>();
+    for (const e of edges) {
+      if (!typeOf.has(e.source)) continue;
+      (wiredHandles.get(e.target) ?? wiredHandles.set(e.target, new Set()).get(e.target)!).add(e.targetHandle ?? '');
+    }
+    for (const n of nodes) {
+      const handles = wiredHandles.get(n.id);
+      const root = implicitRootOf(n, (h) => handles?.has(h) ?? false);
+      if (root !== null) implicitRoot.set(n.id, root);
+    }
+  }
   const scopes = new Map<string, Set<string>>();
   for (const spec of specs) {
-    const roots = nodes.filter((n) => spec.roots.has(n.data.registryType)).map((n) => n.id);
+    const rootTypes = scopeRootTypes(spec);
+    const roots = nodes
+      .filter((n) => rootTypes.has(n.data.registryType) || (spec.implicitRoots === true && rootTypes.has(implicitRoot.get(n.id) ?? '')))
+      .map((n) => n.id);
     const dep = closure(roots, (id) => outgoing.get(id) ?? []);
     dep.delete(sinkId);
-    const feeders = edges.filter((e) => e.target === sinkId && e.targetHandle === spec.handle).map((e) => e.source);
+    const feeders = edges.filter((e) => e.target === sinkId && spec.sockets.includes(e.targetHandle ?? '')).map((e) => e.source);
     const anc = closure(feeders, (id) => incoming.get(id) ?? []);
     scopes.set(spec.handle, new Set([...anc].filter((id) => dep.has(id))));
   }
+  /** Is a direct wire from `id` into the sink's `socket` read INSIDE a scope that declares `id`? */
+  const readInScope = (id: string, socket: string): boolean =>
+    specs.some((sp) => sp.sockets.includes(socket) && scopes.get(sp.handle)!.has(id));
   // One union of every scope's members, built once. `inAny` is asked per
   // OUTGOING EDGE of every scope member in the nested loop below, and spreading
   // `scopes.values()` inside it allocated a fresh array on each of those
@@ -339,13 +670,40 @@ export function marchPartition(
   const inAnySet = new Set<string>();
   for (const s of scopes.values()) for (const id of s) inAnySet.add(id);
   const inAny = (id: string): boolean => inAnySet.has(id);
-  const allRoots = new Set([...specs.flatMap((s) => [...s.roots])]);
+  const allRoots = new Set(specs.flatMap((s) => [...scopeRootTypes(s)]));
   const mainAlso = new Set<string>();
   for (const set of scopes.values()) {
     for (const id of set) {
       if (allRoots.has(typeOf.get(id) ?? '')) { mainAlso.add(id); continue; }
+      if (mainAlso.has(id)) continue;
+      let flat = false;
       for (const t of outgoing.get(id) ?? []) {
-        if (t !== sinkId && !inAny(t)) { mainAlso.add(id); break; }
+        if (t !== sinkId && !inAny(t)) { flat = true; break; }
+      }
+      // A wire into a sink socket that NO scope declaring this node reads — a
+      // march's numbers, or a Background whose scope is over a different
+      // root — is read in the flat body (or the IIFE), where a name declared
+      // only inside a Fn does not exist.
+      if (!flat) flat = (intoSink.get(id) ?? []).some((socket) => !readInScope(id, socket));
+      if (flat) mainAlso.add(id);
+    }
+  }
+  // A flat copy brings its in-scope ANCESTORS with it. Its line reads its
+  // inputs by name, and an input that is a scope member but not itself flat is
+  // declared only inside a Fn — a ReferenceError the moment the module runs,
+  // which fails the whole shader. Roots are always flat, so this bites a
+  // member one level above an implicit-root noise (`remap(noise1, …)`) or two
+  // above a real root (`mul(length1, 1)`). The copies are valid where they
+  // land: an implicit read keeps today's text outside a splat Fn, and the
+  // plan still walks `sorted`, so the emission order is unchanged. An input in
+  // no scope is flat already, and its own in-scope inputs were added above.
+  const pending = [...mainAlso];
+  while (pending.length) {
+    const id = pending.pop()!;
+    for (const src of incoming.get(id) ?? []) {
+      if (inAnySet.has(src) && !mainAlso.has(src)) {
+        mainAlso.add(src);
+        pending.push(src);
       }
     }
   }

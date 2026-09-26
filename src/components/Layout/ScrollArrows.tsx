@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState, type RefObject } from 'react';
+import { useAppStore } from '@/store/useAppStore';
+import { t } from '@/i18n';
 
 /**
  * The ONE horizontal "there is more this way" control, shared by the asset
@@ -94,6 +96,7 @@ export function ScrollArrow({
   invert?: boolean;
   className?: string;
 }) {
+  const language = useAppStore((s) => s.language);
   return (
     <button
       type="button"
@@ -103,7 +106,7 @@ export function ScrollArrow({
         (className ? ` ${className}` : '')
       }
       onClick={onClick}
-      aria-label={`Scroll ${direction}`}
+      aria-label={t(direction === 'left' ? 'Scroll left' : 'Scroll right', language)}
     >
       {direction === 'left' ? '‹' : '›'}
     </button>

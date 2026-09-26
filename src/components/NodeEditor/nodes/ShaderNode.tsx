@@ -14,6 +14,7 @@ import { nodeCostPoints } from '@/utils/nodeCost';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { NodeTitle } from './NodeTitle';
+import { useHeaderTip } from './headerTip';
 // Imported BEFORE './ShaderNode.css' so the bundler emits PaletteColorPicker.css
 // first: `.shader-node__input-color` and `.palette-swatch` have equal
 // specificity, and the on-node size must win. (The size override below is also
@@ -605,6 +606,7 @@ export const ShaderNode = memo(function ShaderNode({
       ? valueStr(data.values.name)
       : varName ?? data.label;
   const language = useAppStore((s) => s.language);
+  const headerTip = useHeaderTip(def);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   // The header mixes into the card, and the card follows the theme
@@ -1037,8 +1039,8 @@ export const ShaderNode = memo(function ShaderNode({
         >
         {cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>}
 
-        <div className="node-base__header" style={headerStyle}>
-          <NodeTitle text={headerText} style={{ color: headerTextColor }} />
+        <div className="node-base__header" style={headerStyle} {...headerTip}>
+          <NodeTitle text={headerText} style={{ color: headerTextColor }} bare={headerTip !== null} />
         </div>
 
         <div className="shader-node__op" style={{ height: BODY_H, ...(box.width ? { minWidth: 0 } : null) }}>
@@ -1154,8 +1156,8 @@ export const ShaderNode = memo(function ShaderNode({
       {cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>}
 
       {/* Header — colored by performance impact (cost) */}
-      <div className="node-base__header" style={headerStyle}>
-        <NodeTitle text={headerText} style={{ color: headerTextColor }} />
+      <div className="node-base__header" style={headerStyle} {...headerTip}>
+        <NodeTitle text={headerText} style={{ color: headerTextColor }} bare={headerTip !== null} />
       </div>
 
       {/* Data node: source filename under the header (wraps if long).

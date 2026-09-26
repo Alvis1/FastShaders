@@ -1,6 +1,7 @@
 import { t } from '@/i18n';
 import type { Language } from '@/i18n';
-import { fillMeshRefusal, modelTooLargeRefusal, type MeshRefusal } from './previewMesh';
+import { fillMeshRefusal, formatSplatCount, modelTooLargeRefusal, type MeshRefusal, type SplatFacts } from './previewMesh';
+import { SPLAT_HEADSET_ADVISORY_COUNT } from './splatLimits';
 import type { GltfImageStatus, GltfReadRefusal, GltfReadRefusalReason } from './gltfReader';
 import { fillTemplate } from './fillTemplate';
 import { formatMiB } from './formatSize';
@@ -27,6 +28,48 @@ export const MESH_KTX2_MISSING_KEY = "Some of this model's KTX2 textures could n
 
 /** Shown when saving the model on screen to the IndexedDB cache hit the quota. */
 export const MESH_CACHE_FULL_KEY = 'This 3D model will not be restored after a reload — browser storage is full.';
+
+/**
+ * Shown (as an info line) when a loaded splat declares more splats than
+ * SPLAT_HEADSET_ADVISORY_COUNT. An ADVISORY, never a refusal: the desktop
+ * preview renders it, and the hard cap is SPLAT_MAX_COUNT. `{count}` and
+ * `{advisory}` are grouped whole numbers.
+ */
+export const MESH_SPLAT_HEADSET_KEY =
+  'This scene has {count} splats. Above {advisory}, a standalone VR headset may not keep a smooth frame rate.';
+
+/**
+ * Shown (as an info line) when the sandbox dropped a splat's spherical-harmonic
+ * bands (its `shDropped`, 1–3): only degree 0 is rendered, so the colour no
+ * longer changes with the viewing angle.
+ */
+export const MESH_SPLAT_SH_DROPPED_KEY =
+  "This scene's view-dependent colour (spherical harmonics, degree {degree}) is not shown — FastShaders draws each splat's base colour.";
+
+/**
+ * The headset advisory for a loaded splat, in `lang` — or null when there is
+ * nothing to say (no facts, an unknown count, or a count at or under the
+ * advisory). The count is the one the file DECLARES (`PreviewMesh.splat`);
+ * the sandbox's count, once it reports, may be passed as `{ count }` instead.
+ */
+export function splatHeadsetMessage(facts: Pick<SplatFacts, 'count'> | null | undefined, lang: Language): string | null {
+  const count = facts?.count;
+  if (typeof count !== 'number' || !Number.isSafeInteger(count) || count <= SPLAT_HEADSET_ADVISORY_COUNT) return null;
+  return fillTemplate(t(MESH_SPLAT_HEADSET_KEY, lang), {
+    count: formatSplatCount(count, lang),
+    advisory: formatSplatCount(SPLAT_HEADSET_ADVISORY_COUNT, lang),
+  });
+}
+
+/**
+ * The dropped-SH info line for a degree the sandbox reported, in `lang` — or
+ * null for 0 (nothing was dropped) and for anything that is not 1, 2 or 3 (a
+ * forgeable number is never printed).
+ */
+export function splatShDroppedMessage(degree: unknown, lang: Language): string | null {
+  if (degree !== 1 && degree !== 2 && degree !== 3) return null;
+  return fillTemplate(t(MESH_SPLAT_SH_DROPPED_KEY, lang), { degree });
+}
 
 /**
  * Shown in the preview's overlay when the decoder a compressed model needs

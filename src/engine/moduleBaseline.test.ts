@@ -134,6 +134,33 @@ function cases(): Record<string, Graph> {
   };
 }
 
+/**
+ * The Splat Output's module — pinned as its OWN snapshot entry rather than a
+ * key of `cases()`, so adding it wrote one new entry and moved no existing one
+ * (a corpus key would have needed a `-u` of the whole object). Cut by a
+ * distance field, tinted by a stored swatch, faded by world position, with a
+ * stored Size, Feather and Invert: every key of `splat: { … }` at once.
+ */
+function splatCase(): Graph {
+  const sp = makeNode('sp', 'splatOutput');
+  (sp.data as Record<string, unknown>).values = { color: '#2d6cdf', size: 1.5, feather: 0.1, invert: true };
+  return {
+    nodes: [
+      makeNode('pos', 'positionLocal'),
+      makeNode('sd', 'sdCircle'),
+      makeNode('pw', 'positionWorld'),
+      makeNode('len', 'length'),
+      sp,
+    ],
+    edges: [
+      makeEdge('pos', 'out', 'sd', 'p'),
+      makeEdge('sd', 'out', 'sp', 'cut'),
+      makeEdge('pw', 'out', 'len', 'v'),
+      makeEdge('len', 'out', 'sp', 'opacity'),
+    ],
+  };
+}
+
 /** `buildShaderBundle`'s module step, fed a graph instead of the store. */
 function exportModule({ nodes, edges }: Graph): string {
   const output = findDefaultOutput(nodes);
@@ -161,6 +188,17 @@ describe('the exported shaderloader module is byte-stable', () => {
 
   it('module corpus', () => {
     expect(emitAll()).toMatchSnapshot();
+  });
+
+  it('the Splat Output module (its own entry — see `splatCase`)', () => {
+    const m = exportModule(splatCase());
+    expect(() => parse(m, { sourceType: 'module' })).not.toThrow();
+    expect(m).toContain('  return { splat: { shade: sp1Shade, shape: sp1Shape, size: 1.5, feather: 0.1, invert: true } };');
+    expect(m).not.toContain('__pixel');
+    expect(m).not.toContain('Discard');
+    expect(m).not.toMatch(/\bside: 2\b/); // not a march: no forced double side
+    expect(m).toContain('a-frame-shaderloader-0.8');
+    expect(m).toMatchSnapshot();
   });
 
   it('covers every case, so one cannot be dropped with a `-u`', () => {

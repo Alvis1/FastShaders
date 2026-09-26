@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
+import { t } from '@/i18n';
 import { graphToCode } from '@/engine/graphToCode';
 import { onUnknownExpressionValidated, loadUnknownExpressionValidator } from '@/engine/unknownExpression';
 // NB codeToGraph is deliberately NOT imported here — see doCodeSync, which
@@ -233,7 +234,7 @@ export function useSyncEngine() {
         } catch {
           setCodeErrors([
             {
-              message: 'The TSL parser could not be loaded — reload the app and apply again.',
+              message: t('The TSL parser could not be loaded — reload the app and apply again.', useAppStore.getState().language),
               severity: 'error',
             },
           ]);

@@ -160,7 +160,7 @@
    Offset Y …) — was RETIRED on 2026-09-19 with the rows it sat in. No node
    draws text beside an INPUT socket: a socket names itself through its own
    tooltip, on hover, on a touch tap, or pinned by a double-click on the node
-   (`.fs-labels-shown`, TypedHandle.css), which is one label in one place
+   (`[data-fs-labels-shown]`, TypedHandle.css), which is one label in one place
    whatever showed it. Do not reintroduce the class — an on-card name is a
    SECOND placement for the same string, which is the thing that rule exists
    to prevent. */

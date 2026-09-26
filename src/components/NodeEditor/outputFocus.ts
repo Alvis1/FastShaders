@@ -1,6 +1,6 @@
 import type { FitViewOptions } from '@xyflow/react';
 import type { AppEdge, AppNode } from '@/types';
-import { activeSink, MARCH_OUTPUT_TYPE } from '@/utils/sdfPartition';
+import { activeSink, isSinkNode } from '@/utils/sdfPartition';
 import { contributingOutputs } from '@/utils/outputMaterials';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { nodeCentre } from './keyboardNav';
@@ -203,9 +203,10 @@ export function costFocusId(nodes: readonly AppNode[], edges: readonly AppEdge[]
  * decision D4, 2026-09-18: "when clicked on the top point counter — the view
  * focus cycles through output nodes").
  *
- * WHICH NODES. Plain Outputs AND Raymarch Outputs, i.e. every node the cost
- * pill's own single-press target can be. `costFocusId` resolves to
- * `activeSink`, which returns a Raymarch Output whenever one drives — so a
+ * WHICH NODES. Plain Outputs, Raymarch Outputs AND Splat Outputs —
+ * `isSinkNode`, i.e. every node the cost pill's own single-press target can
+ * be. `costFocusId` resolves to `activeSink`, which returns a Raymarch or
+ * Splat Output whenever one drives — so a
  * cycle over plain Outputs alone could not contain its own starting point, and
  * the second press would jump out of the set the first press was in. The
  * shared badge rule says the same thing from the other side: `sinkCosts` gives
@@ -235,7 +236,7 @@ export function costFocusId(nodes: readonly AppNode[], edges: readonly AppEdge[]
 export function outputCycleOrder(nodes: readonly AppNode[]): AppNode[] {
   const all = nodes as AppNode[];
   return all
-    .filter((n) => n.data.registryType === 'output' || n.data.registryType === MARCH_OUTPUT_TYPE)
+    .filter(isSinkNode)
     .map((n) => ({ n, c: nodeCentre(n, all) }))
     .sort((a, b) => {
       const rowA = Math.round(a.c.y / 24);

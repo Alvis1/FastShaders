@@ -62,6 +62,20 @@
  *     model on its own materials, which is why the tab's label names the
  *     version. The Three.js tab stays on the primitive.
  *
+ *     A GAUSSIAN SPLAT is deliberately NOT a fourth exception. With a splat
+ *     scene in the preview (or a Splat Output driving) this page still hangs
+ *     the module on the sphere every model geometry falls back to, with the
+ *     same two scripts — byte-identical to the page for that module on any
+ *     other model (`primitiveOf` / `isModelGeometry` below, and no `kind` is
+ *     read anywhere here). Describing a splat would add a THIRD
+ *     script (`fs-splat-0.1.js`, after the A-Frame bundle), a `splat-model`
+ *     entity and a model file the page does not have beside it — a whole
+ *     second setup, where this page is the defaults-only one. The splat
+ *     pairing is documented where the scene file actually ships instead: the
+ *     bundle export's README (`meshPairingSnippet` in utils/exportBundle.ts —
+ *     the runtime tag plus `splat-model="src: url(models/<name>); kind: …;
+ *     size: 1.6"`), and dropping that zip into Podest shows it.
+ *
  * The page carries NO script of its own. The VR promise rides rule 3's SECOND
  * deliberate exception instead: `<a-scene renderer="backend: webgl">`. The
  * bundle carries aframevr/aframe#5847's `backend` renderer property (applied

@@ -64,6 +64,16 @@ describe('preview rebuild policy: the cold key', () => {
     expect(documentMemoDeps()).toEqual(['coldDocKey']);
   });
 
+  it('a Gaussian splat adds nothing to it: its kind rides the mesh id, its report is display-only', () => {
+    // A splat document differs from a mesh document only in what is decided at
+    // emit time for the SAME `custom:<id>` key, so a splat is cold exactly
+    // when any dropped model is. The sandbox's fs:model-splat report and the
+    // pane notice must never rebuild the document they describe.
+    const decl = SRC.slice(SRC.indexOf('const coldDocKey ='), SRC.indexOf(';', SRC.indexOf('const coldDocKey =')));
+    expect(decl).not.toMatch(/splat/i);
+    expect(SRC).toContain("(previewGeometry === 'custom' ? `custom:${previewMesh?.id ?? 0}` : previewGeometry)");
+  });
+
   it('names every document-memo dependency in the classification comment', () => {
     // The comment IS the specification (the task that introduced this asked
     // for every dep to be classified in prose). An unnamed dep means someone

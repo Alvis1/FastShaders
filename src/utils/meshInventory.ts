@@ -55,8 +55,19 @@
  * safety for these characters belongs at the emission site (`JSON.stringify`
  * plus the comment-terminator escape codegen already applies), not here.
  *
- * Pure and import-free, so the vitest node env covers it.
+ * A GAUSSIAN SPLAT is reported as ONE row of its own shape —
+ * `{ index, name: '', materialName: '', vertexCount: 0, splat: true, splats: N }`
+ * — and it is kept OUT of `meshes` on purpose: every consumer maps `meshes` to
+ * the names a part may target (the picker, "+ Add output", dormancy), and a
+ * splat can never be one (loader 0.8 gives a splat no plain material; the Splat
+ * Output shades it). It lands on `MeshInventory.splat` instead, as display-only
+ * facts. The same module validates the sandbox's `fs:model-splat` report
+ * (`sanitizeSplatReport`), which is equally forgeable.
+ *
+ * Pure; its one import is the zero-import `splatLimits` leaf, so the vitest
+ * node env covers it.
  */
+import { SPLAT_MAX_COUNT } from './splatLimits';
 
 /** One named mesh in the loaded model, as the preview scene actually holds it. */
 export interface MeshInventoryEntry {
@@ -72,6 +83,18 @@ export interface MeshInventoryEntry {
   vertexCount: number;
 }
 
+/**
+ * The loaded model's Gaussian splat, as the sandbox reported it. DISPLAY-ONLY
+ * ("Gaussian splat · N splats"): it is never a part target — which is why it is
+ * not a `MeshInventoryEntry` — and nothing emitted may depend on it.
+ */
+export interface MeshInventorySplat {
+  /** Traversal index, like `MeshInventoryEntry.index`. */
+  index: number;
+  /** How many splats the sandbox built — a safe integer in [0, SPLAT_MAX_COUNT]. */
+  splats: number;
+}
+
 /** The whole report, tied to the model document that produced it. */
 export interface MeshInventory {
   /** The `custom:<id>` / built-in geometry key this report describes. A report
@@ -79,6 +102,10 @@ export interface MeshInventory {
    *  from a torn-down document identifiable as stale rather than plausible. */
   key: string;
   meshes: MeshInventoryEntry[];
+  /** The model's Gaussian splat, when the scene holds one (the first reported
+   *  splat row). ABSENT — never undefined-valued — otherwise, so a mesh
+   *  report compares equal to what it always was. */
+  splat?: MeshInventorySplat;
 }
 
 /** Longest mesh name kept, in UTF-16 units. */
@@ -145,10 +172,18 @@ export function sanitizeMeshInventory(
   if (!Array.isArray(meshes)) return null;
 
   const out: MeshInventoryEntry[] = [];
+  let splat: MeshInventorySplat | null = null;
   let seen = 0;
   for (const raw of meshes) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
     const entry = raw as Record<string, unknown>;
+    // A splat row (the literal `true` marks one) never joins `meshes`, whatever
+    // name it claims: that list is what every part target is picked from. Only
+    // the first well-formed one is kept — the preview builds one splat per scene.
+    if (entry.splat === true) {
+      if (!splat && isSplatCount(entry.splats)) splat = { index: count(entry.index), splats: entry.splats };
+      continue;
+    }
     if (!isUsableMeshName(entry.name)) continue;
     seen += 1;
     if (out.length >= MAX_INVENTORY_MESHES) continue;
@@ -159,8 +194,62 @@ export function sanitizeMeshInventory(
       vertexCount: count(entry.vertexCount),
     });
   }
-  if (out.length === 0) return null;
-  return { key, meshes: out, truncated: seen > out.length };
+  // A splat-only scene is KNOWN, with nothing to target — the same answer "no
+  // model loaded" gives every target reader, which is the honest one.
+  if (out.length === 0 && !splat) return null;
+  return { key, meshes: out, truncated: seen > out.length, ...(splat ? { splat } : {}) };
+}
+
+/** A splat count the preview could really hold: a safe integer in [0, SPLAT_MAX_COUNT]. */
+function isSplatCount(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v <= SPLAT_MAX_COUNT;
+}
+
+/**
+ * What the sandbox said about the Gaussian splat it built (`fs:model-splat`),
+ * once validated — the store's `previewSplatFacts`. SESSION-ONLY and
+ * DISPLAY-ONLY (the cost bar's splat figure, the info lines): the report is
+ * forgeable, so nothing is priced or emitted from it.
+ */
+export interface PreviewSplatFacts {
+  /** The `PreviewMesh.id` it describes; `setPreviewMesh` clears the facts. */
+  meshId: number;
+  /** Splats built, a safe integer in [0, SPLAT_MAX_COUNT]. */
+  count: number;
+  /** The spherical-harmonic degree the runtime dropped (0 = nothing dropped). */
+  shDropped: 0 | 1 | 2 | 3;
+}
+
+/**
+ * Validate a `fs:model-splat` report from the sandboxed preview. The caller
+ * has already checked the SENDER (the iframe's own contentWindow); this checks
+ * the rest, and answers null for anything it would not show:
+ *
+ *  - `meshId` must be the id of the splat mesh on screen now (the caller passes
+ *    null when the loaded mesh is not a splat kind), and `currentKey` the model
+ *    key the live document was built for — `custom:<meshId>`;
+ *  - the report's `geometry` must be that key EXACTLY, so a late report from a
+ *    torn-down document (another mesh) is stale rather than plausible;
+ *  - `count` a safe integer in [0, SPLAT_MAX_COUNT] (the runtime refuses more,
+ *    so anything else is junk or forged), never coerced — `'5'` is refused;
+ *  - `shDropped` one of the literal numbers 0, 1, 2, 3.
+ *
+ * Returns a FRESH object, never the message's.
+ */
+export function sanitizeSplatReport(
+  report: unknown,
+  currentKey: unknown,
+  meshId: unknown,
+): PreviewSplatFacts | null {
+  if (typeof meshId !== 'number' || !Number.isSafeInteger(meshId)) return null;
+  if (typeof currentKey !== 'string' || currentKey !== `custom:${meshId}`) return null;
+  if (!report || typeof report !== 'object' || Array.isArray(report)) return null;
+  const r = report as Record<string, unknown>;
+  if (r.geometry !== currentKey) return null;
+  if (!isSplatCount(r.count)) return null;
+  const sh = r.shDropped;
+  if (sh !== 0 && sh !== 1 && sh !== 2 && sh !== 3) return null;
+  return { meshId, count: r.count, shDropped: sh };
 }
 
 /**

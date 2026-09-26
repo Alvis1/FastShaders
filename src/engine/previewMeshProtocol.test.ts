@@ -15,6 +15,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { tslToPreviewHTML } from './tslToPreviewHTML';
+import { sanitizeMeshInventory } from '@/utils/meshInventory';
 
 const TSL = `const shader = Fn(() => {
   return { color: vec3(1, 0, 0) };
@@ -148,5 +149,105 @@ describe('fs:highlight-mesh (parent → sandbox)', () => {
     const block = html.slice(html.indexOf('__fsMeshKey'));
     const fn = block.slice(block.indexOf('function highlight(target)'));
     expect(fn.slice(0, 200)).toContain('clearHighlight();');
+  });
+});
+
+describe('a Gaussian splat in the sub-mesh protocol', () => {
+  const splatModel = { kind: 'splat' as const, id: 11 };
+
+  /** Run a document's sub-mesh <script> against stubs with `root` loaded. */
+  function runInventory(html: string, root: unknown) {
+    const start = html.indexOf('  var __fsMeshKey = ');
+    expect(start).toBeGreaterThan(-1);
+    const body = html.slice(start, html.indexOf('</script>', start));
+    const posted: Array<{ type: string; geometry: unknown; meshes: unknown }> = [];
+    const onMessage: Array<(e: { source: unknown; data: unknown }) => void> = [];
+    const parent = { postMessage: (m: { type: string; geometry: unknown; meshes: unknown }) => posted.push(m) };
+    const entity = {
+      components: { shader: null },
+      getObject3D: (k: string) => (k === 'mesh' ? root : null),
+      addEventListener: () => {},
+    };
+    class FlatMaterial { userData: Record<string, unknown> = {}; }
+    const win = {
+      parent,
+      THREE: { MeshBasicMaterial: FlatMaterial },
+      addEventListener: (t: string, fn: (e: { source: unknown; data: unknown }) => void) => { if (t === 'message') onMessage.push(fn); },
+      __fsWhenSceneBooted: (fn: () => void) => fn(),
+    };
+    const doc = { getElementById: (id: string) => (id === 'preview-entity' ? entity : null) };
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    new Function('window', 'document', 'setTimeout', body)(win, doc, (fn: () => void) => fn());
+    const send = (data: unknown) => { for (const fn of onMessage) fn({ source: parent, data }); };
+    return { posted, send };
+  }
+
+  /** The GaussianSplat as the runtime builds it: a Mesh over one instanced quad. */
+  function splatStub(name: string) {
+    const material = { name: 'addon' };
+    const s = {
+      isMesh: true,
+      isGaussianSplat: true,
+      name,
+      uuid: 'splat-1',
+      material,
+      geometry: { instanceCount: 12345, attributes: { position: { count: 4 } } },
+      traverse(fn: (n: unknown) => void) { fn(s); },
+    };
+    return s;
+  }
+
+  it('reports the splat as ONE nameless row carrying its splat count, which the parent keeps out of the targets', () => {
+    const html = tslToPreviewHTML(TSL, { geometry: 'custom', customModel: splatModel });
+    // Whatever name the object carries, the row is nameless.
+    const { posted } = runInventory(html, splatStub('Body'));
+    expect(posted).toEqual([{
+      type: 'fs:model-meshes',
+      geometry: 'custom:11',
+      meshes: [{ index: 0, name: '', materialName: '', vertexCount: 0, splat: true, splats: 12345 }],
+    }]);
+    // …and the parent's sanitizer puts it beside the meshes, never among them.
+    expect(sanitizeMeshInventory(posted[0].geometry, posted[0].meshes)).toEqual({
+      key: 'custom:11',
+      meshes: [],
+      truncated: false,
+      splat: { index: 0, splats: 12345 },
+    });
+  });
+
+  it('never lights a splat, even under a name that matches', () => {
+    const html = tslToPreviewHTML(TSL, { geometry: 'custom', customModel: splatModel });
+    const splat = splatStub('Body');
+    const { send } = runInventory(html, splat);
+    const before = splat.material;
+    send({ type: 'fs:highlight-mesh', names: ['Body'] });
+    send({ type: 'fs:highlight-mesh', name: 'Body' });
+    expect(splat.material).toBe(before);
+  });
+
+  it('the splat lines exist only in a splat document; a mesh document reports and lights as before', () => {
+    const splatHtml = tslToPreviewHTML(TSL, { geometry: 'custom', customModel: splatModel });
+    expect(splatHtml).toContain('if (n.isGaussianSplat) {');
+    expect(splatHtml).toContain('if (list[i].isGaussianSplat) continue;');
+    const meshHtml = tslToPreviewHTML(TSL, { geometry: 'custom', customModel });
+    const block = meshHtml.slice(meshHtml.indexOf('__fsMeshKey'));
+    expect(block).not.toContain('isGaussianSplat');
+    // The mesh document still lights a named mesh.
+    const mesh: { isMesh: true; name: string; uuid: string; material: unknown; geometry: unknown; traverse(fn: (n: unknown) => void): void } = {
+      isMesh: true,
+      name: 'Body',
+      uuid: 'mesh-1',
+      material: { name: 'Steel' },
+      geometry: { attributes: { position: { count: 3 } } },
+      traverse(fn) { fn(mesh); },
+    };
+    const { send } = runInventory(meshHtml, mesh);
+    send({ type: 'fs:highlight-mesh', names: ['Body'] });
+    expect((mesh.material as { userData?: { __fsHighlight?: boolean } }).userData?.__fsHighlight).toBe(true);
+  });
+
+  it('is not emitted into the XR popup for a splat either', () => {
+    const html = tslToPreviewHTML(TSL, { geometry: 'custom', xr: true, customModel: { ...splatModel, url: 'blob:https://x/y' } });
+    expect(html).not.toContain('fs:model-meshes');
   });
 });

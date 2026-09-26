@@ -39,6 +39,10 @@ const COPIES: Record<string, string[]> = {
   'decoders/basis_transcoder.js': ['public/js'],
   'decoders/basis_transcoder.wasm': ['public/js'],
   'decoders/README.md': ['public/js'],
+  // The Gaussian-splat runtime, BUILT in the submodule (build/build-splat.mjs)
+  // from the three r186 sources its splat/ folder pins — see the describe at
+  // the end of this file.
+  'fs-splat-0.1.js': ['public/js'],
 };
 
 describe('vendored A-Frame scripts stay in sync with the submodule source', () => {
@@ -303,5 +307,74 @@ describe('the glTF decoders are three\'s own files, byte for byte', () => {
     expect(readme).toContain('Apache License');
     expect(readme).toContain('TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION');
     expect(readme).toContain('END OF TERMS AND CONDITIONS');
+  });
+});
+
+/**
+ * The Gaussian-splat runtime's SOURCES: eight three r186 addon files that the
+ * submodule's `splat/` folder holds byte for byte (the app runs r184, so there
+ * is no node_modules copy to compare against — the tarball's hashes live in
+ * `splat/README.md`, and `build/build-splat.mjs` refuses to build from a file
+ * whose hash differs). This pins the other side: every file the folder ships
+ * has a row, every row's size and sha256 match the file, and the licence the
+ * README must carry is there, whole. The built `js/fs-splat-0.1.js` itself is
+ * pinned to its public/js copy by COPIES above; its contents by
+ * src/fsSplatBundle.test.ts.
+ *
+ * Skipped when the submodule is not checked out (the srcMissing pattern).
+ */
+describe('the Gaussian-splat sources are three r186\'s files, as splat/README.md records them', () => {
+  const SPLAT = path.join(ROOT, 'a-frame-shaderloader/splat');
+  const FILES = [
+    'objects/GaussianSplat.js',
+    'gpgpu/CountingSort.js',
+    'utils/GaussianSplatUtils.js',
+    'loaders/SPLATLoader.js',
+    'loaders/SPZLoader.js',
+    'loaders/GaussianSplatPLYLoader.js',
+    'loaders/PLYLoader.js',
+    'loaders/KSPLATLoader.js',
+  ];
+  const skip = !existsSync(SPLAT);
+  const readme = () => readFileSync(path.join(SPLAT, 'README.md'), 'utf8');
+  const listed = (dir: string, prefix = ''): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((d) =>
+      d.isDirectory() ? listed(path.join(dir, d.name), `${prefix}${d.name}/`) : [`${prefix}${d.name}`]);
+
+  it.skipIf(skip)('holds exactly the eight sources plus the README', () => {
+    expect(listed(SPLAT).sort()).toEqual([...FILES, 'README.md'].sort());
+  });
+
+  for (const file of FILES) {
+    it.skipIf(skip)(`splat/${file} matches its README row (size + sha256)`, () => {
+      const bytes = readFileSync(path.join(SPLAT, file));
+      const row = readme().split('\n').find((l) => l.startsWith(`| \`${file}\``));
+      expect(row, `README has no row for ${file}`).toBeTruthy();
+      expect(row).toContain(`examples/jsm/${file}`);
+      expect(row).toContain(bytes.length.toLocaleString('en-US'));
+      expect(
+        row,
+        `drift: a-frame-shaderloader/splat/${file} is not the file splat/README.md records. The addon ` +
+          'sources are never edited: re-copy it from the three tarball, update the row, rebuild with ' +
+          '`npm run build:splat`, then push the submodule and purge fs-splat-0.1.js on jsdelivr.',
+      ).toContain(createHash('sha256').update(bytes).digest('hex'));
+    });
+  }
+
+  it.skipIf(skip)('the README states three 0.186.0 and carries the MIT text', () => {
+    const text = readme();
+    expect(text).toContain('three 0.186.0');
+    expect(text).toContain('The MIT License');
+    expect(text).toContain('Copyright © 2010-2026 three.js authors');
+    expect(text).toContain('Permission is hereby granted, free of charge');
+    expect(text).toContain('THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND');
+  });
+
+  it.skipIf(skip)('the built runtime is vendored beside the loader, in the sync plugin too', () => {
+    // COPIES above pins public/js to the submodule; VENDOR_TARGETS is what
+    // makes `vite` produce that copy, so a row missing there would pass here
+    // only until the next clean checkout.
+    const vite = readFileSync(path.join(ROOT, 'vite.config.ts'), 'utf8');
+    expect(vite).toContain("{ file: 'fs-splat-0.1.js', dests: ['public/js'] }");
   });
 });

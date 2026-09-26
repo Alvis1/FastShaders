@@ -9,7 +9,16 @@ import { MATERIAL_PART_KEY_RE, emitRank, sanitizeModelSignature } from './materi
 import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF, getFlowNodeType, chainPortId, growsOperands, MAX_CHAIN_OPERANDS } from '@/registry/nodeRegistry';
 import { MODULE_HELPER_NAMES, HELPER_ALIASES } from './moduleHelpers';
 import { PART_SETTING_KEYS, materialSettingsFromSource } from './materialSettingsCode';
-import { MARCH_OUTPUT_TYPE } from '@/utils/sdfPartition';
+import {
+  ACTIVE_OUTPUT_KEY,
+  MARCH_OUTPUT_TYPE,
+  SPLAT_OUTPUT_TYPE,
+  SPLAT_CONSTANTS,
+  SPLAT_PRIMARY_SOCKETS,
+  SPLAT_SCOPES,
+  bindingOfRoot,
+  implicitIdentifierOf,
+} from '@/utils/sdfPartition';
 import { generateId } from '@/utils/idGenerator';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
 import { makeTypedEdge } from '@/utils/edgeUtils';
@@ -34,6 +43,9 @@ interface CodeToGraphResult {
   edges: AppEdge[];
   errors: ParseError[];
 }
+
+/** A Splat Output scope Fn's role — the suffix of its `sp<n><Role>` name. */
+type SplatFnKind = 'Shade' | 'Shape' | 'Size' | 'Feather';
 
 /**
  * id → node lookup over the parse's own node array, incremental and keyed BY
@@ -119,30 +131,149 @@ export function codeToGraph(code: string): CodeToGraphResult {
   // `raymarchOutput`). Left alone because renaming it is churn across ~9 call
   // sites in the middle of a parser, not because it is still accurate.
   let sdfOutputId: string | null = null;
-  let marchPosId: string | null = null;
-  let rayDirId: string | null = null;
   const helperReturnTargets = new Map<t.Node, { nodeId: string; handle: string }>();
   const ensureMarchOutput = (): string => {
     if (sdfOutputId) return sdfOutputId;
     const def = NODE_REGISTRY.get(MARCH_OUTPUT_TYPE)!;
     sdfOutputId = generateId();
-    rawNodes.push(createNode(sdfOutputId, def, 'Raymarch Output'));
+    rawNodes.push(createNode(sdfOutputId, def, 'SDF Output'));
     hasOutput = true;
     return sdfOutputId;
   };
-  const ensureMarchPos = (): string => {
-    if (marchPosId) return marchPosId;
-    const def = NODE_REGISTRY.get('positionLocal')!;
-    marchPosId = generateId();
-    rawNodes.push(createNode(marchPosId, def, 'positionLocal'));
-    return marchPosId;
+  // ===== Splat Output =====
+  // graphToCode emits up to four `const sp1<Shade|Shape|Size|Feather> =
+  // Fn(([p, pw, n, c]) => {…})` declarators — graph content, walked by the
+  // ordinary visitors with each parameter bound to its root node — and a
+  // return `{ splat: { shade, shape, size, feather, invert } }` whose keys are
+  // the node itself: the Fns' own returns wire Color/Opacity (`vec4(rgb, a)`),
+  // Move/Cut (`vec4(move, cut)`), Size and Feather, and the return object's
+  // literals are the stored values. No plain Output is minted for it. A feeder
+  // emitted into two Fns (or a Fn and the flat body) parses back as ONE node
+  // (the implicit-reads block below).
+  let splatOutputId: string | null = null;
+  /** Set when the module's `{ splat: … }` return built the node — see the
+   *  active flag at the end of the parse. */
+  let splatFromReturn = false;
+  /** The splat Fns' arrow functions → which one each is. */
+  const splatFns = new Map<t.Node, SplatFnKind>();
+  /** Their declared NAMES, so the return object's `shade: sp1Shade` is known. */
+  const splatFnNames = new Set<string>();
+  const ensureSplatOutput = (): string => {
+    if (splatOutputId) return splatOutputId;
+    const def = NODE_REGISTRY.get(SPLAT_OUTPUT_TYPE)!;
+    splatOutputId = generateId();
+    rawNodes.push(createNode(splatOutputId, def, 'Splat Output'));
+    hasOutput = true;
+    return splatOutputId;
   };
-  const ensureRayDir = (): string => {
-    if (rayDirId) return rayDirId;
-    const def = NODE_REGISTRY.get('rayDirection')!;
-    rayDirId = generateId();
-    rawNodes.push(createNode(rayDirId, def, 'rayDirection'));
-    return rayDirId;
+  /**
+   * A custom sink's Fn PARAMETER → the root node type it stands for: the
+   * march's ray position and direction, the splat's centre (`p`, also the
+   * march's), world centre, facing direction and own colour. ONE node per type
+   * per parse, minted only when the flat body did not already declare it.
+   */
+  const ROOT_PARAMS = new Map<string, string>([
+    ['p', 'positionLocal'],
+    ['dir', 'rayDirection'],
+    ['pw', 'positionWorld'],
+    ['n', 'normalLocal'],
+    ['c', 'vertexColor'],
+  ]);
+  const rootNodeIds = new Map<string, string>();
+  const ensureRootNode = (type: string): string => {
+    const known = rootNodeIds.get(type);
+    if (known) return known;
+    const def = NODE_REGISTRY.get(type)!;
+    const id = generateId();
+    rawNodes.push(createNode(id, def, type));
+    rootNodeIds.set(type, id);
+    return id;
+  };
+  /** The parameter names of a custom sink's scope Fn (`([p, pw, n, c]) =>`). */
+  const fnParamNames = (fn: t.Node): string[] => {
+    if (!t.isArrowFunctionExpression(fn) && !t.isFunctionExpression(fn)) return [];
+    const p0 = fn.params[0];
+    if (t.isArrayPattern(p0)) return p0.elements.filter((e): e is t.Identifier => t.isIdentifier(e)).map((e) => e.name);
+    return t.isIdentifier(p0) ? [p0.name] : [];
+  };
+
+  // ===== Implicit reads inside a splat Fn =====
+  // graphToCode emits a node whose UNWIRED input defaults to a geometry read
+  // (a noise's `positionGeometry`) with that default bound to the splat's own
+  // parameter inside the Fn — `mx_noise_float(p)` — and, when the node is also
+  // consumed outside every Fn, with today's text in the flat body as well
+  // (utils/sdfPartition.ts implicitRootOf). Two things make that parse back
+  // to the SAME graph:
+  //  - a noise position that IS one of the Fn's parameters (or a per-splat
+  //    constant) is the node's unwired position, stored as the identifier that
+  //    binds back to it (`implicitIdentifierOf`) — never as `p`, which would
+  //    re-emit a bare `p` outside the Fn, a ReferenceError at load;
+  //  - a declarator inside a splat Fn that RE-declares a name the flat body
+  //    (or an earlier splat Fn) already declared, with the same expression
+  //    under the splat's bindings, is that same node's scoped copy — it is
+  //    skipped, not minted as a second node.
+  /** Every splat scope binds the same parameters and constants. */
+  const splatBindings = SPLAT_SCOPES[0];
+  /** The first declaration's initializer, per name. */
+  const firstInit = new Map<string, t.Node>();
+  /** What a noise `pos` argument means inside splat Fn `fn` (see above). */
+  const splatImplicitPos = (fn: t.Node) => {
+    const params = fnParamNames(fn);
+    return (arg: t.Node): string | null => {
+      if (t.isIdentifier(arg)) {
+        // A name the parse has DECLARED is a wire, not the parameter:
+        // graphToCode reserves the parameter names from its namer, so a
+        // declared `p` can only be hand-written.
+        if (!params.includes(arg.name) || varToNodeId.has(arg.name)) return null;
+        return implicitIdentifierOf(splatBindings, arg.name);
+      }
+      // Not an identifier, so only a constant's exact text can match.
+      return arg.start != null && arg.end != null ? implicitIdentifierOf(splatBindings, code.slice(arg.start, arg.end)) : null;
+    };
+  };
+  /** Run `parse` with the noise-position resolver of splat Fn `fn` installed. */
+  const inSplatFn = <T,>(fn: t.Node, parse: () => T): T => withImplicitNoisePos(splatImplicitPos(fn), parse);
+  /**
+   * Is `scoped` (a declarator's initializer inside a splat Fn with parameters
+   * `params`) the same expression as `first` (the name's first declaration)
+   * once the splat's bindings are undone? Structural, over the shapes
+   * graphToCode emits; anything else must match as TEXT. A parameter matches
+   * itself or a bare global the splat binds to it (`positionGeometry` ↔ `p`),
+   * a per-splat constant a bare global bound to it (`screenUV` ↔
+   * `vec2(0.5)`); a non-computed member's property is a name, never a binding.
+   */
+  const sameUnderSplatBinding = (first: t.Node, scoped: t.Node, params: readonly string[]): boolean => {
+    const text = (n: t.Node): string | null => (n.start != null && n.end != null ? code.slice(n.start, n.end) : null);
+    const bound = (flat: string, name: string): boolean =>
+      params.includes(name) && !varToNodeId.has(name) && bindingOfRoot(splatBindings, flat)?.expr === name;
+    const eq = (a: t.Node | null | undefined, b: t.Node | null | undefined): boolean => {
+      if (!a || !b) return !a && !b;
+      if (t.isIdentifier(a) && t.isIdentifier(b)) return a.name === b.name || bound(a.name, b.name);
+      if (t.isIdentifier(a)) {
+        const binding = bindingOfRoot(splatBindings, a.name);
+        return !!binding && !params.includes(binding.expr) && text(b) === binding.expr;
+      }
+      if (a.type !== b.type) return false;
+      if (t.isNumericLiteral(a) || t.isStringLiteral(a) || t.isBooleanLiteral(a)) {
+        return a.value === (b as t.NumericLiteral | t.StringLiteral | t.BooleanLiteral).value;
+      }
+      if (t.isCallExpression(a) && t.isCallExpression(b)) {
+        return eq(a.callee, b.callee) && a.arguments.length === b.arguments.length &&
+          a.arguments.every((arg, i) => eq(arg, b.arguments[i]));
+      }
+      if (t.isMemberExpression(a) && t.isMemberExpression(b)) {
+        if (a.computed !== b.computed || !eq(a.object, b.object)) return false;
+        if (a.computed) return eq(a.property, b.property);
+        return t.isIdentifier(a.property) && t.isIdentifier(b.property) && a.property.name === b.property.name;
+      }
+      if (t.isUnaryExpression(a) && t.isUnaryExpression(b)) return a.operator === b.operator && eq(a.argument, b.argument);
+      if ((t.isBinaryExpression(a) && t.isBinaryExpression(b)) || (t.isLogicalExpression(a) && t.isLogicalExpression(b))) {
+        return a.operator === b.operator && eq(a.left, b.left) && eq(a.right, b.right);
+      }
+      const ta = text(a);
+      return ta !== null && ta === text(b);
+    };
+    return eq(first, scoped);
   };
   const MARCH_HELPER_HANDLES: Record<string, string> = {
     Field: 'field', Density: 'density', Color: 'color', Emissive: 'emissive', Glow: 'glow', Background: 'background',
@@ -635,6 +766,154 @@ export function codeToGraph(code: string): CodeToGraphResult {
     }
   };
 
+  /** The source text of a node, for a warning. */
+  const sourceText = (n: t.Node, fallback: string): string =>
+    n.start != null && n.end != null ? code.slice(n.start, n.end) : fallback;
+
+  /** Wire `expr` (a scalar-widen undone) into the Splat Output's `handle`. */
+  const wireSplatSocket = (expr: t.Node, handle: string): void => {
+    const target = ensureSplatOutput();
+    const ref = resolveReturnSource(unwrapScalarWiden(expr), rawNodes, rawEdges, varToNodeId, varToHandle, splitNodes, code, warnings);
+    if (ref) {
+      addEdge(rawEdges, ref.nodeId, ref.handle, target, handle);
+      return;
+    }
+    warnings.push({
+      message: `Cannot represent "${sourceText(expr, 'value')}" on the Splat Output's ${handle} socket — it was left unwired.`,
+      line: expr.loc?.start.line,
+      severity: 'warning',
+    });
+  };
+
+  /**
+   * A splat scope Fn's `return`, routed by the Fn's role — the inverse of
+   * graphToCode's `vec4(<rgb | color(0x…) | c.rgb>, <opacity | number>)`,
+   * `vec4(<move | 0, 0, 0>, <cut | 0>)` and the size / feather scalar.
+   */
+  const routeSplatReturn = (kind: SplatFnKind, arg: t.Node): void => {
+    const target = ensureSplatOutput();
+    const node = nodeById(rawNodes, target)!;
+    if (kind === 'Size' || kind === 'Feather') {
+      const key = kind === 'Size' ? 'size' : 'feather';
+      const n = foldNumericConstant(arg);
+      if (n !== undefined) setNodeValues(node, { [key]: n });
+      else wireSplatSocket(arg, key);
+      return;
+    }
+    if (!t.isCallExpression(arg) || !t.isIdentifier(arg.callee) || arg.callee.name !== 'vec4') {
+      warnings.push({
+        message: `The Splat Output's ${kind.toLowerCase()} function must return vec4(…) — "${sourceText(arg, 'its return')}" was dropped.`,
+        line: arg.loc?.start.line,
+        severity: 'warning',
+      });
+      return;
+    }
+    const args = arg.arguments as t.Node[];
+    if (kind === 'Shade') {
+      if (args.length !== 2) {
+        warnings.push({ message: 'The Splat Output\'s shade function must return vec4(rgb, opacity) — it was dropped.', line: arg.loc?.start.line, severity: 'warning' });
+        return;
+      }
+      const [rgb, alpha] = args;
+      // `c.rgb`, the splat's own colour, is the UNWIRED Color socket.
+      const ownColour =
+        t.isMemberExpression(rgb) && !rgb.computed &&
+        t.isIdentifier(rgb.object, { name: 'c' }) && t.isIdentifier(rgb.property, { name: 'rgb' });
+      if (!ownColour) {
+        const hex = matchStoredChannelValue('color', rgb);
+        if (typeof hex === 'string') setNodeValues(node, { color: hex });
+        else wireSplatSocket(rgb, 'color');
+      }
+      const opacity = foldNumericConstant(alpha);
+      if (opacity !== undefined) setNodeValues(node, { opacity });
+      else wireSplatSocket(alpha, 'opacity');
+      return;
+    }
+    // Shape: `vec4(0, 0, 0, cut)` with Move unwired, `vec4(move, cut)` with it wired.
+    let move: t.Node | null = null;
+    let cut: t.Node;
+    if (args.length === 4 && args.slice(0, 3).every((a) => foldNumericConstant(a) === 0)) {
+      cut = args[3];
+    } else if (args.length === 2) {
+      [move, cut] = args;
+    } else {
+      warnings.push({ message: 'The Splat Output\'s shape function must return vec4(move, cut) — it was dropped.', line: arg.loc?.start.line, severity: 'warning' });
+      return;
+    }
+    if (move) wireSplatSocket(move, 'move');
+    const k = foldNumericConstant(cut);
+    if (k === undefined) wireSplatSocket(cut, 'cut');
+    else if (k !== 0) {
+      warnings.push({
+        message: `A constant Cut of ${k} has no graph equivalent (Cut has no stored value) — it was dropped.`,
+        line: cut.loc?.start.line,
+        severity: 'warning',
+      });
+    }
+  };
+
+  /**
+   * The module return `{ splat: { … } }` — the Splat Output node itself. The
+   * Fns it names were read off their own declarators; its numbers are the
+   * node's stored values and a captured node is an edge. Unknown keys, and
+   * any key beside `splat`, have no graph equivalent and say so.
+   */
+  const buildSplatFromObject = (obj: t.ObjectExpression, spec: t.ObjectProperty): void => {
+    const target = ensureSplatOutput();
+    const node = nodeById(rawNodes, target)!;
+    splatFromReturn = true;
+    for (const p of obj.properties) {
+      if (p === spec) continue;
+      const key = t.isObjectProperty(p) ? propKeyName(p) : null;
+      warnings.push({
+        message: `"${key ?? sourceText(p, 'entry')}" beside a Splat Output's \`splat\` has no graph equivalent — it was dropped.`,
+        line: p.loc?.start.line,
+        severity: 'warning',
+      });
+    }
+    if (!t.isObjectExpression(spec.value)) {
+      warnings.push({ message: 'The module\'s `splat` must be an object literal — it was dropped.', line: spec.loc?.start.line, severity: 'warning' });
+      return;
+    }
+    for (const p of spec.value.properties) {
+      const key = t.isObjectProperty(p) && !p.computed ? propKeyName(p) : null;
+      const value = t.isObjectProperty(p) ? p.value : null;
+      const drop = (why: string) => warnings.push({
+        message: `splat.${key ?? '?'}: ${why} — it was dropped.`,
+        line: p.loc?.start.line,
+        severity: 'warning',
+      });
+      if (key === null || value === null) { drop('not a plain key'); continue; }
+      if (key === 'shade' || key === 'shape') {
+        // Wired by the named Fn's own return.
+        if (!(t.isIdentifier(value) && splatFnNames.has(value.name))) drop(`not one of this module's sp<n>${key === 'shade' ? 'Shade' : 'Shape'} functions`);
+        continue;
+      }
+      if (key === 'size' || key === 'feather') {
+        const n = foldNumericConstant(value);
+        if (n !== undefined) { setNodeValues(node, { [key]: n }); continue; }
+        // `size: sp1Size` / `feather: sp1Feather` — wired by that Fn's own
+        // return. A Fn named for the OTHER role is not this key's, and falls
+        // through to the "cannot represent" warning.
+        if (
+          t.isIdentifier(value) && splatFnNames.has(value.name) &&
+          value.name.endsWith(key === 'size' ? 'Size' : 'Feather')
+        ) continue;
+        wireSplatSocket(value, key);
+        continue;
+      }
+      if (key === 'invert') {
+        if (t.isBooleanLiteral(value)) {
+          if (value.value) (node.data as { values: Record<string, unknown> }).values.invert = true;
+          continue;
+        }
+        drop('only the literal true counts');
+        continue;
+      }
+      drop('not a Splat Output key');
+    }
+  };
+
   // Build the OutputNode and wire its channels from a return/output expression.
   // Shared between `return X` (FastShaders canonical form) and `output = X`
   // (three.js TSL editor compatible form).
@@ -644,6 +923,15 @@ export function codeToGraph(code: string): CodeToGraphResult {
     // keys carry nothing this parse has not already wired and no plain Output
     // is minted for them.
     if (sdfOutputId) return;
+    // So is a Splat Output's `{ splat: { … } }` — read BEFORE the `hasOutput`
+    // guard, which its own scope Fns have already set.
+    if (t.isObjectExpression(rawArg)) {
+      const spec = lastProp(rawArg, 'splat');
+      if (spec) {
+        buildSplatFromObject(rawArg, spec);
+        return;
+      }
+    }
     if (hasOutput) return;
     const arg = unwrapScalarWiden(rawArg);
 
@@ -698,6 +986,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
         const varName = path.node.id.name;
         const init = path.node.init;
         if (!init) return;
+        if (!firstInit.has(varName)) firstInit.set(varName, init);
 
         // Skip the module-local helpers graphToCode emits above the shader
         // (`const hsl = Fn(...)`, the distance-field family — see
@@ -799,14 +1088,71 @@ export function codeToGraph(code: string): CodeToGraphResult {
           return;
         }
 
+        // Splat Output emission (see the state block above): a scope Fn.
+        // Walk INTO the body — it is graph content — and route its `return`
+        // by the Fn's role.
+        const splatFn = /^sp\d+(Shade|Shape|Size|Feather)$/.exec(varName);
+        if (
+          splatFn &&
+          t.isCallExpression(init) && t.isIdentifier(init.callee) && init.callee.name === 'Fn' &&
+          init.arguments[0] &&
+          (t.isArrowFunctionExpression(init.arguments[0]) || t.isFunctionExpression(init.arguments[0]))
+        ) {
+          ensureSplatOutput();
+          splatFns.set(init.arguments[0], splatFn[1] as SplatFnKind);
+          splatFnNames.add(varName);
+          return;
+        }
+
+        // Which custom-sink scope Fn (if any) this declarator sits DIRECTLY in.
+        const scopeFn = path.getFunctionParent()?.node;
+        const inScopeFn = !!scopeFn && (helperReturnTargets.has(scopeFn) || splatFns.has(scopeFn));
+
+        // `const uv1 = vec2(0.5);` inside a splat Fn: a per-corner source bound
+        // to the splat's centre (SPLAT_CONSTANTS). The flat body declared the
+        // real node under the same name (roots are always emitted there too),
+        // so the existing binding IS the root — the root-parameter rule below,
+        // for a constant. Bound by NAME, not by the bound node's type: a UV
+        // node with rotation parses back as its expanded chain, and rebinding
+        // the name to a fresh `vec2(0.5)` node would silently move what every
+        // consumer reads. An UNBOUND name spelled this way is an ordinary
+        // constant and parses as one.
+        // (Any expression shape: `modelViewMatrix.mul(vec4(p, 1)).xyz`, the
+        // View Position's binding, is a member expression.)
+        if (
+          inScopeFn && splatFns.has(scopeFn!) && varToNodeId.has(varName) &&
+          init.start != null && init.end != null
+        ) {
+          const text = code.slice(init.start, init.end);
+          if (SPLAT_CONSTANTS.some((c) => c.expr === text)) {
+            path.skip();
+            return;
+          }
+        }
+
+        // A splat Fn's copy of a node the flat body (or an earlier splat Fn)
+        // already declared: the SAME node, emitted again because it is read
+        // in both places — skipped, so the existing binding stands (see the
+        // implicit-reads block above). An initializer that differs is a
+        // hand-written shadow and parses as a node of its own, as before.
+        if (inScopeFn && splatFns.has(scopeFn!) && varToNodeId.has(varName)) {
+          const first = firstInit.get(varName);
+          if (first && first !== init && sameUnderSplatBinding(first, init, fnParamNames(scopeFn!))) {
+            path.skip();
+            return;
+          }
+        }
+
         // const x = identifier (e.g. positionGeometry, or aliasing another var)
         if (t.isIdentifier(init)) {
-          // `const positionLocal1 = p;` inside a Raymarch Output per-step function:
-          // the march root. The flat body declared the same name from the real
-          // `positionLocal` just above (roots are always emitted there too), so
-          // the existing node IS the root — rebinding would mint a duplicate.
-          if ((init.name === 'p' || init.name === 'dir') && helperReturnTargets.size > 0) {
-            if (!varToNodeId.has(varName)) varToNodeId.set(varName, init.name === 'p' ? ensureMarchPos() : ensureRayDir());
+          // `const positionLocal1 = p;` inside a custom sink's scope Fn: a
+          // root, bound to the Fn's parameter. The flat body declared the same
+          // name from the real node just above (roots are always emitted there
+          // too), so the existing node IS the root — rebinding would mint a
+          // duplicate. Only a name that IS one of this Fn's parameters counts.
+          const rootType = ROOT_PARAMS.get(init.name);
+          if (rootType && inScopeFn && fnParamNames(scopeFn!).includes(init.name)) {
+            if (!varToNodeId.has(varName)) varToNodeId.set(varName, ensureRootNode(rootType));
             return;
           }
           const def = TSL_FUNCTION_TO_DEF.get(init.name);
@@ -847,7 +1193,10 @@ export function codeToGraph(code: string): CodeToGraphResult {
 
         // const x = func(args...) or const x = obj.method(args...)
         if (t.isCallExpression(init)) {
-          processCall(init, varName, rawNodes, rawEdges, varToNodeId, varToHandle, splitNodes, code, warnings);
+          const parse = () => processCall(init, varName, rawNodes, rawEdges, varToNodeId, varToHandle, splitNodes, code, warnings);
+          // Inside a splat Fn a noise position may be the Fn's own `p`.
+          if (inScopeFn && splatFns.has(scopeFn!)) inSplatFn(scopeFn!, parse);
+          else parse();
         }
       },
 
@@ -862,6 +1211,14 @@ export function codeToGraph(code: string): CodeToGraphResult {
         if (target) {
           const ref = resolveReturnSource(unwrapScalarWiden(arg), rawNodes, rawEdges, varToNodeId, varToHandle, splitNodes, code, warnings);
           if (ref) addEdge(rawEdges, ref.nodeId, ref.handle, target.nodeId, target.handle);
+          return;
+        }
+        // …and one inside a Splat Output's scope Fn feeds ITS sockets.
+        const splatKind = fnNode ? splatFns.get(fnNode) : undefined;
+        if (splatKind) {
+          // A hand-written inline call (`return vec4(0, 0, 0, mx_noise_float(p))`)
+          // reads its noise position the way a declarator does.
+          inSplatFn(fnNode!, () => routeSplatReturn(splatKind, arg));
           return;
         }
         buildOutputFromExpr(arg);
@@ -950,7 +1307,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
   // this parser consumed may still have produced no node — and a graph with no
   // Output is one the user cannot wire. (An existence check, not a "which one
   // is THE output" question, so `outputNodes` rather than a `find`.)
-  if (outputNodes(rawNodes).length === 0 && !sdfOutputId) {
+  if (outputNodes(rawNodes).length === 0 && !sdfOutputId && !splatOutputId) {
     const outputDef = NODE_REGISTRY.get('output');
     if (outputDef) mintOutputNode(outputDef);
   }
@@ -995,6 +1352,24 @@ export function codeToGraph(code: string): CodeToGraphResult {
         }
       }
     }
+  }
+
+  // A `{ splat: … }` program whose Splat Output ends up with NO primary
+  // socket wired — a stored tint / opacity / size / feather, a Feather Fn, or
+  // the identity `{}` — can only have been emitted by a FLAGGED sink: an
+  // unflagged one drives only through a wired primary socket (activeSink's
+  // fallback). So the parse flags it. Without the flag nothing drives, and the
+  // next graph → code pass replaces the program with the red "nothing wired"
+  // sentinel, errors [] — on every path that has no old node to carry the
+  // flag from (pasted text in a document without a Splat Output, Load Script,
+  // a hand-written `.js`). A program with a primary socket wired is left
+  // unflagged, so the parse never stamps a choice nobody made; the resync and
+  // restore paths still run normalizeActiveOutput, which keeps the one-flag
+  // invariant.
+  if (splatOutputId && splatFromReturn) {
+    const id = splatOutputId;
+    const wired = rawEdges.some((e) => e.target === id && SPLAT_PRIMARY_SOCKETS.includes(e.targetHandle ?? ''));
+    if (!wired) (nodeById(rawNodes, id)!.data as Record<string, unknown>)[ACTIVE_OUTPUT_KEY] = true;
   }
 
   return { nodes: rawNodes, edges: rawEdges, errors: warnings };
@@ -1717,8 +2092,30 @@ function tryParseTimeSpeed(
 }
 
 /**
+ * While a splat Fn's statement is parsed: what a noise call's position
+ * argument means when it names one of the Fn's parameters (or a per-splat
+ * constant) — the stored identifier of the node's UNWIRED position — else
+ * null. Installed around exactly that parse by `withImplicitNoisePos` (the
+ * parser is synchronous and never re-entered, so one module slot is enough;
+ * `processCall` and its recursion stay unaware of scopes). Null everywhere
+ * else, where a bare identifier keeps its old meaning.
+ */
+let implicitNoisePos: ((arg: t.Node) => string | null) | null = null;
+
+function withImplicitNoisePos<T>(resolve: (arg: t.Node) => string | null, parse: () => T): T {
+  const prev = implicitNoisePos;
+  implicitNoisePos = resolve;
+  try {
+    return parse();
+  } finally {
+    implicitNoisePos = prev;
+  }
+}
+
+/**
  * Parse noise function calls: mx_worley_noise_float(posOrMul)
- * The first arg may be `positionGeometry`, a variable ref, or `mul(pos, scale)`.
+ * The first arg may be `positionGeometry`, a variable ref, or `mul(pos, scale)`
+ * — and, inside a splat Fn, the Fn's `p` (see `implicitNoisePos`).
  */
 function processNoiseCall(
   callExpr: t.CallExpression,
@@ -1735,7 +2132,10 @@ function processNoiseCall(
   // `pos.mul(scale)`. graphToCode emits the chained form; the three.js TSL
   // editor produces the direct-call form. Both need to round-trip.
   const wirePosAndScale = (posInner: t.Node, scaleInner: t.Node): void => {
-    if (t.isIdentifier(posInner)) {
+    const implicit = implicitNoisePos?.(posInner) ?? null;
+    if (implicit !== null) {
+      extractedValues.pos = implicit;
+    } else if (t.isIdentifier(posInner)) {
       const sourceId = varToNodeId.get(posInner.name);
       if (sourceId) {
         addEdge(edges, sourceId, varToHandle.get(posInner.name) ?? 'out', nodeId, 'pos');
@@ -1757,7 +2157,11 @@ function processNoiseCall(
   // --- arg[0]: position (possibly wrapped in mul(pos, scale) or pos.mul(scale)) ---
   if (args.length > 0) {
     const posArg = args[0];
-    if (
+    const implicit = implicitNoisePos?.(posArg) ?? null;
+    if (implicit !== null) {
+      // Inside a splat Fn: `mx_noise_float(p)` is the UNWIRED position.
+      extractedValues.pos = implicit;
+    } else if (
       t.isCallExpression(posArg) &&
       t.isIdentifier(posArg.callee) &&
       posArg.callee.name === 'mul' &&

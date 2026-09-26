@@ -59,11 +59,11 @@ describe('spliceNodeIntoEdge', () => {
   });
 
   it('REFUSES a node that cannot pass a signal on, and changes nothing', () => {
-    // Both sinks declare `outputs: []`, and they are the node types a user is
+    // Every sink declares `outputs: []`, and they are the node types a user is
     // most likely to reach for while pointing at a wire. Reading
     // `def.outputs[0].id` on one is a TypeError, so the guard lives in the
     // splice rather than at each call site, where a new caller can forget it.
-    for (const sink of ['output', 'raymarchOutput']) {
+    for (const sink of ['output', 'raymarchOutput', 'splatOutput']) {
       seed();
       const before = useAppStore.getState().edges;
       expect(def(sink).outputs, `${sink} has grown an output port`).toHaveLength(0);

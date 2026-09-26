@@ -33,6 +33,8 @@ const REASONS = {
   study: false,
   'no-model': true,
   'not-gltf': true,
+  'splat-model': true,
+  'splat-driven': true,
   'external-data': true,
   'module-error': true,
   unreadable: true,
@@ -212,6 +214,7 @@ describe('glbUnavailableText', () => {
   const REASONS = {
     'no-model': false,
     obj: true,
+    splat: true,
     'external-data': true,
     unreadable: true,
   } as const satisfies Record<GlbExportUnavailable, boolean>;
@@ -231,6 +234,21 @@ describe('glbUnavailableText', () => {
   it('a missing name falls back to the extension rather than an empty quote', () => {
     expect(glbUnavailableText({ ok: false, reason: 'obj' }, 'en')).toContain('.obj is an .obj file');
     expect(glbUnavailableText({ ok: false, reason: 'unreadable' }, 'en')).toContain('.glb could not be read');
+    expect(glbUnavailableText({ ok: false, reason: 'splat' }, 'en')).toContain('.splat is a Gaussian splat scene');
+  });
+
+  it('a splat scene is never called an .obj, and the build refusal says the same as the popover', () => {
+    for (const lang of LANGS) {
+      const a = glbUnavailableText({ ok: false, reason: 'splat', name: 'garden.ply' }, lang)!;
+      expect(a).not.toContain('.obj');
+      expect(a).toContain('“garden.ply”');
+      expect(glbExportRefusalText('splat-model', lang, { name: 'garden.ply' })).toBe(a);
+    }
+    // The splat-driven refusal names the node and the two ways out.
+    const en = glbExportRefusalText('splat-driven', 'en')!;
+    expect(en).toContain('Splat Output');
+    expect(en).toContain('.zip');
+    expect(glbExportRefusalText('splat-driven', 'lv')).toContain('Gausa pleķi');
   });
 });
 

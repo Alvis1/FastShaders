@@ -64,6 +64,19 @@
  *           FastShaders GLB is recognised by `extras.fastshaders.v === 1`
  *           alone: `assets` is optional, since a module-only export carries
  *           no images.
+ *       10. Gaussian splats (section 9b). A module may return
+ *           `{ splat: { shade, shape, size, feather, invert } }`; it counts as
+ *           the object API (never the Simple-API branch), and every
+ *           GaussianSplat under the target (three r186's addon, delivered by
+ *           js/fs-splat-0.1.js) keeps its own material while its VERTEX node is
+ *           wrapped: shade → vec4(rgb, opacity), shape → vec4(move, cut), size,
+ *           each called with (p, pw, n, c) per splat. `cut > 0` removes a splat
+ *           (a sign test; `invert: true` flips it), `feather` fades the edge.
+ *           A GaussianSplat is skipped by every material, weld and barycentric
+ *           traverse, so a module WITHOUT `splat` leaves the addon's material
+ *           alone. The wrapper reads two private addon fields
+ *           (`_buffers.centerRead`, `_sort.orderRead`); without them it warns
+ *           and edits nothing.
  *      Written for three r184. 0.6, 0.5 and 0.4 are FROZEN: shaders exported
  *      against them fetch them from the CDN by URL, so they never change.
  *      Later 0.8.x edits are ADDITIVE only — no renamed state field, method,
@@ -180,6 +193,13 @@ var WARN_MP_MIRROR =
   "[FastShaders] materialPartsMirror is not an array of part names; it was ignored.";
 var WARN_GLTF_HOOK =
   "[FastShaders] could not hook A-Frame's gltf-model; a model that loads before its shader attaches will not be indexed.";
+// The splat section's messages (9b). Each prints once per page.
+var WARN_SPLAT_NO_TARGET =
+  "[FastShaders] this shader shades Gaussian splats (it returns `splat`), and there is no GaussianSplat here; other meshes keep their own materials. Load a .splat / .spz / .ply / .ksplat with splat-model (js/fs-splat-0.1.js).";
+var WARN_SPLAT_SHAPE =
+  "[FastShaders] splat shading skipped: this GaussianSplat lacks _buffers.centerRead, _sort.orderRead or its material's vertexNode (a different three.js splat addon?). It renders unedited.";
+var WARN_SPLAT_SH =
+  "[FastShaders] splat shading skipped: this GaussianSplat carries view-dependent colour (spherical harmonics), which cannot be shaded on the WebGL backend. Load it through FastShadersSplat.parseBytes, which drops them. It renders unedited.";
 // A name out of someone's model file: quoted, cut at 40 characters.
 function mpName(s) {
   if (typeof s !== "string") return "(too long)";
@@ -1113,7 +1133,17 @@ function buildMaterials(shaderResult) {
     shaderResult.materialParts &&
     typeof shaderResult.materialParts === "object"
   );
-  const isObjectAPI = hasChannels(shaderResult) || hasParts || hasMaterialParts;
+  // 0.8 (header delta 10): and for `splat`. A splat-only module has no
+  // channel either, and the Simple-API branch would hand every mesh a material
+  // whose colorNode is the result object (a GaussianSplat under 0.8.0 renders
+  // opaque BLACK that way, with no error).
+  const hasSplat = !!(
+    shaderResult &&
+    typeof shaderResult === "object" &&
+    shaderResult.splat &&
+    typeof shaderResult.splat === "object"
+  );
+  const isObjectAPI = hasChannels(shaderResult) || hasParts || hasMaterialParts || hasSplat;
 
   // The default material stays null when the module declares only parts:
   // unmatched meshes then keep the materials the MODEL was authored with,
@@ -1152,16 +1182,27 @@ function buildMaterials(shaderResult) {
     material = new (T().MeshPhysicalNodeMaterial)();
     material.colorNode = shaderResult;
   }
-  return { material: material, partMaterials: partMaterials, hasMaterialParts: hasMaterialParts };
+  return {
+    material: material,
+    partMaterials: partMaterials,
+    hasMaterialParts: hasMaterialParts,
+    // The module's splat spec, handed to wrapSplats as it is (section 9b).
+    splat: hasSplat ? shaderResult.splat : null,
+  };
 }
 
 // ---------------------------------------------------------------------------
 // (8) Dispatch, over a state object (the A-Frame component passes itself)
 // ---------------------------------------------------------------------------
 
+// A GaussianSplat is a Mesh, and every traverse in this section skips it:
+// replacing its material would throw away the addon's projection and kernel.
+// It is shaded only by the vertex-node wrapper (section 9b). `isGaussianSplat`
+// is undefined on every other three.js object, so these guards change nothing
+// for a scene without splats.
 function storeOriginalMaterials(state, mesh) {
   mesh.traverse(function (node) {
-    if (node.isMesh && !(node.uuid in state.originalMaterials)) {
+    if (node.isMesh && !node.isGaussianSplat && !(node.uuid in state.originalMaterials)) {
       // Never record a transient editor highlight as a mesh's "original".
       // Defence rather than a fix for an observed path — this runs at
       // model-loaded, before any highlight can exist, and skips uuids it
@@ -1210,7 +1251,7 @@ function applyMaterialToMesh(state, mesh, material, partMaterials) {
   if (partMaterials && !material) {
     let meshCount = 0;
     mesh.traverse(function (node) {
-      if (node.isMesh) meshCount++;
+      if (node.isMesh && !node.isGaussianSplat) meshCount++;
     });
     if (meshCount === 1) {
       const first = partMaterials.values().next();
@@ -1221,7 +1262,7 @@ function applyMaterialToMesh(state, mesh, material, partMaterials) {
   // (resolveIndexPart) > the default material > the single-mesh first-part
   // fallback > the authored material.
   mesh.traverse(function (node) {
-    if (!node.isMesh) return;
+    if (!node.isMesh || node.isGaussianSplat) return;
     let m = material;
     const named = partMaterials ? partMaterials.get(node.name) : undefined;
     if (named) {
@@ -1230,14 +1271,17 @@ function applyMaterialToMesh(state, mesh, material, partMaterials) {
       const indexed = resolveIndexPart(state, node);
       if (indexed) {
         m = indexed;
-      } else if (!material && (partMaterials || state._materialPartsStatus)) {
+      } else if (!material && (partMaterials || state._materialPartsStatus || state._splatStatus)) {
         // No default was declared: put this mesh back on the material the
         // MODEL was authored with rather than blanking it — unless this is
         // the model's only mesh, which takes the first part instead. A
         // materialParts module (any status) takes this rung even when no NAME
         // part survives: on a re-apply the mesh still wears the previous
         // shader's material, which has just been disposed. A module with
-        // neither keeps 0.6's path (_materialPartsStatus is null then).
+        // neither keeps 0.6's path (_materialPartsStatus is null then). A
+        // splat module (0.8, section 9b) takes it for the same reason: it
+        // shades no ordinary mesh, so each one goes back to its authored
+        // material (_splatStatus is null for a module without `splat`).
         m = soleMeshFallback || state.originalMaterials[node.uuid] || node.material;
       }
     }
@@ -1249,8 +1293,10 @@ function applyMaterialToMesh(state, mesh, material, partMaterials) {
 }
 
 function restoreOriginalMaterials(state, mesh) {
+  // Splats keep their material throughout; what goes back is their vertex node.
+  unsplat(state);
   mesh.traverse(function (node) {
-    if (node.isMesh && state.originalMaterials[node.uuid]) {
+    if (node.isMesh && !node.isGaussianSplat && state.originalMaterials[node.uuid]) {
       node.material = state.originalMaterials[node.uuid];
     }
   });
@@ -1292,6 +1338,10 @@ function disposeShaderMaterial(state) {
   state._indexPartResolver = null;
   state._materialPartsStatus = null;
   state._appliedMaterials = null;
+  // The splat wraps belong to this generation too (9b): every splat gets the
+  // addon's own vertex node back before anything new is built.
+  unsplat(state);
+  state._splatStatus = null;
   // A src: model generation's image URLs die with the materials they fed (13c).
   releaseModelAssets(state);
 }
@@ -1509,6 +1559,13 @@ function syncWeld(state, mesh) {
   // system's geometry and ours, and a bary geometry sitting on top makes
   // both false — unweld would silently no-op and leak.
   unbary(state);
+  // A GaussianSplat's geometry is the ONE instanced quad every splat is drawn
+  // with: a weld would rebuild it without `instanceCount` and draw one quad.
+  // Neither `weld: true` nor a geometry component on the entity may reach it.
+  if (mesh.isGaussianSplat) {
+    unweld(state, mesh);
+    return;
+  }
   if (!state._weldWanted) {
     unweld(state, mesh);
     return;
@@ -1575,7 +1632,9 @@ function syncBary(state, mesh) {
   }
   const owned = state._baryOwned || (state._baryOwned = []);
   mesh.traverse(function (node) {
-    if (!node.isMesh || !node.geometry) return;
+    // A GaussianSplat's quad template: toNonIndexed() would replace the
+    // InstancedBufferGeometry with a plain one and lose `instanceCount`.
+    if (!node.isMesh || node.isGaussianSplat || !node.geometry) return;
     const g = node.geometry;
     if (g.getAttribute("bary")) return; // already ours, or authored
     // A geometry with no positions cannot describe a triangle, and asking it
@@ -1615,6 +1674,272 @@ function unbary(state) {
     entry.geometry.dispose();
   }
   state._baryOwned = [];
+}
+
+// ---------------------------------------------------------------------------
+// (9b) Gaussian splats: the vertex-node wrapper (header delta 10)
+// ---------------------------------------------------------------------------
+//
+// A module may return `{ splat: { shade, shape, size, feather, invert } }`.
+// The target's GaussianSplats (three r186's addon, built by js/fs-splat-0.1.js)
+// keep their own NodeMaterial; what changes is its VERTEX node, wrapped per
+// INSTANCE (a node graph is never shared between two splats):
+//
+//   clip  = the addon's own projection (its whole vertex node, run first)
+//   p     = the splat centre in object space — the addon's OWN storage nodes,
+//           centerRead.element(orderRead.element(instanceIndex)); a second
+//           storage() over the same attribute would read UNSORTED data on
+//           WebGL, where only the addon's nodes get setPBO(true)
+//   pw    = modelWorldMatrix * (p, 1)
+//   n     = normalize(cameraPosition - pw): the direction the billboard
+//           faces (a splat has no normal)
+//   c     = the addon's vSplatColor, read back through the named varying
+//           after the addon assigned it (rgb clamped, alpha * alphaScale)
+//   shape(p, pw, n, c) → vec4(move.xyz, cut)
+//   size                → a scale of the footprint (a function, number or node)
+//   shade(p, pw, n, c) → vec4(rgb, opacity)
+//
+// A move or a size REBUILDS the clip position from the moved centre,
+// clip = P*MV*(p + move, 1) + (clip - P*MV*(p, 1)) * s, with the footprint's
+// growth capped at the addon's own 2048 px bound, and re-runs the addon's cull
+// on the NEW centre (a splat moved into the 1 cm shell before the eye would
+// otherwise fill the screen). `cut > 0` removes a whole splat by collapsing its
+// quad to vec4(2, 2, 2, 1), the addon's own off-screen cull: zero raster cost.
+// That is a SIGN test, not Discard's truthiness, so a distance field wired to
+// Cut keeps its inside; `invert: true` (the literal) flips it; `feather` fades
+// alpha by clamp(1 - cut / feather, 0, 1). A quad the addon itself culled stays
+// culled. Everything runs per VERTEX (4 per splat), never per pixel.
+//
+// The addon's onBeforeRender re-imposes ITS vertex node every frame, so the
+// wrapper replaces it with one that calls exactly the two public methods it
+// calls: updateSphericalHarmonics and (when autoSort) updateSort. unsplat puts
+// the vertex node, the colour node and onBeforeRender back.
+//
+// Private addon fields are read (`_buffers.centerRead`, `_sort.orderRead`):
+// when a three.js revision renames them the splat is left unedited with one
+// warning, never a throw. A splat still carrying spherical harmonics is left
+// alone too: on WebGL its SH vertex variant cannot be wrapped.
+
+// The four values every splat function receives, in order.
+var SPLAT_PARAMS = ["p", "pw", "n", "c"];
+var SPLAT_SPEC_FNS = ["shade", "shape", "size", "feather"];
+
+// size / feather: a function of the splat, a finite number or a node; anything
+// else is the default (size 1, feather 0).
+function isSplatValue(v) {
+  return (
+    typeof v === "function" ||
+    (typeof v === "number" && isFinite(v)) ||
+    !!(v && typeof v === "object" && v.isNode === true)
+  );
+}
+
+// A direct call, never f.apply(): a TSL Fn() is a Proxy whose property reads
+// go to its FnNode, so `fn.apply` is undefined there.
+function callSplatFn(f, args) {
+  return f(args[0], args[1], args[2], args[3]);
+}
+
+function splatValue(TSL, v, dflt, args) {
+  if (typeof v === "function") v = callSplatFn(v, args);
+  if (typeof v === "number") return TSL.float(isFinite(v) ? v : dflt);
+  if (v && typeof v === "object" && v.isNode === true) return v;
+  return TSL.float(dflt);
+}
+
+// Call every PLAIN-function entry once, now, on stand-in nodes, so one that
+// throws (or a shade / shape that returns no node) fails the APPLY — whose
+// catch leaves the target as authored — rather than the first render. A TSL
+// Fn() is skipped: calling one only records the call, its body runs when the
+// shader is built.
+function probeSplatSpec(TSL, spec) {
+  var args = [TSL.vec3(0), TSL.vec3(0), TSL.vec3(0, 0, 1), TSL.vec4(1)];
+  for (var i = 0; i < SPLAT_SPEC_FNS.length; i++) {
+    var key = SPLAT_SPEC_FNS[i];
+    var f = spec[key];
+    if (typeof f !== "function" || f.isFn === true) continue;
+    var r = callSplatFn(f, args);
+    // size / feather fall back to their default on any other value (see
+    // splatValue); shade and shape have no default to fall back to.
+    var ok = key === "size" || key === "feather" || !!(r && typeof r === "object" && r.isNode === true);
+    if (!ok) {
+      throw new TypeError("FastShaders: splat." + key + "(p, pw, n, c) must return a TSL node.");
+    }
+  }
+}
+
+function restoreSplat(rec) {
+  if (rec.restored) return;
+  rec.restored = true;
+  rec.material.vertexNode = rec.vertexNode;
+  rec.material.colorNode = rec.colorNode;
+  rec.node.onBeforeRender = rec.onBeforeRender;
+  rec.material.needsUpdate = true;
+}
+
+// Wrap ONE GaussianSplat → its record, or null (warned) when it cannot be.
+function wrapSplat(state, node, spec) {
+  var material = node && node.material;
+  var buffers = node && node._buffers;
+  var sort = node && node._sort;
+  var centerRead = buffers && buffers.centerRead;
+  var orderRead = sort && sort.orderRead;
+  if (
+    !material ||
+    !material.vertexNode ||
+    !centerRead ||
+    typeof centerRead.element !== "function" ||
+    !orderRead ||
+    typeof orderRead.element !== "function" ||
+    typeof node.updateSphericalHarmonics !== "function" ||
+    typeof node.updateSort !== "function"
+  ) {
+    warnOnce("splat-shape", WARN_SPLAT_SHAPE);
+    return null;
+  }
+  if (node._sphericalHarmonicsVertexNode != null) {
+    warnOnce("splat-sh", WARN_SPLAT_SH);
+    return null;
+  }
+  spec = spec && typeof spec === "object" ? spec : {};
+  var TSL = T().TSL;
+  var rec = {
+    node: node,
+    material: material,
+    vertexNode: material.vertexNode,
+    colorNode: material.colorNode,
+    onBeforeRender: node.onBeforeRender,
+    restored: false,
+  };
+  var inner = rec.vertexNode;
+  var shadeFn = typeof spec.shade === "function" ? spec.shade : null;
+  var shapeFn = typeof spec.shape === "function" ? spec.shape : null;
+  var hasSize = isSplatValue(spec.size);
+  var invert = spec.invert === true;
+  var vcol = TSL.varyingProperty("vec4", "vSplatColor");
+  // A throw while the shader is BUILT puts THIS splat back before the error
+  // goes on, so the next frame draws it unedited instead of failing every
+  // frame.
+  var drop = function () {
+    restoreSplat(rec);
+    var list = state._splatWraps;
+    var at = list ? list.indexOf(rec) : -1;
+    if (at !== -1) list.splice(at, 1);
+  };
+  var wrapped = TSL.Fn(function () {
+    // Runs when the shader is built, and calls the spec's PLAIN functions.
+    try {
+      var clip = inner.toVar("fsClip");
+      var oldCulled = clip.x.equal(2).and(clip.y.equal(2)).and(clip.z.equal(2)).and(clip.w.equal(1)).toVar("fsOldCulled");
+      var idx = orderRead.element(TSL.instanceIndex).toVar("fsIdx");
+      var p = centerRead.element(idx).xyz.toVar("fsP");
+      var pw = TSL.modelWorldMatrix.mul(TSL.vec4(p, 1)).xyz.toVar("fsPw");
+      var n = TSL.normalize(TSL.cameraPosition.sub(pw)).toVar("fsN");
+      var c = vcol.toVar("fsC");
+      var args = [p, pw, n, c];
+      var shape = shapeFn ? shapeFn(p, pw, n, c).toVar("fsShape") : null;
+      var feather = splatValue(TSL, spec.feather, 0, args);
+      var MV = TSL.highpModelViewMatrix;
+      var P = TSL.cameraProjectionMatrix;
+      if (shape || hasSize) {
+        var size = splatValue(TSL, spec.size, 1, args);
+        var centerOld = P.mul(MV.mul(TSL.vec4(p, 1))).toVar("fsCOld");
+        var offset = clip.sub(centerOld).toVar("fsOff");
+        var moved = shape ? p.add(shape.xyz) : p;
+        var viewNew = MV.mul(TSL.vec4(moved, 1)).toVar("fsVNew");
+        var centerNew = P.mul(viewNew).toVar("fsCNew");
+        // Physical growth (the offset stays in clip units = footprint x z/z'),
+        // capped at the addon's own bound: a corner sits at 2 sigma and
+        // sigma <= 1024 px, so 2048 px.
+        var pxNew = TSL.length(offset.xy.div(TSL.max(centerNew.w, 1e-6)).mul(TSL.cameraViewport.zw.mul(0.5))).toVar("fsPx");
+        var s = TSL.min(size, TSL.float(2048).div(TSL.max(pxNew, 1e-6))).toVar("fsS");
+        var lim = centerNew.w.mul(1.4);
+        var newCulled = viewNew.z
+          .greaterThanEqual(-0.01)
+          .or(centerNew.z.lessThan(centerNew.w.negate()))
+          .or(centerNew.z.greaterThan(centerNew.w))
+          .or(TSL.abs(centerNew.x).greaterThan(lim))
+          .or(TSL.abs(centerNew.y).greaterThan(lim));
+        clip.assign(centerNew.add(offset.mul(s)));
+        TSL.If(newCulled, function () {
+          clip.assign(TSL.vec4(2, 2, 2, 1));
+        });
+      }
+      var keep = TSL.float(1);
+      if (shape) {
+        var cutS = invert ? shape.w.negate() : shape.w;
+        keep = TSL.clamp(TSL.float(1).sub(cutS.div(TSL.max(feather, 1e-6))), 0, 1).toVar("fsKeep");
+        TSL.If(cutS.greaterThan(feather), function () {
+          clip.assign(TSL.vec4(2, 2, 2, 1));
+        });
+      }
+      TSL.If(oldCulled, function () {
+        clip.assign(TSL.vec4(2, 2, 2, 1));
+      });
+      var sh = shadeFn ? shadeFn(p, pw, n, c).toVar("fsShade") : TSL.vec4(c.rgb, 1);
+      vcol.assign(TSL.vec4(sh.rgb, c.a.mul(sh.a).mul(keep)));
+      return clip;
+    } catch (e) {
+      drop();
+      throw e;
+    }
+  })();
+  // A TSL Fn() spec's BODY runs later, while this node's subtree is built
+  // (and so does the addon's own inner node): the same guard, one level up.
+  var build = wrapped.build;
+  if (typeof build === "function") {
+    wrapped.build = function () {
+      try {
+        return Function.prototype.apply.call(build, this, arguments);
+      } catch (e) {
+        drop();
+        throw e;
+      }
+    };
+  }
+  material.vertexNode = wrapped;
+  material.needsUpdate = true;
+  node.onBeforeRender = function (renderer, scene, camera) {
+    node.updateSphericalHarmonics(renderer, camera);
+    if (node.autoSort === true) node.updateSort(renderer, camera);
+  };
+  return rec;
+}
+
+// Wrap every GaussianSplat under `mesh` → how many were wrapped. The records
+// land on state._splatWraps; state._splatStatus becomes "applied", "no-target"
+// (nothing to shade: one warning, other meshes stay authored) or "unavailable"
+// (splats found, none wrappable).
+function wrapSplats(state, mesh, spec) {
+  unsplat(state);
+  var nodes = [];
+  mesh.traverse(function (node) {
+    if (node.isGaussianSplat) nodes.push(node);
+  });
+  var wraps = [];
+  state._splatWraps = wraps;
+  if (nodes.length === 0) {
+    warnOnce("splat-no-target", WARN_SPLAT_NO_TARGET);
+    state._splatStatus = "no-target";
+    return 0;
+  }
+  spec = spec && typeof spec === "object" ? spec : {};
+  // Before anything is edited: a throw here leaves every splat as it was.
+  probeSplatSpec(T().TSL, spec);
+  for (var i = 0; i < nodes.length; i++) {
+    var rec = wrapSplat(state, nodes[i], spec);
+    if (rec) wraps.push(rec);
+  }
+  state._splatStatus = wraps.length > 0 ? "applied" : "unavailable";
+  return wraps.length;
+}
+
+// Put every wrapped splat back. Returns at once on a state that wrapped none.
+function unsplat(state) {
+  var list = state._splatWraps;
+  if (!list) return;
+  state._splatWraps = null;
+  for (var i = 0; i < list.length; i++) restoreSplat(list[i]);
 }
 
 // ---------------------------------------------------------------------------
@@ -1719,7 +2044,14 @@ function applyResult(state, mesh, loaded, hooks) {
   // null when the module carries no materialParts; the component emits it as
   // `shader-material-parts`, a plain Binding exposes it as `materialParts`.
   state._materialPartsStatus = mp.detail;
+  // Non-null while a `splat` module is applied: the dispatch's authored rung
+  // reads it (a splat module shades no ordinary mesh). wrapSplats settles it.
+  state._splatStatus = built.splat ? "requested" : null;
   applyMaterialToMesh(state, mesh, built.material, built.partMaterials);
+  // Gaussian splats (9b): their vertex nodes, after the dispatch (which skips
+  // them) and before the weld and the corners (which skip them too).
+  state._splatWraps = null;
+  if (built.splat) wrapSplats(state, mesh, built.splat);
   // Weld coincident vertices when this shader DISPLACES a primitive. Kept
   // out of applyMaterialToMesh so that keeps 0.6's exact dispatch shape.
   state._weldWanted = shouldWeld(
@@ -1817,6 +2149,9 @@ function apply(target, input, opts) {
     _materialPartsStatus: null,
     // src: model image URLs this binding owns (13c); apply() itself never adopts.
     _modelAssetUrls: null,
+    // Gaussian splats (9b): the wrapped splats' records, and the apply's status.
+    _splatWraps: null,
+    _splatStatus: null,
     _disposed: false,
   };
   const adapter = opts.textures || plainTextureAdapter(state);
@@ -1874,6 +2209,11 @@ function apply(target, input, opts) {
     // materialParts, else null (see resolveMaterialParts).
     get materialParts() {
       return state._materialPartsStatus;
+    },
+    // How many GaussianSplats this binding's `splat` spec is shading (0 for a
+    // module without `splat`, and after dispose).
+    get splats() {
+      return state._splatWraps ? state._splatWraps.length : 0;
     },
     // Set one property uniform: a number, a colour ('#33ccff', a THREE.Color)
     // or, for a map, a Texture, an element or a URL. false for a name the
@@ -3463,8 +3803,13 @@ const api = {
     resolveModelPlaceholders: resolveModelPlaceholders,
     modelPayloadOf: modelPayloadOf,
     releaseModelAssets: releaseModelAssets,
+    wrapSplats: wrapSplats,
+    wrapSplat: wrapSplat,
+    unsplat: unsplat,
   }),
   NODE_PROPS: Object.freeze(NODE_PROPS.slice()),
+  // The parameters every `splat` function receives, in order (section 9b).
+  SPLAT_PARAMS: Object.freeze(SPLAT_PARAMS.slice()),
   fetch: null,
   importSource: null,
 };
@@ -3539,6 +3884,9 @@ var componentDef = {
     // `_currentSrc === 'model'`, so the src string cannot tell them apart).
     this._modelAssetUrls = null;
     this._modelApplyToken = null;
+    // 0.8, Gaussian splats (9b): the wrapped splats' records and the status.
+    this._splatWraps = null;
+    this._splatStatus = null;
 
     // --- vertex weld (0.6) ---------------------------------------------------
     // `_weldWanted` is decided per apply (see shouldWeld); `_welded` is the
@@ -3732,6 +4080,11 @@ var componentDef = {
       // derives anything that matters from this event.
       if (this._materialPartsStatus) {
         this.el.emit("shader-material-parts", Object.assign({}, this._materialPartsStatus));
+      }
+      // …and a module that wrapped at least one GaussianSplat says how many
+      // (9b). Just as forgeable, and display-only for the same reason.
+      if (this._splatWraps && this._splatWraps.length > 0) {
+        this.el.emit("shader-splat", { src: tslPath, splats: this._splatWraps.length });
       }
       // Announce success so embedding pages (editor preview, viewer) can
       // clear any error overlay. Bubbles like every A-Frame entity event.

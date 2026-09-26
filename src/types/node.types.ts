@@ -372,6 +372,8 @@ export type NoteFlowNode = Node<NoteNodeData, 'note'>;
 export type SoundFlowNode = Node<ShaderNodeData, 'sound'>;
 /** The Raymarch Output — the Output node's chrome, its own component. */
 export type RaymarchOutputFlowNode = Node<OutputNodeData, 'raymarchOutput'>;
+/** The Splat Output — the Output node's chrome, its own component. */
+export type SplatOutputFlowNode = Node<OutputNodeData, 'splatOutput'>;
 
 /**
  * Every React Flow node type the app registers, so `node.type === 'sound'`
@@ -394,6 +396,7 @@ export type AppNode =
   | SoundFlowNode
   | OutputFlowNode
   | RaymarchOutputFlowNode
+  | SplatOutputFlowNode
   | GroupFlowNode
   | NoteFlowNode;
 

@@ -108,7 +108,8 @@ import type { DesktopAutosaveRuntime } from '@/utils/desktopAutosave';
 // pattern), so the dependency is one-way.
 import { evalLog } from '@/eval/telemetry';
 import type { PreviewMesh } from '@/utils/previewMesh';
-import type { MeshInventory } from '@/utils/meshInventory';
+import type { MeshInventory, PreviewSplatFacts } from '@/utils/meshInventory';
+import type { PreviewShape } from '@/engine/exportModel';
 import { savePreviewMeshToCache, announceMeshCacheFull } from '@/utils/previewMeshCache';
 import { encodeImageFile } from '@/utils/imageImport';
 import { transposeCsv, type ParsedCsv } from '@/utils/csvParser';
@@ -546,6 +547,7 @@ export type ContextMenuType =
   | 'node'
   | 'shader'
   | 'raymarch'
+  | 'splat'
   | 'edge'
   | 'group'
   | 'note'
@@ -1585,6 +1587,12 @@ interface AppState {
   // vouches for meshes no loaded model contains. It is re-reported by every
   // fresh preview document, so there is nothing to save.
   previewMeshInventory: MeshInventory | null;
+  // What the SANDBOX said about the Gaussian splat it built for the loaded
+  // splat mesh (`fs:model-splat`, validated by `sanitizeSplatReport`): the
+  // splat count and the spherical-harmonic degree it dropped. SESSION-ONLY and
+  // DISPLAY-ONLY like the inventory beside it — forgeable, so it is never
+  // priced, emitted, persisted or put in history; `setPreviewMesh` clears it.
+  previewSplatFacts: PreviewSplatFacts | null;
   // Whether Export bundles the loaded preview mesh into the zip (the EXPORT
   // button's right-click setting). SESSION-ONLY like the mesh it governs — a
   // persisted "off" would silently strip models from exports weeks later.
@@ -1604,6 +1612,18 @@ interface AppState {
   // them. The row renders only where an encoder is registered, so in a build
   // with none this flag is unreachable and inert.
   exportKtx2: boolean;
+  // The EXPORT popover's "Include unconnected nodes" row: false = EXPORT
+  // carries only the nodes that feed an Output (engine/exportGraph.ts). OFF by
+  // default and SESSION-ONLY like the three export flags above; NEW's
+  // save-first, the Work-folder Save and the study package never read it —
+  // they always export the whole canvas.
+  exportAllNodes: boolean;
+  // The EXPORT popover's "Export model" row while a BUILT-IN shape is shown
+  // (sphere, cube, plane, Raymarch window, teapot, bunny): ship it as an .obj
+  // under models/ (engine/builtinModelObj.ts). OFF by default — a plain shader
+  // stays a bare .js — and SESSION-ONLY like the flags above. The DROPPED
+  // model keeps `exportIncludeMesh`.
+  exportBuiltinModel: boolean;
   // The preview top bar's WGSL/GLSL toggle — true forces the sandboxed 3D
   // preview onto the WebGL2/GLSL backend (what the immersive popup and Safari
   // always run), so backend-dependent shader behavior is checkable without a
@@ -1618,6 +1638,11 @@ interface AppState {
   // (`shownPreviewMesh`, utils/outputMaterials.ts). True until the preview
   // reports, so a page without one hides nothing.
   previewShowsModel: boolean;
+  // What the 3D pane RENDERS — geometry, subdivision, Raymarch window radius —
+  // written by ShaderPreview (engine/exportModel.ts). SESSION-ONLY like the
+  // flag above and never read by emission: EXPORT reads it to ship the SHOWN
+  // model, and the popover names it. Null until the preview reports.
+  previewShape: PreviewShape | null;
 
   // Board drawings (freehand ink annotations) — VISUAL-ONLY, like notes /
   // waypoints. Separate slice so graphToCode / cpuEvaluator / the sync engine
@@ -1850,11 +1875,16 @@ interface AppState {
    * forge the message this comes from.
    */
   setPreviewMeshInventory: (inventory: MeshInventory | null) => void;
+  /** The validated `fs:model-splat` facts (ShaderPreview is the one writer). */
+  setPreviewSplatFacts: (facts: PreviewSplatFacts | null) => void;
   setExportIncludeMesh: (include: boolean) => void;
   setExportAsGlb: (asGlb: boolean) => void;
   setExportKtx2: (on: boolean) => void;
+  setExportAllNodes: (all: boolean) => void;
+  setExportBuiltinModel: (on: boolean) => void;
   setPreviewForceWebGL2: (force: boolean) => void;
   setPreviewShowsModel: (shows: boolean) => void;
+  setPreviewShape: (shape: PreviewShape | null) => void;
   setSelectedHeadsetId: (id: string) => void;
 
   // Node variable name actions
@@ -2007,11 +2037,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
   savedGroups: [],
   previewMesh: null,
   previewMeshInventory: null,
+  previewSplatFacts: null,
   exportIncludeMesh: true,
   exportAsGlb: false,
   exportKtx2: false,
+  exportAllNodes: false,
+  exportBuiltinModel: false,
   previewForceWebGL2: false,
   previewShowsModel: true,
+  previewShape: null,
 
   // Drawings are hydrated from fs:graph by App.tsx (loadGraph) alongside the
   // graph; tool prefs are their own persisted keys.
@@ -2689,12 +2723,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
       const tr = transposeCsv(head.parsed);
       if (!tr.ok) {
         // Can't transpose (would exceed the column cap) — surface it and skip
-        // rather than placing an invalid node. `{error}` stays the parser's
-        // own English message.
+        // rather than placing an invalid node.
+        const lang = get().language;
         window.alert(
-          fillTemplate(t('Could not transpose {name}:\n{error}', get().language), {
+          fillTemplate(t('Could not transpose {name}:\n{error}', lang), {
             name: `“${head.fileName}”`,
-            error: tr.error,
+            error: fillTemplate(t(tr.errorKey, lang), tr.errorParams),
           }),
         );
         dequeue();
@@ -2880,7 +2914,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // "nothing known yet" is the only honest answer. Keeping the previous
     // model's names would leave a picker offering meshes that are no longer
     // on screen, which is indistinguishable from the new model having them.
-    set({ previewMesh: mesh, previewMeshInventory: null });
+    // The splat facts describe one mesh too, and go with it on the same terms.
+    set({ previewMesh: mesh, previewMeshInventory: null, previewSplatFacts: null });
     // Fire-and-forget: the cache is a convenience, so a quota/private-mode
     // failure must never make the drop itself fail. savePreviewMeshToCache
     // resolves on every error path rather than rejecting. Only a QUOTA failure
@@ -2897,14 +2932,30 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setPreviewMeshInventory: (inventory) => set({ previewMeshInventory: inventory }),
 
+  setPreviewSplatFacts: (facts) => set({ previewSplatFacts: facts }),
+
   setExportIncludeMesh: (include) => set({ exportIncludeMesh: include }),
 
   setExportAsGlb: (asGlb) => set({ exportAsGlb: asGlb === true }),
   setExportKtx2: (on) => set({ exportKtx2: on === true }),
 
+  setExportAllNodes: (all) => set({ exportAllNodes: all === true }),
+  setExportBuiltinModel: (on) => set({ exportBuiltinModel: on === true }),
+
   setPreviewForceWebGL2: (force) => set({ previewForceWebGL2: force }),
 
   setPreviewShowsModel: (shows) => set({ previewShowsModel: shows }),
+
+  // Written from an effect keyed on the three values, so it lands only when
+  // one of them changed; the equality check keeps a re-report inert anyway.
+  setPreviewShape: (shape) => {
+    const cur = get().previewShape;
+    if (
+      cur === shape ||
+      (cur && shape && cur.geometry === shape.geometry && cur.subdivision === shape.subdivision && cur.marchWindow === shape.marchWindow)
+    ) return;
+    set({ previewShape: shape });
+  },
 
   setSelectedHeadsetId: (id) => {
     // Selecting a device may be a measured cost profile (its id) or a built-in

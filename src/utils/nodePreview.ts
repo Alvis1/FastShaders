@@ -1,7 +1,7 @@
 import type { AppNode, AppEdge, OutputNodeData, PortDefinition, ShaderNodeData } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { findDefaultOutput, isOutputNode } from '@/utils/outputMaterials';
-import { isSinkNode, hasActiveFlag, ACTIVE_OUTPUT_KEY } from '@/utils/sdfPartition';
+import { isSinkNode, isSplatOutput, hasActiveFlag, activeSink, ACTIVE_OUTPUT_KEY, SPLAT_OUTPUT_TYPE } from '@/utils/sdfPartition';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { generateEdgeId } from '@/utils/idGenerator';
 
@@ -31,8 +31,36 @@ export interface NodePreviewTarget {
   handleId: string;
 }
 
-/** The Output channel the previewed socket is routed to. */
+/** The socket the previewed output is routed to — the plain Output's Color
+ *  channel, or, while a Splat Output is the active sink, THAT node's Color
+ *  socket (the same id on both, which is what lets PreviewRoute look for one
+ *  handle whichever node the route ends on). */
 export const PREVIEW_CHANNEL = 'color';
+
+/**
+ * The Splat Output Preview mode routes to: the ACTIVE sink when it is a Splat
+ * Output (`activeSink` over UNWRAPPED edges — a feeder inside a collapsed
+ * group still wires it), else null. A document with no Splat Output at all
+ * never unwraps anything, so every other graph takes exactly the path it
+ * always did.
+ */
+function activeSplatSink(nodes: readonly AppNode[], unwrapped: () => AppEdge[]): AppNode | null {
+  if (!nodes.some(isSplatOutput)) return null;
+  const s = activeSink(nodes, unwrapped());
+  return s && isSplatOutput(s) ? s : null;
+}
+
+/**
+ * The id of the node the Preview route ENDS on — what `previewGraph` routes to
+ * and `PreviewRoute` draws to: the active Splat Output when a splat drives,
+ * else the plain Output `findDefaultOutput` names, else null (the module then
+ * feeds a synthesized Output, `PREVIEW_OUTPUT_ID`, and there is no socket on
+ * the canvas to draw to).
+ */
+export function previewTargetId(nodes: AppNode[], edges: AppEdge[]): string | null {
+  const splat = activeSplatSink(nodes, () => unwrapCollapsedGroupEdges(nodes, edges));
+  return splat?.id ?? findDefaultOutput(nodes)?.id ?? null;
+}
 
 /**
  * The id of the Output node `previewGraph` SYNTHESIZES when the graph has no
@@ -91,7 +119,7 @@ export function resolveNodePreview(
  * The DERIVED graph the 3D preview renders while a node is previewed. Three
  * rewrites, applied to copies — the store's arrays are never mutated:
  *
- *   1. Every edge INTO any sink (plain Output or Raymarch Output) is dropped —
+ *   1. Every edge INTO any sink (plain, Raymarch or Splat Output) is dropped —
  *      "disable all other inputs to the Output". Edges are unwrapped first
  *      (`unwrapCollapsedGroupEdges`), so a wire that reaches the Output
  *      through a collapsed group's boundary socket is dropped too.
@@ -127,6 +155,19 @@ export function resolveNodePreview(
  * The result is a graph like any other, so `graphToCode` needs no preview
  * branch and the emitted module is exactly what the user would get by wiring
  * the socket to Color by hand and unplugging everything else.
+ *
+ * A SPLAT DOCUMENT is the one exception to the anchor. While a Splat Output is
+ * the ACTIVE sink the thing on screen is a Gaussian-splat scene, which a plain
+ * Output cannot shade at all (loader 0.8 wraps only the splat objects, and
+ * only for a module returning `splat`), so re-anchoring on a plain Output
+ * would preview the node on nothing. The route ends on THAT Splat Output
+ * instead, cleaned the same way — same id, no stored values (so no swatch, no
+ * Opacity, no Invert, no Feather or Size), its flag set — and fed on its own
+ * Color socket: every splat is painted with the previewed value, evaluated at
+ * its centre. Rules 1 and 2 are unchanged (every sink edge drops, every plain
+ * Output goes, any other flagged sink loses its flag). A march on a splat
+ * document keeps today's treatment: while IT is the active sink, the plain
+ * Output anchors, and the unwired, unflagged splat cannot drive.
  */
 export function previewGraph(
   nodes: AppNode[],
@@ -136,19 +177,35 @@ export function previewGraph(
   const src = nodes.find((n) => n.id === preview.nodeId);
   if (!src) return { nodes, edges };
 
-  const target = findDefaultOutput(nodes);
+  let unwrappedCache: AppEdge[] | null = null;
+  const unwrapped = () => (unwrappedCache ??= unwrapCollapsedGroupEdges(nodes, edges));
+  const splat = activeSplatSink(nodes, unwrapped);
+  const target = splat ?? findDefaultOutput(nodes);
   const outId = target?.id ?? PREVIEW_OUTPUT_ID;
-  const settings = target ? (target.data as OutputNodeData).materialSettings : undefined;
-  const clean = {
-    ...(target ?? { id: PREVIEW_OUTPUT_ID, type: 'output' as const, position: { x: 0, y: 0 } }),
-    data: {
-      registryType: 'output' as const,
-      label: 'Output',
-      cost: 0,
-      ...(settings ? { materialSettings: settings } : {}),
-      [ACTIVE_OUTPUT_KEY]: true,
-    },
-  } as AppNode;
+  let clean: AppNode;
+  if (splat) {
+    clean = {
+      ...splat,
+      data: {
+        registryType: SPLAT_OUTPUT_TYPE,
+        label: NODE_REGISTRY.get(SPLAT_OUTPUT_TYPE)?.label ?? 'Splat Output',
+        cost: 0,
+        [ACTIVE_OUTPUT_KEY]: true,
+      },
+    } as unknown as AppNode;
+  } else {
+    const settings = target ? (target.data as OutputNodeData).materialSettings : undefined;
+    clean = {
+      ...(target ?? { id: PREVIEW_OUTPUT_ID, type: 'output' as const, position: { x: 0, y: 0 } }),
+      data: {
+        registryType: 'output' as const,
+        label: 'Output',
+        cost: 0,
+        ...(settings ? { materialSettings: settings } : {}),
+        [ACTIVE_OUTPUT_KEY]: true,
+      },
+    } as AppNode;
+  }
 
   /** The other plain Outputs, dropped outright (rule 2). */
   const dropped = new Set<string>();
@@ -174,7 +231,7 @@ export function previewGraph(
   // reaches here from a hand-edited file, but a wire to a node the derived
   // graph no longer holds is exactly the dangling reference codegen must never
   // be handed.
-  const kept = unwrapCollapsedGroupEdges(nodes, edges).filter(
+  const kept = unwrapped().filter(
     (e) => !sinkIds.has(e.target) && !dropped.has(e.source),
   );
   const route: AppEdge = {

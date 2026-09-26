@@ -28,11 +28,12 @@
  *    ones wrap.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { FIT_BOUNDS_SCRIPT } from './tslToPreviewHTML';
+import { bareObjArrays } from './builtinModelObj';
 
 interface FitComponent {
   fit: (this: { el: { getObject3D: () => THREE.Object3D | null }; data: { size: number; regen: boolean } }) => void;
@@ -731,6 +732,71 @@ describe('fit-bounds normalization', () => {
     const root = new THREE.Object3D();
     expect(() => runFit(root)).not.toThrow();
   });
+
+  /**
+   * A GaussianSplat as the `splat-model` component hands it over: a Mesh whose
+   * geometry is ONE instanced ±2 quad (`instanceCount` = splats). Stubbed rather
+   * than built — the addon is not part of the node three — with the two facts
+   * fit-bounds could trip on: `isMesh` and a real geometry.
+   */
+  function makeSplatStub(splats = 1000): THREE.Mesh {
+    const g = new THREE.InstancedBufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-2, -2, 0, 2, -2, 0, 2, 2, 0, -2, 2, 0]), 3));
+    g.setIndex([0, 1, 2, 0, 2, 3]);
+    g.instanceCount = splats;
+    return Object.assign(new THREE.Mesh(g, new THREE.MeshBasicMaterial()), { isGaussianSplat: true });
+  }
+
+  /** Run `fn` with `Box3.setFromObject` and the splat geometry's `clone` spied on. */
+  function withSpies(splat: THREE.Mesh, fn: () => void): { setFromObject: number; clone: number } {
+    const box = vi.spyOn(THREE.Box3.prototype, 'setFromObject');
+    const clone = vi.spyOn(splat.geometry, 'clone');
+    try {
+      fn();
+      return { setFromObject: box.mock.calls.length, clone: clone.mock.calls.length };
+    } finally {
+      box.mockRestore();
+      clone.mockRestore();
+    }
+  }
+
+  it('leaves a Gaussian splat exactly as splat-model built it — never cloned, baked or scaled', () => {
+    const splat = makeSplatStub();
+    splat.position.set(0.3, -0.2, 0.1);
+    const geometry = splat.geometry;
+    const before = Array.from(geometry.attributes.position.array as Float32Array);
+    const calls = withSpies(splat, () => runFit(splat, { regen: false }));
+    expect(calls).toEqual({ setFromObject: 0, clone: 0 });
+    expect(splat.geometry).toBe(geometry);
+    expect(Array.from(geometry.attributes.position.array as Float32Array)).toEqual(before);
+    expect(splat.position.toArray()).toEqual([0.3, -0.2, 0.1]);
+    expect(splat.scale.toArray()).toEqual([1, 1, 1]);
+    expect((splat.geometry as THREE.InstancedBufferGeometry).instanceCount).toBe(1000);
+  });
+
+  it('returns early for a splat ANYWHERE in the subtree — the mesh beside it is not baked either', () => {
+    const root = new THREE.Group();
+    root.scale.setScalar(3);
+    const splat = makeSplatStub();
+    const box = makeBoxMesh(50);
+    const boxGeometry = box.geometry;
+    root.add(box, splat);
+    const calls = withSpies(splat, () => runFit(root));
+    expect(calls).toEqual({ setFromObject: 0, clone: 0 });
+    expect(box.geometry).toBe(boxGeometry);
+    expect(root.scale.toArray()).toEqual([3, 3, 3]);
+  });
+
+  it('never measures a splat by its world box, even on the animated (Object3D-scaling) path', () => {
+    const root = new THREE.Group();
+    root.animations = [new THREE.AnimationClip('spin', 1, [])];
+    const splat = makeSplatStub();
+    root.add(splat);
+    const calls = withSpies(splat, () => runFit(root));
+    expect(calls.setFromObject).toBe(0);
+    expect(root.scale.toArray()).toEqual([1, 1, 1]);
+    expect(root.position.toArray()).toEqual([0, 0, 0]);
+  });
 });
 
 /**
@@ -901,5 +967,197 @@ describe('podest fit-bounds twin', () => {
 
     runPodestFit(root);
     expect(longestAxis(attributeBounds(root))).toBeCloseTo(1.6, 5);
+  });
+
+  /*
+   * The Gaussian-splat early return, twinned. Podest's stage and VR popup put
+   * fit-bounds beside splat-model exactly as the editor does, so a twin that
+   * kept baking would clone the one instanced ±2 quad and scale the already
+   * normalised scene (or measure the quad with a Box3) on the pedestal only.
+   */
+  const podestSplatStub = (splats = 1000): THREE.Mesh => {
+    const g = new THREE.InstancedBufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-2, -2, 0, 2, -2, 0, 2, 2, 0, -2, 2, 0]), 3));
+    g.setIndex([0, 1, 2, 0, 2, 3]);
+    g.instanceCount = splats;
+    const splat = new THREE.Mesh(g, new THREE.MeshBasicMaterial());
+    (splat as unknown as { isGaussianSplat: boolean }).isGaussianSplat = true;
+    return splat;
+  };
+  const podestSpied = (splat: THREE.Mesh, fn: () => void): { setFromObject: number; clone: number } => {
+    const box = vi.spyOn(THREE.Box3.prototype, 'setFromObject');
+    const clone = vi.spyOn(splat.geometry, 'clone');
+    try {
+      fn();
+      return { setFromObject: box.mock.calls.length, clone: clone.mock.calls.length };
+    } finally {
+      box.mockRestore();
+      clone.mockRestore();
+    }
+  };
+
+  it('leaves a Gaussian splat exactly as splat-model built it, like the editor copy', () => {
+    const run = (fit: (r: THREE.Object3D) => void) => {
+      const splat = podestSplatStub();
+      splat.position.set(0.3, -0.2, 0.1);
+      const geometry = splat.geometry;
+      const before = Array.from(geometry.attributes.position.array as Float32Array);
+      const calls = podestSpied(splat, () => fit(splat));
+      expect(splat.geometry).toBe(geometry);
+      expect(Array.from(geometry.attributes.position.array as Float32Array)).toEqual(before);
+      expect((geometry as THREE.InstancedBufferGeometry).instanceCount).toBe(1000);
+      return { calls, position: splat.position.toArray(), scale: splat.scale.toArray() };
+    };
+    const podest = run((r) => runPodestFit(r, false));
+    expect(podest).toEqual({ calls: { setFromObject: 0, clone: 0 }, position: [0.3, -0.2, 0.1], scale: [1, 1, 1] });
+    expect(podest).toEqual(run((r) => runFit(r, { regen: false })));
+  });
+
+  it('returns early for a splat ANYWHERE in the subtree — the mesh beside it is not baked either', () => {
+    for (const regen of [true, false]) {
+      const root = new THREE.Group();
+      root.scale.setScalar(3);
+      const splat = podestSplatStub();
+      const box = makeBoxMesh(50);
+      const boxGeometry = box.geometry;
+      root.add(box, splat);
+      const calls = podestSpied(splat, () => runPodestFit(root, regen));
+      expect(calls).toEqual({ setFromObject: 0, clone: 0 });
+      expect(box.geometry).toBe(boxGeometry);
+      expect(root.scale.toArray()).toEqual([3, 3, 3]);
+    }
+  });
+
+  it('never measures a splat by its world box, even on the animated (Object3D-scaling) path', () => {
+    const root = new THREE.Group();
+    root.animations = [new THREE.AnimationClip('spin', 1, [])];
+    const splat = podestSplatStub();
+    root.add(splat);
+    const calls = podestSpied(splat, () => runPodestFit(root));
+    expect(calls.setFromObject).toBe(0);
+    expect(root.scale.toArray()).toEqual([1, 1, 1]);
+    expect(root.position.toArray()).toEqual([0, 0, 0]);
+  });
+
+  it('spells the guard the way the editor copy does (one check in the traverse, one return after it)', () => {
+    const html = readFileSync(new URL('../../public/podest.html', import.meta.url), 'utf8');
+    const line = html.split('\n').find((l) => l.includes('L.push(\'  AFRAME.registerComponent("fit-bounds"'))!;
+    expect(line).toContain('root.traverse(function(node){if(node.isGaussianSplat){splatSeen=true;return;}if(!node.isMesh||!node.geometry)return;');
+    expect(line).toContain('});if(splatSeen)return;if(skinned||animated){');
+    expect(FIT_BOUNDS_SCRIPT).toContain('if (node.isGaussianSplat) { splatSeen = true; return; }');
+    expect(FIT_BOUNDS_SCRIPT).toContain('if (splatSeen) return;');
+  });
+});
+
+/**
+ * A bare OBJ — `v` and `f` lines, no `vn` — is what the built-in Stanford
+ * bunny is. three's OBJLoader INVENTS a flat per-face normal for every face
+ * without a `vn` index, the regen path took those for authored normals, and
+ * `splitByAuthored` split every corner apart again: measured in the browser,
+ * 208,567 vertices for 34,834 positions, so any displacement tore the bunny
+ * into loose triangles and "Merge Vertices" could not reach it (the loader
+ * welds primitives only). Both twins now drop the invented normals at the
+ * parse. Evaluated with an OBJLoader SUBCLASS, so the patch lands on the
+ * subclass's prototype and cannot leak into another suite (`isolate: false`).
+ */
+describe('a bare OBJ is welded, not split by invented normals', () => {
+  const BUNNY = readFileSync(new URL('../../public/models/stanford-bunny.obj', import.meta.url), 'utf8');
+
+  // As in the vendored bundle: the loader obj-model builds hangs off
+  // AFRAME.THREE, which is NOT window.THREE (that one has no OBJLoader) — the
+  // first cut patched window.THREE's, a no-op the browser caught.
+  function editorWithLoader() {
+    class ProbeOBJLoader extends OBJLoader {}
+    const body = FIT_BOUNDS_SCRIPT.replace(/^<script>/, '').replace(/<\/script>$/, '');
+    const registry: Record<string, FitComponent> = {};
+    const AFRAME = {
+      THREE: { OBJLoader: ProbeOBJLoader },
+      components: {} as Record<string, unknown>,
+      registerComponent: (name: string, def: FitComponent) => { registry[name] = def; },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    new Function('THREE', 'window', 'AFRAME', body)(THREE, { AFRAME }, AFRAME);
+    return { comp: registry['fit-bounds'], Loader: ProbeOBJLoader };
+  }
+
+  function podestWithLoader() {
+    class ProbeOBJLoader extends OBJLoader {}
+    const html = readFileSync(new URL('../../public/podest.html', import.meta.url), 'utf8');
+    const wanted = ['function patchObjNormals', 'patchObjNormals();', 'function mergeByPosition', 'function rawComponent', 'function expandAttribute', 'function splitUVSeam', 'function splitByAuthored', 'function sphericalUVs', 'function flipWinding', 'function dequantize', 'AFRAME.registerComponent("fit-bounds"'];
+    const parts = wanted.map((needle) => {
+      const line = html.split('\n').find((l) => l.includes(`L.push('  ${needle}`));
+      expect(line, `podest.html is missing its ${needle} push`).toBeTruthy();
+      // The host string is single-quoted JS: undo its one escape (\\ → \), as
+      // the runtime does when it writes the line into the document.
+      return line!.trim().replace(/^L\.push\('/, '').replace(/'\);$/, '').replace(/\\\\/g, '\\');
+    });
+    const registry: Record<string, FitComponent> = {};
+    const AFRAME = {
+      THREE: { OBJLoader: ProbeOBJLoader },
+      components: {} as Record<string, unknown>,
+      registerComponent: (name: string, def: FitComponent) => { registry[name] = def; },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    new Function('THREE', 'AFRAME', parts.join('\n'))(THREE, AFRAME);
+    return { comp: registry['fit-bounds'], Loader: ProbeOBJLoader };
+  }
+
+  /** Coincident vertices whose normals differ — a crack under displacement. */
+  function splitGroups(g: THREE.BufferGeometry): number {
+    const pos = g.attributes.position, nor = g.attributes.normal;
+    const first = new Map<string, number>();
+    let split = 0;
+    for (let i = 0; i < pos.count; i++) {
+      const k = `${Math.round(pos.getX(i) * 1e4)}_${Math.round(pos.getY(i) * 1e4)}_${Math.round(pos.getZ(i) * 1e4)}`;
+      const j = first.get(k);
+      if (j === undefined) { first.set(k, i); continue; }
+      if (Math.abs(nor.getX(i) - nor.getX(j)) + Math.abs(nor.getY(i) - nor.getY(j)) + Math.abs(nor.getZ(i) - nor.getZ(j)) > 1e-5) split++;
+    }
+    return split;
+  }
+
+  const fitted = (w: { comp: FitComponent; Loader: typeof OBJLoader }, text: string): THREE.BufferGeometry => {
+    const root = w.Loader.prototype.parse.call(new w.Loader(), text) as THREE.Group;
+    w.comp.fit.call({ el: { getObject3D: () => root }, data: { size: 1.6, regen: true } });
+    return (root.children[0] as THREE.Mesh).geometry;
+  };
+
+  it('drops only the INVENTED normals at the parse, and patches only the loader it was handed', () => {
+    const { Loader } = editorWithLoader();
+    const bare = new Loader().parse('v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n');
+    expect((bare.children[0] as THREE.Mesh).geometry.attributes.normal).toBeUndefined();
+    const authored = new Loader().parse('v 0 0 0\nv 1 0 0\nv 0 1 0\nvn 0 0 1\nf 1//1 2//1 3//1\n');
+    expect((authored.children[0] as THREE.Mesh).geometry.attributes.normal).toBeTruthy();
+    expect(Object.prototype.hasOwnProperty.call(OBJLoader.prototype, '__fsBareObjNormals')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(OBJLoader.prototype, 'parse')).toBe(true);
+  });
+
+  it('the bunny comes out one skin in the editor preview and in podest', () => {
+    const editor = fitted(editorWithLoader(), BUNNY);
+    const podest = fitted(podestWithLoader(), BUNNY);
+    expect(splitGroups(editor)).toBe(0);
+    expect(splitGroups(podest)).toBe(0);
+    expect(podest.attributes.position.count).toBe(editor.attributes.position.count);
+    // Welded: near the scan's own vertex count, not one vertex per corner.
+    expect(editor.attributes.position.count).toBeLessThan(36000);
+  });
+
+  it('an OBJ that carries vn keeps its creases', () => {
+    // A flat-shaded quad pair folded at x=0: two authored normals at the fold.
+    const text = 'v -1 0 0\nv 0 0 0\nv 0 1 0\nv 1 0 1\nvn 0 0 1\nvn 1 0 0\nf 1//1 2//1 3//1\nf 2//2 4//2 3//2\n';
+    const g = fitted(editorWithLoader(), text);
+    expect(splitGroups(g)).toBeGreaterThan(0);
+  });
+
+  it('the exported bunny IS the bunny the preview shows', () => {
+    const editor = fitted(editorWithLoader(), BUNNY);
+    const exported = bareObjArrays(BUNNY)!;
+    expect(exported.positions.length / 3).toBe(editor.attributes.position.count);
+    for (let i = 0; i < editor.attributes.position.count; i += 97) {
+      expect(exported.positions[i * 3]).toBeCloseTo(editor.attributes.position.getX(i), 4);
+      expect(exported.positions[i * 3 + 1]).toBeCloseTo(editor.attributes.position.getY(i), 4);
+      expect(exported.normals[i * 3 + 2]).toBeCloseTo(editor.attributes.normal.getZ(i), 4);
+      expect(exported.uvs![i * 2]).toBeCloseTo(editor.attributes.uv.getX(i), 4);
+    }
   });
 });

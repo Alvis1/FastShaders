@@ -10,13 +10,15 @@
  * initialisation is exactly the costTable TDZ failure CLAUDE.md records. The
  * pre-read size gate (`preReadModelGate`) lives here for the same reason, with
  * the too-large refusal it returns. So
- * this file imports only the shared JSON reviver and two TYPES, and must never
- * import `previewMesh.ts`, the reader or anything that reaches them
- * (`gltfCompression.test.ts` pins it).
+ * this file imports only the shared JSON reviver, two TYPES and the zero-import
+ * splat caps leaf (the pre-read gate refuses a `.splat` from its size alone),
+ * and must never import `previewMesh.ts`, the reader or anything that reaches
+ * them (`gltfCompression.test.ts` pins it).
  */
 
 import { safeJsonReviver } from './safeJson';
 import type { DecoderNeeds, DecoderSupport } from './meshDecoders';
+import { SPLAT_MAX_COUNT, SPLAT_ROW_BYTES } from './splatLimits';
 
 /** Hard cap on a model file. The zip reader's SUM cap (zipReader
  *  `MAX_TOTAL_UNCOMPRESSED`, 96 MiB) is this plus 32 MiB of headroom, so an
@@ -87,8 +89,28 @@ export const MESH_TOO_LARGE_KEY =
 export const MESH_TOO_LARGE_LIMIT_KEY =
   'Model too large ({size} MB — max {limit} MB). Reduce its polygon count or texture sizes and export it again from your 3D software.';
 
-/** Why a model was refused — what a caller that must BRANCH on it reads. */
-export type MeshRejectReason = 'unsupported' | 'empty' | 'too-large' | 'bad-glb' | 'compressed';
+/**
+ * Why a model was refused — what a caller that must BRANCH on it reads. The
+ * splat reasons: `bad-splat` (a container its loader would throw on),
+ * `splat-count` (over SPLAT_MAX_COUNT), `ply-not-splat` (a mesh or point-cloud
+ * `.ply`), `ply-sh` (a training `.ply` with `f_rest_*` bands), `ply-compressed`
+ * (SuperSplat's chunked `.ply`), `spz-version` (SPZ v4, zstd), `gltf-splat` (a
+ * glTF naming KHR_gaussian_splatting) and `splat-eval` (a study session).
+ */
+export type MeshRejectReason =
+  | 'unsupported'
+  | 'empty'
+  | 'too-large'
+  | 'bad-glb'
+  | 'compressed'
+  | 'bad-splat'
+  | 'splat-count'
+  | 'ply-not-splat'
+  | 'ply-sh'
+  | 'ply-compressed'
+  | 'spz-version'
+  | 'gltf-splat'
+  | 'splat-eval';
 
 /**
  * A model refusal, structured so every surface can translate it rather than
@@ -99,7 +121,12 @@ export type MeshRejectReason = 'unsupported' | 'empty' | 'too-large' | 'bad-glb'
  *   - `sizeBytes` is formatted at display time, in the reader's language;
  *   - `limitBytes` is the cap that was APPLIED, present only when it is not
  *     MESH_MAX_BYTES — it fills `{limit}`, which only MESH_TOO_LARGE_LIMIT_KEY
- *     carries and only `meshRefusalMessage` fills.
+ *     carries and only `meshRefusalMessage` fills;
+ *   - `count` is a splat count the file DECLARES (`{count}`), formatted at
+ *     display time like the size;
+ *   - `limitCount` is the splat cap that was applied, present only when it is
+ *     not SPLAT_MAX_COUNT (`{maxCount}` falls back to that cap);
+ *   - `version` is a container version the file declares (`{version}`).
  */
 export interface MeshRefusal {
   reason: MeshRejectReason;
@@ -108,6 +135,43 @@ export interface MeshRefusal {
   ext?: CompressionName;
   sizeBytes?: number;
   limitBytes?: number;
+  count?: number;
+  limitCount?: number;
+  version?: number;
+}
+
+/*
+ * The two splat refusals the pre-read gate can build from a `.splat`'s SIZE
+ * alone. They live here for the reason the too-large key does: the gate is in
+ * this leaf and may import nothing that could supply them. `splatSniff.ts`
+ * builds the same two after the read, through these same builders, so a drop
+ * refused before the read and a zip entry refused after it say the same thing.
+ */
+
+/** The literal "32" is pinned against SPLAT_ROW_BYTES by splatSniff.test.ts. */
+export const MESH_BAD_SPLAT_KEY = 'Not a valid .splat file (its size is not a whole number of 32-byte splats).';
+
+export const MESH_SPLAT_COUNT_KEY =
+  'Too many splats ({count} — max {maxCount}). Reduce the scene in SuperSplat (or splat-transform) and export it again.';
+
+/** Over the splat cap. `limitCount` is omitted for SPLAT_MAX_COUNT, as `limitBytes` is for the model gate. */
+export function splatCountRefusal(count: number, limitCount: number = SPLAT_MAX_COUNT): MeshRefusal {
+  return limitCount === SPLAT_MAX_COUNT
+    ? { reason: 'splat-count', key: MESH_SPLAT_COUNT_KEY, count }
+    : { reason: 'splat-count', key: MESH_SPLAT_COUNT_KEY, count, limitCount };
+}
+
+/**
+ * The `.splat` rules that need nothing but the length: the format is headerless
+ * fixed-width rows, so a length that is not a whole number of rows is a file
+ * SPLATLoader throws on, and the length divided by the row size IS the count.
+ * Null when the length passes (0 included: the empty-file refusal comes after
+ * the read). Only called with a safe, non-negative integer.
+ */
+export function splatSizeRefusal(sizeBytes: number): MeshRefusal | null {
+  if (sizeBytes % SPLAT_ROW_BYTES !== 0) return { reason: 'bad-splat', key: MESH_BAD_SPLAT_KEY };
+  const count = sizeBytes / SPLAT_ROW_BYTES;
+  return count > SPLAT_MAX_COUNT ? splatCountRefusal(count) : null;
 }
 
 /**
@@ -142,9 +206,17 @@ export function modelTooLargeRefusal(sizeBytes: number, limitBytes: number = MES
  * drop is exactly the old `file.size > MESH_MAX_BYTES` test
  * (`modelDropGate.test.ts` pins the call). A size that is not a finite,
  * non-negative number is refused: it cannot be shown to fit.
+ *
+ * A `.splat` is also refused from its size alone (`splatSizeRefusal`): a length
+ * that is not a whole number of 32-byte rows, or more rows than SPLAT_MAX_COUNT,
+ * is known before a byte is read — so a 32,000,032-byte drop never allocates.
+ * That check runs BEFORE the byte cap, so an oversized `.splat` names its splat
+ * count (what the user can act on) rather than megabytes, exactly as the
+ * post-read sniff does for the same file arriving from a zip. The other splat
+ * kinds carry their count in a header, which only the post-read sniff reads.
  */
 export function preReadModelGate(
-  kind: 'obj' | 'glb' | 'gltf' | null,
+  kind: 'obj' | 'glb' | 'gltf' | 'splat' | 'spz' | 'ply' | 'ksplat' | null,
   sizeBytes: number,
   buildEnabled: boolean,
 ): MeshRefusal | null {
@@ -153,6 +225,10 @@ export function preReadModelGate(
   // build path through the model-gate sentence told the user to get under 64 MB
   // when 96 — in the desktop room 256 — was allowed.
   if (typeof sizeBytes !== 'number' || !(sizeBytes >= 0)) return modelTooLargeRefusal(0, cap);
+  if (kind === 'splat' && Number.isSafeInteger(sizeBytes)) {
+    const splat = splatSizeRefusal(sizeBytes);
+    if (splat) return splat;
+  }
   return sizeBytes > cap ? modelTooLargeRefusal(sizeBytes, cap) : null;
 }
 
@@ -190,6 +266,16 @@ export function preReadModelGate(
  * Like `countMeshVertices`, it reads a length-capped header through the shared
  * reviver and looks at exactly two top-level string arrays.
  *
+ * ONE answer is not about compression: a document naming
+ * `KHR_gaussian_splatting` in either list is marked `gltfSplat`, which
+ * `createPreviewMesh` refuses ('gltf-splat', ahead of any compression refusal).
+ * r184's GLTFLoader does not know the extension, so it would hand the loader
+ * raw POINTS — a picture that silently is not the splat. That mark is only
+ * ever an answer the pre-check CAN give (the name is listed); every document
+ * it cannot read still fails open exactly as above, and a splat glTF that
+ * slips through that way is refused loudly by the sandbox when REQUIRED and
+ * drawn as points when merely used.
+ *
  * It is split in two so a caller that has ALREADY parsed the document (the
  * glTF reader) runs the same rules without a second parse:
  * `inspectGltfCompression` is the length cap and the parse, `inspectParsedGltf`
@@ -198,6 +284,7 @@ export function preReadModelGate(
 const GLTF_DRACO = 'KHR_draco_mesh_compression';
 const GLTF_MESHOPT = ['EXT_meshopt_compression', 'KHR_meshopt_compression'];
 const GLTF_BASISU = 'KHR_texture_basisu';
+const GLTF_GAUSSIAN_SPLATTING = 'KHR_gaussian_splatting';
 /** How many entries of each extension list are looked at — a real file lists a handful. */
 const EXTENSION_LIST_CAP = 256;
 
@@ -215,6 +302,10 @@ export interface GltfCompressionReport {
   ktx2Fallback: boolean;
   /** The decoders the model needs, on a surface that has them. */
   needs: DecoderNeeds;
+  /** Present (and `true`) only when either extension list names
+   *  `KHR_gaussian_splatting` — a glTF-wrapped splat, which is refused as
+   *  'gltf-splat'. Absent otherwise, so every other report is unchanged. */
+  gltfSplat?: true;
 }
 
 /** A fresh report for a document that was not inspected (or needs nothing). */
@@ -279,8 +370,11 @@ export function inspectParsedGltf(
     ktx2: basisuListed && support.ktx2,
   };
   const refusal = (refused: CompressionName): GltfCompressionReport => ({ refused, ktx2Fallback: false, needs });
-  if (dracoListed && !support.draco) return refusal('Draco');
-  if (meshoptRequired && !support.meshopt) return refusal('meshopt');
-  if (basisuRequired && !support.ktx2) return refusal('KTX2');
-  return { refused: null, ktx2Fallback: basisuListed && !support.ktx2, needs };
+  let report: GltfCompressionReport;
+  if (dracoListed && !support.draco) report = refusal('Draco');
+  else if (meshoptRequired && !support.meshopt) report = refusal('meshopt');
+  else if (basisuRequired && !support.ktx2) report = refusal('KTX2');
+  else report = { refused: null, ktx2Fallback: basisuListed && !support.ktx2, needs };
+  if (used.has(GLTF_GAUSSIAN_SPLATTING) || required.has(GLTF_GAUSSIAN_SPLATTING)) report.gltfSplat = true;
+  return report;
 }

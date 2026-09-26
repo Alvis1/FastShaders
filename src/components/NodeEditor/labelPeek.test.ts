@@ -1,7 +1,7 @@
 /**
  * The double-click/double-tap "show this node's port names" gesture.
  *
- * The DOM half (the class on the React Flow wrapper, the CSS that reads it) is
+ * The DOM half (the attribute on the React Flow wrapper, the CSS that reads it) is
  * source-pinned at the bottom — the vitest env is `node`, so there is nothing to
  * drive a real double-click against.
  */
@@ -78,19 +78,23 @@ describe('the DOM half', () => {
     expect(editor).not.toContain('onNodeDoubleClick=');
   });
 
-  it('marks the node imperatively, like the open-menu class', () => {
+  it('marks the node imperatively, with an ATTRIBUTE like Preview mode', () => {
     // A className on the node OBJECT would push through history and the
-    // autosave; looking at a node's ports is not an edit.
-    expect(editor).toContain("classList.add('fs-labels-shown')");
-    expect(editor).toContain("classList.remove('fs-labels-shown')");
+    // autosave; looking at a node's ports is not an edit. And not a CLASS on
+    // the wrapper either: React Flow rewrites its whole className on every
+    // select/drag, which erased the mark mid-peek.
+    expect(editor).toContain("setAttribute('data-fs-labels-shown', '')");
+    expect(editor).toContain("removeAttribute('data-fs-labels-shown')");
+    expect(editor).not.toContain("classList.add('fs-labels-shown')");
     // Node ids come out of .fastshader files, so the selector is escaped.
-    expect(editor).toMatch(/fs-labels-shown[\s\S]{0,400}|CSS\.escape\(peekNodeId\)/);
+    expect(editor).toContain('CSS.escape(peekNodeId)');
   });
 
   it('shows the label the socket already has, in its one placement', () => {
     // A fourth trigger for the existing label — never a second bubble with
     // placement rules of its own.
-    expect(css).toContain('.fs-labels-shown .typed-handle[data-tooltip]::after');
+    expect(css).toContain('.react-flow__node[data-fs-labels-shown] .typed-handle[data-tooltip]::after');
+    expect(css).not.toContain('.fs-labels-shown');
     expect(css).toContain('opacity: 1');
   });
 

@@ -5,8 +5,14 @@
  *
  *  - the study never sees the row (the popover IS reachable there by
  *    right-click), and the engine refuses the path even if it did;
- *  - the reason under a disabled radio is VISIBLE text, because WebKit drops
- *    the tooltip of a disabled control;
+ *  - the popover carries no prose: every row explains itself — and an
+ *    inactive row says why — in its TOOLTIP, so an inactive input is
+ *    `aria-disabled` with a guarded onChange, never `disabled` (WebKit drops
+ *    the tooltip of a disabled control);
+ *  - the "Export model" row names the SHOWN model (a built-in shape too) and
+ *    is never locked while there is one;
+ *  - only EXPORT honours the unconnected-nodes row; NEW and the Work folder
+ *    always save the whole canvas;
  *  - every surface asks `effectiveExportFormat` rather than the raw flag, or
  *    the Work-folder tooltip predicts a `.glb` while the write lands a `.zip`;
  *  - the flag is session-only: never in history, the autosave or a file.
@@ -33,25 +39,60 @@ describe('the Toolbar popover', () => {
     expect(TOOLBAR.slice(gate, at)).not.toContain('{exportOpen');
   });
 
-  it('disables the .glb radio and shows the reason as text, not a title', () => {
-    expect(TOOLBAR).toContain('disabled={!glbAvail.ok}');
-    expect(TOOLBAR).toContain('{!glbAvail.ok && (');
-    expect(TOOLBAR).toContain('className="toolbar__export-format-reason"');
-    expect(TOOLBAR).toContain('glbUnavailableText(glbAvail, language)');
-    // The visible row, not a tooltip on a disabled input.
-    expect(TOOLBAR).not.toMatch(/title=\{glbUnavailableText/);
+  const POPOVER = TOOLBAR.slice(
+    TOOLBAR.indexOf('className="toolbar__local-popover toolbar__export-popover"'),
+    TOOLBAR.indexOf('{__FS_DESKTOP__ && <WorkFolder />}'),
+  );
+
+  it('an unavailable .glb radio is aria-disabled and says why in its row tooltip', () => {
+    expect(POPOVER).toContain('aria-disabled={!glbAvail.ok || undefined}');
+    // The guard is what makes aria-disabled inert: a click still reaches onChange.
+    expect(POPOVER).toContain('if (glbAvail.ok) setExportAsGlb(true);');
+    expect(POPOVER).toMatch(/: \(glbUnavailableText\(glbAvail, language\) \?\? undefined\)/);
+    expect(POPOVER).toContain('GLB_EXPORT_KEYS.popoverNoteGlb');
+    // Never `disabled`: WebKit drops a disabled control's tooltip, which is the reason.
+    expect(POPOVER).not.toMatch(/\sdisabled=\{/);
   });
 
-  it('the mesh checkbox is inert in .glb mode, and says why', () => {
-    expect(TOOLBAR).toContain("disabled={!previewMesh || exportFormat === 'glb'}");
-    expect(TOOLBAR).toContain('GLB_EXPORT_KEYS.meshNoteGlb');
-    expect(TOOLBAR).toContain('GLB_EXPORT_KEYS.popoverNoteGlb');
+  it('the popover holds no prose: every explanation is a row tooltip', () => {
+    expect(POPOVER).not.toContain('toolbar__local-note');
+    expect(POPOVER).not.toContain('toolbar__export-format-reason');
+    expect(read('components/Layout/Toolbar.css')).not.toContain('toolbar__export-format-reason');
+  });
+
+  it('the "Export model" row names the shown model and is never locked while there is one', () => {
+    const row = POPOVER.slice(POPOVER.indexOf("t('Export model', language)") - 3500);
+    expect(row).toContain('activePreviewModel(previewShape, previewMesh)');
+    // Inactive only when there is no model at all.
+    expect(POPOVER).toContain('aria-disabled={name === null || undefined}');
+    // A built-in shape rides its own flag; the dropped model keeps exportIncludeMesh.
+    expect(POPOVER).toContain('checked={glb || (builtin ? exportBuiltinModel : exportIncludeMesh)}');
+    expect(POPOVER).toContain('if (builtin) setExportBuiltinModel(e.target.checked);');
+    // A study session names only a dropped model — it never exports a shape.
+    expect(row).toContain("? (previewMesh ? { kind: 'dropped' as const, mesh: previewMesh } : null)");
+    // In .glb mode unticking means "the shader file without the model" — both flags.
+    const glbBranch = row.slice(row.indexOf('if (glb) {'), row.indexOf('if (builtin) setExportBuiltinModel'));
+    expect(glbBranch).toContain('setExportAsGlb(false);');
+    expect(glbBranch).toContain('setExportIncludeMesh(false);');
+    expect(POPOVER).toContain('GLB_EXPORT_KEYS.meshNoteGlb');
     // The format radio never writes the mesh flag.
-    const group = TOOLBAR.slice(
-      TOOLBAR.indexOf('className="toolbar__export-format"'),
-      TOOLBAR.indexOf('</div>', TOOLBAR.indexOf('toolbar__export-format-reason')),
+    const group = POPOVER.slice(
+      POPOVER.indexOf('className="toolbar__export-format"'),
+      POPOVER.indexOf("t(GLB_EXPORT_KEYS.formatGlb, language)"),
     );
     expect(group).not.toContain('setExportIncludeMesh');
+  });
+
+  it('the unconnected-nodes row: outside a study, and only EXPORT reads it', () => {
+    const at = POPOVER.indexOf("t('Include unconnected nodes', language)");
+    expect(at).toBeGreaterThan(-1);
+    const gate = POPOVER.lastIndexOf('{!isEvalMode() && (', at);
+    expect(POPOVER.slice(gate, at)).toContain('checked={exportAllNodes}');
+    expect(TOOLBAR).toContain("scope: exportAllNodes ? 'whole' : 'connected'");
+    // …and it is the ONE surface that ships the SHOWN model.
+    expect(TOOLBAR).toContain("model: 'shown',");
+    expect(EDITOR).not.toContain("model: 'shown'");
+    expect(WORK_FOLDER).not.toContain("model: 'shown'");
   });
 
   it('EXPORT keeps the study branch above the wrapper and guards a second press', () => {
@@ -73,6 +114,16 @@ describe('every user surface goes through the one wrapper', () => {
     expect(WORK_FOLDER).toContain('buildShaderExportChecked(');
     expect(WORK_FOLDER).not.toContain('buildShaderBundleChecked(');
     expect(WORK_FOLDER).toContain("delivery: 'write'");
+  });
+
+  it('NEW and the Work-folder Save are saves of the document: always the whole canvas', () => {
+    for (const [name, src] of [
+      ['NodeEditor', EDITOR],
+      ['WorkFolder', WORK_FOLDER],
+    ] as const) {
+      expect(src, name).toContain("scope: 'whole'");
+      expect(src, name).not.toContain('exportAllNodes');
+    }
   });
 
   it('each mounts ONE modal element, which covers both dialogs', () => {
@@ -113,7 +164,7 @@ describe('the engine gate and the derived flag', () => {
     expect(gate).toBeGreaterThan(-1);
     expect(prepare).toBeGreaterThan(gate);
     expect(body).toContain("effectiveExportFormat(s.exportAsGlb, s.previewMesh, false) !== 'glb'");
-    expect(body).toContain('buildShaderBundleChecked(asks.preflight)');
+    expect(body).toContain('buildShaderBundleChecked(asks.preflight, graph, model)');
     // The telemetry chokepoint stays on the download tail. The pattern is
     // ASSEMBLED, because evalHooks.test.ts scans every file under src/ for the
     // call text and would count this one as a logging site.
@@ -149,6 +200,17 @@ describe('the engine gate and the derived flag', () => {
     expect(store).toContain('exportAsGlb: asGlb === true');
     const project = EXPORT_SHADER.slice(EXPORT_SHADER.indexOf('export function buildProjectState'));
     expect(project.slice(0, project.indexOf('\n}\n'))).not.toContain('exportAsGlb');
+  });
+
+  it('so is exportAllNodes, and a study session never prunes', () => {
+    const store = read('store/useAppStore.ts');
+    const snapshot = store.slice(store.indexOf('function snapshotOf'), store.indexOf('function snapshotOf') + 2000);
+    expect(snapshot).not.toContain('exportAllNodes');
+    expect(store).not.toContain("'fs:exportAllNodes'");
+    expect(store).toContain('exportAllNodes: false,');
+    const project = EXPORT_SHADER.slice(EXPORT_SHADER.indexOf('export function buildProjectState'));
+    expect(project.slice(0, project.indexOf('\n}\n'))).not.toContain('exportAllNodes');
+    expect(EXPORT_SHADER).toContain("exportGraphFor(isEvalMode() ? 'whole' : (asks.scope ?? 'whole'))");
   });
 });
 

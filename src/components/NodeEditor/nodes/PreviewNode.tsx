@@ -13,6 +13,7 @@ import './PreviewNode.css';
 import { hasNoiseRangeFlag, isUnsignedNoise } from '@/utils/noiseRange';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
 import { NodeTitle } from './NodeTitle';
+import { useHeaderTip } from './headerTip';
 
 const PREVIEW_SIZE = 96;
 /**
@@ -97,6 +98,7 @@ export const PreviewNode = memo(function PreviewNode({
   // below the hooks is NOT a mechanical edit here (ShaderNode/PreviewNode hooks
   // dereference `def`) — see CLEAN-3.
   if (!def) return null;
+  const headerTip = useHeaderTip(def);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Scratch pixel buffer for the thumbnail, ONE per card for the life of the
@@ -331,8 +333,8 @@ export const PreviewNode = memo(function PreviewNode({
       {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}
 
       {/* Header */}
-      <div className="node-base__header" style={{ background: costColor }}>
-        <NodeTitle text={varName ?? data.label} style={{ color: headerTextColor }} />
+      <div className="node-base__header" style={{ background: costColor }} {...headerTip}>
+        <NodeTitle text={varName ?? data.label} style={{ color: headerTextColor }} bare={headerTip !== null} />
       </div>
 
       {/* Preview canvas */}

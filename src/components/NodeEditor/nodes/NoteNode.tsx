@@ -3,6 +3,7 @@ import { NodeResizeControl, type NodeProps } from '@xyflow/react';
 import type { NoteFlowNode } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
 import { getContrastColor } from '@/utils/colorUtils';
+import { assetText, t } from '@/i18n';
 import './NoteNode.css';
 
 const DEFAULT_BODY = '#fff7cc';
@@ -17,6 +18,12 @@ const DEFAULT_HEADER = '#ffd24a';
  * corner (single enlarged handle) so the other edges stay clear of the text.
  * Heading + colors + scale are changed via the right-click NoteSettingsMenu;
  * only the body text is inline-editable.
+ *
+ * A built-in preset's explainer note shows in Latvian (`assetText`, matched on
+ * the stored ENGLISH text) — display only: the node keeps its English data, so
+ * a saved file never carries whoever-made-it's UI language. Typing into the
+ * Latvian body stores what was typed, which then no longer matches and simply
+ * shows as written, in both languages.
  */
 export const NoteNode = memo(function NoteNode({
   id,
@@ -29,6 +36,7 @@ export const NoteNode = memo(function NoteNode({
   const bodyText = getContrastColor(bodyColor);
   const headText = getContrastColor(headerColor);
   const updateNoteData = useAppStore((s) => s.updateNoteData);
+  const language = useAppStore((s) => s.language);
 
   const onBody = useCallback(
     (e: ChangeEvent<HTMLTextAreaElement>) => updateNoteData(id, { text: e.target.value }),
@@ -55,16 +63,18 @@ export const NoteNode = memo(function NoteNode({
       <div
         className="note-node__header"
         style={{ background: headerColor, color: headText, fontSize: `calc(12px * ${scale})` }}
-        title="Drag to move"
+        title={t('Drag to move', language)}
       >
-        {data.heading || 'Note'}
+        {/* A note's text is file data with no restore sanitizer: anything but
+            a string reads as absent rather than reaching React as a child. */}
+        {typeof data.heading === 'string' && data.heading ? assetText(data.heading, language) : t('Note', language)}
       </div>
       <textarea
         className="note-node__body nodrag nowheel"
-        value={data.text ?? ''}
+        value={typeof data.text === 'string' ? assetText(data.text, language) : ''}
         onChange={onBody}
         onPointerDown={(e) => e.stopPropagation()}
-        placeholder="Note…"
+        placeholder={t('Note…', language)}
         style={{ color: bodyText, fontSize: `calc(11px * ${scale})` }}
       />
     </div>

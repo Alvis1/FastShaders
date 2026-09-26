@@ -12,6 +12,7 @@ import { ClockFaceSvg, applyClockFrame } from './ClockFaceSvg';
 import { LiveEdgeValue } from './LiveEdgeValue';
 import { portLabel } from '@/i18n';
 import { NodeTitle } from './NodeTitle';
+import { useHeaderTip } from './headerTip';
 // One rule for "what is arriving on this input", shared with ShaderNode/SoundNode
 // (whose stylesheet also owns .shader-node__edge-val).
 import { edgeValueLabel } from './ShaderNode';
@@ -41,6 +42,7 @@ export const ClockNode = memo(function ClockNode({
   // below the hooks is NOT a mechanical edit here (ShaderNode/PreviewNode hooks
   // dereference `def`) — see CLEAN-3.
   if (!def) return null;
+  const headerTip = useHeaderTip(def);
 
   const handRef = useRef<SVGGElement>(null);
   // The rAF loop's visibility probe. It has to be an HTML element:
@@ -168,8 +170,8 @@ export const ClockNode = memo(function ClockNode({
     >
       {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}
 
-      <div className="node-base__header" style={{ background: costColor }}>
-        <NodeTitle text={varName ?? data.label} style={{ color: headerTextColor }} />
+      <div className="node-base__header" style={{ background: costColor }} {...headerTip}>
+        <NodeTitle text={varName ?? data.label} style={{ color: headerTextColor }} bare={headerTip !== null} />
       </div>
 
       {/* The sockets live INSIDE this wrapper so they centre on the clock face

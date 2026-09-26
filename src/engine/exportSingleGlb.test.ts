@@ -30,7 +30,7 @@ import { readGltfModel } from '@/utils/gltfReader';
 import { readGlbFsExtras } from '@/utils/glbShaderExtras';
 import { parseGlbContainer } from '@/utils/glbContainer';
 import { safeJsonReviver } from '@/utils/safeJson';
-import { canonicalSrc, fakeWebp, makeEdge, makeNode, makeRealPng, repackBaseGlb } from '@/test-utils';
+import { canonicalSrc, fakeWebp, makeEdge, makeNode, makeRealPng, repackBaseGlb, splatRows } from '@/test-utils';
 import type { AppEdge, AppNode } from '@/types';
 
 const SIG = ['Body', 'Glass', 'Trim'];
@@ -178,6 +178,23 @@ describe('refusals', () => {
     expect(await prepareSingleGlb()).toEqual({ ok: false, reason: 'not-gltf', name: 'rock.obj' });
     setStore(graph(['Body', 'Glass', 'Other']));
     expect(await prepareSingleGlb()).toEqual({ ok: false, reason: 'model-mismatch' });
+  });
+
+  it('a Gaussian splat scene (its own reason, never the .obj sentence), and a graph a Splat Output drives', async () => {
+    const sp = createPreviewMesh('garden.splat', splatRows(4));
+    if (!('mesh' in sp)) throw new Error('splat');
+    setStore(graph(), undefined, sp.mesh);
+    expect(await prepareSingleGlb()).toEqual({ ok: false, reason: 'splat-model', name: 'garden.splat' });
+
+    // A real .glb loaded, but the module is a splat program: refused before
+    // any fallback encode runs.
+    const g = graph();
+    const sink = makeNode('sp', 'splatOutput');
+    const tint = makeNode('tint', 'color', { hex: '#ff0000' });
+    const driven = { nodes: [...g.nodes, sink, tint], edges: [...g.edges, makeEdge('tint', 'out', 'sp', 'color')] };
+    setStore(driven);
+    expect(await prepareSingleGlb()).toEqual({ ok: false, reason: 'splat-driven' });
+    expect(calls).toEqual([]);
   });
 
   it('an aborted signal, before and during the fallback encodes', async () => {

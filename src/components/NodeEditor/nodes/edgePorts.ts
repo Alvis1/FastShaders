@@ -12,7 +12,7 @@
  * hanging off the bottom corner) for nothing. Edge ports put the sockets where
  * the eye looks for them, beside the thing the node draws, and hand the naming
  * job back to the socket's own tooltip: hover, a touch tap, or the
- * double-click label pin (`fs-labels-shown`), which is the app-wide model
+ * double-click label pin (`data-fs-labels-shown`), which is the app-wide model
  * every other node already uses (NODE_DESIGN_REQUIREMENTS #8).
  *
  * A LEAF that imports nothing — ShaderNode, NodeVisual and the node tests all

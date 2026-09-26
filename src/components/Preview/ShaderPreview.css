@@ -740,6 +740,14 @@
   border-color: var(--border-focus);
 }
 
+/* The ✕ beside the Model select that removes a dropped model: a props button,
+   squared to the control height so it reads as the select's own affordance. */
+.shader-preview__props-btn.shader-preview__model-remove {
+  width: var(--ctl-size);
+  padding: 0;
+  margin-left: -2px;
+}
+
 /* Locked (not disabled) backend toggle — aria-disabled keeps the native
    tooltip working in WebKit, so the dimming is ours to draw. */
 .shader-preview__props-btn[aria-disabled='true'] {

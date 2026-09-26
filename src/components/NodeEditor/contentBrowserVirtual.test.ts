@@ -95,19 +95,20 @@ describe('content browser — the boot cost, stated', () => {
     // COMPANIONS (registry/optionalCategories.ts), withheld with it while the
     // switch is off, which is the default here. `img` is the Texture node,
     // which the GLB work unhid (registry/editorVisibility.json), so this count
-    // follows the FILE rather than a literal.
-    expect(booted.length).toBe(76 + img);
+    // follows the FILE rather than a literal. 77 with the Splat Output
+    // (2026-09-25), which is always offered — not a Distance-fields companion.
+    expect(booted.length).toBe(77 + img);
   });
 
-  it(`observes ${74 + img} elements through ONE shared ResizeObserver`, () => {
+  it(`observes ${75 + img} elements through ONE shared ResizeObserver`, () => {
     // NodePreviewCard wraps every branch except `color` in FitNodeHeading; the
     // colour cards need no heading normalization (they have no header), so they
     // escape it. The count of OBSERVED ELEMENTS is unchanged — what changed
     // (2026-09-09) is that they share a single observer instead of registering
     // one per card in the browser's observation loop for the whole session
-    // (74: the boot set minus the two colour cards).
+    // (75: the boot set minus the two colour cards).
     const observed = booted.filter((d) => getFlowNodeType(d) !== 'color');
-    expect(observed.length).toBe(74 + img);
+    expect(observed.length).toBe(75 + img);
     const card = readFileSync(join(__dirname, 'NodePreviewCard.tsx'), 'utf8');
     expect((card.match(/new ResizeObserver\(/g) ?? []).length).toBe(1);
     expect(card).toContain('return observeCardSize(el, measure);');

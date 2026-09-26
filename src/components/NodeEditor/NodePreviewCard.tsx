@@ -5,6 +5,7 @@ import { getTypeColor, getCostColor, getCostTextColor, getCostScale, CATEGORY_CO
 import { getFlowNodeType, displayDescription } from '@/registry/nodeRegistry';
 import { formatNodeLabel, nodeDescription, portLabel, t } from '@/i18n';
 import { useAssetTooltip } from './AssetTooltip';
+import { fillTemplate } from '@/utils/fillTemplate';
 import { useAppStore } from '@/store/useAppStore';
 import { NodeVisual } from './nodes/NodeVisual';
 import { NodeTitle } from './nodes/NodeTitle';
@@ -18,7 +19,7 @@ import {
 } from './nodes/soundGeometry';
 import { ClockFaceSvg } from './nodes/ClockFaceSvg';
 import { useFitText } from '@/hooks/useFitText';
-import { OUTPUT_DEFAULT_EXPOSED, MARCH_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
+import { OUTPUT_DEFAULT_EXPOSED, MARCH_DEFAULT_EXPOSED, SPLAT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import {
   COLOR_NODE_SIZE,
   LABEL_MAX_PX as COLOR_LABEL_MAX_PX,
@@ -36,6 +37,8 @@ import './nodes/ClockNode.css';
 import './nodes/SoundNode.css';
 import './nodes/OutputNode.css';
 import { MARCH_NODE_CONFIG } from './nodes/RaymarchOutputNode';
+import { SPLAT_NODE_CONFIG, SPLAT_OWN_COLOUR_KEY } from './nodes/SplatOutputNode';
+import { OutputTitle } from './nodes/OutputTitle';
 import './NodePreviewCard.css';
 import { NODE_BORDER_WIDTH } from './nodes/nodeFrame';
 
@@ -586,7 +589,74 @@ function MarchOutputCardContent({ def, cost, costColor, costTextColor, headerTex
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
       )}
       <div className="output-node__header" style={{ background: costColor }}>
-        <span className="output-node__title" style={{ color: headerTextColor }}>{formatNodeLabel(config.title, def.type, language, false)}</span>
+        <OutputTitle title={config.title} type={def.type} original={config.original} language={language} color={headerTextColor} />
+      </div>
+      <div className="output-node__material">
+        <span className="output-node__preview-socket" aria-hidden="true" />
+        {config.sections.filter((section) => section.ports.some((p) => exposed.has(p))).map((section, i) => (
+          <div key={section.label}>
+            {i > 0 && <div className="output-node__subdivider" />}
+            <div className="output-node__section">
+              <div className="output-node__section-label">{t(section.label, language)}</div>
+              <div className="output-node__ports">{rows(section.ports)}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+ * SplatOutputCardContent — the Splat Output, in the Output's chrome
+ * ============================================================ */
+
+function SplatOutputCardContent({ def, cost, costColor, costTextColor, headerTextColor }: ContentProps) {
+  const language = useAppStore((s) => s.language);
+  // Mirrors SplatOutputNode.tsx's markup and reuses OutputNode.css outright
+  // (the Output card's rule), rendered inert: a FRESH node — nothing wired,
+  // nothing stored — so Color is the UNSET swatch ("Own colour": every splat
+  // keeps the colour it was captured with) and the numbers are the registry
+  // defaults.
+  const config = SPLAT_NODE_CONFIG;
+  const defaults = def.defaultValues ?? {};
+  const cell = (portId: string) => {
+    if (config.colorPorts.includes(portId)) {
+      return (
+        <span
+          className="palette-swatch palette-swatch--unset output-node__val"
+          title={t(SPLAT_OWN_COLOUR_KEY, language)}
+        />
+      );
+    }
+    const setting = config.settings[portId];
+    if (setting && portId in defaults) {
+      return (
+        <span className="output-node__val node-preview-card__inert">
+          <DragNumberInput compact value={Number(defaults[portId])} decimals={setting.decimals} onChange={() => {}} />
+        </span>
+      );
+    }
+    return <span className="output-node__val" />;
+  };
+  // Only the DEFAULT-exposed sockets, like the Output card: Feather and Size
+  // live in the node's right-click menu (SPLAT_DEFAULT_EXPOSED).
+  const exposed = new Set<string>(SPLAT_DEFAULT_EXPOSED);
+  const rows = (ids: string[]) =>
+    def.inputs.filter((p) => ids.includes(p.id) && exposed.has(p.id)).map((port) => (
+      <div key={port.id} className="output-node__row">
+        <CardSocket side="left" dataType={port.dataType} />
+        {cell(port.id)}
+        <span className="output-node__port-label">{portLabel(port.label, language)}</span>
+      </div>
+    ));
+  return (
+    <div className="output-node output-node--splat node-preview-card__node" style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid var(--cat-output)` }}>
+      {cost > 0 && (
+        <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
+      )}
+      <div className="output-node__header" style={{ background: costColor }}>
+        <OutputTitle title={config.title} type={def.type} original={config.original} language={language} color={headerTextColor} />
       </div>
       <div className="output-node__material">
         <span className="output-node__preview-socket" aria-hidden="true" />
@@ -718,7 +788,7 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
       onPointerDown={onPointerDown}
       {...tileActivationProps(
         { kind: 'node', nodeType: def.type },
-        `Add ${def.label} node`,
+        fillTemplate(t('Add {name} node', language), { name: formatNodeLabel(def.label, def.type, language, false) }),
       )}
       {...tooltipHandlers}
     >
@@ -735,6 +805,8 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
         <FitNodeHeading visualScale={shared.costScale} textScale={1}><SoundCardContent {...shared} /></FitNodeHeading>
       ) : flowType === 'raymarchOutput' ? (
         <FitNodeHeading visualScale={shared.costScale} textScale={OUTPUT_TITLE_PX / CARD_TITLE_BASE_PX}><MarchOutputCardContent {...shared} /></FitNodeHeading>
+      ) : flowType === 'splatOutput' ? (
+        <FitNodeHeading visualScale={shared.costScale} textScale={OUTPUT_TITLE_PX / CARD_TITLE_BASE_PX}><SplatOutputCardContent {...shared} /></FitNodeHeading>
       ) : flowType === 'output' ? (
         // textScale carries the Output header's own type size: its heading is
         // `.output-node__title` (10px), not the 9px `.node-base__title` the

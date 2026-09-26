@@ -29,6 +29,11 @@ one):
   module that default-exports a TSL `Fn` and imports from `three/tsl`.
 - **Model** — `.glb`, `.gltf`, `.obj`. Becomes the mesh the shader runs on, adds
   a *Loaded model* entry to the geometry picker and selects it.
+- **Gaussian splat** — `.splat`, `.spz`, `.ply` (a Gaussian-splat PLY without
+  spherical harmonics), `.ksplat`, up to 1,000,000 splats. Loaded like a model;
+  a shader exported from a Splat Output cuts, recolours and moves it, any other
+  shader leaves it as it is. A refused file names why (and, for a training
+  `.ply`, the conversion to `.splat`).
 - **Archive** — `.zip`. Unzipped in the browser; the first shader and the first
   model inside are loaded. If a drop contains a `.zip`, the zip wins and the
   other files in that drop are ignored.
@@ -263,9 +268,10 @@ Podest works on any plain static server with no configuration. Copy these files,
 keeping the layout:
 
 ```
-podest.html                          244 KB
+podest.html                          279 KB
 js/a-frame-180-a-01.min.js           1.6 MB
-js/a-frame-shaderloader-0.8.js       118 KB
+js/a-frame-shaderloader-0.8.js       168 KB
+js/fs-splat-0.1.js                    55 KB     only for Gaussian-splat files
 js/aframe-orbit-controls.min.js       25 KB
 js/decoders/draco_wasm_wrapper.js     58 KB   ┐ only for Draco- and
 js/decoders/draco_decoder.wasm       192 KB   │ meshopt-compressed

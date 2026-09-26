@@ -3,6 +3,7 @@ import { contributingOutputs, defaultOutput, materialPartsMirrorPlanAcross, mirr
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
+import { rememberBunnyText } from '@/utils/builtinModelText';
 import { ScrollArrow, useScrollArrows } from '@/components/Layout/ScrollArrows';
 import { evalLog } from '@/eval/telemetry';
 import { getNodeValues } from '@/types';
@@ -32,10 +33,21 @@ import {
 } from './subdivisionSteps';
 import { shownGeometry, validateGeometry } from './previewGeometryPref';
 import { BOOT_MESH_WAIT_MS, shouldWaitForBootMesh } from './bootMeshWait';
-import { createPreviewMesh, detectMeshKind, preReadModelGate } from '@/utils/previewMesh';
+import {
+  createPreviewMesh,
+  detectMeshKind,
+  isBinaryKind,
+  isSplatKind,
+  preReadModelGate,
+  splatEvalRefusal,
+  MESH_DROP_HINT_KEY,
+  MESH_SPLAT_EVAL_KEY,
+} from '@/utils/previewMesh';
 import {
   meshRefusalMessage,
   decoderLoadMessage,
+  splatHeadsetMessage,
+  splatShDroppedMessage,
   MESH_KTX2_FALLBACK_KEY,
   MESH_KTX2_MISSING_KEY,
   MESH_CACHE_FULL_KEY,
@@ -46,7 +58,9 @@ import { isEvalMode } from '@/eval/evalMode';
 import { GLB_IMPORT_KEYS } from '@/utils/glbImportCopy';
 import { useGlbImport } from './useGlbImport';
 import { marchWindowRadius } from '@/utils/sdfPartition';
-import { sanitizeMeshInventory } from '@/utils/meshInventory';
+import { sinkModelIssue } from '@/utils/sinkModelFit';
+import { sinkModelIssueText } from '@/utils/sinkModelCopy';
+import { sanitizeMeshInventory, sanitizeSplatReport } from '@/utils/meshInventory';
 import { MESH_HIGHLIGHT_EVENT, sanitizeHighlightNames, type MeshHighlightDetail } from '@/utils/meshHighlight';
 import {
   bootGeometryWasCustom,
@@ -215,6 +229,7 @@ const COMPILE_OVERLAY_TIMEOUT_MS = 12000;
  *  advice in it could not be read in. */
 const DROP_NOTICE_MS = 12000;
 
+
 /**
  * Master switch for the shader HOT-SWAP path (see the previewHtml memo's
  * dep classification, and SHADER_HOT_SWAP_SCRIPT in tslToPreviewHTML.ts).
@@ -381,9 +396,13 @@ const objTextCache = new Map<'bunny', Promise<string>>();
 function fetchObjText(geometry: 'bunny'): Promise<string> {
   let p = objTextCache.get(geometry);
   if (!p) {
-    p = fetch(getModelUrl(geometry)).then((r) => {
+    p = fetch(getModelUrl(geometry)).then(async (r) => {
       if (!r.ok) throw new Error(`HTTP ${r.status} fetching model`);
-      return r.text();
+      const text = await r.text();
+      // The EXPORT popover's "Export model" row writes the bunny from this
+      // text, synchronously (engine/builtinModelObj.ts).
+      rememberBunnyText(text);
+      return text;
     });
     p.catch(() => objTextCache.delete(geometry));
     objTextCache.set(geometry, p);
@@ -503,10 +522,11 @@ export function ShaderPreview() {
   // double-sided (the march starts at the camera on a back face, so zooming
   // inside the window still shows the shape), the preview renders through the
   // node's own WINDOW SPHERE (MARCH_WINDOW_GEOMETRY = 'marchSphere', radius =
-  // the node's Window setting) instead of the Model dropdown's choice — a
-  // plane or a bunny as the ray-start surface meant nothing — and the dropdown
-  // is parked. Folded to a boolean so a position-only notify cannot re-render
-  // this panel.
+  // the node's Window setting) — the dropdown's first entry while it drives.
+  // The dropdown is NOT parked: the march runs in object space from each
+  // front-face fragment, so any other model is a window too (the field seen
+  // through that surface), and picking one is the user's call (`marchModel`).
+  // Folded to a boolean so a position-only notify cannot re-render this panel.
   // The driving Raymarch Output's Window radius, or null when nothing drives —
   // a NUMBER, so a position-only notify cannot re-render this panel.
   //
@@ -544,9 +564,26 @@ export function ShaderPreview() {
   // derived, and ONE derivation feeds the document, the `<select>` and the
   // Subd gate, so the picker and the viewport cannot disagree.
   const geometryShown = shownGeometry(geometry, previewMesh !== null);
-  // What the iframe actually renders: the shown choice, or the march window
-  // sphere while a Raymarch Output drives.
-  const previewGeometry: GeometryType = marchWindow !== null ? MARCH_WINDOW_GEOMETRY : geometryShown;
+  // While a Raymarch Output drives: the model picked to march through instead
+  // of its window sphere, null = the window. SESSION-ONLY — every session (and
+  // every graph that starts driving) opens on the window the node was tuned
+  // for; a pick also becomes the ordinary Model choice, so it stays when the
+  // march stops.
+  const [marchModel, setMarchModel] = useState<GeometryType | null>(null);
+  const marchShown: GeometryType =
+    marchModel === null ? MARCH_WINDOW_GEOMETRY : shownGeometry(marchModel, previewMesh !== null);
+  // What the iframe actually renders: the shown choice, or — while a Raymarch
+  // Output drives — its window sphere or the model picked in its place.
+  const previewGeometry: GeometryType = marchWindow !== null ? marchShown : geometryShown;
+  // Does the output node that DRIVES the shader fit the object on screen
+  // (utils/sinkModelFit.ts — a material on a splat, a march through a splat, a
+  // march over a model's per-mesh Outputs, a Splat Output with no splat)? A
+  // string selector over the same unwrapped edges, so a position-only notify
+  // re-renders nothing; the common case returns before building anything.
+  const splatLoaded = previewMesh !== null && isSplatKind(previewMesh.kind);
+  const sinkIssue = useAppStore((s) =>
+    sinkModelIssue(s.nodes, getUnwrappedEdges(s.nodes, s.edges), { geometry: previewGeometry, splatLoaded }),
+  );
   // Tell the node editor whether the loaded model is what is SHOWN, so
   // import-built index sections sleep on a primitive (session-only; emission
   // never reads it — see shownPreviewMesh).
@@ -624,6 +661,9 @@ export function ShaderPreview() {
       .then((mesh) => {
         if (cancelled || !mesh) return;
         if (useAppStore.getState().previewMesh) return;
+        // A study session takes no splat from ANY path (D10) — a cached one
+        // from an earlier, non-study visit in this browser included.
+        if (isEvalMode() && isSplatKind(mesh.kind)) return;
         // persist:false — these bytes came straight OUT of the cache.
         useAppStore.getState().setPreviewMesh(mesh, { persist: false });
         if (bootGeometryWasCustom()) setGeometry('custom');
@@ -962,6 +1002,12 @@ export function ShaderPreview() {
   // shader edit rebuilds the document, and each fresh one reports again — the
   // fact is about the MODEL, so it is said once per model.
   const ktx2ReportedRef = useRef<Set<string>>(new Set());
+  // The same once-per-model rule for a Gaussian splat's info lines, keyed by
+  // mesh id: which splat meshes have had their fs:model-splat report acted on,
+  // and which have already been shown the headset advisory (at drop time when
+  // the header states the count, else from that report).
+  const splatReportedRef = useRef<Set<number>>(new Set());
+  const splatAdvisedRef = useRef<Set<number>>(new Set());
   const cameraPosRef = useRef<CameraPosition | null>(loadCameraPos());
   const rotationRef = useRef<CameraPosition | null>(loadRotation());
 
@@ -1091,6 +1137,14 @@ export function ShaderPreview() {
     setPreviewMesh(result.mesh);
     setGeometry('custom');
     if (result.ktx2Fallback) showDropNotice(t(MESH_KTX2_FALLBACK_KEY, language), 'info');
+    // A splat whose header states its count gets the headset advisory NOW; a
+    // gzip .spz (count null until the sandbox inflates it) gets it from the
+    // fs:model-splat report instead, which also says whether it was shown.
+    const headset = splatHeadsetMessage(result.mesh.splat, language);
+    if (headset) {
+      splatAdvisedRef.current.add(result.mesh.id);
+      showDropNotice(headset, 'info');
+    }
   }, [setPreviewMesh, setGeometry, showDropNotice, language]);
 
   // The GLB import flow (useGlbImport): the dialog, the build, the commit.
@@ -1107,6 +1161,13 @@ export function ShaderPreview() {
       // AND restore (a stored shader never beats a shader dropped with it).
       // `source` reaches the dialog: a forwarded ('iframe') drop's Restore asks.
       const offer = opts?.offerBuild !== false && !isEvalMode() && (kind === 'glb' || kind === 'gltf');
+      // A study session takes no Gaussian splat (D10): refused on the kind
+      // alone, BEFORE the pre-read gate and the read, so the study host never
+      // reaches for the splat runtime. The zip import skips one the same way.
+      if (isEvalMode() && isSplatKind(kind)) {
+        showDropNotice(meshRefusalMessage(splatEvalRefusal(), language));
+        return;
+      }
       // EVERY model drop is refused while the dialog is open — an .obj or a
       // paired model is not offerable, but it would still swap the mesh
       // under the dialog that is asking about another one.
@@ -1218,7 +1279,7 @@ export function ShaderPreview() {
       else void loadMeshFile(model, { source });
     }
     if (!model && !zip && !script) {
-      showDropNotice(t('Drop a 3D model (.obj / .glb / .gltf) or a shader (.js / .zip)', language));
+      showDropNotice(t(MESH_DROP_HINT_KEY, language));
     }
   }, [loadMeshFile, glbFlow, showDropNotice, language]);
 
@@ -1465,7 +1526,7 @@ export function ShaderPreview() {
         has?: boolean; duration?: number; canInPlace?: boolean;
         name?: unknown; clip?: number; clips?: unknown; time?: number;
         backend?: unknown; geometry?: unknown; meshes?: unknown; hot?: unknown;
-        fallbacks?: unknown; missing?: unknown;
+        fallbacks?: unknown; missing?: unknown; count?: unknown; shDropped?: unknown;
       } | null;
       if (!data || typeof data.type !== 'string') return;
       // A gen-tagged reply is the ONLY acknowledgement of a hot shader swap.
@@ -1487,7 +1548,43 @@ export function ShaderPreview() {
         // edit mints a fresh one) identifiable as stale rather than plausible.
         const inv = sanitizeMeshInventory(data.geometry, data.meshes);
         if (!inv || inv.key !== modelKeyRef.current) return;
-        useAppStore.getState().setPreviewMeshInventory({ key: inv.key, meshes: inv.meshes });
+        // A splat rides beside the meshes, never among them — it is not a
+        // part target (see meshInventory.ts).
+        useAppStore.getState().setPreviewMeshInventory({
+          key: inv.key,
+          meshes: inv.meshes,
+          ...(inv.splat ? { splat: inv.splat } : {}),
+        });
+        return;
+      }
+      if (data.type === 'fs:model-splat') {
+        // What the sandbox built from the splat mesh on screen: its splat count
+        // (the only count a gzip .spz has) and the spherical-harmonic degree the
+        // runtime dropped. Forgeable, so validated against the CURRENT mesh id
+        // and document key, and display-only: the cost bar's figure and two
+        // info lines, never a price or an emission input.
+        const store = useAppStore.getState();
+        const mesh = store.previewMesh;
+        const facts = sanitizeSplatReport(data, modelKeyRef.current, mesh && isSplatKind(mesh.kind) ? mesh.id : null);
+        if (!facts || !mesh) return;
+        const prev = store.previewSplatFacts;
+        if (!prev || prev.meshId !== facts.meshId || prev.count !== facts.count || prev.shDropped !== facts.shDropped) {
+          store.setPreviewSplatFacts(facts);
+        }
+        // Every cold rebuild re-reports; the lines are about the MESH, so they
+        // are said once per mesh id.
+        if (splatReportedRef.current.has(facts.meshId)) return;
+        splatReportedRef.current.add(facts.meshId);
+        const lang = store.language;
+        // The header's count when it states one, else the sandbox's.
+        const headset = splatHeadsetMessage({ count: mesh.splat?.count ?? facts.count }, lang);
+        const sh = splatShDroppedMessage(facts.shDropped, lang);
+        const advised = splatAdvisedRef.current.has(facts.meshId);
+        splatAdvisedRef.current.add(facts.meshId);
+        // ONE line: showDropNotice REPLACES the notice, so a dropped-SH line
+        // arriving while the drop-time advisory is still up re-states it rather
+        // than wiping it unseen (the fs:model-ktx2 rule above).
+        if (sh || (headset && !advised)) showDropNotice([headset, sh].filter(Boolean).join(' '), 'info');
         return;
       }
       if (data.type === 'fs:model-ktx2') {
@@ -1889,6 +1986,29 @@ export function ShaderPreview() {
   // list (instead of the live state) means dragging the slider while a model
   // is selected doesn't rebuild the iframe to produce identical HTML.
   const effectiveSubdivision = isModelGeometry(previewGeometry) ? 0 : subdivision;
+
+  // …and at the moment a WIRE makes the pairing wrong, the canvas — where the
+  // wire was just made — says so once too. Only a GRAPH-caused change: when
+  // the shown model changed in the same step, the user is looking at the pane,
+  // whose notice already says it. Never over a note that is still up (an
+  // import report would be replaced), and never in a study session.
+  const shownModelKey = `${previewGeometry}|${previewMesh?.id ?? ''}`;
+  const lastFitRef = useRef({ issue: sinkIssue, shownModelKey });
+  useEffect(() => {
+    const prev = lastFitRef.current;
+    lastFitRef.current = { issue: sinkIssue, shownModelKey };
+    if (sinkIssue === null || sinkIssue === prev.issue || shownModelKey !== prev.shownModelKey || isEvalMode()) return;
+    const store = useAppStore.getState();
+    if (store.importNote) return;
+    store.showImportNote([{ kind: 'sink-model', issue: sinkIssue, name: store.previewMesh?.name ?? '' }]);
+  }, [sinkIssue, shownModelKey]);
+
+  // What the pane renders, for EXPORT's "Export model" row (engine/exportModel.ts):
+  // the raw slider value, since the teapot's resolution IS the subdivision.
+  const setPreviewShape = useAppStore((s) => s.setPreviewShape);
+  useEffect(() => {
+    setPreviewShape({ geometry: previewGeometry, subdivision, marchWindow: marchWindow ?? 1 });
+  }, [previewGeometry, subdivision, marchWindow, setPreviewShape]);
 
   // Generate the iframe's HTML payload. We pass it via `srcDoc` rather than
   // building a blob URL because the iframe is sandboxed without
@@ -2380,8 +2500,11 @@ export function ShaderPreview() {
         const w = liveWindow();
         if (!w) return;
         const extra = decoders ? { decoders } : {};
-        if (mesh.kind === 'glb') {
-          w.postMessage({ type: 'fs:obj-model', geometry: key, kind: 'glb', bytes: mesh.bytes, ...extra }, '*');
+        // Per kind, by the ONE table (MODEL_FEED_KINDS, which `isBinaryKind`
+        // is pinned equal to): BYTES for a glb and every splat kind — a splat
+        // is never TextDecoded — and the pre-decoded TEXT for obj / gltf.
+        if (isBinaryKind(mesh.kind)) {
+          w.postMessage({ type: 'fs:obj-model', geometry: key, kind: mesh.kind, bytes: mesh.bytes, ...extra }, '*');
         } else {
           w.postMessage({ type: 'fs:obj-model', geometry: key, kind: mesh.kind, text: mesh.text ?? '', ...extra }, '*');
         }
@@ -2465,7 +2588,7 @@ export function ShaderPreview() {
   const handleOpenVR = useCallback(() => {
     const w = window.open('', '_blank');
     if (!w) {
-      window.alert('The browser blocked the VR window. Allow popups for this site and try again.');
+      window.alert(t('The browser blocked the VR window. Allow popups for this site and try again.', useAppStore.getState().language));
       return;
     }
     // The popup renders what the PANE renders: `previewGeometry`, not the
@@ -2519,6 +2642,19 @@ export function ShaderPreview() {
       }, { once: true });
     }
   }, [previewCode, previewGeometry, marchWindow, previewMesh, playing, materialSettings, bgColor, effLighting, effectiveSubdivision, shaderName]);
+
+  // The pane's standing notice while the driving output does not fit the
+  // model on screen — it would otherwise look like the shader does nothing.
+  // LOADED and SHOWN are separate facts: the Model menu is local state, so
+  // picking Sphere parks a loaded splat without clearing it, and then the
+  // advice is to pick it, not to drop a file. In a study session splats are
+  // refused outright, so only the Splat Output's own two can arise, and they
+  // get the study's refusal; no new notice enters the study condition.
+  const modelNotice = sinkIssue === null
+    ? null
+    : isEvalMode()
+      ? (sinkIssue === 'splat-needs-splat' || sinkIssue === 'splat-pick-splat' ? t(MESH_SPLAT_EVAL_KEY, language) : null)
+      : sinkModelIssueText(sinkIssue, previewMesh?.name ?? '', language);
 
   return (
     <div
@@ -2600,21 +2736,27 @@ export function ShaderPreview() {
             // select, so the control would silently display its first entry
             // while claiming another — the picker must say what the viewport
             // is doing.
-            value={geometryShown}
-            onChange={(e) => setGeometry(e.target.value as GeometryType)}
-            disabled={sdfDrives}
+            value={sdfDrives ? marchShown : geometryShown}
+            onChange={(e) => {
+              const picked = e.target.value as GeometryType;
+              if (sdfDrives) {
+                // The window is not a Model choice of its own: it exists only
+                // while the march drives, so it is never persisted.
+                if (picked === MARCH_WINDOW_GEOMETRY) { setMarchModel(null); return; }
+                setMarchModel(picked);
+              }
+              setGeometry(picked);
+            }}
             title={sdfDrives
               // The node this names is the RAYMARCH Output (the SDF Output and the
               // Volume Output were folded into it), its window is a SPHERE
               // (MARCH_WINDOW_GEOMETRY = 'marchSphere', not a bounding box), and it
-              // drives on Field OR Density (MARCH_PRIMARY_SOCKETS) — so it stops
-              // driving only once BOTH are unwired. This is the ONE explanation a
-              // user gets for a dropdown that has gone inert, so it has to name a
-              // node that exists in the palette and a shape they can see.
-              ? t('A Raymarch Output is driving the shader: it renders through its own window sphere, so the model is ignored until its Field and Density are unwired', language)
-              : t('Preview geometry — drag the model to orbit, scroll to zoom; drop a 3D model (.obj / .glb / .gltf) on the preview to shade your own mesh', language)}
+              // drives on Field OR Density (MARCH_PRIMARY_SOCKETS).
+              ? t('An SDF Output is driving the shader. “SDF group” renders it through the node’s own window sphere; pick a model to march through that model’s surface instead.', language)
+              : t('Preview geometry — drag the model to orbit, scroll to zoom; drop a 3D model (.obj / .glb / .gltf) or a Gaussian splat (.splat / .spz / .ply / .ksplat) on the preview to shade it', language)}
             aria-label={t('Preview geometry', language)}
           >
+            {sdfDrives && <option value={MARCH_WINDOW_GEOMETRY}>{t('SDF group', language)}</option>}
             <option value="sphere">{t('Sphere', language)}</option>
             <option value="cube">{t('Cube', language)}</option>
             <option value="plane">{t('Plane', language)}</option>
@@ -2625,7 +2767,25 @@ export function ShaderPreview() {
             )}
           </select>
         </label>
-        {!isModelGeometry(geometryShown) && !sdfDrives && (
+        {/* Removes the DROPPED model (a splat scene too): the store, its
+            inventory and its IndexedDB copy — exactly what NEW does to it — so
+            a reload does not bring it back. A 'custom' pick falls back to the
+            sphere through shownGeometry. Not undoable, like NEW: the mesh never
+            rides history; the tooltip says how to get it back. */}
+        {previewMesh && (
+          <button
+            type="button"
+            className="shader-preview__props-btn shader-preview__model-remove"
+            onClick={() => setPreviewMesh(null)}
+            title={fillTemplate(t('Remove {name} from the preview. Drop the file again to bring it back.', language), {
+              name: `“${truncateMiddle(previewMesh.name, 48)}”`,
+            })}
+            aria-label={t('Remove the dropped model', language)}
+          >
+            ✕
+          </button>
+        )}
+        {!isModelGeometry(previewGeometry) && previewGeometry !== MARCH_WINDOW_GEOMETRY && (
           <label className="shader-preview__subdivision" title={t('Mesh subdivision', language)}>
             <span className="shader-preview__ctl-label">{t('Subd', language)}</span>
             {/* The slider's value is the STOP INDEX, not the segment count, so
@@ -2721,7 +2881,7 @@ export function ShaderPreview() {
         )}
         {dropVeil && (
           <div className="shader-preview__drop-veil">
-            {t('Drop a 3D model (.obj / .glb / .gltf) or a shader (.js / .zip)', language)}
+            {t(MESH_DROP_HINT_KEY, language)}
           </div>
         )}
         {dropNotice && (
@@ -2737,6 +2897,16 @@ export function ShaderPreview() {
               title={t('Dismiss', language)}
               aria-label={t('Dismiss', language)}
             >✕</button>
+          </div>
+        )}
+        {/* A STATE notice, not an event: it stays while the condition holds
+            (a Splat Output drives, no splat is shown) and yields to the
+            transient notice, which uses the same corner. Click-through like
+            it, with no ✕ — dismissing a fact that is still true would only
+            hide why the pane looks unshaded. */}
+        {modelNotice && !dropNotice && (
+          <div className="shader-preview__drop-notice shader-preview__drop-notice--info" role="status">
+            <span className="shader-preview__drop-notice-text">{modelNotice}</span>
           </div>
         )}
         {/* Always MOUNTED while enabled (never conditionally rendered on the

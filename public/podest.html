@@ -21,6 +21,11 @@
       property uniforms become live sliders (auto-detected by the shaderloader).
     • 3D model (.glb / .gltf / .obj) — becomes the mesh the shader runs on; a toggle
       switches between the shader and the model's own PBR materials.
+    • Gaussian splat scene (.splat / .spz / .ply / .ksplat) — header-sniffed here
+      (sniffSplatHeader, the twin of src/utils/splatSniff.ts), then parsed and
+      drawn INSIDE the stage by the splat runtime (js/fs-splat-0.1.js, loaded
+      only by a document that shows a splat); a FastShaders Splat Output shader
+      shades it, and the toggle shows the scene's own colours.
     • Archive (.zip) — unzipped in-browser (native DecompressionStream, no
       dependency); the first shader script + first model inside are loaded.
 
@@ -438,7 +443,7 @@
 <div id="error"></div>
 <div id="stats"></div>
 <div id="overlay">Drop shader · model · zip</div>
-<div id="hint">Drop a shader (.js/.tsl), a model (.glb/.gltf/.obj), or a .zip anywhere — or click the panel drop area.</div>
+<div id="hint">Drop a shader (.js/.tsl), a model (.glb/.gltf/.obj), a Gaussian splat (.splat/.spz/.ply/.ksplat), or a .zip anywhere — or click the panel drop area.</div>
 
 <div id="title-bar">
   <div id="title-col">
@@ -488,9 +493,9 @@
 
     <div class="dropzone" id="dropzone">
       <strong>Drop a file</strong>
-      shader (.js / .tsl) · model (.glb / .gltf / .obj) · archive (.zip)
+      shader (.js / .tsl) · model (.glb / .gltf / .obj) · splat (.splat / .spz / .ply / .ksplat) · archive (.zip)
     </div>
-    <input type="file" id="file-input" accept=".js,.mjs,.tsl,.txt,.glb,.gltf,.obj,.zip" multiple hidden />
+    <input type="file" id="file-input" accept=".js,.mjs,.tsl,.txt,.glb,.gltf,.obj,.splat,.spz,.ply,.ksplat,.zip" multiple hidden />
 
     <div class="loaded" id="loaded" hidden></div>
 
@@ -597,7 +602,7 @@
     shaderName: null,
     modelBytes: null,      // ArrayBuffer of a dropped model (null = none)
     modelName: null,
-    modelKind: null,       // "obj" | "gltf" — set by loadModelBuffer
+    modelKind: null,       // "obj" | "gltf" | a splat extension ("splat" | "spz" | "ply" | "ksplat") — set by loadModelBuffer
     modelDecoderFiles: [], // decoder files the model needs — set by loadModelBuffer
     geometry: "sphere",
     showMaterials: false,  // model-materials mode (shader detached in the iframe)
@@ -1531,6 +1536,24 @@
     stage.setAttribute("srcdoc", buildStageDoc());
   }
 
+  // Whether the CURRENT stage document carries the Gaussian-splat runtime
+  // (buildStageDoc sets it). The runtime tag is emitted only into a document
+  // that shows a splat, so every other stage stays exactly as it was — which
+  // means a splat model arriving on a runtime-less document needs a NEW one.
+  var stageSplat = false;
+  // That swap is a document the visitor asked for, not a failure: no restart
+  // streak and no rate limit, but the boot deadline restarts so the watchdog
+  // waits for the new document instead of calling it "never started". The
+  // fs:ready replay (applyStateToStage → setGeometry) then posts the model to
+  // a document that can read it.
+  function reloadStageForSplat() {
+    var now = Date.now();
+    lastRestartAt = now;
+    stageReady = false; outQueue = [];
+    lastBeat = now; lastProgress = now; lastFrameId = -1;
+    stage.setAttribute("srcdoc", buildStageDoc());
+  }
+
   // Watchdog. Runs only while the document is VISIBLE — a hidden tab has no
   // rAF, so a frozen frameId there is normal, not a fault.
   function checkStage() {
@@ -1748,7 +1771,10 @@
     // dropping a new file — a name the user typed must survive the reload.
     var customTitle = readStr("fs:viewerTitleText", "");
     if (rec.modelBytes instanceof ArrayBuffer && rec.modelBytes.byteLength > 0 && rec.modelBytes.byteLength <= MAX_SAVED_MODEL) {
-      loadModelBuffer(rec.modelBytes, name(rec.modelName) || (rec.modelKind === "obj" ? "model.obj" : "model.glb"));
+      // The fallback name carries the kind, since the extension is what
+      // loadModelBuffer dispatches on (isSplatExt is an exact whitelist, so a
+      // tampered record cannot smuggle a name through it).
+      loadModelBuffer(rec.modelBytes, name(rec.modelName) || (rec.modelKind === "obj" ? "model.obj" : isSplatExt(rec.modelKind) ? "model." + rec.modelKind : "model.glb"));
     }
     if (typeof rec.shaderSource === "string" && rec.shaderSource && rec.shaderSource.length <= MAX_SAVED_SHADER) {
       loadShaderText(rec.shaderSource, name(rec.shaderName) || "shader");
@@ -1821,7 +1847,11 @@
   var DECODER_MAX_BYTES = 1048576;
   function modelDecoderFiles(buf, modelKind) {
     try {
-      if (modelKind === "obj" || !(buf instanceof ArrayBuffer)) return [];
+      // A splat scene is parsed by the splat runtime, which needs no decoder
+      // (its gzip .spz inflates through the browser's DecompressionStream).
+      // Spelled out rather than isSplatExt: this function is also run on its
+      // own (podestDecoders.test.ts), outside the page's scope.
+      if (modelKind === "obj" || modelKind === "splat" || modelKind === "spz" || modelKind === "ply" || modelKind === "ksplat" || !(buf instanceof ArrayBuffer)) return [];
       var u8 = new Uint8Array(buf), view = new DataView(buf), json;
       if (u8.length >= 4 && view.getUint32(0, true) === 0x46546C67) {
         // GLB: the JSON chunk only, its length clamped to the buffer.
@@ -1874,7 +1904,10 @@
     state.geometry = kind;
     var seq = ++geometrySeq;
     if (kind === "model" && state.modelBytes) {
-      var mk = state.modelKind === "obj" ? "obj" : "gltf";
+      var mk = state.modelKind === "obj" ? "obj" : isSplatExt(state.modelKind) ? state.modelKind : "gltf";
+      // A splat needs the runtime <script>, which only a fresh stage document
+      // can carry; the replay after its fs:ready comes back here with it.
+      if (isSplatExt(mk) && !stageSplat) { reloadStageForSplat(); return; }
       var bytes = state.modelBytes, files = state.modelDecoderFiles || [];
       var send = function (dec) {
         var msg = { type: "fs:model", modelType: mk, bytes: bytes, regen: mk === "obj", rotation: ROTATIONS[kind] };
@@ -1903,6 +1936,211 @@
       post({ type: "fs:geometry", geometryAttr: primAttr(kind), rotation: ROTATIONS[kind] });
     }
   }
+
+  // ── Gaussian-splat header sniff: twin of src/utils/splatSniff.ts ─────
+  // A dropped .splat / .spz / .ply / .ksplat is checked HERE, on the trusted
+  // page, before the bytes are kept or posted: the same bounded header reads
+  // as the editor (fixed-offset integers and at most PLY_HEADER_SCAN_BYTES of
+  // ASCII — nothing is parsed, inflated or allocated in proportion to the
+  // file), the same literals and the same English sentences, so a file the
+  // editor refuses is refused here with the words the editor uses. The real
+  // parse (FastShadersSplat.parseBytes) runs inside the sandboxed stage.
+  // src/podestSplat.test.ts slices this section out between its two anchor
+  // comments and runs it against the editor's fixtures; the four limits below
+  // are also compared with src/utils/splatLimits.ts and the runtime's LIMITS.
+  // Hand-written ES5 like the rest of this page; no reference outside itself.
+  var SPLAT_ROW_BYTES = 32;
+  var SPLAT_MAX_COUNT = 1000000;
+  var SPZ_MAX_DECODED_BYTES = 96 * 1024 * 1024;
+  var PLY_HEADER_SCAN_BYTES = 64 * 1024;
+  var KSPLAT_HEADER_BYTES = 4096;
+  var SPZ_MAGIC = 0x5053474e;
+  var SPLAT_TEXT = {
+    badSplat: "Not a valid .splat file (its size is not a whole number of 32-byte splats).",
+    count: "Too many splats ({count} — max {maxCount}). Reduce the scene in SuperSplat (or splat-transform) and export it again.",
+    badSpz: "Not a valid .spz file (missing its gzip or SPZ header).",
+    badPly: "Not a valid .ply file (missing or damaged PLY header).",
+    badKsplat: "Not a valid .ksplat file (damaged or unsupported header).",
+    plyNotSplat: "This .ply is a mesh or point cloud, not a Gaussian splat. Load meshes as .obj, .glb or .gltf.",
+    plySh: "This .ply carries spherical-harmonic colour (f_rest_* properties), which FastShaders does not read. Convert it to .splat (SuperSplat can) or export it again without spherical harmonics.",
+    plyCompressed: "This is a compressed .ply (SuperSplat's chunked format), which FastShaders cannot read yet. Export it again as an uncompressed .ply or as .splat.",
+    plyAscii: "This .ply is stored as text (format ascii), which FastShaders does not read. Export it again as a binary .ply or convert it to .splat.",
+    plyTruncated: "This .ply file is cut short: its header declares a splat count of {count}, but the file holds fewer. Download it or export it again.",
+    spzVersion: "This .spz is version {version} (zstd-compressed), which FastShaders cannot read yet. Convert it to .ply or .splat.",
+    spzTooLarge: "This .spz unpacks to {size} MB — max {limit} MB. Reduce the scene in SuperSplat (or splat-transform) and export it again."
+  };
+  function isSplatExt(e) { return e === "splat" || e === "spz" || e === "ply" || e === "ksplat"; }
+  // "1,000,001": the editor's formatSplatCount for English (grouped integer).
+  function splatGroup(n) { return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
+  // The editor's formatMiB for English: MiB, one decimal at most, never grouped;
+  // a measured size rounds UP, a declared cap to NEAREST.
+  function splatMiB(bytes, up) {
+    var b = isFinite(bytes) && bytes > 0 ? bytes : 0, tenths = b * 10 / 1048576;
+    return String((up ? Math.ceil(tenths) : Math.round(tenths)) / 10);
+  }
+  function splatNo(reason, message) { return { ok: false, reason: reason, message: message }; }
+  function splatBad(kind) {
+    return splatNo("bad-splat", kind === "spz" ? SPLAT_TEXT.badSpz : kind === "ply" ? SPLAT_TEXT.badPly : kind === "ksplat" ? SPLAT_TEXT.badKsplat : SPLAT_TEXT.badSplat);
+  }
+  function splatCountNo(count) {
+    return splatNo("splat-count", SPLAT_TEXT.count.replace("{count}", splatGroup(count)).replace("{maxCount}", splatGroup(SPLAT_MAX_COUNT)));
+  }
+  function splatView(bytes) { return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength); }
+  // → { ok: true, count, shDegree, container } or { ok: false, reason, message }.
+  // Synchronous, bounded, never throws.
+  function sniffSplatHeader(kind, bytes) {
+    try {
+      if (!(bytes instanceof Uint8Array)) return splatBad(kind);
+      if (kind === "splat") return sniffDotSplat(bytes);
+      if (kind === "spz") return sniffSpzHeader(bytes);
+      if (kind === "ply") return sniffPlyHeader(bytes);
+      if (kind === "ksplat") return sniffKsplatHeader(bytes);
+      return splatBad(kind);
+    } catch (e) {
+      return splatBad(kind);
+    }
+  }
+  // .splat: headerless 32-byte rows — whole rows, under the count cap.
+  function sniffDotSplat(bytes) {
+    if (bytes.length === 0) return splatBad("splat");
+    if (bytes.length % SPLAT_ROW_BYTES !== 0) return splatNo("bad-splat", SPLAT_TEXT.badSplat);
+    var count = bytes.length / SPLAT_ROW_BYTES;
+    if (count > SPLAT_MAX_COUNT) return splatCountNo(count);
+    return { ok: true, count: count, shDegree: 0, container: "splat" };
+  }
+  // .spz: gzip (v1-3; the ISIZE trailer is only a CLAIM, the stage's streamed
+  // counter is the real guard), or a raw NGSP header (v4 = zstd, refused).
+  function sniffSpzHeader(bytes) {
+    var n = bytes.length;
+    if (n >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
+      if (n < 18 || bytes[2] !== 8) return splatBad("spz");
+      var isize = splatView(bytes).getUint32(n - 4, true);
+      if (isize > SPZ_MAX_DECODED_BYTES) {
+        return splatNo("too-large", SPLAT_TEXT.spzTooLarge.replace("{size}", splatMiB(isize, true)).replace("{limit}", splatMiB(SPZ_MAX_DECODED_BYTES, false)));
+      }
+      if (isize < 16) return splatBad("spz");
+      return { ok: true, count: null, shDegree: null, container: "spz-gzip" };
+    }
+    if (n >= 8) {
+      var view = splatView(bytes);
+      if (view.getUint32(0, true) === SPZ_MAGIC) {
+        var version = view.getUint32(4, true);
+        if (version === 4) return splatNo("spz-version", SPLAT_TEXT.spzVersion.replace("{version}", String(version)));
+        return splatBad("spz");
+      }
+    }
+    return splatBad("spz");
+  }
+  var PLY_REQUIRED_PROPERTIES = ["x", "y", "z", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3", "f_dc_0", "f_dc_1", "f_dc_2", "opacity"];
+  // A PLY scalar type's size in bytes (PLYLoader's getBinaryReader table), 0 when unknown.
+  function plyTypeBytes(type) {
+    switch (type) {
+      case "char": case "int8": case "uchar": case "uint8": return 1;
+      case "short": case "int16": case "ushort": case "uint16": return 2;
+      case "int": case "int32": case "uint": case "uint32": case "float": case "float32": return 4;
+      case "double": case "float64": return 8;
+      default: return 0;
+    }
+  }
+  // .ply: THE ONE PLY HEADER RULE SET, in the order src/utils/splatSniff.ts
+  // lists it above sniffPly (the runtime's sniffPlyHeader applies it too):
+  // 1 an exact end_header LINE, the first end_header in the 64 KiB window (its
+  // line ending may be the byte after it); 2 one known format line, every
+  // property `property <type> <name>` of a known scalar type (or a list),
+  // format/element/property lines ASCII; 3 no element chunk; 4 exactly ONE
+  // element, vertex, no list, no property before it; 5 the 3DGS set, no
+  // f_rest_N; 6 binary; 7 a 1-10 digit count, > 0, <= the cap; 8 a body that
+  // holds count x row bytes, starting where PLYLoader starts it.
+  function sniffPlyHeader(bytes) {
+    if (bytes.length < 3 || bytes[0] !== 0x70 || bytes[1] !== 0x6c || bytes[2] !== 0x79) return splatBad("ply");
+    var MARK = "end_header", last = Math.min(bytes.length, PLY_HEADER_SCAN_BYTES) - MARK.length, end = -1, i, j;
+    outer: for (i = 0; i <= last; i++) {
+      for (j = 0; j < MARK.length; j++) { if (bytes[i + j] !== MARK.charCodeAt(j)) continue outer; }
+      var before = bytes[i - 1], after = bytes[i + MARK.length];
+      if ((before === 13 || before === 10) && (after === 13 || after === 10)) end = i + MARK.length;
+      break;
+    }
+    if (end < 0) return splatBad("ply");
+    // Bytes, not UTF-8 (PLYLoader's own decoding): a stray high byte stays one character.
+    var text = "";
+    for (i = 3; i < end - MARK.length; i++) text += String.fromCharCode(bytes[i]);
+    var formats = 0, format = "", damaged = false, orphan = false, list = false, elements = [], current = null;
+    var lines = text.split(/\r\n|\r|\n/);
+    for (i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (line === "") continue;
+      var words = line.split(/\s+/), keyword = words[0];
+      if (keyword !== "format" && keyword !== "element" && keyword !== "property") continue;
+      if (/[^\x00-\x7f]/.test(lines[i])) damaged = true;
+      if (keyword === "format") {
+        formats++;
+        format = words[1] === undefined ? "" : words[1];
+      } else if (keyword === "element") {
+        current = { name: words[1] === undefined ? "" : words[1], count: words[2] === undefined ? "" : words[2], names: [], rowBytes: 0 };
+        elements.push(current);
+      } else {
+        if (current === null) orphan = true;
+        if (words[1] === "list") list = true;
+        else if (words.length !== 3 || plyTypeBytes(words[1]) === 0) damaged = true;
+        else if (current !== null) { current.names.push(words[2]); current.rowBytes += plyTypeBytes(words[1]); }
+      }
+    }
+    var container = format === "ascii" ? "ply-ascii" : format === "binary_little_endian" ? "ply-binary-le" : format === "binary_big_endian" ? "ply-binary-be" : null;
+    if (formats !== 1 || container === null || damaged) return splatBad("ply");
+    for (i = 0; i < elements.length; i++) { if (elements[i].name === "chunk") return splatNo("ply-compressed", SPLAT_TEXT.plyCompressed); }
+    var vertex = elements.length === 1 && elements[0].name === "vertex" && !orphan && !list ? elements[0] : null;
+    if (vertex === null) return splatNo("ply-not-splat", SPLAT_TEXT.plyNotSplat);
+    for (i = 0; i < PLY_REQUIRED_PROPERTIES.length; i++) {
+      if (vertex.names.indexOf(PLY_REQUIRED_PROPERTIES[i]) === -1) return splatNo("ply-not-splat", SPLAT_TEXT.plyNotSplat);
+    }
+    for (i = 0; i < vertex.names.length; i++) { if (/^f_rest_\d+$/.test(vertex.names[i])) return splatNo("ply-sh", SPLAT_TEXT.plySh); }
+    // Text bodies are refused (the runtime refuses them too): PLYLoader makes
+    // one string per number of an ASCII body.
+    if (container === "ply-ascii") return splatNo("bad-splat", SPLAT_TEXT.plyAscii);
+    if (!/^\d{1,10}$/.test(vertex.count)) return splatBad("ply");
+    var count = Number(vertex.count);
+    if (count === 0) return splatBad("ply");
+    if (count > SPLAT_MAX_COUNT) return splatCountNo(count);
+    var bodyStart = end + 1 + (bytes[3] === 13 && bytes[4] === 10 ? 1 : 0);
+    if (count * vertex.rowBytes > bytes.length - bodyStart) return splatNo("bad-splat", SPLAT_TEXT.plyTruncated.replace("{count}", splatGroup(count)));
+    return { ok: true, count: count, shDegree: 0, container: container };
+  }
+  // .ksplat: the 4096-byte header and the 1 KiB section headers after it, at
+  // the offsets three r186's KSPLATLoader reads.
+  var KSPLAT_SECTION_HEADER_BYTES = 1024;
+  var KSPLAT_SH_COMPONENTS = [0, 9, 24, 45];
+  var KSPLAT_LEVELS = [{ base: 12 + 12 + 16 + 4, sh: 4 }, { base: 6 + 6 + 8 + 4, sh: 2 }, { base: 6 + 6 + 8 + 4, sh: 1 }];
+  function sniffKsplatHeader(bytes) {
+    var n = bytes.length;
+    if (n < KSPLAT_HEADER_BYTES) return splatBad("ksplat");
+    var view = splatView(bytes);
+    if (view.getUint8(0) !== 0 || view.getUint8(1) < 1) return splatBad("ksplat");
+    var level = KSPLAT_LEVELS[view.getUint16(20, true)];
+    if (level === undefined) return splatBad("ksplat");
+    var splatCount = view.getUint32(16, true);
+    if (splatCount > SPLAT_MAX_COUNT) return splatCountNo(splatCount);
+    if (splatCount === 0) return splatBad("ksplat");
+    var maxSections = view.getUint32(4, true);
+    var base = KSPLAT_HEADER_BYTES + maxSections * KSPLAT_SECTION_HEADER_BYTES;
+    // Also what bounds the walk: at most one section per KiB of file.
+    if (base > n) return splatBad("ksplat");
+    var seen = 0, shDegree = 0;
+    for (var s = 0; s < maxSections; s++) {
+      var at = KSPLAT_HEADER_BYTES + s * KSPLAT_SECTION_HEADER_BYTES;
+      var sectionSplats = view.getUint32(at, true), sectionMax = view.getUint32(at + 4, true);
+      var bucketCount = view.getUint32(at + 12, true), bucketBytes = view.getUint16(at + 20, true);
+      var partialBuckets = view.getUint32(at + 36, true), degree = view.getUint16(at + 40, true);
+      var components = KSPLAT_SH_COMPONENTS[degree];
+      if (components === undefined) return splatBad("ksplat");
+      var storage = bucketBytes * bucketCount + partialBuckets * 4 + (level.base + components * level.sh) * sectionMax;
+      if (base + storage > n) return splatBad("ksplat");
+      if (sectionSplats > 0) { seen += sectionSplats; if (degree > shDegree) shDegree = degree; }
+      base += storage;
+    }
+    if (seen !== splatCount) return splatBad("ksplat");
+    return { ok: true, count: splatCount, shDegree: shDegree, container: "ksplat" };
+  }
+  // ── end of the Gaussian-splat sniff twin ──
 
   // ── Shader / model loading ──────────────────────────────────────────
   function loadShaderText(text, name) {
@@ -1938,20 +2176,36 @@
     saveSession(true);   // the payload changed — mirror the source itself
   }
 
+  // The last refusal's sentence, so a caller that loads a shader right after
+  // (whose loadShaderText clears the banner) can put it back.
+  var lastModelRefusal = "";
   // → true when the model was taken, false when it was refused (a GLB whose
-  // payload cannot be dropped).
+  // payload cannot be dropped, or a splat scene the header sniff refuses).
   function loadModelBuffer(buf, name) {
     // Normalize to a standalone ArrayBuffer so it survives structured-clone
     // messaging regardless of whether the source was a File or a zip slice.
     var ab = buf instanceof ArrayBuffer ? buf : buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    lastModelRefusal = "";
     // A FastShaders GLB carries a shader MODULE: the stage, the session mirror
     // and the VR popup never hold it (fsDropPayload). This one site covers
     // drops, zip models and the session replay; a shader found inside a model
     // runs only through handleFiles' confirm, as the text it read.
     if (extOf(name || "") === "glb") {
       var clean = fsDropPayload(new Uint8Array(ab));
-      if (!clean) { showError("\u201c" + fsSafeName(name) + "\u201d: not a valid .glb file."); return false; }
+      if (!clean) { showError("\u201c" + fsSafeName(name) + "\u201d: not a valid .glb file."); lastModelRefusal = errEl.textContent; return false; }
       ab = clean.byteOffset === 0 && clean.buffer.byteLength === clean.byteLength ? clean.buffer : clean.slice().buffer;
+    }
+    // A Gaussian splat scene passes the header sniff (the editor's rules and
+    // sentences) BEFORE anything keeps it: a refused file never reaches the
+    // state, the session mirror or the stage.
+    var ext = extOf(name || "");
+    if (isSplatExt(ext)) {
+      var sniffed = sniffSplatHeader(ext, new Uint8Array(ab));
+      if (!sniffed.ok) {
+        lastModelRefusal = "\u201c" + fsSafeName(name) + "\u201d: " + sniffed.message;
+        showError(lastModelRefusal);
+        return false;
+      }
     }
     // A clip index means nothing across models, and neither does a playhead.
     state.animClip = 0;
@@ -1959,8 +2213,9 @@
     state.modelBytes = ab;
     // A dropped OBJ takes the obj-model + regen path (normals/UVs rebuilt —
     // OBJLoader output is non-indexed, same as the built-in teapot/bunny);
-    // glb/gltf keep their authored data (regen:false).
-    state.modelKind = extOf(name || "") === "obj" ? "obj" : "gltf";
+    // glb/gltf keep their authored data (regen:false). A splat scene keeps
+    // its extension as its kind: the stage's splat-model reads it.
+    state.modelKind = ext === "obj" ? "obj" : isSplatExt(ext) ? ext : "gltf";
     state.modelName = name || "model.glb";
     state.modelDecoderFiles = modelDecoderFiles(ab, state.modelKind);
     if (!geoSelect.querySelector('option[value="model"]')) {
@@ -2723,7 +2978,7 @@
   // ── File dispatch ───────────────────────────────────────────────────
   function extOf(name) { var i = name.lastIndexOf("."); return i < 0 ? "" : name.slice(i + 1).toLowerCase(); }
   function isShaderName(n) { var e = extOf(n); return e === "js" || e === "mjs" || e === "tsl" || e === "txt"; }
-  function isModelName(n) { var e = extOf(n); return e === "glb" || e === "gltf" || e === "obj"; }
+  function isModelName(n) { var e = extOf(n); return e === "glb" || e === "gltf" || e === "obj" || isSplatExt(e); }
   function junkName(n) { var base = n.split("/").pop(); return n.indexOf("__MACOSX") !== -1 || base.charAt(0) === "."; }
 
   // Monotonic guard for the ASYNC work-folder loads (a multi-second zip
@@ -2741,8 +2996,8 @@
     if (zip) { handleZip(zip); return; }
     var shader = list.find(function (f) { return isShaderName(f.name); });
     var model = list.find(function (f) { return isModelName(f.name); });
-    if (!shader && !model) { showError("Unrecognized file. Drop a shader (.js/.tsl), a model (.glb/.gltf/.obj), or a .zip."); return; }
-    var seq = loadSeq, reads = [], glbShader = false;
+    if (!shader && !model) { showError("Unrecognized file. Drop a shader (.js/.tsl), a model (.glb/.gltf/.obj), a Gaussian splat (.splat/.spz/.ply/.ksplat), or a .zip."); return; }
+    var seq = loadSeq, reads = [], glbShader = false, modelRefusal = "";
     // A dropped FastShaders .glb may carry a shader. It runs only after the
     // visitor says yes, naming the file, and then exactly like a dropped .js
     // (inside the sandbox; the accepted text is what the session mirrors, so
@@ -2750,7 +3005,7 @@
     // wins and nothing is asked; zips and the work folder never ask.
     if (model) reads.push(model.arrayBuffer().then(function (buf) {
       var fsr = (!shader && extOf(model.name) === "glb") ? fsReadGlb(new Uint8Array(buf)) : { state: "none" };
-      if (!loadModelBuffer(buf, model.name)) return false;
+      if (!loadModelBuffer(buf, model.name)) { modelRefusal = lastModelRefusal; return false; }
       if (fsr.state === "refused") {
         showError("\u201c" + fsSafeName(model.name) + "\u201d: its stored shader could not be read (" + FS_REASON_TEXT[fsr.reason] + "), so only the model is shown.");
       } else if (fsr.state === "ok" && fsr.moduleText !== null && seq === loadSeq &&
@@ -2765,9 +3020,13 @@
       .catch(function (e) { showError("Could not read file: " + e.message); return false; }));
     // Both halves first: loadShaderText clears the banner, so a note raised
     // after the model alone would be wiped by the shader landing second. A
-    // failed read keeps its own error; a newer drop supersedes this note.
+    // failed read keeps its own error; a newer drop supersedes this note. A
+    // REFUSED model (a splat the header sniff turns away, a broken .glb) says
+    // so last, since a shader dropped beside it may have landed second.
     Promise.all(reads).then(function (ok) {
-      if (seq !== loadSeq || ok.indexOf(false) >= 0) return;
+      if (seq !== loadSeq) return;
+      if (modelRefusal) { showError(modelRefusal); return; }
+      if (ok.indexOf(false) >= 0) return;
       noteRestoreLimits(!!model, !!shader || glbShader);
     });
   }
@@ -2783,10 +3042,13 @@
       var usable = entries.filter(function (e) { return !junkName(e.name); });
       var shader = usable.find(function (e) { return isShaderName(e.name); });
       var model = usable.find(function (e) { return isModelName(e.name); });
-      if (model) loadModelBuffer(model.data, model.name.split("/").pop());
+      var modelRefusal = model && !loadModelBuffer(model.data, model.name.split("/").pop()) ? lastModelRefusal : "";
       if (shader) loadShaderText(new TextDecoder().decode(shader.data), shader.name.split("/").pop());
-      if (!shader && !model) showError("Zip contained no shader (.js/.tsl) or model (.glb/.gltf/.obj).");
+      if (!shader && !model) showError("Zip contained no shader (.js/.tsl), model (.glb/.gltf/.obj) or Gaussian splat (.splat/.spz/.ply/.ksplat).");
       else if (!quiet) noteRestoreLimits(!!model, !!shader);
+      // The shader's load cleared the banner: a refused model says so last
+      // (not on a quiet cycle tick, which never raises a banner of its own).
+      if (modelRefusal && !quiet) showError(modelRefusal);
     }).catch(function (e) { showError(zipErrorText(e)); });
   }
 
@@ -3310,7 +3572,16 @@
     // when they entered. See pushVrNav.
     var EYE = "0 1.4 0";
     var entityAttrs;
-    if (kind === "model" && state.modelBytes) {
+    // A Gaussian splat scene: the splat runtime draws it (its splat-model
+    // component normalises into the same 1.6-unit frame fit-bounds bakes for
+    // meshes, and fit-bounds steps aside for it). No gltf-anim — a splat has
+    // no clips — and the runtime <script> is emitted below ONLY for this case.
+    var splatModel = kind === "model" && !!state.modelBytes && isSplatExt(state.modelKind);
+    if (splatModel) {
+      try { if (vrModelUrl) URL.revokeObjectURL(vrModelUrl); } catch (e) {}
+      vrModelUrl = URL.createObjectURL(new Blob([state.modelBytes], { type: "application/octet-stream" }));
+      entityAttrs = 'fit-bounds="size: 1.6; regen: false" splat-model="src: url(' + vrModelUrl + '); kind: ' + state.modelKind + '; size: 1.6"';
+    } else if (kind === "model" && state.modelBytes) {
       try { if (vrModelUrl) URL.revokeObjectURL(vrModelUrl); } catch (e) {}
       var mk = state.modelKind === "obj" ? "obj" : "gltf";
       // Blob URLs are origin-scoped and the popup shares this origin, so a
@@ -3358,6 +3629,9 @@
     // structured event. Last message wins; length-capped (shader-controlled).
     L.push('<script>(function(){var q=null;window.__fsErr=function(m){try{var el=document.getElementById("err");if(!el){q=m;return;}el.textContent=String(m).slice(0,2000);el.style.display="block";}catch(e){}};addEventListener("DOMContentLoaded",function(){if(q!==null)__fsErr(q);});window.onerror=function(msg,u,l,c,err){__fsErr((err&&err.stack)||msg||"Error");};window.onunhandledrejection=function(ev){var r=ev&&ev.reason;__fsErr((r&&r.stack)||r||"Shader load failed");};var ce=console.error;console.error=function(){try{var p=[];for(var i=0;i<arguments.length;i++)p.push(String(arguments[i]));__fsErr(p.join(" "));}catch(e){}return ce.apply(console,arguments);};addEventListener("shader-error",function(ev){var d=ev&&ev.detail;__fsErr("Shader error: "+((d&&d.message)||"failed to apply"));});})();<\/script>');
     L.push('<script src="' + iife + '" onerror="__fsErr(\'Failed to load the A-Frame bundle\')"><\/script>');
+    // The splat runtime, right after the A-Frame bundle it reads THREE from —
+    // and only into a document that shows a splat.
+    if (splatModel) L.push('<script src="' + dir + 'js/fs-splat-0.1.js" onerror="__fsErr(\'Failed to load the Gaussian-splat runtime\')"><\/script>');
     L.push('<script src="' + loader + '" onerror="__fsErr(\'Failed to load the shaderloader\')"><\/script>');
     // Mesh decoders for a dropped compressed glTF: this popup runs at the real
     // origin, so it points loader 0.8 at js/decoders/ beside the loader itself.
@@ -3423,7 +3697,7 @@
     // only after the loader finishes its dynamic import.
     L.push('  function applyValues(){var tries=0;(function poll(){var comp=entity&&entity.components&&entity.components.shader;var u=comp&&comp._propertyUniforms;if(u){for(var k in VALUES){if(!Object.prototype.hasOwnProperty.call(VALUES,k)||SOUND_RE.test(k)||!u[k])continue;var v=VALUES[k];if(u[k].value&&u[k].value.isColor){if(typeof v==="string")try{u[k].value.set(v);}catch(e){}}else if(typeof v==="number"&&isFinite(v)){u[k].value=v;}}return;}if(tries++<120)setTimeout(poll,50);})();}');
     L.push('  window.addEventListener("shader-applied",applyValues);');
-    L.push('  function boot(){entity=document.getElementById("preview-entity");entity.addEventListener("model-error",function(){var why="";try{var d=window.FastShaders&&FastShaders.decoders;if(d&&typeof d.lastError==="string")why=d.lastError;}catch(e){}__fsErr("Failed to load the 3D model: "+(why||"the file could not be parsed (corrupt, or compressed in a way Podest cannot decode)."));});if(SRC){var u=URL.createObjectURL(new Blob([SRC],{type:"text/javascript"}));entity.setAttribute("shader","src: "+u);}}');
+    L.push('  function boot(){entity=document.getElementById("preview-entity");entity.addEventListener("model-error",function(ev){var why="";try{var dm=ev&&ev.detail&&ev.detail.message;if(typeof dm==="string")why=dm.slice(0,1000);}catch(e){}if(!why)try{var d=window.FastShaders&&FastShaders.decoders;if(d&&typeof d.lastError==="string")why=d.lastError;}catch(e){}__fsErr("Failed to load the 3D model: "+(why||"the file could not be parsed (corrupt, or compressed in a way Podest cannot decode)."));});if(SRC){var u=URL.createObjectURL(new Blob([SRC],{type:"text/javascript"}));entity.setAttribute("shader","src: "+u);}}');
     // Auto-enter once REAL support is confirmed, but keep an in-document
     // button until a session actually starts: a document.write'd popup may
     // not inherit the opening click's transient activation, and an
@@ -3499,7 +3773,10 @@
   // plugin covers this file; previewFitBounds.test.ts runs both twins
   // through the same assertions). regen:true rebuilds normals + spherical
   // UVs for OBJ; regen:false preserves a dropped GLB's own data and only
-  // synthesizes what is missing.
+  // synthesizes what is missing. A Gaussian splat anywhere in the subtree
+  // makes fit return untouched, exactly as the editor copy does: splat-model
+  // already normalised the scene, and its Mesh is one instanced quad that a
+  // bake or a Box3 would treat as the model.
   /**
    * `gltf-anim`: hand-minified twin of GLTF_ANIM_SCRIPT in
    * src/engine/tslToPreviewHTML.ts — A-Frame core ships no animation-mixer, so
@@ -3540,6 +3817,14 @@
     L.push('<script>');
     L.push('(function(){');
     L.push('  if(!window.AFRAME||AFRAME.components["fit-bounds"])return;');
+    // three's OBJLoader invents flat per-face normals for a file with no vn
+    // line, and the regen path took them for authored ones and split every
+    // corner, so a displaced bare OBJ (the Stanford bunny) tore into loose
+    // triangles. Dropped at the parse instead -- on AFRAME.THREE's loader, the
+    // one obj-model builds (window.THREE has none). Full rationale on the editor
+    // twin in src/engine/tslToPreviewHTML.ts -- keep the two in step.
+    L.push('  function patchObjNormals(){var C=(AFRAME.THREE&&AFRAME.THREE.OBJLoader)||THREE.OBJLoader,P=C&&C.prototype;if(!P||typeof P.parse!=="function"||P.__fsBareObjNormals)return;var parse=P.parse;P.parse=function(text){var group=parse.apply(this,arguments);if(typeof text==="string"&&group&&typeof group.traverse==="function"&&!/^[ \\t]*vn[ \\t]/m.test(text)){group.traverse(function(o){if(o.isMesh&&o.geometry&&o.geometry.attributes&&o.geometry.attributes.normal)o.geometry.deleteAttribute("normal");});}return group;};P.__fsBareObjNormals=true;}');
+    L.push('  patchObjNormals();');
     L.push('  function mergeByPosition(geom){var pos=geom.attributes.position;if(!pos)return geom;var oldIndex=geom.index,precision=1e4,lookup=Object.create(null),newPositions=[],remap=new Uint32Array(pos.count),nextIndex=0;for(var i=0;i<pos.count;i++){var x=pos.getX(i),y=pos.getY(i),z=pos.getZ(i);var key=Math.round(x*precision)+"_"+Math.round(y*precision)+"_"+Math.round(z*precision);var idx=lookup[key];if(idx===undefined){idx=nextIndex++;lookup[key]=idx;newPositions.push(x,y,z);}remap[i]=idx;}var indexCount=oldIndex?oldIndex.count:pos.count;var Arr=nextIndex<65535?Uint16Array:Uint32Array;var newIndex=new Arr(indexCount);if(oldIndex){for(var j=0;j<indexCount;j++)newIndex[j]=remap[oldIndex.getX(j)];}else{for(var k=0;k<indexCount;k++)newIndex[k]=remap[k];}var merged=new THREE.BufferGeometry();merged.setAttribute("position",new THREE.BufferAttribute(new Float32Array(newPositions),3));merged.setIndex(new THREE.BufferAttribute(newIndex,1));return merged;}');
     // The spherical projection SEAMS at the -X half-plane, where atan2 wraps and
     // u steps 1 -> 0; an indexed mesh shares one vertex across that step, so
@@ -3562,7 +3847,7 @@
     // first; every other attribute keeps its form. Full rationale on the
     // editor twin in src/engine/tslToPreviewHTML.ts -- keep the two in step.
     L.push('  function dequantize(g){var names=["position","normal","tangent"];for(var n=0;n<names.length;n++){var a=g.getAttribute(names[n]);if(!a||a.array instanceof Float32Array)continue;var size=a.itemSize,out=new Float32Array(a.count*size);for(var i=0;i<a.count;i++){out[i*size]=a.getX(i);if(size>1)out[i*size+1]=a.getY(i);if(size>2)out[i*size+2]=a.getZ(i);if(size>3)out[i*size+3]=a.getW(i);}g.setAttribute(names[n],new THREE.BufferAttribute(out,size,false));}}');
-    L.push('  AFRAME.registerComponent("fit-bounds",{schema:{size:{type:"number",default:1.6},regen:{type:"boolean",default:false}},init:function(){this.el.addEventListener("model-loaded",this.fit.bind(this));},fit:function(){var root=this.el.getObject3D("mesh");if(!root)return;var regen=this.data.regen,target=this.data.size;root.updateMatrixWorld(true);var animated=!!(root.animations&&root.animations.length);var rootInv=new THREE.Matrix4().copy(root.matrixWorld).invert();var pre=new THREE.Matrix4().multiplyMatrices(root.matrix,rootInv);var entries=[],skinned=false;root.traverse(function(node){if(!node.isMesh||!node.geometry)return;if(node.isSkinnedMesh||node.isInstancedMesh){skinned=true;return;}entries.push({node:node,m:new THREE.Matrix4().multiplyMatrices(pre,node.matrixWorld)});});if(skinned||animated){var wbox=new THREE.Box3().setFromObject(root);if(wbox.isEmpty())return;var wsize=new THREE.Vector3(),wcenter=new THREE.Vector3();wbox.getSize(wsize);wbox.getCenter(wcenter);var ws=target/(Math.max(wsize.x,wsize.y,wsize.z)||1);root.position.sub(wcenter.multiplyScalar(ws));root.scale.setScalar(ws);return;}if(!entries.length)return;var box=new THREE.Box3();for(var i=0;i<entries.length;i++){var g0=entries[i].node.geometry;if(!g0.boundingBox)g0.computeBoundingBox();if(g0.boundingBox)box.union(g0.boundingBox.clone().applyMatrix4(entries[i].m));}if(box.isEmpty())return;var ext=new THREE.Vector3(),center=new THREE.Vector3();box.getSize(ext);box.getCenter(center);var s=target/(Math.max(ext.x,ext.y,ext.z)||1);var N=new THREE.Matrix4().makeScale(s,s,s).multiply(new THREE.Matrix4().makeTranslation(-center.x,-center.y,-center.z));for(var e=0;e<entries.length;e++){var node=entries[e].node;var bake=new THREE.Matrix4().multiplyMatrices(N,entries[e].m);var g=node.geometry.clone();dequantize(g);g.applyMatrix4(bake);if(bake.determinant()<0)flipWinding(g);if(regen){var src=g,hadUv=!!src.attributes.uv,hadNormal=!!src.attributes.normal;g=mergeByPosition(src);g.computeVertexNormals();g.computeBoundingBox();var c=new THREE.Vector3();g.boundingBox.getCenter(c);var nrm=g.attributes.normal,pos=g.attributes.position;var inward=0,sampled=0,step=Math.max(1,Math.floor(pos.count/200));for(var sv=0;sv<pos.count;sv+=step){var dot=(pos.getX(sv)-c.x)*nrm.getX(sv)+(pos.getY(sv)-c.y)*nrm.getY(sv)+(pos.getZ(sv)-c.z)*nrm.getZ(sv);if(dot<0)inward++;sampled++;}var flipped=false;if(sampled>0&&inward*2>sampled){flipWinding(g);g.computeVertexNormals();flipped=true;}if(hadUv||hadNormal)g=splitByAuthored(src,g,flipped);if(!hadUv)sphericalUVs(g,c);}else{if(!g.attributes.normal&&g.attributes.position)g.computeVertexNormals();if(!g.attributes.uv&&g.attributes.position){g.computeBoundingBox();var c0=new THREE.Vector3();g.boundingBox.getCenter(c0);sphericalUVs(g,c0);}}node.geometry=g;}root.traverse(function(node){node.position.set(0,0,0);node.quaternion.set(0,0,0,1);node.scale.set(1,1,1);});root.updateMatrixWorld(true);}});');
+    L.push('  AFRAME.registerComponent("fit-bounds",{schema:{size:{type:"number",default:1.6},regen:{type:"boolean",default:false}},init:function(){this.el.addEventListener("model-loaded",this.fit.bind(this));},fit:function(){var root=this.el.getObject3D("mesh");if(!root)return;var regen=this.data.regen,target=this.data.size;root.updateMatrixWorld(true);var animated=!!(root.animations&&root.animations.length);var rootInv=new THREE.Matrix4().copy(root.matrixWorld).invert();var pre=new THREE.Matrix4().multiplyMatrices(root.matrix,rootInv);var entries=[],skinned=false,splatSeen=false;root.traverse(function(node){if(node.isGaussianSplat){splatSeen=true;return;}if(!node.isMesh||!node.geometry)return;if(node.isSkinnedMesh||node.isInstancedMesh){skinned=true;return;}entries.push({node:node,m:new THREE.Matrix4().multiplyMatrices(pre,node.matrixWorld)});});if(splatSeen)return;if(skinned||animated){var wbox=new THREE.Box3().setFromObject(root);if(wbox.isEmpty())return;var wsize=new THREE.Vector3(),wcenter=new THREE.Vector3();wbox.getSize(wsize);wbox.getCenter(wcenter);var ws=target/(Math.max(wsize.x,wsize.y,wsize.z)||1);root.position.sub(wcenter.multiplyScalar(ws));root.scale.setScalar(ws);return;}if(!entries.length)return;var box=new THREE.Box3();for(var i=0;i<entries.length;i++){var g0=entries[i].node.geometry;if(!g0.boundingBox)g0.computeBoundingBox();if(g0.boundingBox)box.union(g0.boundingBox.clone().applyMatrix4(entries[i].m));}if(box.isEmpty())return;var ext=new THREE.Vector3(),center=new THREE.Vector3();box.getSize(ext);box.getCenter(center);var s=target/(Math.max(ext.x,ext.y,ext.z)||1);var N=new THREE.Matrix4().makeScale(s,s,s).multiply(new THREE.Matrix4().makeTranslation(-center.x,-center.y,-center.z));for(var e=0;e<entries.length;e++){var node=entries[e].node;var bake=new THREE.Matrix4().multiplyMatrices(N,entries[e].m);var g=node.geometry.clone();dequantize(g);g.applyMatrix4(bake);if(bake.determinant()<0)flipWinding(g);if(regen){var src=g,hadUv=!!src.attributes.uv,hadNormal=!!src.attributes.normal;g=mergeByPosition(src);g.computeVertexNormals();g.computeBoundingBox();var c=new THREE.Vector3();g.boundingBox.getCenter(c);var nrm=g.attributes.normal,pos=g.attributes.position;var inward=0,sampled=0,step=Math.max(1,Math.floor(pos.count/200));for(var sv=0;sv<pos.count;sv+=step){var dot=(pos.getX(sv)-c.x)*nrm.getX(sv)+(pos.getY(sv)-c.y)*nrm.getY(sv)+(pos.getZ(sv)-c.z)*nrm.getZ(sv);if(dot<0)inward++;sampled++;}var flipped=false;if(sampled>0&&inward*2>sampled){flipWinding(g);g.computeVertexNormals();flipped=true;}if(hadUv||hadNormal)g=splitByAuthored(src,g,flipped);if(!hadUv)sphericalUVs(g,c);}else{if(!g.attributes.normal&&g.attributes.position)g.computeVertexNormals();if(!g.attributes.uv&&g.attributes.position){g.computeBoundingBox();var c0=new THREE.Vector3();g.boundingBox.getCenter(c0);sphericalUVs(g,c0);}}node.geometry=g;}root.traverse(function(node){node.position.set(0,0,0);node.quaternion.set(0,0,0,1);node.scale.set(1,1,1);});root.updateMatrixWorld(true);}});');
     L.push('})();');
     L.push('<\/script>');
   }
@@ -3740,6 +4025,12 @@
     var iife = dir + "js/a-frame-180-a-01.min.js";
     var loader = dir + "js/a-frame-shaderloader-0.8.js";
     var orbit = dir + "js/aframe-orbit-controls.min.js";
+    // The splat runtime rides ONLY in a document built while a splat scene is
+    // the loaded model, so every other stage document is exactly what it was.
+    // Recorded for setGeometry, which rebuilds the stage when a splat arrives
+    // on a document without it (reloadStageForSplat).
+    var splat = isSplatExt(state.modelKind);
+    stageSplat = splat;
     // Bake the persisted background + spin prefs straight into the initial scene
     // so boot matches the saved state without a post-ready restart. bg is
     // validated (#rrggbb) so it is safe to inline into the markup; when spin is
@@ -3820,6 +4111,8 @@
     L.push('<\/script>');
 
     L.push('<script src="' + iife + '" onerror="fsPost(\'Failed to load the A-Frame bundle\', true)"><\/script>');
+    // After the A-Frame bundle it reads THREE from (it throws without it).
+    if (splat) L.push('<script src="' + dir + 'js/fs-splat-0.1.js" onerror="fsPost(\'Failed to load the Gaussian-splat runtime\', true)"><\/script>');
     L.push('<script src="' + loader + '" onerror="fsPost(\'Failed to load the shaderloader\', true)"><\/script>');
     // Mesh decoders: the table setModel fills with blob: URLs of the bytes the
     // parent pushed (see modelDecoderFiles). An empty slot answers null, so a
@@ -3908,8 +4201,10 @@
     // the model was authored with. Never from a reference stashed on this side
     // — the loader disposes the outgoing material BEFORE assigning the new
     // one, so a stash taken across an apply restores a disposed material.
+    // A GaussianSplat is a Mesh but never a part: assigning a mesh material to
+    // its quad template would draw every splat as a unit square.
     L.push('  function shaderComp(){return (entity&&entity.components&&entity.components.shader)||null;}');
-    L.push('  function meshList(){var out=[],root=entity&&entity.getObject3D&&entity.getObject3D("mesh");if(root&&root.traverse)root.traverse(function(n){if(n.isMesh)out.push(n);});return out;}');
+    L.push('  function meshList(){var out=[],root=entity&&entity.getObject3D&&entity.getObject3D("mesh");if(root&&root.traverse)root.traverse(function(n){if(n.isMesh&&!n.isGaussianSplat)out.push(n);});return out;}');
     L.push('  function reportParts(){var c=shaderComp(),list=meshList(),meshes=[],parts=[],i;for(i=0;i<list.length&&i<200;i++)meshes.push(String(list[i].name||""));if(attached&&c&&c._partMaterials&&c._partMaterials.forEach)c._partMaterials.forEach(function(v,k){if(parts.length<200)parts.push(String(k));});toParent({type:"fs:parts",meshes:meshes,parts:parts,hasDefault:!!(attached&&c&&c._shaderMaterial)});}');
     L.push('  function assignPart(meshName,partName){if(typeof meshName!=="string"||!meshName)return;var c=shaderComp(),list=meshList(),want=(typeof partName==="string"&&partName)?partName:null,i;for(i=0;i<list.length;i++){var n=list[i];if(n.name!==meshName)continue;var next=null;if(want&&c&&c._partMaterials&&c._partMaterials.get)next=c._partMaterials.get(want)||null;if(!next)next=(c&&c._shaderMaterial)||null;if(!next)next=(c&&c.originalMaterials)?(c.originalMaterials[n.uuid]||null):null;if(next)n.material=next;}}');
     // Right-click forwarding: this iframe covers the viewport, so the parent
@@ -3919,14 +4214,19 @@
     L.push('  addEventListener("contextmenu",function(e){if(!ctxHook)return;e.preventDefault();toParent({type:"fs:contextmenu",x:e.clientX,y:e.clientY});});');
     L.push('  function applyShaderSource(src){try{if(shaderUrl)URL.revokeObjectURL(shaderUrl);}catch(e){}shaderUrl=URL.createObjectURL(new Blob([src],{type:"text/javascript"}));attached=true;entity.setAttribute("shader","src: "+shaderUrl);var comp=entity.components&&entity.components.shader;if(comp)comp._propertyUniforms=null;reportUniforms();}');
     L.push('  function detachShader(){attached=false;entity.removeAttribute("shader");reportParts();}');
-    L.push('  function clearGeo(){var comp=entity.components&&entity.components.shader;if(comp&&attached)comp._propertyUniforms=null;entity.removeAttribute("geometry");entity.removeAttribute("obj-model");entity.removeAttribute("gltf-model");entity.removeAttribute("fit-bounds");entity.removeAttribute("gltf-anim");entity.removeAttribute("material");toParent({type:"fs:anim",has:false,duration:0,canInPlace:false,name:"",clip:0,clips:[]});toParent({type:"fs:parts",meshes:[],parts:[],hasDefault:false});}');
+    L.push('  function clearGeo(){var comp=entity.components&&entity.components.shader;if(comp&&attached)comp._propertyUniforms=null;entity.removeAttribute("geometry");entity.removeAttribute("obj-model");entity.removeAttribute("gltf-model");entity.removeAttribute("splat-model");entity.removeAttribute("fit-bounds");entity.removeAttribute("gltf-anim");entity.removeAttribute("material");toParent({type:"fs:anim",has:false,duration:0,canInPlace:false,name:"",clip:0,clips:[]});toParent({type:"fs:parts",meshes:[],parts:[],hasDefault:false});}');
     L.push('  function setPrimitive(attr,rot){clearGeo();entity.setAttribute("material","color: #808080");entity.setAttribute("geometry",attr);entity.setAttribute("rotation",rot||"45 45 0");if(attached){setTimeout(function(){var c=entity.components&&entity.components.shader;if(c&&typeof c.applyShader==="function")c.applyShader();reportUniforms();reportParts();},0);}else setTimeout(reportParts,0);}');
     // The decoder bytes the parent pushed become blob: URLs, only for the three
     // known names, only as text / ArrayBuffer, at most DEC_MAX each; a filled
     // slot keeps its URL. Runs BEFORE gltf-model is set.
+    // setModel's splat branch (the kind IS the extension, one of four exact
+    // literals): the bytes become a blob the runtime's splat-model loads
+    // through THREE.FileLoader, so the URL modifier above still applies; no
+    // gltf-anim (a splat has no clips) and no decoders. This document carries
+    // the runtime <script> because the parent built it for a splat model.
     L.push('  var DEC_FILES=' + jsonForScript(DECODER_FILES) + ',DEC_MAX=' + DECODER_MAX_BYTES + ';');
     L.push('  function fillDec(dec){var t=window.__fsDecoderUrls;if(!t||!dec||typeof dec!=="object")return;for(var i=0;i<DEC_FILES.length;i++){var n=DEC_FILES[i];if(t[n]||!Object.prototype.hasOwnProperty.call(dec,n))continue;var v=dec[n],w=n.slice(-5)===".wasm";if(w?!(v instanceof ArrayBuffer&&v.byteLength>0&&v.byteLength<=DEC_MAX):!(typeof v==="string"&&v.length>0&&v.length<=DEC_MAX))continue;try{t[n]=URL.createObjectURL(new Blob([v],{type:w?"application/wasm":"text/javascript"}));}catch(e){}}}');
-    L.push('  function setModel(kind,bytes,regen,rot,dec){try{if(window.FastShaders&&FastShaders.decoders)FastShaders.decoders.clearError();}catch(e){}clearGeo();fillDec(dec);try{if(modelUrl)URL.revokeObjectURL(modelUrl);}catch(e){}var mime=kind==="obj"?"text/plain":"model/gltf-binary";modelUrl=URL.createObjectURL(new Blob([bytes],{type:mime}));entity.setAttribute("fit-bounds","size: 1.6; regen: "+(regen?"true":"false"));entity.setAttribute("gltf-anim","");if(kind==="obj")entity.setAttribute("obj-model","obj: url("+modelUrl+")");else entity.setAttribute("gltf-model","url("+modelUrl+")");entity.setAttribute("rotation",rot||"0 0 0");if(attached)reportUniforms();}');
+    L.push('  function setModel(kind,bytes,regen,rot,dec){try{if(window.FastShaders&&FastShaders.decoders)FastShaders.decoders.clearError();}catch(e){}clearGeo();fillDec(dec);try{if(modelUrl)URL.revokeObjectURL(modelUrl);}catch(e){}var splat=kind==="splat"||kind==="spz"||kind==="ply"||kind==="ksplat";var mime=kind==="obj"?"text/plain":splat?"application/octet-stream":"model/gltf-binary";modelUrl=URL.createObjectURL(new Blob([bytes],{type:mime}));if(splat){entity.setAttribute("fit-bounds","size: 1.6; regen: false");entity.setAttribute("splat-model","src: url("+modelUrl+"); kind: "+kind+"; size: 1.6");}else{entity.setAttribute("fit-bounds","size: 1.6; regen: "+(regen?"true":"false"));entity.setAttribute("gltf-anim","");if(kind==="obj")entity.setAttribute("obj-model","obj: url("+modelUrl+")");else entity.setAttribute("gltf-model","url("+modelUrl+")");}entity.setAttribute("rotation",rot||"0 0 0");if(attached)reportUniforms();}');
     // Colour uniforms mutate in place via .set() — assigning a hex string to
     // .value would replace the THREE.Color object with a string.
     L.push('  function setUniform(name,value){var comp=entity&&entity.components&&entity.components.shader;if(!comp||!comp._propertyUniforms||!comp._propertyUniforms[name])return;var u=comp._propertyUniforms[name];if(u.value&&u.value.isColor){try{u.value.set(value);}catch(e){}}else{u.value=value;}}');
@@ -4017,8 +4317,10 @@
     // The model-loaded report is deferred one tick so it is taken AFTER
     // fit-bounds has baked the geometry and the shaderloader has stored the
     // authored materials — both listen for the same event, and both were
-    // registered before this one.
-    L.push('  function boot(){entity=document.getElementById("preview-entity");spinEl=document.getElementById("spin-parent");camEl=document.querySelector("[camera]");entity.addEventListener("model-error",function(){var why="";try{var d=window.FastShaders&&FastShaders.decoders;if(d&&typeof d.lastError==="string")why=d.lastError;}catch(e){}fsPost("Failed to load the 3D model: "+(why||"the file could not be parsed (corrupt, or compressed in a way Podest cannot decode)."));});entity.addEventListener("model-loaded",function(){setTimeout(reportParts,0);});toParent({type:"fs:ready"});kickResize();setTimeout(kickResize,250);setTimeout(kickResize,1000);setTimeout(kickResize,2500);if(!beatTimer){beat();beatTimer=setInterval(beat,BEAT_MS);}}');
+    // registered before this one. model-error names its cause from the
+    // event's own `message` first (the splat runtime's splat-model sends its
+    // parse refusal there), else from the decoders' last error.
+    L.push('  function boot(){entity=document.getElementById("preview-entity");spinEl=document.getElementById("spin-parent");camEl=document.querySelector("[camera]");entity.addEventListener("model-error",function(ev){var why="";try{var dm=ev&&ev.detail&&ev.detail.message;if(typeof dm==="string")why=dm.slice(0,1000);}catch(e){}if(!why)try{var d=window.FastShaders&&FastShaders.decoders;if(d&&typeof d.lastError==="string")why=d.lastError;}catch(e){}fsPost("Failed to load the 3D model: "+(why||"the file could not be parsed (corrupt, or compressed in a way Podest cannot decode)."));});entity.addEventListener("model-loaded",function(){setTimeout(reportParts,0);});toParent({type:"fs:ready"});kickResize();setTimeout(kickResize,250);setTimeout(kickResize,1000);setTimeout(kickResize,2500);if(!beatTimer){beat();beatTimer=setInterval(beat,BEAT_MS);}}');
     L.push('  if(!window.AFRAME){toParent({type:"fs:error",message:"A-Frame failed to initialize"});return;}');
     // The scene arrives via the pre-flight injector above — wire boot to it
     // (the helper also handles the already-booted case).

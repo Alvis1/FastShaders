@@ -17,9 +17,18 @@
  * `.glb` straight back.
  */
 import type { PreviewMesh } from './previewMesh';
+import type { SplatKind } from './splatSniff';
 
 /** Why one `.glb` is not on offer. Each maps to a sentence in glbExportCopy. */
-export type GlbExportUnavailable = 'no-model' | 'obj' | 'external-data' | 'unreadable';
+export type GlbExportUnavailable = 'no-model' | 'obj' | 'splat' | 'external-data' | 'unreadable';
+
+/**
+ * The splat kinds, spelled here rather than imported so this stays a LEAF
+ * (`isSplatKind` is a value in a module that pulls in the pre-read gate). The
+ * mapped type makes a fifth `SplatKind` fail `tsc` here instead of falling
+ * through to 'unreadable'.
+ */
+const SPLAT_KIND: { readonly [K in SplatKind]: true } = { splat: true, spz: true, ply: true, ksplat: true };
 
 export type GlbExportAvailability =
   | { ok: true }
@@ -34,6 +43,11 @@ export type GlbExportMesh = Pick<PreviewMesh, 'kind' | 'name' | 'gltf' | 'gltfRe
 export function glbExportAvailability(mesh: GlbExportMesh): GlbExportAvailability {
   if (!mesh) return { ok: false, reason: 'no-model' };
   if (mesh.kind === 'obj') return { ok: false, reason: 'obj', name: mesh.name };
+  // A Gaussian splat scene is no glTF mesh: one `.glb` cannot hold it (the
+  // KHR_gaussian_splatting form is refused on import too), so EXPORT falls back
+  // to the bundle, whose zip carries the scene under models/ with the runtime
+  // pairing snippet. Own sentence — the obj one would call it an .obj file.
+  if (Object.prototype.hasOwnProperty.call(SPLAT_KIND, mesh.kind)) return { ok: false, reason: 'splat', name: mesh.name };
   // `gltf`: an object = read OK; null = refused; undefined = never computed
   // (an older session record, or a mesh built by hand) — treated as unreadable,
   // the safe direction, since the export would have to parse it anyway.

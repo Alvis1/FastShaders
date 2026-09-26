@@ -2,7 +2,7 @@ import type { AppNode, AppEdge } from '@/types';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { getCost } from '@/utils/costTable';
-import { activeSink, isSinkNode, isMarchOutput, marchPartition } from '@/utils/sdfPartition';
+import { activeSink, isSinkNode, isMarchOutput, isSplatOutput, isCustomSink, marchPartition } from '@/utils/sdfPartition';
 // `nodeCost` already sits inside the store's import cycle (nodeCost →
 // outputMaterials → exposedPorts → edgeUtils → useAppStore), so this adds no
 // new edge — and nothing here is EVALUATED at module scope, which is the rule
@@ -141,8 +141,9 @@ export function nodeCostPoints(node: AppNode, edges: AppEdge[]): number {
  * read, so a headset change can never price a different set from the one the
  * meter was showing a moment earlier.
  *
- * A driving Raymarch Output seeds ALONE — it suppresses every plain Output, so
- * pricing one beside it would charge for a chain that emits nothing. Otherwise
+ * A driving custom sink (Raymarch or Splat Output) seeds ALONE — it
+ * suppresses every plain Output, so pricing one beside it would charge for a
+ * chain that emits nothing. Otherwise
  * the seeds are `contributingOutputs`: the node supplying the module's
  * top-level channels plus EVERY targeted Output, since each of those emits its
  * own `parts` / `materialParts` entry whatever the active flag says. Seeding
@@ -160,7 +161,7 @@ export function nodeCostPoints(node: AppNode, edges: AppEdge[]): number {
  */
 export function costSeeds(nodes: AppNode[], edges: AppEdge[]): AppNode[] {
   const sink = activeSink(nodes, edges);
-  if (sink && isMarchOutput(sink)) return [sink];
+  if (sink && isCustomSink(sink)) return [sink];
   return contributingOutputs(nodes);
 }
 
@@ -253,6 +254,15 @@ export function computeReachableCost(
   // charge a body shared between them twice, which is the honest direction (it
   // really is evaluated in both loops) but is not a case anything can produce.
   for (const march of seeds) {
+    // A Splat Output's Fns run once per splat VERTEX (four per splat, inside
+    // the splat renderer's own vertex stage), never per pixel and never per
+    // step — so its chain is priced once, like a plain Output's, plus the
+    // sink's own flat table cost. What it cannot price is the splat COUNT:
+    // that is a figure of the loaded model, not of the graph.
+    if (isSplatOutput(march)) {
+      total += getCost(march.data.registryType);
+      continue;
+    }
     if (!isMarchOutput(march)) continue;
     const raw = Number(getNodeValues(march).steps);
     const dflt = Number(NODE_REGISTRY.get(march.data.registryType)?.defaultValues?.steps ?? 64);

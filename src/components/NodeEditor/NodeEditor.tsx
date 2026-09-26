@@ -278,6 +278,7 @@ const IMPORT_FIT_TIMEOUT_MS = 3000;
 const NODE_MENU_TYPES: Record<string, ContextMenuType> = {
   output: 'shader',
   raymarchOutput: 'raymarch',
+  splatOutput: 'splat',
   stripes: 'stripes',
   dataviz: 'dataviz',
   colormap: 'colormap',
@@ -905,10 +906,16 @@ export function NodeEditor() {
     };
   }, []);
   /**
-   * The node whose socket labels are held open by a double-click / double-tap
-   * (see labelPeek.ts). Local state: nothing outside this component opens it,
-   * and looking at a node's ports is not an edit — it must not reach history,
-   * the autosave or a shared file.
+   * The node whose socket labels (and, in Latvian, its header name) are held
+   * open by a double-click / double-tap (see labelPeek.ts). Local state:
+   * nothing outside this component opens it, and looking at a node's ports is
+   * not an edit — it must not reach history, the autosave or a shared file.
+   *
+   * The mark is an ATTRIBUTE, for the reason Preview mode's is: the wrapper's
+   * `className` is rewritten whole whenever `selected`/`dragging` flips, and a
+   * hand-added class went with it — drag the peeked node and its labels
+   * vanished while the peek stayed set, so the next double-click toggled it
+   * OFF and showed nothing.
    */
   const [peekNodeId, setPeekNodeId] = useState<string | null>(null);
   const lastActivationRef = useRef<Activation>(null);
@@ -923,8 +930,8 @@ export function NodeEditor() {
       return;
     }
     if (!el) return;
-    el.classList.add('fs-labels-shown');
-    return () => el?.classList.remove('fs-labels-shown');
+    el.setAttribute('data-fs-labels-shown', '');
+    return () => el?.removeAttribute('data-fs-labels-shown');
   }, [peekNodeId]);
 
   /**
@@ -2593,11 +2600,11 @@ export function NodeEditor() {
       reader.onload = () => {
         const res = parseCsv(String(reader.result ?? ''));
         if (!res.ok) {
-          // `{error}` stays the CSV parser's own English message.
+          const lang = useAppStore.getState().language;
           window.alert(
-            fillTemplate(t('Could not load {name}:\n{error}', useAppStore.getState().language), {
+            fillTemplate(t('Could not load {name}:\n{error}', lang), {
               name: `“${file.name}”`,
-              error: res.error,
+              error: fillTemplate(t(res.errorKey, lang), res.errorParams),
             }),
           );
           return;
@@ -3737,6 +3744,9 @@ export function NodeEditor() {
       preflight: askExportPreflight,
       glb: glbExportUi,
       delivery: 'download',
+      // A save before NEW wipes the canvas ("the whole project embedded"), so
+      // it never honours the EXPORT popover's unconnected-nodes row.
+      scope: 'whole',
     });
     if (!bundle) return false;
     downloadShader(bundle);

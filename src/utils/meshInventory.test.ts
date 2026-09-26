@@ -2,11 +2,13 @@ import { describe, it, expect } from 'vitest';
 import {
   isUsableMeshName,
   sanitizeMeshInventory,
+  sanitizeSplatReport,
   meshNameCounts,
   MESH_NAME_MAX,
   MAX_INVENTORY_MESHES,
   MATERIAL_NAME_MAX,
 } from './meshInventory';
+import { SPLAT_MAX_COUNT } from './splatLimits';
 
 const entry = (over: Record<string, unknown> = {}) => ({
   index: 0,
@@ -175,5 +177,104 @@ describe('meshNameCounts', () => {
     expect(counts.get('toString')).toBe(1);
     expect(counts.get('constructor')).toBeUndefined();
     expect(counts.get('hasOwnProperty')).toBeUndefined();
+  });
+});
+
+describe('sanitizeMeshInventory — a Gaussian splat row', () => {
+  const splatRow = (over: Record<string, unknown> = {}) => ({
+    index: 0, name: '', materialName: '', vertexCount: 0, splat: true, splats: 100_000, ...over,
+  });
+
+  it('keeps the splat BESIDE the meshes, never among them — it can never be a part target', () => {
+    const got = sanitizeMeshInventory('custom:4', [splatRow()]);
+    expect(got).toEqual({ key: 'custom:4', meshes: [], truncated: false, splat: { index: 0, splats: 100_000 } });
+  });
+
+  it('ignores whatever name, material or vertex count the splat row claims', () => {
+    // A hostile document can name its splat row anything; a usable name must
+    // still never reach the list targets are picked from.
+    const got = sanitizeMeshInventory('custom:4', [
+      splatRow({ name: 'Body', materialName: 'Steel', vertexCount: 999, index: 3 }),
+    ]);
+    expect(got?.meshes).toEqual([]);
+    expect(got?.splat).toEqual({ index: 3, splats: 100_000 });
+  });
+
+  it('sits beside ordinary meshes without disturbing them', () => {
+    const got = sanitizeMeshInventory('k', [entry(), splatRow({ index: 1 }), entry({ index: 2, name: 'Glass' })]);
+    expect(got?.meshes.map((m) => m.name)).toEqual(['Body', 'Glass']);
+    expect(got?.splat).toEqual({ index: 1, splats: 100_000 });
+  });
+
+  it('refuses a splat count that is not a safe integer in [0, SPLAT_MAX_COUNT]', () => {
+    for (const splats of [-1, 1.5, SPLAT_MAX_COUNT + 1, Number.MAX_SAFE_INTEGER + 2, NaN, Infinity, '5', null, undefined, {}]) {
+      expect(sanitizeMeshInventory('k', [splatRow({ splats })]), String(splats)).toBeNull();
+    }
+    expect(sanitizeMeshInventory('k', [splatRow({ splats: 0 })])?.splat).toEqual({ index: 0, splats: 0 });
+    expect(sanitizeMeshInventory('k', [splatRow({ splats: SPLAT_MAX_COUNT })])?.splat?.splats).toBe(SPLAT_MAX_COUNT);
+  });
+
+  it('keeps only the first well-formed splat row', () => {
+    const got = sanitizeMeshInventory('k', [splatRow({ splats: 'x' }), splatRow({ splats: 7 }), splatRow({ splats: 9 })]);
+    expect(got?.splat).toEqual({ index: 0, splats: 7 });
+  });
+
+  it('only the literal `true` marks a splat row — anything else is an ordinary row, judged by its name', () => {
+    for (const splat of [1, 'true', {}, false]) {
+      const got = sanitizeMeshInventory('k', [entry({ splat, splats: 5 })]);
+      expect(got?.splat, String(splat)).toBeUndefined();
+      expect(got?.meshes).toEqual([{ index: 0, name: 'Body', materialName: 'Steel', vertexCount: 100 }]);
+    }
+  });
+
+  it('adds no `splat` key at all to a mesh-only report, so it compares as it always did', () => {
+    const got = sanitizeMeshInventory('k', [entry()]);
+    expect(got && 'splat' in got).toBe(false);
+  });
+});
+
+describe('sanitizeSplatReport — the fs:model-splat report', () => {
+  const ok = { type: 'fs:model-splat', geometry: 'custom:9', count: 250_001, shDropped: 3 };
+
+  it('accepts a report for the splat mesh on screen, as a fresh object', () => {
+    const got = sanitizeSplatReport(ok, 'custom:9', 9);
+    expect(got).toEqual({ meshId: 9, count: 250_001, shDropped: 3 });
+    expect(got).not.toBe(ok);
+    expect(Object.keys(got!).sort()).toEqual(['count', 'meshId', 'shDropped']);
+  });
+
+  it('refuses a report for another model: a stale key, another id, or no splat on screen', () => {
+    expect(sanitizeSplatReport({ ...ok, geometry: 'custom:8' }, 'custom:9', 9)).toBeNull();
+    expect(sanitizeSplatReport(ok, 'custom:8', 8)).toBeNull();
+    // The live document key must be THIS mesh's (a rebuild window, a primitive).
+    expect(sanitizeSplatReport(ok, '__primitive__', 9)).toBeNull();
+    expect(sanitizeSplatReport(ok, 'custom:9', 10)).toBeNull();
+    // The caller passes null when the loaded mesh is not a splat kind.
+    expect(sanitizeSplatReport(ok, 'custom:9', null)).toBeNull();
+    for (const id of [9.5, NaN, '9', undefined]) expect(sanitizeSplatReport(ok, 'custom:9', id)).toBeNull();
+    for (const geometry of [undefined, null, 9, ['custom:9'], { toString: () => 'custom:9' }]) {
+      expect(sanitizeSplatReport({ ...ok, geometry }, 'custom:9', 9)).toBeNull();
+    }
+  });
+
+  it('refuses a junk count — never coerced', () => {
+    for (const count of [-1, 0.5, SPLAT_MAX_COUNT + 1, Number.MAX_SAFE_INTEGER, NaN, Infinity, '250001', null, undefined, true, [5], { valueOf: () => 5 }]) {
+      expect(sanitizeSplatReport({ ...ok, count }, 'custom:9', 9), String(count)).toBeNull();
+    }
+    expect(sanitizeSplatReport({ ...ok, count: 0 }, 'custom:9', 9)?.count).toBe(0);
+    expect(sanitizeSplatReport({ ...ok, count: SPLAT_MAX_COUNT }, 'custom:9', 9)?.count).toBe(SPLAT_MAX_COUNT);
+  });
+
+  it('accepts shDropped only as the literal 0, 1, 2 or 3', () => {
+    for (const shDropped of [0, 1, 2, 3] as const) {
+      expect(sanitizeSplatReport({ ...ok, shDropped }, 'custom:9', 9)?.shDropped).toBe(shDropped);
+    }
+    for (const shDropped of [4, -1, 1.5, '1', null, undefined, NaN, true]) {
+      expect(sanitizeSplatReport({ ...ok, shDropped }, 'custom:9', 9), String(shDropped)).toBeNull();
+    }
+  });
+
+  it('refuses a non-object report', () => {
+    for (const r of [null, undefined, 'fs:model-splat', 7, [ok]]) expect(sanitizeSplatReport(r, 'custom:9', 9)).toBeNull();
   });
 });

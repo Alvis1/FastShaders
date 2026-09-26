@@ -113,6 +113,7 @@
     "sdfRevolve": 6,
     "sdfMask": 5,
     "raymarchOutput": 16,
+    "splatOutput": 2,
     "rayDirection": 6,
 
     "unknown": 25,

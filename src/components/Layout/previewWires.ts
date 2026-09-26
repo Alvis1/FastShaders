@@ -16,11 +16,13 @@
  * `Set` of the mesh names PER contributing node inside `dormantMaterialIndices`
  * — three times a frame. The key is `outputBindingsKey` (which folds the node
  * data these answers depend on and is itself keyed on the nodes array, so an
- * ordinary drag frame is a hit) plus the identity of everything else read:
+ * ordinary drag frame is a hit), the custom sinks' ids and flags
+ * (`customSinksKey`, the half of the active-sink election the first key does
+ * not see), plus the identity of everything else read:
  * `edges` for the default-contributes walk, and the three preview fields
  * dormancy is judged on.
  */
-import { drivingMarchOutput } from '@/utils/sdfPartition';
+import { drivingCustomSink, hasActiveFlag, isCustomSink } from '@/utils/sdfPartition';
 import { previewWireTargets, type PreviewWireTarget } from '@/utils/outputMaterials';
 import { getUnwrappedEdges } from '@/engine/cpuEvaluator';
 import { outputBindingsKey } from '@/components/NodeEditor/nodes/outputNodePlans';
@@ -38,6 +40,7 @@ export interface WireState {
 let memo:
   | {
     key: string;
+    sinks: string;
     edges: unknown;
     mesh: unknown;
     inventory: unknown;
@@ -46,20 +49,44 @@ let memo:
   }
   | null = null;
 
+let sinksMemo: { nodes: readonly AppNode[]; key: string } | null = null;
+
+/**
+ * The custom sinks' ids and active flags, in array order — the part of
+ * `drivingCustomSink`'s answer that neither `outputBindingsKey` (PLAIN Outputs
+ * only) nor the edges carry. Without it, clicking a Raymarch or Splat Output's
+ * preview socket on a document where no plain Output carried the flag moved
+ * neither key, and the wire kept leaving the node that no longer rendered.
+ * Memoized on the nodes array, like `outputBindingsKey`.
+ */
+function customSinksKey(nodes: readonly AppNode[]): string {
+  if (sinksMemo && sinksMemo.nodes === nodes) return sinksMemo.key;
+  let key = '';
+  for (const n of nodes) {
+    if (isCustomSink(n)) key += `${n.id.length}:${n.id};${hasActiveFlag(n) ? 1 : 0};`;
+  }
+  sinksMemo = { nodes, key };
+  return key;
+}
+
 /**
  * The Output nodes the preview wires leave, in emit order.
  *
- * A DRIVING Raymarch Output collapses the set to itself: it silences every
- * plain Output, and a wire from a silenced one would claim the viewer renders
- * what it does not. It is asked HERE rather than inside `previewWireTargets`
- * because `activeSink`'s fallbacks are array-order dependent and its callers do
- * not all hold the same array.
+ * A DRIVING custom sink (Raymarch or Splat Output) collapses the set to
+ * itself: it silences every plain Output, and a wire from a silenced one would
+ * claim the viewer renders what it does not. It is asked HERE rather than
+ * inside `previewWireTargets` because `activeSink`'s fallbacks are array-order
+ * dependent and its callers do not all hold the same array.
  */
 export function resolveWireTargets(s: WireState): PreviewWireTarget[] {
+  // Two cached strings compared apart — never concatenated per call, which
+  // would allocate on every store notify of a drag.
   const key = outputBindingsKey(s.nodes);
+  const sinks = customSinksKey(s.nodes);
   if (
     memo
     && memo.key === key
+    && memo.sinks === sinks
     && memo.edges === s.edges
     && memo.mesh === s.previewMesh
     && memo.inventory === s.previewMeshInventory
@@ -67,14 +94,16 @@ export function resolveWireTargets(s: WireState): PreviewWireTarget[] {
   ) {
     return memo.wires;
   }
-  const march = drivingMarchOutput(s.nodes, getUnwrappedEdges(s.nodes, s.edges));
-  // A march renders the whole preview window, which is what the DEFAULT label
-  // says — so it needs no branch of its own and no string of its own.
-  const wires = march
-    ? [{ id: march.id, label: { kind: 'default' } } as PreviewWireTarget]
+  const custom = drivingCustomSink(s.nodes, getUnwrappedEdges(s.nodes, s.edges));
+  // A march renders the whole preview window, and a splat program the whole
+  // splat model, which is what the DEFAULT label says — so neither needs a
+  // branch of its own nor a string of its own.
+  const wires = custom
+    ? [{ id: custom.id, label: { kind: 'default' } } as PreviewWireTarget]
     : previewWireTargets(s as Parameters<typeof previewWireTargets>[0]);
   memo = {
     key,
+    sinks,
     edges: s.edges,
     mesh: s.previewMesh,
     inventory: s.previewMeshInventory,

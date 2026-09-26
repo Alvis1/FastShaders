@@ -3,6 +3,7 @@ import { NodeResizeControl, Position, useUpdateNodeInternals, type NodeProps } f
 import type { GroupFlowNode } from '@/types';
 import { useAppStore, MIN_GROUP_W, MIN_GROUP_H } from '@/store/useAppStore';
 import { getGroupFrameColors } from '@/utils/colorUtils';
+import { assetText, t } from '@/i18n';
 import { TypedHandle } from '../handles/TypedHandle';
 import './GroupNode.css';
 
@@ -35,6 +36,10 @@ export const GroupNode = memo(function GroupNode({
   // getGroupFrameColors. (`codeEditorTheme` is the app-wide dark switch; the
   // store field keeps its historical name.)
   const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
+  const language = useAppStore((s) => s.language);
+  // A dropped preset/texture keeps its ENGLISH name as data (a saved file must
+  // not carry the UI language); the header shows it in Latvian while it is
+  // still that built-in name. A renamed group shows exactly what was typed.
 
   // Tell React Flow to re-measure handle positions when boundary sockets
   // change. Without this, dynamically mounted synthetic handles (__in_*,
@@ -103,14 +108,14 @@ export const GroupNode = memo(function GroupNode({
         className="group-node__header"
         style={{ background: color, height: data.titleSize && data.titleSize > 1 ? 22 * data.titleSize : undefined }}
       >
-        <span className="group-node__label" style={data.titleSize && data.titleSize > 1 ? { fontSize: `calc(var(--font-size-xs) * ${data.titleSize})` } : undefined}>{data.label || 'Group'}</span>
+        <span className="group-node__label" style={data.titleSize && data.titleSize > 1 ? { fontSize: `calc(var(--font-size-xs) * ${data.titleSize})` } : undefined}>{typeof data.label === 'string' && data.label ? assetText(data.label, language) : t('Group', language)}</span>
         <button
           type="button"
           className="group-node__toggle nodrag"
           onClick={onToggle}
           onPointerDown={(e) => e.stopPropagation()}
-          title={collapsed ? 'Expand group' : 'Collapse group'}
-          aria-label={collapsed ? 'Expand group' : 'Collapse group'}
+          title={t(collapsed ? 'Expand group' : 'Collapse group', language)}
+          aria-label={t(collapsed ? 'Expand group' : 'Collapse group', language)}
         >
           {collapsed ? '+' : '\u2212'}
         </button>

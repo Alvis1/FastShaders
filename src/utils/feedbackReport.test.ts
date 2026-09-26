@@ -240,6 +240,27 @@ describe('feedbackReport — project counts', () => {
     expect(joined).toContain('statue.glb · vertex count unavailable · 2.0 KB');
   });
 
+  it('labels a Gaussian splat’s number as splats, never vertices — every splat kind', () => {
+    for (const ext of ['splat', 'spz', 'ply', 'ksplat']) {
+      const joined = envLines(ENV, {
+        ...PROJECT, geometry: 'custom',
+        mesh: { name: `garden.${ext}`, bytes: 3_200_000, vertices: 100_000 },
+      }).join('\n');
+      expect(joined, ext).toContain(`garden.${ext} · 100,000 splats · 3.1 MB`);
+      expect(joined, ext).not.toContain('vertices');
+    }
+    // A gzip .spz states no count until the sandbox inflates it.
+    const gz = envLines(ENV, {
+      ...PROJECT, geometry: 'custom', mesh: { name: 'garden.spz', bytes: 900, vertices: null },
+    }).join('\n');
+    expect(gz).toContain('garden.spz · splat count unavailable · 900 B');
+    // A name merely CONTAINING a splat word is still a mesh.
+    const mesh = envLines(ENV, {
+      ...PROJECT, geometry: 'custom', mesh: { name: 'splat-ply.obj', bytes: 900, vertices: 12 },
+    }).join('\n');
+    expect(mesh).toContain('splat-ply.obj · 12 vertices');
+  });
+
   it('project rows are dropped entirely when no project is passed', () => {
     const joined = envLines(ENV).join('\n');
     expect(joined).not.toContain('Graph:');

@@ -44,6 +44,9 @@ const NODE_PROP_TO_CHANNEL = new Map<string, string>([
 /** Material settings keys injected by tslToShaderModule that should be stripped */
 const MATERIAL_KEYS = new Set(['transparent', 'side', 'alphaTest', 'depthWrite', 'mergeVertices']);
 
+/** A Splat Output scope Fn's declarator line — graphToCode's exact spelling. */
+const SPLAT_FN_DECL_RE = /^const\s+sp\d+(?:Shade|Shape|Size|Feather)\s*=\s*Fn\s*\(/;
+
 /**
  * String-only entry point, kept for every caller that doesn't need the
  * module's material settings (the test suites, and any future consumer that
@@ -159,6 +162,7 @@ export function scriptToTSLWithSettings(
   let skipSchema = false;
   let schemaBraces = 0;
   let skipNestedFn = 0;
+  let keepSplatFn = 0;
   let keepHelper = false;
   let helperBraces = 0;
 
@@ -255,6 +259,30 @@ export function scriptToTSLWithSettings(
 
     // --- Inside function body ---
     if (insideFn) {
+      // A Splat Output's scope Fns (`const sp1Shade = Fn(([p, pw, n, c]) => {`,
+      // Shape, Size, Feather) are GRAPH CONTENT, not wrapper artifacts: codeToGraph
+      // walks their bodies and routes their returns to the node's sockets, and
+      // the module's `splat: { shade: sp1Shade }` names them. Kept verbatim,
+      // or a bare splat module would come back as a Splat Output with its
+      // program gone and a return naming Fns that no longer exist.
+      if (keepSplatFn > 0) {
+        for (const ch of maskedTrimmed) {
+          if (ch === '{') { keepSplatFn++; fnBraceDepth++; }
+          if (ch === '}') { keepSplatFn--; fnBraceDepth--; }
+        }
+        outLines.push(line);
+        continue;
+      }
+      if (SPLAT_FN_DECL_RE.test(maskedTrimmed)) {
+        keepSplatFn = 0;
+        for (const ch of maskedTrimmed) {
+          if (ch === '{') { keepSplatFn++; fnBraceDepth++; }
+          if (ch === '}') { keepSplatFn--; fnBraceDepth--; }
+        }
+        if (keepSplatFn < 0) keepSplatFn = 0;
+        outLines.push(line);
+        continue;
+      }
       // Skip nested Fn(() => { ... }) artifacts from unknown-node round-tripping.
       // These appear when graphToCode emits an unknown node's rawExpression containing
       // the original Fn wrapper, and tslToShaderModule passes it through verbatim.

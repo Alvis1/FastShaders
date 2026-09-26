@@ -5,6 +5,7 @@ import { ConnectionStub } from './ConnectionStub';
 import { NodeSettingsMenu } from './NodeSettingsMenu';
 import { ShaderSettingsMenu } from './ShaderSettingsMenu';
 import { RaymarchSettingsMenu } from './RaymarchSettingsMenu';
+import { SplatSettingsMenu } from './SplatSettingsMenu';
 import { EdgeContextMenu } from './EdgeContextMenu';
 import { GroupSettingsMenu } from './GroupSettingsMenu';
 import { NoteSettingsMenu } from './NoteSettingsMenu';
@@ -162,6 +163,7 @@ export function ContextMenu() {
         {type === 'node' && nodeId && <NodeSettingsMenu nodeId={nodeId} />}
         {type === 'shader' && <ShaderSettingsMenu nodeId={nodeId} />}
         {type === 'raymarch' && nodeId && <RaymarchSettingsMenu nodeId={nodeId} />}
+        {type === 'splat' && nodeId && <SplatSettingsMenu nodeId={nodeId} />}
         {type === 'edge' && edgeId && <EdgeContextMenu edgeId={edgeId} />}
         {type === 'group' && nodeId && <GroupSettingsMenu nodeId={nodeId} />}
         {type === 'note' && nodeId && <NoteSettingsMenu nodeId={nodeId} />}

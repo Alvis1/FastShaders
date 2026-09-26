@@ -81,20 +81,31 @@ describe('one derivation feeds the document, the picker and the Subd gate', () =
       'const geometryShown = shownGeometry(geometry, previewMesh !== null);',
     );
     expect(SRC).toContain(
-      "const previewGeometry: GeometryType = marchWindow !== null ? MARCH_WINDOW_GEOMETRY : geometryShown;",
+      "const previewGeometry: GeometryType = marchWindow !== null ? marchShown : geometryShown;",
     );
+    // A model picked while a Raymarch Output drives goes through the SAME
+    // fallback, so a removed mesh cannot leave the pane asking for 'custom'.
+    expect(SRC).toContain('marchModel === null ? MARCH_WINDOW_GEOMETRY : shownGeometry(marchModel, previewMesh !== null);');
   });
 
   it('the Model select shows the SHOWN geometry, not the raw preference', () => {
     // `value={geometry}` with no matching <option> (the custom entry renders
     // only while a mesh is loaded) leaves the control displaying its first
     // entry while state says otherwise — the picker/viewport disagreement.
-    expect(SRC).toContain('value={geometryShown}');
+    expect(SRC).toContain('value={sdfDrives ? marchShown : geometryShown}');
     expect(SRC).not.toMatch(/value=\{geometry\}/);
   });
 
-  it('the Subd slider is gated on the same value', () => {
-    expect(SRC).toContain('{!isModelGeometry(geometryShown) && !sdfDrives && (');
+  it('the Subd slider is gated on what the pane RENDERS', () => {
+    expect(SRC).toContain('{!isModelGeometry(previewGeometry) && previewGeometry !== MARCH_WINDOW_GEOMETRY && (');
+  });
+
+  it('a Raymarch Output does not park the Model select; its window is never persisted', () => {
+    const select = SRC.slice(SRC.indexOf("aria-label={t('Preview geometry', language)}") - 2500, SRC.indexOf("aria-label={t('Preview geometry', language)}"));
+    expect(select).not.toContain('disabled={sdfDrives}');
+    expect(SRC).toContain("{sdfDrives && <option value={MARCH_WINDOW_GEOMETRY}>{t('SDF group', language)}</option>}");
+    // Picking the window only clears the session pick; it never reaches setGeometry.
+    expect(SRC).toContain('if (picked === MARCH_WINDOW_GEOMETRY) { setMarchModel(null); return; }');
   });
 
   it('nothing writes the fallback back to the preference', () => {

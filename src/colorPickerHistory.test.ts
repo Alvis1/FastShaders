@@ -52,6 +52,18 @@ const SITES: { file: string; history: 'bracket' | 'none'; count: number; why: st
     why: 'the Raymarch Output colour swatch is a stored channel value that emits color(0x…) — graph content, undoable',
   },
   {
+    file: 'components/NodeEditor/nodes/SplatOutputNode.tsx',
+    history: 'bracket',
+    count: 1,
+    why: 'the Splat Output Color swatch is a stored value that emits color(0x…) in the shade Fn — graph content, undoable; its reset row deletes the key (Own colour)',
+  },
+  {
+    file: 'components/NodeEditor/menus/SplatSettingsMenu.tsx',
+    history: 'bracket',
+    count: 1,
+    why: 'the same stored Splat Output Color, edited from its settings menu — graph content, undoable',
+  },
+  {
     file: 'components/NodeEditor/nodes/ColorNode.tsx',
     history: 'bracket',
     count: 1,

@@ -1232,7 +1232,7 @@ const definitions: NodeDefinition[] = [
       labels: { twist: 'Twist (about Y)', bend: 'Bend (about Z)', elongate: 'Elongate' },
       symbols: { twist: '\u21BB', bend: '\u2312', elongate: '\u2194' },
     },
-    description: 'Warp the space a shape is built in: twist it around the Y axis by Amount radians per unit of height, bend it around Z by Amount per unit of X, or elongate — stretch the middle of the shape by the Stretch amounts, keeping its ends. Deformed distances are only approximate, so lower the Step scale on the Raymarch Output if the surface shows holes. Choose the mode in the node settings. Also: warp, stretch, curve, spiral, sdf',
+    description: 'Warp the space a shape is built in: twist it around the Y axis by Amount radians per unit of height, bend it around Z by Amount per unit of X, or elongate — stretch the middle of the shape by the Stretch amounts, keeping its ends. Deformed distances are only approximate, so lower the Step scale on the SDF Output if the surface shows holes. Choose the mode in the node settings. Also: warp, stretch, curve, spiral, sdf',
   },
   {
     type: 'sdfExtrude',
@@ -1292,7 +1292,7 @@ const definitions: NodeDefinition[] = [
     // fills the view; Field radius is where fine stepping starts, outside it
     // the ray jumps straight to that bubble. See the Raymarch Output convention.
     type: 'raymarchOutput',
-    label: 'Raymarch Output',
+    label: 'SDF Output',
     // OUTPUT, not sdf: it is a sink — the thing a graph ends at — and the
     // Distance fields family it grew up in is an OPTIONAL category that is off
     // by default, which left the only marching sink unreachable unless you had
@@ -1325,7 +1325,44 @@ const definitions: NodeDefinition[] = [
     ],
     outputs: [],
     defaultValues: { steps: 64, stepSize: 0.03, epsilon: 0.002, bend: 0, horizon: 0, window: 1, fieldRadius: 1, lightX: 0.6, lightY: 0.8, lightZ: 0.5, ao: 0, shadow: 0, stepScale: 1 },
-    description: 'Render a distance field as a solid, a density field as a translucent volume, or both, by marching rays through them. The preview mesh becomes a window onto the result; Bend pulls rays toward the origin like gravity, Horizon swallows them, Background fills what the ray never hit, and a large Window puts the camera inside the sky. Also: raymarch, ray marching, sphere tracing, volumetric, gas, fog, cloud, lensing, black hole, sdf',
+    description: 'Render a distance field as a solid, a density field as a translucent volume, or both, by marching rays through them. The preview mesh becomes a window onto the result; Bend pulls rays toward the origin like gravity, Horizon swallows them, Background fills what the ray never hit, and a large Window puts the camera inside the sky. Also: raymarch output, raymarch, ray marching, sphere tracing, volumetric, gas, fog, cloud, lensing, black hole, sdf',
+  },
+  {
+    // THE Gaussian-splat sink. Its program is not a material: graphToCode
+    // emits up to four Fns of `(p, pw, n, c)` — shade → vec4(rgb, opacity),
+    // shape → vec4(move, cut), size → float, feather → float (size and
+    // feather only when their chain depends on the splat) — returned as
+    // `{ splat: { shade, shape, size, feather, invert } }`, and loader 0.8
+    // calls them ONCE PER SPLAT inside the splat renderer's own vertex stage
+    // (utils/sdfPartition.ts, SPLAT_SCOPES). `p` is the splat's centre, `n`
+    // the direction toward the camera (a splat has no normal), `c` its own
+    // colour. Cut is a SIGN test — above zero removes, so a distance field
+    // wired to it keeps its inside — never a Discard: a removed splat's quad
+    // collapses off screen and costs no raster.
+    //
+    // `values.color` (#rrggbb; absent = the splat's own colour) and
+    // `values.invert` (only the literal `true` counts) live in values ONLY,
+    // never in defaultValues — on a ShaderNode-rendered def that map is the
+    // socket list, and an absent key must keep meaning "untouched".
+    //
+    // Always offered on the Output tab (owner decision D2), not a companion
+    // of the Distance-fields switch.
+    type: 'splatOutput',
+    label: 'Splat Output',
+    category: 'output',
+    tslFunction: '',
+    tslImportModule: '',
+    inputs: [
+      { id: 'color', label: 'Color', dataType: 'color' },
+      { id: 'opacity', label: 'Opacity', dataType: 'float' },
+      { id: 'cut', label: 'Cut', dataType: 'float' },
+      { id: 'feather', label: 'Feather', dataType: 'float' },
+      { id: 'move', label: 'Move', dataType: 'vec3' },
+      { id: 'size', label: 'Size', dataType: 'float' },
+    ],
+    outputs: [],
+    defaultValues: { opacity: 1, feather: 0, size: 1 },
+    description: 'Shade a dropped Gaussian splat model (.splat, .spz, .ply, .ksplat) one splat at a time: tint it, fade it, remove every splat where Cut is above zero (a distance field wired to Cut keeps its inside; Feather softens that edge and Invert keeps the outside instead), move splats by small smooth offsets, or scale them. Every socket is read once per splat, at its centre; the direction a normal reads is the one facing the camera. Also: gaussian splat, point cloud, 3dgs, cut, clip, tint',
   },
   {
     // The direction a fragment's view ray travels, world space, unit length —
@@ -1341,7 +1378,7 @@ const definitions: NodeDefinition[] = [
     tslImportModule: '',
     inputs: [],
     outputs: [{ id: 'out', label: 'Direction', dataType: 'vec3' }],
-    description: 'The direction this pixel\'s view ray travels, world space, unit length. Feed an Image node\'s Direction socket to sample a sky; inside the Raymarch Output\'s Background it is the bent ray, so the sky is lensed. Also: view ray, eye ray, look direction, sky',
+    description: 'The direction this pixel\'s view ray travels, world space, unit length. Feed an Image node\'s Direction socket to sample a sky; inside the SDF Output\'s Background it is the bent ray, so the sky is lensed. Also: view ray, eye ray, look direction, sky',
   },
 
   // ===== NOISE =====
@@ -1987,13 +2024,16 @@ export function categoryEmptiedByHiding(category: NodeCategory): boolean {
 }
 
 /** Map a registry definition to its React Flow node type string. */
-export type FlowNodeType = 'shader' | 'color' | 'preview' | 'mathPreview' | 'clock' | 'sound' | 'output' | 'raymarchOutput';
+export type FlowNodeType = 'shader' | 'color' | 'preview' | 'mathPreview' | 'clock' | 'sound' | 'output' | 'raymarchOutput' | 'splatOutput';
 
 export function getFlowNodeType(def: NodeDefinition): FlowNodeType {
   if (def.type === 'output') return 'output';
   // The raymarching output wears the Output node's chrome (RaymarchOutputNode.tsx),
   // not the generic rows — same header, sections, labelled rows, value cells.
   if (def.type === 'raymarchOutput') return 'raymarchOutput';
+  // So does the Gaussian-splat sink (SplatOutputNode.tsx): a generic ShaderNode
+  // would draw its Color and Move as number boxes and give it no preview socket.
+  if (def.type === 'splatOutput') return 'splatOutput';
   if (def.type === 'time') return 'clock';
   // Places every socket itself (see SoundNode.tsx) — ShaderNode's row layout
   // cannot express its arrangement.

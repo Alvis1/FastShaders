@@ -591,6 +591,51 @@ function extractDiscards(bodyText: string): { conds: string[]; rest: string } {
   return { conds, rest };
 }
 
+/** A bare identifier — a splat Fn's name. */
+const SPLAT_FN_RE = /^[A-Za-z_$][\w$]*$/;
+/** An identifier or a member chain of identifiers (`float1`, `vec31.x`,
+ *  `image1.rgb.x`) — a captured node, as graphToCode's scalar refs spell it. No
+ *  call, no operator, no computed member. */
+const SPLAT_NODE_REF_RE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
+const SPLAT_NUMBER_RE = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/;
+
+/**
+ * The Splat Output's `splat: { … }` value, re-emitted on a WHITELIST — the
+ * joined entries (possibly empty), or null when the value is not an object
+ * literal at all (then the key is dropped).
+ *
+ *   shade, shape    a bare identifier (the emitted `sp1Shade` / `sp1Shape` Fn)
+ *   size, feather   an identifier / member chain (a Fn or a captured node) or
+ *                   a FINITE numeric literal
+ *   invert          the literal `true` only
+ *
+ * Anything else — an unknown key, a call, an expression, `invert: 1` — is
+ * dropped. The last occurrence of a key wins, as in the JS literal, and the
+ * output order is fixed (the loader contract's), so a hand-reordered literal
+ * emits the same module.
+ */
+function translateSplatBody(src: string): string | null {
+  const body = src.trim();
+  if (!body.startsWith('{') || !body.endsWith('}')) return null;
+  const seen = new Map<string, string>();
+  for (const prop of splitTopLevelArgs(body.slice(1, -1))) {
+    const colon = prop.indexOf(':');
+    if (colon === -1) continue;
+    const key = prop.slice(0, colon).trim().replace(/^(['"])(.*)\1$/, '$2');
+    const val = prop.slice(colon + 1).trim();
+    let ok = false;
+    if (key === 'shade' || key === 'shape') ok = SPLAT_FN_RE.test(val);
+    else if (key === 'size' || key === 'feather') {
+      ok = SPLAT_NODE_REF_RE.test(val) || (SPLAT_NUMBER_RE.test(val) && Number.isFinite(Number(val)));
+    } else if (key === 'invert') ok = val === 'true';
+    if (ok) seen.set(key, val);
+  }
+  return ['shade', 'shape', 'size', 'feather', 'invert']
+    .filter((k) => seen.has(k))
+    .map((k) => `${k}: ${seen.get(k)!}`)
+    .join(', ');
+}
+
 /** Parse processed body into definition lines and output channels. */
 function parseBody(
   processedBody: string,
@@ -1140,6 +1185,18 @@ export function buildShaderModule(
     if (/\bnormalLocal\b/.test(partsOut) && !tslNames.includes('normalLocal')) {
       tslNames.push('normalLocal');
     }
+  }
+
+  // --- The Splat Output's program (loader 0.8's `splat` key) --------------
+  //
+  // `{ splat: { shade, shape, size, feather, invert } }` is not a material
+  // channel, so CHANNEL_TO_PROP (which means "a material node prop") never
+  // sees it; it passes through here on a WHITELIST, because the loader reads
+  // every one of these keys and the code panel is an editing surface. No
+  // `__pixel`: a splat program carries no Discard (a cut is a value).
+  if (channels.splat !== undefined) {
+    const splatBody = translateSplatBody(channels.splat);
+    if (splatBody !== null) returnProps.push(splatBody ? `splat: { ${splatBody} }` : 'splat: {}');
   }
 
   // The DEFAULT material's Transparent / Side / Alpha clip / Depth write. The

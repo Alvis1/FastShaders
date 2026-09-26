@@ -26,6 +26,7 @@ import type { GlbReportLine } from './glbImportReport';
 import { glbReportLineText, glbRestoredLineText } from './glbImportCopy';
 import { glbExportNoteLineText, type GlbExportNoteLine } from './glbExportCopy';
 import { formatMiB } from './formatSize';
+import { sinkModelIssueText, type SinkModelIssue } from './sinkModelCopy';
 
 /** One line of the note. Later packages widen this union; each new member
  *  gets its `case` in `importNoteLineText`. */
@@ -49,6 +50,15 @@ export type ImportNoteLine =
    *  editor can open again (between the web reader's cap and the desktop
    *  one). Posted by `announceExportDelivered` after the download or write. */
   | { kind: 'export-desktop-only'; sizeBytes: number; webLimitBytes: number }
+  /** An EXPORT left out `count` nodes that feed no Output (the popover's
+   *  "Include unconnected nodes" row was unticked), so the file reopens without
+   *  them. Posted by `announceExportDelivered` after the download. */
+  | { kind: 'export-left-out'; count: number }
+  /** A wire made the DRIVING output unfit for the model on screen
+   *  (utils/sinkModelFit.ts) — posted by the preview at that moment; the pane
+   *  keeps the same sentence up while it lasts. `name` is the dropped model's
+   *  sanitized file name. */
+  | { kind: 'sink-model'; issue: SinkModelIssue; name: string }
   /** GLB Phase 7: the shader stored in a FastShaders GLB was restored —
    *  `project` = its node graph, `script` = its module as shader code. The
    *  `glb-` prefix gives the note the report's 30 s. `fileName` is sanitized. */
@@ -142,6 +152,15 @@ export function importNoteLineText(line: ImportNoteLine, lang: Language): string
             name: '\u201c' + line.name + '\u201d',
             n: line.nodes,
           });
+    case 'export-left-out':
+      // The count sits at the END, so neither language has to agree a noun
+      // with it ("1 nodes").
+      return fillTemplate(
+        t('Nodes left out of the export because they feed no Output: {n}. To keep them, right-click EXPORT and tick “Include unconnected nodes”.', lang),
+        { n: line.count },
+      );
+    case 'sink-model':
+      return sinkModelIssueText(line.issue, line.name, lang);
     case 'export-desktop-only':
       return fillTemplate(
         t('Saved ({size} MB). Only the desktop editor can open it again — Podest and the web editor open up to {limit} MB.', lang),

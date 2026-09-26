@@ -206,6 +206,21 @@ describe('podest restore-limit note', () => {
     expect(api.restoreLimitText(null, 123)).toBe('');
   });
 
+  it('holds every model kind to the ONE cap — a Gaussian splat scene included, no per-kind byte cap', () => {
+    // A splat scene is mirrored and replayed exactly like a mesh: the cap is
+    // the editor's MESH_MAX_BYTES and nothing on the way in or out reads the
+    // kind to pick another one (the replay re-runs the splat header sniff
+    // inside loadModelBuffer instead).
+    expect(restoreApi().model()).toBe(MESH_MAX_BYTES);
+    const ws = fnSource('writeSession');
+    expect(ws).toContain('modelBytes: (state.modelBytes && state.modelBytes.byteLength <= MAX_SAVED_MODEL) ? state.modelBytes : null,');
+    expect(ws).toContain('modelKind: state.modelKind || null,');
+    const replay = fnSource('applyRestored');
+    expect(replay).toContain('rec.modelBytes.byteLength <= MAX_SAVED_MODEL');
+    expect(replay).toContain('loadModelBuffer(rec.modelBytes, ');
+    expect(page.match(/MAX_SAVED_[A-Z_]+ = /g)?.sort()).toEqual(['MAX_SAVED_MODEL = ', 'MAX_SAVED_SHADER = ']);
+  });
+
   it('inverts writeSession’s own predicates (change them together)', () => {
     expect(page).toContain('state.shaderSource.length <= MAX_SAVED_SHADER');
     expect(page).toContain('state.modelBytes.byteLength <= MAX_SAVED_MODEL');

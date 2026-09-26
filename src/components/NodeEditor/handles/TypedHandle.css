@@ -37,12 +37,14 @@
    dragged lives in React Flow's connection layer, whose order against the
    nodes layer no z-index inside a handle can change — the old "behind the
    socket" reveal z-index bought nothing and made the reveal state the one
-   place the label rendered under the card's own chrome. */
-.typed-handle[data-tooltip]::after {
-  content: attr(data-tooltip);
+   place the label rendered under the card's own chrome.
+
+   The LOOK is shared, by selector, with the one other canvas label: a node's
+   Latvian name above its header (`[data-header-tip]`, below). Only content
+   and placement are per-label — so the two can never drift into two styles. */
+.typed-handle[data-tooltip]::after,
+[data-header-tip]::after {
   position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
   background: var(--bg-panel);
   color: var(--text-primary);
   font-size: 10px;
@@ -53,6 +55,12 @@
   opacity: 0;
   box-shadow: var(--shadow-sm);
   z-index: 10;
+}
+
+.typed-handle[data-tooltip]::after {
+  content: attr(data-tooltip);
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .typed-handle.react-flow__handle-left[data-tooltip]::after {
@@ -139,14 +147,53 @@
 
 /* Double-click / double-tap a node: EVERY one of its socket labels is held
    open until it is dismissed (labelPeek.ts). Same label, same placement — a
-   fourth trigger, not a second kind of bubble.
+   fourth trigger, not a second kind of bubble. The mark is an ATTRIBUTE on
+   React Flow's node wrapper, never a class: the wrapper's className is
+   rewritten whole on every select/drag, which erased a hand-added one.
 
    Note what this is NOT: pinning every label while a node is SELECTED was tried
    and drowned the card in text (see the touch rule below). The difference is
    that this is asked for and put away — a deliberate gesture, on one node,
    cleared by Escape, a click on empty canvas, or the same gesture again — where
    selection happens constantly and as a side effect of dragging. */
-.fs-labels-shown .typed-handle[data-tooltip]::after {
+.react-flow__node[data-fs-labels-shown] .typed-handle[data-tooltip]::after {
+  opacity: 1;
+}
+
+/* ===== The node's Latvian name (headerTip.ts) =====
+   In Latvian the header keeps printing the generated varName (the graph
+   mirrors the code), so the node's own name — "Reizināt (Multiply)" — is a
+   label ABOVE the header: the socket label's look, and its triggers. Hover
+   shows it at once, and the double-click that pins every socket label pins
+   this one too, so one gesture answers both "what is this node?" and "what
+   are its ports?". Above, because below the header it would cover the node's
+   own sockets and values — the thing the pointer is travelling toward. It
+   rides the header, so on a Color swatch (no header bar) it rides the swatch.
+
+   Hover is suppressed while the node is being DRAGGED — the header is the
+   card's grab bar, and a name riding along with every move is noise; a
+   pinned one stays, since it was asked for. */
+[data-header-tip] {
+  position: relative;
+}
+
+[data-header-tip]::after {
+  content: attr(data-header-tip);
+  left: 50%;
+  bottom: calc(100% + var(--fs-header-tip-gap, 6px));
+  transform: translateX(-50%);
+}
+
+/* A card with a cost number floating above it (`.node-base__cost-badge`,
+   top: -14px, NodeBase.css) stacks its name ABOVE the number rather than
+   covering it. The badge renders before the header in every node that has
+   one, hence the sibling combinator. */
+.node-base__cost-badge ~ [data-header-tip] {
+  --fs-header-tip-gap: 18px;
+}
+
+.react-flow__node:not(.dragging) [data-header-tip]:hover::after,
+.react-flow__node[data-fs-labels-shown] [data-header-tip]::after {
   opacity: 1;
 }
 

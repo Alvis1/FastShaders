@@ -265,7 +265,9 @@ export function SusModal({ open, onClose }: Props) {
       `Nodes added: ${Object.values(summary.nodeAddsByType).reduce((a, b) => a + b, 0)} · connections made: ${summary.counts['edge-connect'] ?? 0}`,
       `Events recorded: ${summary.eventCount}`,
       '',
-      `Please attach the file "${fileName}" (in your Downloads folder) to this email, then press Send.`,
+      // The one line addressed to the PARTICIPANT, so it follows their language;
+      // everything above is the researcher's summary and stays English.
+      fillTemplate(t('Please attach the file "{file}" (in your Downloads folder) to this email, then press Send.', language), { file: fileName }),
     ];
     const mailto = buildMailtoUrl(EVAL_STUDY_EMAIL, subject, bodyLines.join('\n'));
 

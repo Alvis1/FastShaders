@@ -89,7 +89,7 @@ export function RaymarchSettingsMenu({ nodeId }: { nodeId: string }) {
 
   return (
     <div className="context-menu__list">
-      <div className="context-menu__category">{t('Raymarch Settings', language)}</div>
+      <div className="context-menu__category">{t('SDF Output Settings', language)}</div>
       <div
         style={{ padding: '2px var(--space-3) var(--space-2)', fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}
       >

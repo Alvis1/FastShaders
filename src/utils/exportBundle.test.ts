@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { buildExportBundle, buildExportReadme, meshPairingSnippet, type ExportMesh } from './exportBundle';
 import { readZip } from './zipReader';
 import { buildZip } from './zipWriter';
+import { SPLAT_KINDS } from './splatSniff';
+import { CDN_BASE, SPLAT_RUNTIME_FILE } from '@/engine/tslToShaderModule';
+import { splatRows } from '@/test-utils';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -18,6 +21,7 @@ const OBJ_MESH: ExportMesh = {
   kind: 'obj',
   bytes: enc.encode('v 0 0 0') as Uint8Array<ArrayBuffer>,
 };
+const SPLAT_MESH: ExportMesh = { name: 'garden.splat', kind: 'splat', bytes: splatRows(4) };
 
 describe('exportBundle: js vs zip decision', () => {
   it('stays a bare .js with no images and no mesh', () => {
@@ -45,6 +49,17 @@ describe('exportBundle: js vs zip decision', () => {
     expect(Array.from(model?.data ?? [])).toEqual(Array.from(GLB_MESH.bytes));
   });
 
+  it('ships a splat scene under models/ byte-for-byte, like any model', async () => {
+    const b = buildExportBundle('glow', SCRIPT, [], SPLAT_MESH);
+    expect(b.kind).toBe('zip');
+    const entries = await readZip(b.bytes);
+    expect(entries.map((e) => e.name)).toEqual(['glow.js', 'models/garden.splat', 'README.txt']);
+    expect(Array.from(entries[1].data)).toEqual(Array.from(SPLAT_MESH.bytes));
+    expect(b.meshBytes).toBe(SPLAT_MESH.bytes.length);
+    const readme = new TextDecoder().decode(entries[2].data);
+    expect(readme).toContain(`${CDN_BASE}/${SPLAT_RUNTIME_FILE}`);
+  });
+
   it('carries images and the mesh together', async () => {
     const b = buildExportBundle('s', SCRIPT, [IMAGE], OBJ_MESH);
     const names = (await readZip(b.bytes)).map((e) => e.name);
@@ -66,6 +81,40 @@ describe('exportBundle: README content', () => {
     // Eye height, three metres out — must agree with the A-Frame tab's
     // OBJECT_POSITION so the app's two pairing instructions match.
     expect(meshPairingSnippet(OBJ_MESH, 's.js')).toContain('position="0 1.6 -3"');
+  });
+
+  it('a Gaussian splat pairs through the splat runtime and splat-model, per kind', () => {
+    for (const kind of SPLAT_KINDS) {
+      const mesh: ExportMesh = { name: `scene.${kind}`, kind, bytes: new Uint8Array(32) as Uint8Array<ArrayBuffer> };
+      const snippet = meshPairingSnippet(mesh, 'glow.js');
+      // Exactly two lines: the runtime (it must load after the A-Frame bundle,
+      // so it is a tag of its own), then the entity.
+      expect(snippet.split('\n')).toEqual([
+        `<script src="${CDN_BASE}/${SPLAT_RUNTIME_FILE}"></script>`,
+        `<a-entity splat-model="src: url(models/scene.${kind}); kind: ${kind}; size: 1.6" shader="src: glow.js" position="0 1.6 -3"></a-entity>`,
+      ]);
+      // A-Frame's own model components cannot read a splat.
+      expect(snippet).not.toContain('gltf-model');
+      expect(snippet).not.toContain('obj-model');
+    }
+    // The CDN folder and file the module header's loader line uses, not a copy.
+    expect(`${CDN_BASE}/${SPLAT_RUNTIME_FILE}`).toBe(
+      'https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/fs-splat-0.1.js',
+    );
+  });
+
+  it('the README names the splat scene, indents both snippet lines and says the runtime loads after A-Frame', () => {
+    const readme = buildExportReadme('glow', false, SPLAT_MESH);
+    expect(readme).toContain('models/garden.splat — the Gaussian splat scene the shader was previewed on.');
+    expect(readme).toContain('load the splat runtime AFTER the A-Frame');
+    expect(readme).toContain(`\n  <script src="${CDN_BASE}/${SPLAT_RUNTIME_FILE}"></script>\n`);
+    expect(readme).toContain(
+      '\n  <a-entity splat-model="src: url(models/garden.splat); kind: splat; size: 1.6" shader="src: glow.js" position="0 1.6 -3"></a-entity>\n',
+    );
+    expect(readme).toContain('see the shader on the splats');
+    expect(readme).toContain('reloads the splats into the preview');
+    // The mesh wording is unchanged for a mesh.
+    expect(buildExportReadme('glow', false, GLB_MESH)).toContain('reloads the model into the preview');
   });
 
   it('keeps the images section without a mesh (pre-mesh behavior)', () => {

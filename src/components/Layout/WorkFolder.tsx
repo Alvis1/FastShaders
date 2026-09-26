@@ -280,6 +280,9 @@ export function WorkFolder() {
         glb: glbExportUi,
         // An IPC write, so the fresh-click ("ready") step never applies.
         delivery: 'write',
+        // Save writes the DOCUMENT: every node, whatever the EXPORT popover's
+        // unconnected-nodes row says.
+        scope: 'whole',
       });
       if (!bundle) {
         setError(t('Save cancelled — nothing was written.', language));

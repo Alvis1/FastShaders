@@ -1,11 +1,19 @@
 import { resolveObjectURL } from 'node:buffer';
 import vm from 'node:vm';
-import { crc32, deflateSync } from 'node:zlib';
+import { crc32, deflateSync, gzipSync } from 'node:zlib';
 import { vi } from 'vitest';
 import type { AppNode, AppEdge } from '@/types';
 import { encodeDataUri } from '@/utils/glbContainer';
 import { fnv1a32Hex } from '@/utils/payloadDigest';
 import { FS_EXTRAS_KEY, FS_EXTRAS_VERSION, FS_MODULE_MIME, FS_SCENE_MARKER } from '@/engine/glbShaderContract';
+import {
+  KSPLAT_HEADER_BYTES,
+  PLY_HEADER_SCAN_BYTES,
+  SPLAT_MAX_COUNT,
+  SPLAT_ROW_BYTES,
+  SPZ_MAGIC,
+  SPZ_MAX_DECODED_BYTES,
+} from '@/utils/splatLimits';
 
 /**
  * Build a minimal AppNode for tests. Only the parts the engine reads (`id`,
@@ -859,3 +867,419 @@ export function makeKtx2Glb(opts: { ktx2: Uint8Array; fallbackPng?: Uint8Array; 
 
   return makeGlb(json, bin).buffer;
 }
+
+/* ── Gaussian-splat fixtures (the ONE set) ───────────────────────────────── */
+
+/*
+ * The byte layouts three r186's splat loaders read (SPLATLoader, SPZLoader,
+ * GaussianSplatPLYLoader, KSPLATLoader), built by hand so each rule of the
+ * trusted sniff (`utils/splatSniff.ts`) is pinned at its edge. They live HERE,
+ * not in splatSniff.test.ts, because podest's hand-written sniff twin
+ * (`podestSplat.test.ts`) and the runtime's PLY gate (`fsSplatBundle.test.ts`)
+ * must be run against EXACTLY the same bytes — and a
+ * suite never imports another `.test.ts` (under `isolate: false` that would
+ * register the imported file's tests a second time). `SPLAT_SNIFF_CASES` is
+ * the shared corpus both suites walk. Every builder returns fresh bytes.
+ */
+
+/** Each character's low byte — a PLY header is ASCII, and a test may want a stray high byte. */
+export const splatAscii = (s: string): Uint8Array<ArrayBuffer> =>
+  new Uint8Array([...s].map((c) => c.charCodeAt(0) & 0xff));
+
+export function splatConcat(...parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of parts) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
+}
+
+/**
+ * A synthetic `.splat` of `n` 32-byte rows (f32 xyz, f32 scale xyz, u8 rgba,
+ * u8 quaternion w x y z as q·128+128) on a thin noisy shell of radius 0.8 —
+ * the Phase 0 spike's `makeSplatBytes`, seeded so every run writes the same bytes.
+ */
+export function splatRows(n: number, seed = 0x2545f491): Uint8Array<ArrayBuffer> {
+  let s = seed >>> 0;
+  const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32);
+  const bytes = new Uint8Array(n * SPLAT_ROW_BYTES);
+  const view = new DataView(bytes.buffer);
+  for (let i = 0; i < n; i++) {
+    const o = i * SPLAT_ROW_BYTES;
+    const u = rnd() * 2 - 1;
+    const t = rnd() * Math.PI * 2;
+    const r = Math.sqrt(1 - u * u);
+    const nx = r * Math.cos(t);
+    const ny = r * Math.sin(t);
+    const nz = u;
+    const radius = 0.8 + (rnd() - 0.5) * 0.02;
+    view.setFloat32(o, nx * radius, true);
+    view.setFloat32(o + 4, ny * radius, true);
+    view.setFloat32(o + 8, nz * radius, true);
+    const sc = 0.006 + rnd() * 0.01;
+    view.setFloat32(o + 12, sc, true);
+    view.setFloat32(o + 16, sc, true);
+    view.setFloat32(o + 20, sc * 0.3, true);
+    bytes[o + 24] = Math.round((nx * 0.5 + 0.5) * 255);
+    bytes[o + 25] = Math.round((ny * 0.5 + 0.5) * 255);
+    bytes[o + 26] = Math.round((nz * 0.5 + 0.5) * 255);
+    bytes[o + 27] = 235;
+    // The identity rotation: w = 1 → 255, x = y = z = 0 → 128.
+    bytes[o + 28] = 255;
+    bytes[o + 29] = 128;
+    bytes[o + 30] = 128;
+    bytes[o + 31] = 128;
+  }
+  return bytes;
+}
+
+/** The INRIA 3DGS vertex property list (with the normals most trainers write). */
+export const SPLAT_GS_PROPERTIES: readonly string[] = [
+  'x', 'y', 'z', 'nx', 'ny', 'nz',
+  'f_dc_0', 'f_dc_1', 'f_dc_2',
+  'opacity',
+  'scale_0', 'scale_1', 'scale_2',
+  'rot_0', 'rot_1', 'rot_2', 'rot_3',
+];
+
+export interface SplatPlyOpts {
+  format?: string | null;
+  count?: number | string | null;
+  properties?: readonly string[];
+  /** The PLY type of every `properties` entry (default float). */
+  type?: 'float' | 'double' | 'uchar';
+  /** Extra header lines, inserted right after the format line. */
+  before?: string[];
+  /** Extra header lines, inserted after the vertex properties. */
+  after?: string[];
+  eol?: string;
+  /**
+   * Zero bytes after `end_header`. Default: exactly the rows the header
+   * declares (count × the `properties` row size) when the count is a plain
+   * integer up to SPLAT_MAX_COUNT, else 16. Property lines passed in
+   * `before`/`after` are NOT counted — pass `body` for those.
+   */
+  body?: number;
+}
+
+const SPLAT_PLY_TYPE_BYTES = { float: 4, double: 8, uchar: 1 } as const;
+
+/** A PLY header (+ `body` zero bytes after `end_header`); binary little-endian 3DGS by default. */
+export function splatPly(o: SplatPlyOpts = {}): Uint8Array<ArrayBuffer> {
+  const eol = o.eol ?? '\n';
+  const lines = ['ply'];
+  const format = o.format === undefined ? 'binary_little_endian' : o.format;
+  if (format !== null) lines.push(`format ${format} 1.0`);
+  lines.push(...(o.before ?? []));
+  const count = o.count === undefined ? 3 : o.count;
+  if (count !== null) lines.push(`element vertex ${count}`);
+  const type = o.type ?? 'float';
+  const properties = o.properties ?? SPLAT_GS_PROPERTIES;
+  for (const p of properties) lines.push(`property ${type} ${p}`);
+  lines.push(...(o.after ?? []));
+  lines.push('end_header');
+  const rows = typeof count === 'number' ? count : /^\d+$/.test(String(count)) ? Number(count) : NaN;
+  const full = Number.isSafeInteger(rows) && rows >= 0 && rows <= SPLAT_MAX_COUNT
+    ? rows * properties.length * SPLAT_PLY_TYPE_BYTES[type]
+    : 16;
+  return splatConcat(splatAscii(lines.join(eol) + eol), new Uint8Array(o.body ?? full));
+}
+
+/** The body bytes the default `splatPly()` header declares: 3 rows of the 17 float properties. */
+export const SPLAT_PLY_BODY = 3 * 17 * 4;
+
+/** `f_rest_0 … f_rest_{n-1}` — the spherical-harmonic bands a training `.ply` carries. */
+export const splatFRest = (n: number): string[] => Array.from({ length: n }, (_, i) => `f_rest_${i}`);
+
+/** A gzip `.spz`: a raw SPZ v2 header + rows, really gzipped; `isize` overwrites the trailer's claim. */
+export function splatSpzGzip(isize?: number): Uint8Array<ArrayBuffer> {
+  const raw = new Uint8Array(16 + 3 * 19);
+  const v = new DataView(raw.buffer);
+  v.setUint32(0, SPZ_MAGIC, true);
+  v.setUint32(4, 2, true);
+  v.setUint32(8, 3, true);
+  const gz = new Uint8Array(gzipSync(raw));
+  if (isize !== undefined) new DataView(gz.buffer, gz.byteOffset, gz.byteLength).setUint32(gz.length - 4, isize, true);
+  return gz;
+}
+
+/** A raw (un-gzipped) SPZ header: 'NGSP' + version. */
+export function splatSpzRaw(version: number, length = 16): Uint8Array<ArrayBuffer> {
+  const b = new Uint8Array(length);
+  const v = new DataView(b.buffer);
+  v.setUint32(0, SPZ_MAGIC, true);
+  v.setUint32(4, version, true);
+  return b;
+}
+
+export interface KsplatSection {
+  splats: number;
+  max?: number;
+  degree?: number;
+  bucketCount?: number;
+  bucketBytes?: number;
+  partial?: number;
+}
+
+export interface KsplatOpts {
+  major?: number;
+  minor?: number;
+  level?: number;
+  sections?: KsplatSection[];
+  /** Section header SLOTS (maxSectionCount); defaults to sections.length. */
+  maxSections?: number;
+  /** The header's splat count; defaults to the sections' sum. */
+  count?: number;
+  /** Bytes cut off the end. */
+  truncate?: number;
+}
+
+const KSPLAT_BASE = [44, 24, 24];
+const KSPLAT_SH = [4, 2, 1];
+const KSPLAT_COMPONENTS = [0, 9, 24, 45];
+
+/** A `.ksplat` laid out exactly as KSPLATLoader reads one (data bytes are zero). */
+export function splatKsplat(o: KsplatOpts = {}): Uint8Array<ArrayBuffer> {
+  const level = o.level ?? 0;
+  const sections = o.sections ?? [{ splats: 3 }];
+  const maxSections = o.maxSections ?? sections.length;
+  const storage = sections.map((s) => {
+    const per = (KSPLAT_BASE[level] ?? 44) + (KSPLAT_COMPONENTS[s.degree ?? 0] ?? 0) * (KSPLAT_SH[level] ?? 4);
+    return (s.bucketBytes ?? 0) * (s.bucketCount ?? 0) + (s.partial ?? 0) * 4 + per * (s.max ?? s.splats);
+  });
+  const total = KSPLAT_HEADER_BYTES + maxSections * 1024 + storage.reduce((a, b) => a + b, 0);
+  const out = new Uint8Array(total);
+  const v = new DataView(out.buffer);
+  v.setUint8(0, o.major ?? 0);
+  v.setUint8(1, o.minor ?? 1);
+  v.setUint32(4, maxSections, true);
+  v.setUint32(8, sections.length, true);
+  v.setUint32(12, sections.reduce((a, s) => a + (s.max ?? s.splats), 0), true);
+  v.setUint32(16, o.count ?? sections.reduce((a, s) => a + s.splats, 0), true);
+  v.setUint16(20, level, true);
+  sections.forEach((s, i) => {
+    const at = KSPLAT_HEADER_BYTES + i * 1024;
+    v.setUint32(at, s.splats, true);
+    v.setUint32(at + 4, s.max ?? s.splats, true);
+    v.setUint32(at + 8, 256, true);
+    v.setUint32(at + 12, s.bucketCount ?? 0, true);
+    v.setUint16(at + 20, s.bucketBytes ?? 0, true);
+    v.setUint32(at + 36, s.partial ?? 0, true);
+    v.setUint16(at + 40, s.degree ?? 0, true);
+  });
+  return o.truncate ? out.slice(0, out.length - o.truncate) : out;
+}
+
+/** One named file for the shared sniff corpus. `bytes` builds fresh bytes on every call. */
+export interface SplatSniffCase {
+  name: string;
+  kind: 'splat' | 'spz' | 'ply' | 'ksplat';
+  bytes: () => Uint8Array;
+}
+
+/**
+ * The corpus BOTH sniffs are run against: every accept and every refusal the
+ * trusted sniff's suite pins, one file each (the 1M-row `.splat` boundaries
+ * are 32 MB apiece, so they are built lazily). podestSplat.test.ts runs each
+ * through podest's twin and the TS original and requires the same verdict,
+ * facts and English sentence; fsSplatBundle.test.ts runs every `.ply` case
+ * through the runtime's own gate (`FastShadersSplat.internals.sniffPlyHeader`,
+ * and `parseBytes` for an accepted one) and requires the same verdict. Add a
+ * case here when a rule is added to any of the three.
+ */
+export const SPLAT_SNIFF_CASES: readonly SplatSniffCase[] = (() => {
+  const cases: SplatSniffCase[] = [];
+  const add = (kind: SplatSniffCase['kind'], name: string, bytes: () => Uint8Array) =>
+    cases.push({ kind, name: `${kind}: ${name}`, bytes });
+  const MAX = SPLAT_MAX_COUNT;
+
+  // .splat — headerless rows
+  add('splat', 'one row', () => new Uint8Array(32));
+  add('splat', 'seven rows', () => new Uint8Array(32 * 7));
+  add('splat', 'synthetic rows', () => splatRows(100));
+  for (const n of [0, 1, 31, 33, 63, 32 * 5 + 1]) add('splat', `${n} bytes`, () => new Uint8Array(n));
+  add('splat', 'exactly the count cap', () => new Uint8Array(MAX * 32));
+  add('splat', 'one row over the count cap', () => new Uint8Array((MAX + 1) * 32));
+
+  // .ply — the 3DGS header
+  add('ply', 'binary little-endian', () => splatPly());
+  add('ply', 'binary big-endian', () => splatPly({ format: 'binary_big_endian' }));
+  add('ply', 'ascii', () => splatPly({ format: 'ascii' }));
+  add('ply', 'ascii with CRLF', () => splatPly({ format: 'ascii', eol: '\r\n' }));
+  add('ply', 'ascii mesh', () => splatPly({ format: 'ascii', properties: ['x', 'y', 'z', 'nx', 'ny', 'nz'] }));
+  add('ply', 'ascii with SH bands', () => splatPly({ format: 'ascii', properties: [...SPLAT_GS_PROPERTIES, ...splatFRest(9)] }));
+  add('ply', 'ascii with a damaged count', () => splatPly({ format: 'ascii', count: 'many' }));
+  add('ply', 'CRLF', () => splatPly({ eol: '\r\n' }));
+  add('ply', 'CR', () => splatPly({ eol: '\r' }));
+  add('ply', 'no normals', () => splatPly({ properties: SPLAT_GS_PROPERTIES.filter((p) => !p.startsWith('n')) }));
+  add('ply', 'comments and obj_info', () => splatPly({
+    before: ['comment property float f_rest_0', 'comment element chunk 9', 'obj_info trained 30000 steps'],
+  }));
+  // ONE element, `vertex`, with no list property (3DGS training, SuperSplat and
+  // splat-transform write exactly that). PLYLoader walks EVERY element's count,
+  // so a second element is a loop the vertex cap never bounds (RT-1).
+  add('ply', 'an empty face element with a list property', () => splatPly({
+    after: ['element face 0', 'property list uchar int vertex_indices'],
+  }));
+  add('ply', 'a zero-property junk element', () => splatPly({ after: ['element junk 99999999999999'] }));
+  add('ply', 'a second, property-less vertex element', () => splatPly({ after: ['element vertex 99999999999'] }));
+  add('ply', 'a list property on the vertex element', () => splatPly({ after: ['property list uchar int vertex_indices'] }));
+  add('ply', 'a property before any element', () => splatConcat(
+    splatAscii(['ply', 'format binary_little_endian 1.0', ...SPLAT_GS_PROPERTIES.map((p) => `property float ${p}`),
+      'element vertex 3', 'end_header', ''].join('\n')),
+    new Uint8Array(SPLAT_PLY_BODY),
+  ));
+  // The header ends at the first LINE that is exactly `end_header`, as
+  // PLYLoader's extractHeaderText decides it; the first `end_header` SUBSTRING
+  // must be that line, because GaussianSplatPLYLoader stops at the substring.
+  add('ply', 'end_header inside a comment, then format ascii', () => splatPly({ after: ['comment x-end_header', 'format ascii 1.0'] }));
+  add('ply', 'end_header inside a comment before the properties', () => splatPly({ before: ['comment x-end_header'] }));
+  add('ply', 'end_header followed by a space', () => splatConcat(
+    splatAscii(new TextDecoder().decode(splatPly({ body: 0 })).replace('end_header\n', 'end_header \nend_header\n')),
+    new Uint8Array(SPLAT_PLY_BODY),
+  ));
+  // Exactly one format line.
+  add('ply', 'two format lines, ascii then binary', () => splatPly({ format: 'ascii', before: ['format binary_little_endian 1.0'] }));
+  add('ply', 'two format lines, binary then ascii', () => splatPly({ before: ['format ascii 1.0'] }));
+  add('ply', 'two identical format lines', () => splatPly({ before: ['format binary_little_endian 1.0'] }));
+  // Every property a known PLY scalar, `property <type> <name>`, in ASCII.
+  add('ply', 'an unknown property type', () => splatPly({ after: ['property half extra'] }));
+  add('ply', 'a property line with a fourth word', () => splatPly({ after: ['property float extra junk'] }));
+  add('ply', 'a property line with no name', () => splatPly({ after: ['property float'] }));
+  add('ply', 'a no-break space in a property line', () => splatPly({
+    properties: SPLAT_GS_PROPERTIES.map((p) => (p === 'x' ? ' x' : p)),
+  }));
+  add('ply', 'every PLY scalar type', () => splatPly({
+    after: ['char', 'int8', 'uchar', 'uint8', 'short', 'int16', 'ushort', 'uint16', 'int', 'int32', 'uint', 'uint32',
+      'float32', 'double', 'float64'].map((t, i) => `property ${t} extra_${i}`),
+    body: 3 * (17 * 4 + 4 * 1 + 4 * 2 + 5 * 4 + 2 * 8),
+  }));
+  add('ply', 'every PLY scalar type, one byte short', () => splatPly({
+    after: ['char', 'int8', 'uchar', 'uint8', 'short', 'int16', 'ushort', 'uint16', 'int', 'int32', 'uint', 'uint32',
+      'float32', 'double', 'float64'].map((t, i) => `property ${t} extra_${i}`),
+    body: 3 * (17 * 4 + 4 * 1 + 4 * 2 + 5 * 4 + 2 * 8) - 1,
+  }));
+  // The body must hold the rows the header declares.
+  add('ply', 'a truncated body', () => splatPly({ body: SPLAT_PLY_BODY - 1 }));
+  add('ply', 'no body at all', () => splatPly({ body: 0 }));
+  add('ply', 'trailing bytes after the body', () => splatPly({ body: SPLAT_PLY_BODY + 7 }));
+  add('ply', 'a double-typed body', () => splatPly({ type: 'double' }));
+  add('ply', 'a double-typed body read as floats', () => splatPly({ type: 'double', body: SPLAT_PLY_BODY * 2 - 1 }));
+  // extractHeaderText skips ONE more byte when the file's first line ends in
+  // CRLF — whatever ends the end_header line.
+  const crlfMagic = (spare: number) => splatConcat(
+    splatAscii('ply\r\n'),
+    splatPly({ body: SPLAT_PLY_BODY + spare }).subarray(4),
+  );
+  add('ply', 'CRLF after ply only, exact body', () => crlfMagic(0));
+  add('ply', 'CRLF after ply only, one spare byte', () => crlfMagic(1));
+  add('ply', 'a stray high byte in a comment', () => splatPly({ before: ['comment ÿÿ scanned by a camera'] }));
+  add('ply', 'a triangle mesh', () => splatPly({
+    properties: ['x', 'y', 'z', 'nx', 'ny', 'nz'],
+    after: ['element face 12', 'property list uchar int vertex_indices'],
+  }));
+  add('ply', 'a coloured point cloud', () => splatPly({ properties: ['x', 'y', 'z', 'red', 'green', 'blue'] }));
+  add('ply', 'no opacity', () => splatPly({ properties: SPLAT_GS_PROPERTIES.filter((p) => p !== 'opacity') }));
+  add('ply', 'no rot_3', () => splatPly({ properties: SPLAT_GS_PROPERTIES.filter((p) => p !== 'rot_3') }));
+  add('ply', 'no vertex element', () => splatPly({ count: null }));
+  for (const n of [1, 9, 24, 45]) add('ply', `${n} f_rest bands`, () => splatPly({ properties: [...SPLAT_GS_PROPERTIES, ...splatFRest(n)] }));
+  add('ply', 'compressed (chunked)', () => splatPly({
+    before: [
+      'element chunk 1',
+      ...['min_x', 'min_y', 'min_z', 'max_x', 'max_y', 'max_z'].map((p) => `property float ${p}`),
+    ],
+    properties: ['packed_position', 'packed_rotation', 'packed_scale', 'packed_color'],
+    count: 256,
+  }));
+  // One byte per property keeps the million-row body at 17 MB (the body must be whole).
+  add('ply', 'exactly the count cap', () => splatPly({ count: MAX, type: 'uchar' }));
+  add('ply', 'one over the count cap', () => splatPly({ count: MAX + 1 }));
+  add('ply', 'an 11-digit zero-padded count', () => splatPly({ count: '00000000003' }));
+  for (const [why, count] of [['zero', 0], ['past a safe integer', '99999999999999999999'], ['negative', '-3'], ['non-numeric', 'many'], ['fractional', '3.5']] as const) {
+    add('ply', `a ${why} count`, () => splatPly({ count }));
+  }
+  add('ply', 'no format line', () => splatPly({ format: null }));
+  add('ply', 'an unknown format', () => splatPly({ format: 'binary_middle_endian' }));
+  add('ply', 'a leading space', () => splatConcat(splatAscii(' '), splatPly()));
+  add('ply', 'upper-case magic', () => splatAscii('PLY\nformat ascii 1.0\nend_header\n'));
+  add('ply', 'no end_header', () => splatAscii('ply\nformat ascii 1.0\nelement vertex 3\n'));
+  for (const n of [0, 1, 2]) add('ply', `${n} bytes of the magic`, () => splatAscii('ply').subarray(0, n));
+  const head = () => splatAscii(new TextDecoder().decode(splatPly({ body: 0 })).replace('end_header\n', ''));
+  const pad = (n: number) => splatAscii(`comment ${'x'.repeat(n - 9)}\n`);
+  add('ply', 'end_header ending at 64 KiB', () => {
+    const h = head();
+    return splatConcat(h, pad(PLY_HEADER_SCAN_BYTES - 10 - h.length), splatAscii('end_header\n'), new Uint8Array(SPLAT_PLY_BODY));
+  });
+  add('ply', 'end_header straddling 64 KiB', () => {
+    const h = head();
+    return splatConcat(h, pad(PLY_HEADER_SCAN_BYTES - 9 - h.length), splatAscii('end_header\n'), new Uint8Array(SPLAT_PLY_BODY));
+  });
+  add('ply', 'a body spelling f_rest and chunk', () => splatConcat(
+    splatPly({ body: 0 }),
+    splatAscii('\nproperty float f_rest_0\nelement chunk 1\nend_header\n'),
+    new Uint8Array(SPLAT_PLY_BODY),
+  ));
+
+  // .spz — gzip, or a raw NGSP header
+  add('spz', 'gzip', () => splatSpzGzip());
+  add('spz', 'ISIZE at the decoded cap', () => splatSpzGzip(SPZ_MAX_DECODED_BYTES));
+  add('spz', 'ISIZE over the decoded cap', () => splatSpzGzip(SPZ_MAX_DECODED_BYTES + 1));
+  add('spz', 'ISIZE 2^32-1', () => splatSpzGzip(0xffffffff));
+  add('spz', 'ISIZE 16', () => splatSpzGzip(16));
+  add('spz', 'ISIZE 15', () => splatSpzGzip(15));
+  add('spz', 'not deflate', () => {
+    const b = splatSpzGzip();
+    b[2] = 7;
+    return b;
+  });
+  add('spz', 'a gzip cut to 17 bytes', () => splatSpzGzip().subarray(0, 17));
+  add('spz', 'just the gzip magic', () => new Uint8Array([0x1f, 0x8b]));
+  add('spz', 'NGSP v4', () => splatSpzRaw(4));
+  add('spz', 'NGSP v4, 8 bytes', () => splatSpzRaw(4, 8));
+  for (const v of [0, 1, 2, 3, 5, 0xffffffff]) add('spz', `NGSP v${v}`, () => splatSpzRaw(v));
+  add('spz', 'empty', () => new Uint8Array(0));
+  add('spz', 'one byte', () => new Uint8Array([0x1f]));
+  add('spz', 'NGS', () => splatAscii('NGS'));
+  add('spz', 'NGSP alone', () => splatAscii('NGSP'));
+  add('spz', 'a ply header', () => splatAscii('ply\n'));
+  add('spz', '64 zero bytes', () => new Uint8Array(64));
+
+  // .ksplat — the sectioned container
+  add('ksplat', 'one section', () => splatKsplat());
+  add('ksplat', 'two sections, degree 2', () => splatKsplat({ sections: [{ splats: 2, degree: 0 }, { splats: 5, degree: 2 }] }));
+  add('ksplat', 'an empty section of degree 3', () => splatKsplat({ sections: [{ splats: 4 }, { splats: 0, max: 2, degree: 3 }] }));
+  for (const level of [0, 1, 2]) {
+    const b = () => splatKsplat({ level, sections: [{ splats: 6, max: 8, degree: 1, bucketCount: 2, bucketBytes: 12, partial: 1 }] });
+    add('ksplat', `level ${level}`, b);
+    add('ksplat', `level ${level}, one byte short`, () => b().subarray(0, b().length - 1));
+  }
+  add('ksplat', 'a header count over the cap', () => splatKsplat({ count: MAX + 1 }));
+  add('ksplat', 'a header count at the cap', () => splatKsplat({ count: MAX }));
+  add('ksplat', 'major version 1', () => splatKsplat({ major: 1 }));
+  add('ksplat', 'minor version 0', () => splatKsplat({ minor: 0 }));
+  add('ksplat', 'compression level 3', () => splatKsplat({ level: 3 }));
+  add('ksplat', 'zero splats', () => splatKsplat({ sections: [{ splats: 0, max: 1 }] }));
+  add('ksplat', 'SH degree 4', () => splatKsplat({ sections: [{ splats: 3, degree: 4 }] }));
+  add('ksplat', 'sections short of the header count', () => splatKsplat({ count: 4 }));
+  add('ksplat', 'truncated', () => splatKsplat({ truncate: 1 }));
+  add('ksplat', 'shorter than its header', () => splatKsplat().subarray(0, KSPLAT_HEADER_BYTES - 1));
+  add('ksplat', 'empty', () => new Uint8Array(0));
+  add('ksplat', 'an unused section slot', () => splatKsplat({ maxSections: 3 }));
+  for (const slots of [2, 0xffffffff]) {
+    add('ksplat', `${slots} section slots`, () => {
+      const b = splatKsplat();
+      new DataView(b.buffer).setUint32(4, slots, true);
+      return b;
+    });
+  }
+  add('ksplat', 'section storage past 2^32', () => {
+    const b = splatKsplat();
+    const v = new DataView(b.buffer);
+    v.setUint32(KSPLAT_HEADER_BYTES + 12, 0xffffffff, true);
+    v.setUint16(KSPLAT_HEADER_BYTES + 20, 0xffff, true);
+    return b;
+  });
+  return cases;
+})();

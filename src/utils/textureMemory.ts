@@ -73,7 +73,7 @@
  */
 import type { AppNode, AppEdge } from '@/types';
 import { getNodeValues } from '@/types';
-import { activeSink, isMarchOutput } from './sdfPartition';
+import { activeSink, isCustomSink } from './sdfPartition';
 import { contributingOutputs, parseChannelHandle, outputMaterials, materialTargetNames } from './outputMaterials';
 import { validImageDataUrl } from './imageNode';
 import { isImageChannelHandle } from './imageChannels';
@@ -232,13 +232,14 @@ export function textureMemory(inputs: readonly TextureMemoryInput[]): TextureMem
 export function graphTextureMemory(nodes: readonly AppNode[], unwrappedEdges: readonly AppEdge[]): TextureMemory {
   // EVERY Output that reaches the module, walked as ONE set — the `costSeeds`
   // rule, restated here for the same reason the BFS below is: a driving
-  // Raymarch Output suppresses every plain Output and seeds alone, otherwise
-  // each targeted Output samples its own textures. A single-sink walk counted
-  // only the default material's, which since the Output split is one NODE of
-  // several. A texture shared by two Outputs is still counted ONCE — that is
-  // what makes it one walk rather than a sum of walks.
+  // custom sink (Raymarch or Splat Output) suppresses every plain Output and
+  // seeds alone, otherwise each targeted Output samples its own textures. A
+  // single-sink walk counted only the default material's, which since the
+  // Output split is one NODE of several. A texture shared by two Outputs is
+  // still counted ONCE — that is what makes it one walk rather than a sum of
+  // walks.
   const sink = activeSink(nodes, unwrappedEdges);
-  const seeds = sink && isMarchOutput(sink) ? [sink] : contributingOutputs(nodes);
+  const seeds = sink && isCustomSink(sink) ? [sink] : contributingOutputs(nodes);
   if (seeds.length === 0) return NO_TEXTURE_MEMORY;
 
   // Reverse BFS from the seeds -- the same walk as nodeCost's `sumReachable`,

@@ -5,6 +5,8 @@ import { useAppStore } from '@/store/useAppStore';
 import { hexToRgb01 } from '@/utils/colorUtils';
 import { valueStr } from '@/utils/valueCoerce';
 import { TypedHandle } from '../handles/TypedHandle';
+import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { useHeaderTip } from './headerTip';
 import { useLongPress } from '@/hooks/useLongPress';
 import { useFitText } from '@/hooks/useFitText';
 import { ColorPickerPopover } from '@/components/inputs/PaletteColorPicker';
@@ -91,6 +93,9 @@ export const ColorNode = memo(function ColorNode({
   // labels itself with the property name the user typed rather than the
   // generated varName.
   const isProperty = data.registryType === 'property_color';
+  // No header bar on a swatch: the Latvian name rides the swatch itself, opened
+  // above it like every other canvas node's.
+  const headerTip = useHeaderTip(NODE_REGISTRY.get(data.registryType));
   const label = isProperty
     ? valueStr(data.values?.name ?? 'color1')
     : (varName ?? 'Color');
@@ -167,6 +172,7 @@ export const ColorNode = memo(function ColorNode({
       className={`color-node${isProperty ? ' color-node--rect' : ''}${selected ? ' color-node--selected' : ''}`}
       style={{ background: hex, width: COLOR_NODE_SIZE, height: COLOR_NODE_SIZE }}
       onDoubleClick={togglePicker}
+      {...headerTip}
     >
       <span
         ref={labelRef}

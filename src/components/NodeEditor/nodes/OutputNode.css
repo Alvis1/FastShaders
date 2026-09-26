@@ -363,3 +363,18 @@
   margin: 2px 10px;
   background: rgba(var(--node-ink-rgb), 0.06);
 }
+
+/* The header's SECOND line — the technique's original name under a translated
+   title ("STARU SOĻI" over "(Raymarching)", "GAUSA PLEĶI" over "(Gaussian
+   splat)"), drawn by OutputTitle.tsx on the canvas and the tile alike. A block
+   inside the title span, so the header's own flex row (shared with the plain
+   Output) is untouched; a proper name, so it steps out of the uppercase. */
+.output-node__original {
+  display: block;
+  font-size: 8px;
+  font-weight: 400;
+  letter-spacing: 0.2px;
+  text-transform: none;
+  line-height: 1.2;
+  opacity: 0.85;
+}

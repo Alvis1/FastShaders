@@ -21,7 +21,8 @@ import { readPersisted, usePersistedState } from '@/hooks/usePersistedState';
 import { beginDragChrome } from '@/utils/dragChrome';
 import { SeamLens, aimSeamLens } from '@/components/Layout/SeamLens';
 import { registerAssetBarDrag } from '@/components/Layout/assetBarDrag';
-import { formatCategoryLabel, t } from '@/i18n';
+import { assetText, formatCategoryLabel, t } from '@/i18n';
+import { fillTemplate } from '@/utils/fillTemplate';
 import type { NodeCategory, NodeDefinition } from '@/types';
 import { CAT_HEX } from '@/utils/colorUtils';
 import complexityData from '@/registry/complexity.json';
@@ -72,6 +73,19 @@ type BrowserCategory = NodeCategory | 'all' | 'saved';
  * border match the items-area tint so it visually merges with the content
  * below (same trick the TSL/Script tabs use in the code editor).
  */
+/**
+ * A preset/texture also answers its LATVIAN name and description, whichever
+ * language is on — the same rule node search follows (`nodeMatchRank` ranks the
+ * Latvian label in both modes), so a query typed from a Latvian tile's name
+ * finds that tile. `q` is already lower-cased.
+ */
+function assetMatchesLV(a: { name: string; description: string }, q: string): boolean {
+  return (
+    assetText(a.name, 'lv').toLowerCase().includes(q) ||
+    assetText(a.description, 'lv').toLowerCase().includes(q)
+  );
+}
+
 function tabStyle(hex: string, active: boolean): React.CSSProperties {
   if (active) {
     const body = `${hex}1A`;
@@ -693,7 +707,8 @@ export const ContentBrowser = memo(function ContentBrowser() {
       (t) =>
         t.name.toLowerCase().includes(q) ||
         t.id.toLowerCase().includes(q) ||
-        t.description.toLowerCase().includes(q),
+        t.description.toLowerCase().includes(q) ||
+        assetMatchesLV(t, q),
     );
   }, [q, activeCategory, optional.texture]);
 
@@ -716,7 +731,8 @@ export const ContentBrowser = memo(function ContentBrowser() {
       (p) =>
         p.name.toLowerCase().includes(q) ||
         p.id.toLowerCase().includes(q) ||
-        p.description.toLowerCase().includes(q),
+        p.description.toLowerCase().includes(q) ||
+        assetMatchesLV(p, q),
     );
   }, [q, activeCategory]);
 
@@ -762,21 +778,22 @@ export const ContentBrowser = memo(function ContentBrowser() {
   }, [changeHeight]);
 
   const empty = (msg: string) => <div className="content-browser__empty">{msg}</div>;
+  const noMatch = (key: string) => empty(fillTemplate(t(key, language), { query: settledSearch.trim() }));
 
   let items: React.ReactNode;
   if (activeCategory === 'saved') {
     items = savedGroups.length === 0
-      ? empty('Right-click a group on the canvas → Save to Library to store it here.')
+      ? empty(t('Right-click a group on the canvas → Save to Library to store it here.', language))
       : filteredSavedGroups.length === 0
-        ? empty(`No saved groups match “${settledSearch.trim()}”.`)
+        ? noMatch('No saved groups match “{query}”.')
         : filteredSavedGroups.map((g) => <SavedGroupCard key={g.id} group={g} />);
   } else if (activeCategory === 'texture') {
     items = filteredTextures.length === 0
-      ? empty(`No textures match “${settledSearch.trim()}”.`)
+      ? noMatch('No textures match “{query}”.')
       : filteredTextures.map((t) => <TextureCard key={t.id} texture={t} />);
   } else if (activeCategory === 'presets') {
     items = filteredPresets.length === 0
-      ? empty(`No presets match “${settledSearch.trim()}”.`)
+      ? noMatch('No presets match “{query}”.')
       : filteredPresets.map((p) => <PresetCard key={p.id} preset={p} />);
   } else {
     const defCards = filteredDefs.map((item) => (
@@ -793,7 +810,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
       : [];
     // Show a message rather than a blank strip that reads as a rendering bug.
     items = defCards.length + assetCards.length === 0
-      ? empty(q ? `No matches for “${settledSearch.trim()}”.` : 'Nothing here yet.')
+      ? (q ? noMatch('No matches for “{query}”.') : empty(t('Nothing here yet.', language)))
       : [...defCards, ...assetCards];
   }
 

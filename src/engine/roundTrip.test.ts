@@ -608,3 +608,28 @@ describe('round-trip: Append (the vector constructor)', () => {
     }
   });
 });
+
+describe('round-trip: the Splat Output', () => {
+  it('a cut, a tint, a fade, a move, a size, a feather and an invert survive graph → code → graph', () => {
+    const sp = makeNode('sp', 'splatOutput');
+    (sp.data as Record<string, unknown>).values = { feather: 0.15, invert: true };
+    const nodes = [
+      makeNode('pos', 'positionLocal'), makeNode('sd', 'sdCircle'), makeNode('c', 'color', { hex: '#88ccff' }),
+      makeNode('pw', 'positionWorld'), makeNode('len', 'length'), makeNode('t', 'time'), makeNode('f', 'float', { value: 1.25 }),
+      sp,
+    ];
+    const edges = [
+      makeEdge('pos', 'out', 'sd', 'p'), makeEdge('sd', 'out', 'sp', 'cut'), makeEdge('c', 'out', 'sp', 'color'),
+      makeEdge('pw', 'out', 'len', 'v'), makeEdge('len', 'out', 'sp', 'opacity'), makeEdge('t', 'out', 'sp', 'move'),
+      makeEdge('f', 'out', 'sp', 'size'),
+    ];
+    const { code1, code2 } = roundTrip(nodes, edges);
+    expect(code1).toContain('return { splat: { shade: sp1Shade, shape: sp1Shape, size: float1, feather: 0.15, invert: true } };');
+    expect(code2).toBe(code1);
+    const parsed = codeToGraph(code1);
+    expect(parsed.errors).toEqual([]);
+    const types = (ns: AppNode[]) => ns.map((n) => n.data.registryType).sort();
+    expect(types(parsed.nodes)).toEqual(types(nodes));
+    expect(parsed.edges).toHaveLength(edges.length);
+  });
+});

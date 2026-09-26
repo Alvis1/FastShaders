@@ -16,6 +16,7 @@ import {
 import { getAllDefinitions, getEditorDefinitions, searchNodes } from './nodeRegistry';
 import { CATEGORIES } from './nodeCategories';
 import { formatCategoryLabel, t } from '@/i18n';
+import nodeI18n from '@/i18n/node-i18n.json';
 import { useAppStore } from '@/store/useAppStore';
 import type { NodeCategory } from '@/types';
 
@@ -54,11 +55,14 @@ describe('the flags', () => {
 
   it('name real categories that have a tab label in both languages', () => {
     // The right-click row is labelled with the category's own tab name, so the
-    // switch and the tab it summons read as one thing — in Latvian too.
+    // switch and the tab it summons read as one thing — in Latvian too. A
+    // Latvian name may EQUAL the English one ("SDF" is "SDF" in both), so the
+    // pin is that an entry exists, and that a shared name is never doubled.
     for (const id of OPTIONAL_CATEGORIES) {
       const cat = CATEGORIES.find((c) => c.id === id);
       expect(cat, id).toBeDefined();
-      expect(formatCategoryLabel(cat!.label, id, 'lv')).not.toBe(cat!.label);
+      expect((nodeI18n.categories as Record<string, string>)[id], id).toBeTruthy();
+      expect(formatCategoryLabel(cat!.label, id, 'lv', true)).not.toMatch(/^(.+) \(\1\)$/);
       expect(isOptionalCategory(id)).toBe(true);
     }
     expect(isOptionalCategory('math')).toBe(false);
@@ -173,6 +177,25 @@ describe('the registry narrows by the hidden set', () => {
     // The registry itself is untouched: a loaded graph still resolves both.
     getEditorDefinitions(hide('sdf'));
     expect(getAllDefinitions().some((d) => d.type === 'raymarchOutput')).toBe(true);
+  });
+
+  /**
+   * The Splat Output is NOT a companion (owner decision D2, 2026-09-24): it is
+   * always offered on the Output tab, with the Distance-fields switch OFF too —
+   * its Cut socket is then fed by compare / logic nodes. Adding it to the sdf
+   * companions would silently take the only splat sink away from every user
+   * who never found the switch.
+   */
+  it('always offers the Splat Output, whatever the optional categories say', () => {
+    expect(OPTIONAL_CATEGORY_COMPANIONS.sdf).not.toContain('splatOutput');
+    for (const hidden of [hide('sdf'), hide('texture'), hide('sdf', 'texture'), hide()]) {
+      expect(withheldNodeTypes(hidden).has('splatOutput')).toBe(false);
+      expect(getEditorDefinitions(hidden).map((d) => d.type)).toContain('splatOutput');
+    }
+    const def = getEditorDefinitions(hide('sdf')).find((d) => d.type === 'splatOutput')!;
+    expect(def.category).toBe('output');
+    expect(searchNodes('splat', hide('sdf')).map((d) => d.type)).toContain('splatOutput');
+    expect(searchNodes('gaussian', hide('sdf', 'texture')).map((d) => d.type)).toContain('splatOutput');
   });
 
   it('searchNodes cannot type a switched-off family back into existence', () => {

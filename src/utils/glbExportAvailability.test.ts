@@ -12,6 +12,9 @@ import {
   type GlbExportMesh,
 } from './glbExportAvailability';
 import type { GltfPreviewFacts } from './gltfReader';
+import { createPreviewMesh } from './previewMesh';
+import { SPLAT_KINDS } from './splatSniff';
+import { splatRows } from '@/test-utils';
 
 const FACTS: GltfPreviewFacts = { signature: ['Body'], meshMaterials: new Map() };
 
@@ -48,6 +51,34 @@ describe('glbExportAvailability', () => {
       reason: 'unreadable',
       name: 'statue.glb',
     });
+  });
+});
+
+describe('a Gaussian splat scene', () => {
+  it('is unavailable with its own reason for every splat kind, never "obj" or "unreadable"', () => {
+    for (const kind of SPLAT_KINDS) {
+      const name = `garden.${kind}`;
+      // `gltf` is absent on a splat mesh (createPreviewMesh derives glTF facts
+      // for glb/gltf only) — without the splat branch that read as unreadable.
+      expect(glbExportAvailability(mesh({ kind, name, gltf: undefined })), kind).toEqual({ ok: false, reason: 'splat', name });
+    }
+  });
+
+  it('decides BEFORE the glTF facts: even a forged fact cannot make a splat packable', () => {
+    expect(glbExportAvailability(mesh({ kind: 'spz', name: 'x.spz', gltf: FACTS }))).toEqual({ ok: false, reason: 'splat', name: 'x.spz' });
+  });
+
+  it('EXPORT falls back to the bundle, whose zip carries the scene and the runtime snippet', () => {
+    for (const kind of SPLAT_KINDS) {
+      expect(effectiveExportFormat(true, mesh({ kind, name: `g.${kind}`, gltf: undefined }), false), kind).toBe('bundle');
+    }
+  });
+
+  it('a real createPreviewMesh splat mesh answers the same', () => {
+    const r = createPreviewMesh('garden.splat', splatRows(3));
+    if (!('mesh' in r)) throw new Error('splat refused');
+    expect(glbExportAvailability(r.mesh)).toEqual({ ok: false, reason: 'splat', name: 'garden.splat' });
+    expect(effectiveExportFormat(true, r.mesh, false)).toBe('bundle');
   });
 });
 

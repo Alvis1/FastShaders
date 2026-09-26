@@ -5,7 +5,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { BUILTIN_PALETTES } from '@/registry/builtinPalettes';
 import { clearRecentColors, getRecentColors, noteColorUsed } from '@/utils/recentColors';
 import { normalizeHex } from '@/utils/colorUtils';
-import { t } from '@/i18n';
+import { paletteText, t } from '@/i18n';
 import {
   buildPickerSections,
   COMMIT_IDLE_MS,
@@ -367,10 +367,14 @@ export function ColorPickerPopover({
         </button>
       )}
 
-      {sections.map((sec) => (
+      {sections.map((sec) => {
+        // Built-in names show in Latvian; the shader's own palettes are data
+        // and show exactly as saved.
+        const say = (s: string) => (sec.builtin ? paletteText(s, language) : s);
+        return (
         <div key={sec.key} className="palette-pop__section">
-          <div className="palette-pop__label" title={sec.name}>
-            {sec.name}
+          <div className="palette-pop__label" title={say(sec.name)}>
+            {say(sec.name)}
           </div>
           <div className="palette-pop__row">
             {sec.colors.map((hex, i) => (
@@ -383,13 +387,14 @@ export function ColorPickerPopover({
                 style={{ background: hex }}
                 // `names` is materialized to the same length as `colors` by
                 // buildPickerSections, so this index is always in range.
-                title={swatchTitle(hex, sec.names[i])}
+                title={swatchTitle(hex, say(sec.names[i]))}
                 onClick={() => pickSwatch(hex)}
               />
             ))}
           </div>
         </div>
-      ))}
+        );
+      })}
 
       {/* Recents COLLAPSE when empty rather than drawing placeholder cells: a
           row of empty boxes is indistinguishable from a rendering bug, and the

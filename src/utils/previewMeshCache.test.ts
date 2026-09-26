@@ -115,6 +115,28 @@ describe('recordToMesh', () => {
     const restored = recordToMesh({ name: '../../etc/pa$$wd.glb', bytes: glbBytes() });
     expect(restored!.name).toBe('pa-wd.glb');
   });
+
+  it('re-runs the splat sniff: a stored x.splat of 33 bytes restores to null', () => {
+    // 33 is not a whole number of 32-byte rows — the same refusal a drop gets.
+    expect(recordToMesh({ name: 'x.splat', bytes: new Uint8Array(33) })).toBeNull();
+    expect(recordToMesh({ name: 'x.splat', bytes: new Uint8Array(33).buffer })).toBeNull();
+    // A hostile header under a splat name is refused the same way.
+    expect(recordToMesh({ name: 'x.ksplat', bytes: new Uint8Array(4095) })).toBeNull();
+    expect(recordToMesh({ name: 'x.ply', bytes: new TextEncoder().encode('ply\nformat ascii 1.0\nelement vertex 1\nproperty float x\nend_header\n') })).toBeNull();
+  });
+
+  it('a stored splat restores with its facts DERIVED again, never read from the record', () => {
+    const restored = recordToMesh({
+      name: 'x.splat',
+      bytes: new Uint8Array(64),
+      // A forged record field is ignored: only name and bytes are read.
+      splat: { count: 999_999_999, shDegree: 3, container: 'ksplat' },
+    });
+    expect(restored?.kind).toBe('splat');
+    expect(restored?.splat).toEqual({ count: 2, shDegree: 0, container: 'splat' });
+    expect(restored?.text).toBeUndefined();
+    expect(Object.keys(meshToRecord(restored!)).sort()).toEqual(['bytes', 'name']);
+  });
 });
 
 describe('meshCacheOutcome', () => {

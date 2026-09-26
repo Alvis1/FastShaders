@@ -5,6 +5,7 @@ import { HISTORY_IDLE, makeNode, makeEdge } from '@/test-utils';
 import type { AppNode } from '@/types';
 import {
   activeSink,
+  drivingCustomSink,
   drivingMarchOutput,
   isUntargetedOutput,
   marchWindowRadius,
@@ -438,7 +439,7 @@ describe('carryInactiveSinks — an Apply keeps the inactive outputs and their w
    * is false: a DRIVING Raymarch Output.
    *
    * `graphToCode` gates the whole Output pass on it
-   * (`outputs = marchNode ? [] : contributingOutputs(nodes)`), so a marching
+   * (`outputs = customNode ? [] : contributingOutputs(nodes)`), so a marching
    * module carries no `parts`, no `materialParts` and no top-level channels.
    * The parse therefore mints NO plain Output, nothing pairs, and every
    * targeted Output plus its incoming edges was DELETED on Apply — silently,
@@ -680,5 +681,107 @@ describe('store.setActiveOutput', () => {
     expect(imp).toContain('const nodes = normalizeActiveOutput(split.nodes);');
     expect(imp.indexOf('unfoldOutputMaterials(dataSanitized.nodes, edges)'))
       .toBeLessThan(imp.indexOf('normalizeActiveOutput(split.nodes)'));
+  });
+});
+
+/**
+ * The Splat Output is the second CUSTOM sink: everything the Raymarch Output
+ * is to the election, the carry, the pairing, the cost seeds and the Uniforms
+ * scope, it is too — decided by the same predicates (`isCustomSink`,
+ * `drivingCustomSink`), never by a second list of type strings.
+ */
+describe('the Splat Output is a custom sink like the march', () => {
+  const sp = (id = 'sp') => makeNode(id, 'splatOutput');
+  const col = () => makeNode('col', 'color', { hex: '#ff0000' });
+  const splatWired = () => [makeEdge('col', 'out', 'sp', 'color')];
+
+  it('a flagged Splat Output is ELIGIBLE and wins over wiring and array order', () => {
+    expect(activeSink([out(), flag(sp())], [])?.id).toBe('sp');
+    expect(activeSink([flag(out()), sp(), col()], splatWired())?.id).toBe('out1');
+    expect(activeSink([pos(), sd(), rm(), flag(sp())], marchWired())?.id).toBe('sp');
+    expect(drivingCustomSink([pos(), sd(), rm(), flag(sp())], marchWired())?.id).toBe('sp');
+    expect(drivingMarchOutput([pos(), sd(), rm(), flag(sp())], marchWired())).toBeNull();
+  });
+
+  it('with no flag: the first WIRED custom sink in array order, else the lowest-ranked untargeted Output', () => {
+    expect(activeSink([col(), sp(), out()], splatWired())?.id).toBe('sp');
+    expect(activeSink([sp(), out()], [])?.id).toBe('out1');
+    const both = [...marchWired(), ...splatWired()];
+    expect(activeSink([pos(), sd(), rm(), col(), sp(), out()], both)?.id).toBe('rm');
+    expect(activeSink([col(), sp(), pos(), sd(), rm(), out()], both)?.id).toBe('sp');
+    // A targeted plain Output never outranks it.
+    expect(activeSink([targeted(out('a'), ['Body']), col(), sp()], splatWired())?.id).toBe('sp');
+  });
+
+  it('normalizeActiveOutput keeps its flag, strips a second one, and returns the same array when clean', () => {
+    const clean = [out('a'), flag(sp())];
+    expect(normalizeActiveOutput(clean)).toBe(clean);
+    const two = normalizeActiveOutput([flag(sp()), flag(out('b'))]);
+    expect(two.map((n) => hasActiveFlag(n))).toEqual([true, false]);
+    expect(clearActiveOutput([flag(sp())]).some(hasActiveFlag)).toBe(false);
+  });
+
+  it('a PARKED Splat Output is carried across an Apply with its wiring; the active one pairs with the parse', () => {
+    const c2 = makeNode('c2', 'color', { hex: '#00ff00' });
+    const nodes = [flag(out('o1')), sp(), col(), c2];
+    const edges = [...splatWired(), makeEdge('c2', 'out', 'o1', 'color')];
+    const { code } = graphToCode(nodes, edges);
+    expect(code).not.toContain('splat');
+    const parsed = codeToGraph(code);
+    expect(parsed.nodes.some((n) => n.data.registryType === 'splatOutput')).toBe(false);
+    const pairing = pairResyncNodes(nodes, parsed.nodes, 'o1');
+    const surviving = new Set(pairing.paired.map((x) => x.match.id));
+    const carried = carryInactiveSinks(nodes, edges, 'o1', surviving, true);
+    expect(carried.nodes.map((n) => n.id)).toEqual(['sp']);
+    expect(carried.edges.map((e) => `${e.source}->${e.target}:${e.targetHandle}`)).toEqual(['col->sp:color']);
+
+    // The ACTIVE splat: its program is the module, so the parse re-creates it
+    // and the pairing hands the parsed node the old id — nothing is carried.
+    const active = [out('o1'), flag(sp()), col()];
+    const activeCode = graphToCode(active, splatWired()).code;
+    const reparsed = codeToGraph(activeCode);
+    const p2 = pairResyncNodes(active, reparsed.nodes, 'sp');
+    const splatPair = p2.paired.find((x) => x.node.data.registryType === 'splatOutput');
+    expect(splatPair?.match.id).toBe('sp');
+    const carried2 = carryInactiveSinks(active, splatWired(), 'sp', new Set(p2.paired.map((x) => x.match.id)), false);
+    // The parse holds no plain Output, so the untargeted one comes back by the
+    // carry — exactly the march's shape.
+    expect(carried2.nodes.map((n) => n.id)).toEqual(['o1']);
+  });
+
+  it('costSeeds: a driving Splat Output seeds ALONE; its chain is priced once, plus the flat sink cost', () => {
+    const p = pos();
+    const s = sd();
+    const c = col();
+    const splatNode = sp();
+    const plain = out();
+    // A PRICED chain on the silenced plain Output: it must not be charged.
+    const n2 = makeNode('n2', 'perlin');
+    const nodes = [p, s, c, splatNode, plain, n2];
+    const edges = [makeEdge('pos', 'out', 'sd', 'p'), makeEdge('sd', 'out', 'sp', 'cut'), makeEdge('col', 'out', 'sp', 'color'), makeEdge('n2', 'out', 'out1', 'color')];
+    expect(costSeeds(nodes, edges).map((n) => n.id)).toEqual(['sp']);
+    expect(getCost('splatOutput')).toBe(2);
+    const body = nodeCostPoints(p, edges) + nodeCostPoints(s, edges) + nodeCostPoints(c, edges);
+    // NO per-splat or per-step multiplier: the Fns run per vertex, once.
+    expect(computeReachableCost(nodes, edges)).toBe(body + getCost('splatOutput'));
+  });
+
+  it('the Uniforms overlay lists only sliders that reach the DRIVING Splat Output', () => {
+    const s1 = makeNode('s1', 'property_float', { name: 'one', value: 1 });
+    const s2 = makeNode('s2', 'property_float', { name: 'two', value: 2 });
+    const nodes = [out('o1'), sp(), s1, s2];
+    const edges = [makeEdge('s1', 'out', 'o1', 'roughness'), makeEdge('s2', 'out', 'sp', 'opacity')];
+    const key = connectedUniformNamesKey(nodes, edges, { s1: 'one', s2: 'two' });
+    expect(key).toContain('two');
+    expect(key).not.toContain('one');
+  });
+
+  it('store.setActiveOutput moves the flag onto a Splat Output in one history entry', () => {
+    cancelPendingGraphSave();
+    useAppStore.setState({ nodes: [out('o1'), sp()] as AppNode[], edges: [], past: [], future: [], ...HISTORY_IDLE });
+    useAppStore.getState().setActiveOutput('sp');
+    expect(useAppStore.getState().past).toHaveLength(1);
+    expect(useAppStore.getState().nodes.map((n) => hasActiveFlag(n))).toEqual([false, true]);
+    useAppStore.setState({ nodes: [], edges: [], past: [], future: [], ...HISTORY_IDLE });
   });
 });

@@ -498,7 +498,7 @@ export function CodeEditor() {
     // A 3D model is accepted too: importScriptFile hands it to the 3D preview.
     if (detectMeshKind(file.name) === null && !/\.(js|mjs|tsl|zip|json)$/i.test(file.name)) {
       window.alert(
-        t('{name} is not a shader script (.js / .mjs / .tsl), a FastShaders .zip, a 3D model (.obj / .glb / .gltf), or a benchmark complexity .json.', language)
+        t('{name} is not a shader script (.js / .mjs / .tsl), a FastShaders .zip, a 3D model (.obj / .glb / .gltf), a Gaussian splat (.splat / .spz / .ply / .ksplat), or a benchmark complexity .json.', language)
           .replace('{name}', () => `“${file.name}”`),
       );
       return;

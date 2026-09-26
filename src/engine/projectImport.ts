@@ -43,10 +43,14 @@ import {
 import {
   createPreviewMesh,
   detectMeshKind,
+  isSplatKind,
   sanitizeMeshFileName,
+  splatEvalRefusal,
   type MeshRefusal,
+  type MeshRejectReason,
   type PreviewMesh,
 } from '@/utils/previewMesh';
+import { isEvalMode } from '@/eval/evalMode';
 import { assetLiteralText, readGlbFsExtras } from '@/utils/glbShaderExtras';
 import { readGltfModel } from '@/utils/gltfReader';
 import { planTextureStrip, stripGltfTextures } from '@/utils/gltfStrip';
@@ -606,7 +610,45 @@ export class ZipModelSkippedError extends Error {
   }
 }
 
-const SKIP_REASONS: ReadonlySet<unknown> = new Set(['empty', 'too-large', 'bad-glb', 'compressed', 'unsupported']);
+/**
+ * Every `MeshRejectReason`, as a table TYPED over the union: a reason added
+ * there (a new model kind brought eight) fails `tsc` here until it is listed,
+ * so the name-based fallback below can never silently stop recognising one.
+ */
+const SKIP_REASON_TABLE: Readonly<Record<MeshRejectReason, true>> = {
+  unsupported: true,
+  empty: true,
+  'too-large': true,
+  'bad-glb': true,
+  compressed: true,
+  'bad-splat': true,
+  'splat-count': true,
+  'ply-not-splat': true,
+  'ply-sh': true,
+  'ply-compressed': true,
+  'spz-version': true,
+  'gltf-splat': true,
+  'splat-eval': true,
+};
+const SKIP_REASONS: ReadonlySet<unknown> = new Set(Object.keys(SKIP_REASON_TABLE));
+
+/**
+ * The zip's model entry as a preview mesh, or the refusal a drop of the same
+ * file would get. `study` is the study-session switch (`isEvalMode()` at the
+ * one caller), a parameter so a node test can hold it: a study session takes
+ * no Gaussian splat (D10), refused on the KIND alone — before the sniff, the
+ * way the preview drop refuses one before its pre-read gate.
+ */
+export function zipModelOutcome(
+  entryName: string,
+  data: Uint8Array,
+  study: boolean,
+): { mesh: PreviewMesh } | { refusal: MeshRefusal } {
+  const fileName = entryName.split('/').pop() ?? entryName;
+  if (study && isSplatKind(detectMeshKind(fileName))) return { refusal: splatEvalRefusal() };
+  const result = createPreviewMesh(fileName, data);
+  return 'mesh' in result ? { mesh: result.mesh } : { refusal: result.refusal };
+}
 
 /** Name-based as well as `instanceof`, for the reason `isZipLimitError` gives
  *  (a second module instance is possible under `isolate: false`). */
@@ -710,10 +752,13 @@ export async function importShaderZip(
   // entry was picked BY its extension), so it is not reported.
   let skipped: { refusal: MeshRefusal; bytes: number } | null = null;
   if (modelEntry) {
-    const result = createPreviewMesh(modelEntry.name.split('/').pop() ?? modelEntry.name, modelEntry.data);
-    if ('mesh' in result) mesh = result.mesh;
-    else if (result.refusal.reason !== 'unsupported') {
-      skipped = { refusal: result.refusal, bytes: modelEntry.data.length };
+    // A splat in a study session is skipped like any refused model — beside a
+    // script the shader loads and the import note says why; alone, the zip
+    // is refused with that reason.
+    const outcome = zipModelOutcome(modelEntry.name, modelEntry.data, isEvalMode());
+    if ('mesh' in outcome) mesh = outcome.mesh;
+    else if (outcome.refusal.reason !== 'unsupported') {
+      skipped = { refusal: outcome.refusal, bytes: modelEntry.data.length };
     }
   }
 

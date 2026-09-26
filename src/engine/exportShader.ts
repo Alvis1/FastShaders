@@ -5,13 +5,15 @@ import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { contributingOutputs, materialPartsMirrorPlanAcross, moduleSettingsOutput } from '@/utils/outputMaterials';
 import { tslToShaderModule, type PropertyInfo, type ShaderModuleOptions } from './tslToShaderModule';
 import { embedProjectState, type FastShadersProject } from './fastShadersProject';
+import { planExportGraph, remapUniformKeys, type ExportGraph, type ExportScope } from './exportGraph';
+import { activeExportModel } from './exportModel';
 import { inlineImageAssetsFromNodes, imageAssetFor } from './imageAssets';
 import { EXPORT_IMAGE_REFS, referenceImagesInModule } from './projectImageRefs';
 import { getNodeValues } from '@/types';
 import type { AppNode, AppEdge, MaterialSettings, OutputNodeData } from '@/types';
 import { toKebabCase } from '@/utils/nameUtils';
 import { collectImageFiles } from '@/utils/imageNode';
-import { buildExportBundle, type ExportBundle } from '@/utils/exportBundle';
+import { buildExportBundle, type ExportBundle, type ExportMesh } from '@/utils/exportBundle';
 import { evalLog } from '@/eval/telemetry';
 import { isEvalMode } from '@/eval/evalMode';
 import {
@@ -62,14 +64,25 @@ export function collectShaderProperties(nodes: AppNode[]): PropertyInfo[] {
 }
 
 /**
+ * What one export is built from, read from the store at click time (see
+ * engine/exportGraph.ts). `'whole'` is the store's own arrays and code, so
+ * every builder below stays byte-identical to the unscoped export.
+ */
+export function exportGraphFor(scope: ExportScope): ExportGraph {
+  const s = useAppStore.getState();
+  return planExportGraph({ nodes: s.nodes, edges: s.edges, code: s.code }, scope);
+}
+
+/**
  * Build the FastShaders project snapshot embedded in the downloaded `.js`.
  *
  * Preview-tab settings (geometry, lighting, uniform tunings, camera, …)
  * live in localStorage rather than the zustand store, so we read them
  * directly here — they're treated as user preferences that follow the
- * shader file when re-imported.
+ * shader file when re-imported. `graph` is the export's (pruned) graph; the
+ * tuned uniforms are re-keyed to the names ITS module emits.
  */
-export function buildProjectState(): FastShadersProject {
+export function buildProjectState(graph?: ExportGraph): FastShadersProject {
   const ls = (key: string): string | null => {
     try { return localStorage.getItem(key); } catch { return null; }
   };
@@ -89,7 +102,7 @@ export function buildProjectState(): FastShadersProject {
     version: 1,
     shaderName: state.shaderName,
     selectedHeadsetId: state.selectedHeadsetId,
-    graph: { nodes: state.nodes, edges: state.edges },
+    graph: { nodes: graph?.nodes ?? state.nodes, edges: graph?.edges ?? state.edges },
     ...(state.drawings.length ? { drawings: state.drawings } : {}),
     // Conditional for the same reason drawings is: a shader with no palettes
     // must embed the byte-identical block it embedded before palettes existed,
@@ -104,8 +117,14 @@ export function buildProjectState(): FastShadersProject {
       })(),
       bgColor: ls('fs:previewBgColor') ?? undefined,
       playing: ls('fs:previewPlaying') === 'true' ? true : undefined,
-      uniformValues: parseJson<Record<string, number>>(ls('fs:previewUniformValues')),
-      uniformBounds: parseJson<Record<string, unknown>>(ls('fs:previewUniformBounds')),
+      uniformValues: remapUniformKeys(
+        parseJson<Record<string, number>>(ls('fs:previewUniformValues')),
+        graph?.uniformKeys ?? null,
+      ),
+      uniformBounds: remapUniformKeys(
+        parseJson<Record<string, unknown>>(ls('fs:previewUniformBounds')),
+        graph?.uniformKeys ?? null,
+      ),
       cameraPos: parseJson<{ x: number; y: number; z: number }>(ls('fs:previewCameraPos')),
       rotation: parseJson<{ x: number; y: number; z: number }>(ls('fs:previewRotation')),
     },
@@ -141,12 +160,15 @@ export interface BuildExportModuleOptions {
   inlineImages: boolean;
   /** The single-GLB file name; adds the GLB usage header (tslToShaderModule opts). */
   glbFile?: string;
+  /** What the module is built from (exportGraphFor); absent = the whole canvas. */
+  graph?: ExportGraph;
 }
 
 /**
- * The shaderloader MODULE of the current graph, read imperatively from the
- * store: the ONE builder behind the `.js` download (`inlineImages: true`,
- * exactly what buildShaderBundle embeds) and the single-GLB export
+ * The shaderloader MODULE of the current graph (the whole canvas, or the
+ * export's pruned graph when `opts.graph` says so): the ONE builder behind
+ * the `.js` download (`inlineImages: true`, exactly what buildShaderBundle
+ * embeds) and the single-GLB export
  * (`inlineImages: false` + `glbFile`). Both go through the same Raymarch-aware
  * material settings, property list and loader-0.6 mirror plan — the `.js`
  * and the `.glb` module must come from one builder, or the two exports
@@ -154,7 +176,7 @@ export interface BuildExportModuleOptions {
  * composer can refuse it by prefix.
  */
 export function buildExportModule(opts: BuildExportModuleOptions): string {
-  const state = useAppStore.getState();
+  const graph = opts.graph ?? exportGraphFor('whole');
   // TWO different questions off one node list. The module's top-level
   // material settings belong to `moduleSettingsOutput` (D1: the untargeted
   // Output, else the first of any kind — a targeted Output must not lend its
@@ -162,9 +184,9 @@ export function buildExportModule(opts: BuildExportModuleOptions): string {
   // plan below belongs to the Output SET that contributes to the module, which
   // `contributingOutputs` answers in one place for every emission-side surface.
   const materialSettings = marchMaterialSettings(
-    state.nodes,
-    state.edges,
-    (moduleSettingsOutput(state.nodes)?.data as OutputNodeData | undefined)?.materialSettings,
+    graph.nodes,
+    graph.edges,
+    (moduleSettingsOutput(graph.nodes)?.data as OutputNodeData | undefined)?.materialSettings,
   );
   const moduleOpts: ShaderModuleOptions = opts.glbFile !== undefined ? { glbFile: opts.glbFile } : {};
   try {
@@ -172,13 +194,13 @@ export function buildExportModule(opts: BuildExportModuleOptions): string {
     // expanded back to their real `data:` payloads before the module is built;
     // the .glb keeps them for the loader to resolve from the file's images.
     return tslToShaderModule(
-      opts.inlineImages ? inlineImageAssetsFromNodes(state.code, state.nodes) : state.code,
+      opts.inlineImages ? inlineImageAssetsFromNodes(graph.code, graph.nodes) : graph.code,
       materialSettings,
-      collectShaderProperties(state.nodes),
+      collectShaderProperties(graph.nodes),
       // The loader-0.6 mirrors of an import-built Output's index sections —
       // module-only (materialPartsContract R7), and the SAME plan the preview
       // passes, so the download is what the author previewed.
-      materialPartsMirrorPlanAcross(contributingOutputs(state.nodes)),
+      materialPartsMirrorPlanAcross(contributingOutputs(graph.nodes)),
       moduleOpts,
     );
   } catch (e) {
@@ -193,6 +215,14 @@ export interface BuildShaderBundleOptions {
    * behaviour. Never written back to the store.
    */
   includeMesh?: boolean;
+  /** What the bundle carries (exportGraphFor); absent = the whole canvas. */
+  graph?: ExportGraph;
+  /**
+   * The model to ship under models/ (engine/exportModel.ts): EXPORT resolves
+   * the SHOWN one. Absent = a document save's rule — the dropped model, per
+   * `exportIncludeMesh`. `includeMesh: false` still wins.
+   */
+  model?: ExportMesh | null;
 }
 
 /**
@@ -206,10 +236,11 @@ export interface BuildShaderBundleOptions {
  */
 export function buildShaderBundle(opts: BuildShaderBundleOptions = {}): ExportBundle {
   const state = useAppStore.getState();
+  const graph = opts.graph ?? exportGraphFor('whole');
   // The self-contained module (buildExportModule is the one module builder).
-  const script = buildExportModule({ inlineImages: true });
+  const script = buildExportModule({ inlineImages: true, graph });
 
-  const project = buildProjectState();
+  const project = buildProjectState(graph);
   const embedded = embedProjectState(
     script,
     // OWNER GATE (engine/projectImageRefs.ts): 0.3.33 and older read pixels
@@ -221,11 +252,15 @@ export function buildShaderBundle(opts: BuildShaderBundleOptions = {}): ExportBu
   return buildExportBundle(
     shaderBaseName(state.shaderName),
     embedded,
-    collectImageFiles(state.nodes),
-    // The EXPORT button's right-click setting can exclude the loaded mesh —
-    // and the export pre-flight can drop it for one build; see
-    // buildShaderBundleChecked.
-    (opts.includeMesh ?? state.exportIncludeMesh) ? state.previewMesh : null,
+    collectImageFiles(graph.nodes),
+    // The EXPORT button's right-click setting can exclude the loaded mesh (or
+    // add the shown built-in shape, `opts.model`) — and the export pre-flight
+    // can drop it for one build; see buildShaderBundleChecked.
+    opts.includeMesh === false
+      ? null
+      : opts.model !== undefined
+        ? opts.model
+        : (opts.includeMesh ?? state.exportIncludeMesh) ? state.previewMesh : null,
   );
 }
 
@@ -254,15 +289,17 @@ export type AskExportPreflight = (tooLarge: ExportTooLarge) => Promise<ExportPre
  */
 export async function buildShaderBundleChecked(
   ask: AskExportPreflight,
+  graph: ExportGraph = exportGraphFor('whole'),
+  model?: ExportMesh | null,
 ): Promise<ExportBundle | null> {
-  const bundle = buildShaderBundle();
+  const bundle = buildShaderBundle({ graph, model });
   if (isEvalMode()) return bundle;
   const tooLarge = planExportPreflight(bundle);
   if (!tooLarge) return bundle;
   const choice = await ask(tooLarge);
   if (choice === 'cancel') return null;
   if (choice === 'without-model' && tooLarge.withoutModel) {
-    return buildShaderBundle({ includeMesh: false });
+    return buildShaderBundle({ includeMesh: false, graph });
   }
   return bundle;
 }
@@ -280,8 +317,12 @@ export interface ShaderGlbExport {
   report: GlbExportNoteLine[];
 }
 
-/** What a USER export surface delivers: the bundle, or one `.glb`. */
-export type ShaderExport = ExportBundle | ShaderGlbExport;
+/**
+ * What a USER export surface delivers: the bundle, or one `.glb`. `leftOut`
+ * counts the unconnected nodes a `'connected'` export dropped (absent when it
+ * dropped none), so the delivery can say so — the file reopens without them.
+ */
+export type ShaderExport = (ExportBundle | ShaderGlbExport) & { leftOut?: number };
 
 /** The bytes a READER would have to open again (what the notices count). */
 export function exportSizeBytes(e: ShaderExport): number {
@@ -318,6 +359,19 @@ export interface ShaderExportAsks {
   glb: GlbExportUi;
   /** `download` may need the ready step; the Work folder's IPC write never does. */
   delivery: 'download' | 'write';
+  /**
+   * What the file carries (engine/exportGraph.ts). Only EXPORT passes the
+   * popover's choice; NEW's save-first and the Work-folder Save are saves of
+   * the document and pass `'whole'`. Absent = `'whole'`.
+   */
+  scope?: ExportScope;
+  /**
+   * `'shown'`: ship the model the preview SHOWS, per the popover's "Export
+   * model" row, built-in shapes included (engine/exportModel.ts) — EXPORT
+   * only. Absent: a document save's rule, the dropped model per
+   * `exportIncludeMesh`.
+   */
+  model?: 'shown';
 }
 
 /**
@@ -334,9 +388,14 @@ function hasTransientActivation(): boolean {
 }
 
 /** The `.js`/`.zip` alternative, but only when THAT bundle reopens (N1). */
-function bundleIfReopens(): ExportBundle | null {
-  const b = buildShaderBundle();
+function bundleIfReopens(graph: ExportGraph, model: ExportMesh | null | undefined): ExportBundle | null {
+  const b = buildShaderBundle({ graph, model });
   return planExportPreflight(b) === null ? b : null;
+}
+
+/** `out` with the count of nodes its graph left out, when there are any. */
+function withLeftOut<T extends ShaderExport>(out: T | null, graph: ExportGraph): T | null {
+  return out && graph.omitted > 0 ? { ...out, leftOut: graph.omitted } : out;
 }
 
 /**
@@ -357,8 +416,16 @@ function bundleIfReopens(): ExportBundle | null {
  */
 export async function buildShaderExportChecked(asks: ShaderExportAsks): Promise<ShaderExport | null> {
   const s = useAppStore.getState();
+  // Pruned ONCE, at the click: every part of the file — module, project block,
+  // images, the .glb plan, a `.zip` fallback — is built from this one graph.
+  // Never in a study session (the finish dialog, not EXPORT, delivers there).
+  const graph = exportGraphFor(isEvalMode() ? 'whole' : (asks.scope ?? 'whole'));
+  // Resolved ONCE too, like the graph: a built-in shape is written here, and
+  // every bundle below (the pre-flight's rebuild, a .glb's .zip fallback)
+  // carries this same file.
+  const model = asks.model === 'shown' ? activeExportModel(s, isEvalMode()) : undefined;
   if (isEvalMode() || effectiveExportFormat(s.exportAsGlb, s.previewMesh, false) !== 'glb') {
-    return buildShaderBundleChecked(asks.preflight);
+    return withLeftOut(await buildShaderBundleChecked(asks.preflight, graph, model), graph);
   }
   const lang = s.language;
   const ctrl = new AbortController();
@@ -374,23 +441,24 @@ export async function buildShaderExportChecked(asks: ShaderExportAsks): Promise<
     const r = await prepareSingleGlb({
       signal: ctrl.signal,
       ktx2: s.exportKtx2 && encoder ? { encoder, onProgress: (d, t) => asks.glb.progress(d, t) } : null,
+      graph,
     });
     if (!r.ok) {
       if (r.reason === 'aborted') return null;
       const text = glbExportRefusalText(r.reason, lang, { name: r.name, detail: r.detail });
       if (text === null) return null; // `study` — unreachable above, never shown
-      const alt = bundleIfReopens();
+      const alt = bundleIfReopens(graph, model);
       const c = await asks.glb.failed(text, alt !== null);
-      return c === 'as-bundle' && alt ? alt : null;
+      return c === 'as-bundle' && alt ? withLeftOut(alt, graph) : null;
     }
     const prepared = r.prepared;
     let mode: SingleGlbBuildMode = 'fallback';
     const tl = planSingleGlbPreflight(prepared.sizes);
     if (tl) {
-      const alt = bundleIfReopens();
+      const alt = bundleIfReopens(graph, model);
       const c = await asks.glb.tooLarge({ ...tl, asBundle: alt ? { sizeBytes: alt.unpackedBytes } : null });
       if (c === 'cancel') return null;
-      if (c === 'as-bundle') return alt;
+      if (c === 'as-bundle') return withLeftOut(alt, graph);
       if (c === 'webp-only') mode = 'required';
       if (c === 'no-ktx2') mode = 'no-ktx2';
     }
@@ -402,7 +470,7 @@ export async function buildShaderExportChecked(asks: ShaderExportAsks): Promise<
     // click) and the caller's download.
     try {
       const built = prepared.build(mode);
-      return {
+      return withLeftOut<ShaderExport>({
         kind: 'glb',
         fileName: prepared.fileName,
         mime: FS_SINGLE_GLB_MIME,
@@ -413,13 +481,13 @@ export async function buildShaderExportChecked(asks: ShaderExportAsks): Promise<
           prepared.notes,
           mode === 'no-ktx2' ? undefined : { written: prepared.ktx2Written, skipped: prepared.ktx2Skipped },
         ),
-      };
+      }, graph);
     } catch (e) {
       // A measured repack that refused: the invariant failure exportSingleGlb
       // documents. Offer the bundle rather than ending on a dead press.
-      const alt = bundleIfReopens();
+      const alt = bundleIfReopens(graph, model);
       const c = await asks.glb.failed(e instanceof Error ? e.message : String(e), alt !== null);
-      return c === 'as-bundle' && alt ? alt : null;
+      return c === 'as-bundle' && alt ? withLeftOut(alt, graph) : null;
     }
   } finally {
     asks.glb.end();
@@ -465,6 +533,9 @@ export function downloadShader(bundle: ShaderExport = buildShaderBundle()): void
 export function announceExportDelivered(e: ShaderExport): void {
   if (isEvalMode()) return;
   const lines: ImportNoteLine[] = e.kind === 'glb' ? [...e.report] : [];
+  // The default leaves unconnected nodes out, so the file reopens without
+  // them: say so once, after the file is handed over.
+  if (typeof e.leftOut === 'number' && e.leftOut > 0) lines.push({ kind: 'export-left-out', count: e.leftOut });
   const note = planDesktopOnlyExport(exportSizeBytes(e));
   if (note) lines.push({ kind: 'export-desktop-only', ...note });
   if (lines.length > 0) useAppStore.getState().showImportNote(lines);

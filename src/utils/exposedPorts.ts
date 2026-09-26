@@ -33,6 +33,16 @@ export const OUTPUT_DEFAULT_EXPOSED = ['color', 'roughness', 'position'];
  */
 export const MARCH_DEFAULT_EXPOSED = ['field', 'color', 'density', 'background'];
 
+/**
+ * The Splat Output's sockets visible by DEFAULT: the four that decide what the
+ * splats LOOK like — tint (Color), fade (Opacity), remove (Cut) and displace
+ * (Move). Feather and Size refine a cut and a footprint that are already on
+ * screen, so they start hidden, one tick away in the node's own menu — the
+ * Raymarch Output's rule. Emission reads every value regardless of exposure
+ * (a Feather set in the menu applies while its socket is hidden).
+ */
+export const SPLAT_DEFAULT_EXPOSED = ['color', 'opacity', 'cut', 'move'];
+
 /** The Sound node's two analyser params, visible by DEFAULT.
  *
  *  Unlike the other opt-in nodes these are the node's whole input side — it has
@@ -68,6 +78,7 @@ export function usesExposedPorts(def: NodeDefinition | undefined): boolean {
     (def.category === 'noise' ||
       def.type === 'output' ||
       def.type === 'raymarchOutput' ||
+      def.type === 'splatOutput' ||
       def.type === 'imageNode' ||
       def.type === 'time' ||
       def.type === 'soundNode' ||
@@ -152,6 +163,7 @@ export function effectiveExposedPorts(node: AppNode): string[] {
   if (Array.isArray(raw)) return raw.filter((s): s is string => typeof s === 'string');
   if (node.data.registryType === 'output') return OUTPUT_DEFAULT_EXPOSED;
   if (node.data.registryType === 'raymarchOutput') return MARCH_DEFAULT_EXPOSED;
+  if (node.data.registryType === 'splatOutput') return SPLAT_DEFAULT_EXPOSED;
   if (node.data.registryType === 'soundNode') return SOUND_DEFAULT_EXPOSED;
   return [];
 }

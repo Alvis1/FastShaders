@@ -528,7 +528,9 @@ describe('PaletteColorPicker source guards', () => {
     // is safe ONLY because buildPickerSections materializes names to the
     // colours' length. Reading the label from anywhere else (the raw palette,
     // say) would reintroduce the misalignment that pairing them prevents.
-    expect(src).toMatch(/title=\{swatchTitle\(hex, sec\.names\[i\]\)\}/);
+    // `say` only translates a BUILT-IN section's name for display (Latvian);
+    // the index it is handed is still the aligned one.
+    expect(src).toMatch(/title=\{swatchTitle\(hex, say\(sec\.names\[i\]\)\)\}/);
     expect((src.match(/swatchTitle\(/g) ?? []).length).toBe(1);
   });
 

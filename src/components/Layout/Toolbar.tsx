@@ -6,6 +6,9 @@ import { useLongPress } from '@/hooks/useLongPress';
 import { hardReload } from '@/utils/hardReload';
 import { invokeDesktop, errorText } from '@/utils/tauriBridge';
 import { buildShaderExportChecked, downloadShader, shaderBaseName } from '@/engine/exportShader';
+import { unconnectedNodeCount } from '@/engine/exportGraph';
+import { activePreviewModel } from '@/engine/exportModel';
+import type { BuiltinShape } from '@/engine/builtinModelObj';
 import { effectiveExportFormat, glbExportAvailability } from '@/utils/glbExportAvailability';
 import { GLB_EXPORT_KEYS, glbUnavailableText } from '@/utils/glbExportCopy';
 import { hasKtx2Encoder } from '@/utils/ktx2Encoder';
@@ -25,6 +28,16 @@ import { isTypingTarget } from '@/utils/isTypingTarget';
 // release.yml's upload names by desktopDownloads.test.ts.
 import { DESKTOP_DOWNLOADS, releaseDownloadUrl } from '@/utils/desktopDownloads';
 import './Toolbar.css';
+
+/** The Model dropdown's own words for each built-in shape (lv.json keys). */
+const BUILTIN_SHAPE_LABEL: { readonly [S in BuiltinShape]: string } = {
+  sphere: 'Sphere',
+  cube: 'Cube',
+  plane: 'Plane',
+  marchSphere: 'SDF group',
+  teapot: 'Utah Teapot',
+  bunny: 'Stanford Bunny',
+};
 
 const CONTACT = {
   name: 'Alvis Misjuns',
@@ -54,6 +67,7 @@ function EvalModalUnavailable({
   onContinue?: () => void;
   onFinish?: () => void;
 }) {
+  const language = useAppStore((s) => s.language);
   if (!open) return null;
   return (
     <div
@@ -71,8 +85,7 @@ function EvalModalUnavailable({
         zIndex: 'var(--z-overlay)',
       }}
     >
-      The questionnaire could not be loaded. Reload the page and press “!” again — your session is
-      preserved.
+      {t('The questionnaire could not be loaded. Reload the page and press “!” again — your session is preserved.', language)}
     </div>
   );
 }
@@ -141,7 +154,7 @@ const ALLOW_MANY_MATERIALS_HINT =
  */
 const OPTIONAL_CATEGORY_HINTS: Readonly<Record<OptionalCategory, string>> = {
   texture: 'Show the Textures tab in the asset browser, and its textures in search.',
-  sdf: 'Show the Distance fields tab, and its nodes in the Add-node menu and search.',
+  sdf: 'Show the SDF tab, and its nodes in the Add-node menu and search.',
 };
 
 /**
@@ -192,6 +205,11 @@ export function Toolbar() {
   const setExportAsGlb = useAppStore((s) => s.setExportAsGlb);
   const exportKtx2 = useAppStore((s) => s.exportKtx2);
   const setExportKtx2 = useAppStore((s) => s.setExportKtx2);
+  const exportAllNodes = useAppStore((s) => s.exportAllNodes);
+  const setExportAllNodes = useAppStore((s) => s.setExportAllNodes);
+  const exportBuiltinModel = useAppStore((s) => s.exportBuiltinModel);
+  const setExportBuiltinModel = useAppStore((s) => s.setExportBuiltinModel);
+  const previewShape = useAppStore((s) => s.previewShape);
   const glbAvail = glbExportAvailability(previewMesh);
   const exportFormat = effectiveExportFormat(exportAsGlb, previewMesh, isEvalMode());
   const glbFile = `${shaderBaseName(shaderName)}.glb`;
@@ -208,6 +226,9 @@ export function Toolbar() {
   // EXPORT settings popover, opened by right-click on the EXPORT button.
   const [exportOpen, setExportOpen] = useState(false);
   const exportRef = useRef<HTMLDivElement>(null);
+  // How many nodes EXPORT would leave out, for the popover's row. Counted only
+  // while the popover is open: a number selector, so a drag re-renders nothing.
+  const unconnectedCount = useAppStore((s) => (exportOpen ? unconnectedNodeCount(s.nodes, s.edges) : 0));
   const exportBtnRef = useRef<HTMLButtonElement>(null);
   // Touch/pen can't right-click, so a long-press opens the same popover. The
   // finger lift then still fires the button's click — which is the DOWNLOAD —
@@ -509,8 +530,8 @@ export function Toolbar() {
               <img
                 className="toolbar__contact-logo toolbar__contact-logo--eu"
                 src={`${import.meta.env.BASE_URL}images/logo-eu-cofunded.svg`}
-                alt="Co-funded by the European Union"
-                title="Co-funded by the European Union (European Regional Development Fund)"
+                alt={t('Co-funded by the European Union', language)}
+                title={t('Co-funded by the European Union (European Regional Development Fund)', language)}
                 onError={(e) => {
                   e.currentTarget.style.display = 'none';
                 }}
@@ -518,8 +539,8 @@ export function Toolbar() {
               <img
                 className="toolbar__contact-logo toolbar__contact-logo--nap"
                 src={`${import.meta.env.BASE_URL}images/logo-nap2027.svg`}
-                alt="National Development Plan 2027 (Nacionālais attīstības plāns 2027)"
-                title="National Development Plan 2027 (Nacionālais attīstības plāns 2027)"
+                alt={t('National Development Plan 2027 (Nacionālais attīstības plāns 2027)', language)}
+                title={t('National Development Plan 2027 (Nacionālais attīstības plāns 2027)', language)}
                 onError={(e) => {
                   e.currentTarget.style.display = 'none';
                 }}
@@ -527,8 +548,8 @@ export function Toolbar() {
               <img
                 className="toolbar__contact-logo"
                 src={`${import.meta.env.BASE_URL}images/logo-via.svg`}
-                alt="Vidzeme University of Applied Sciences (ViA)"
-                title="Vidzeme University of Applied Sciences (ViA)"
+                alt={t('Vidzeme University of Applied Sciences (ViA)', language)}
+                title={t('Vidzeme University of Applied Sciences (ViA)', language)}
                 onError={(e) => {
                   e.currentTarget.style.display = 'none';
                 }}
@@ -577,6 +598,11 @@ export function Toolbar() {
                 preflight: askExportPreflight,
                 glb: glbExportUi,
                 delivery: 'download',
+                // The ONE surface that honours the popover's rows; NEW and the
+                // Work folder are saves of the document and pass 'whole' and
+                // no model mode (the dropped model, whatever is shown).
+                scope: exportAllNodes ? 'whole' : 'connected',
+                model: 'shown',
               })
                 .then((bundle) => {
                   if (bundle) downloadShader(bundle);
@@ -617,9 +643,15 @@ export function Toolbar() {
               {/* The Format choice. Not rendered in a study session — the
                   popover itself IS reachable there by right-click, so the
                   engine gate in buildShaderExportChecked is the second half of
-                  the same rule. The reason under a disabled row is VISIBLE
-                  text, not a title: WebKit drops the tooltip of a disabled
-                  control. */}
+                  the same rule.
+
+                  No prose in the popover: each row's explanation — and, on an
+                  inactive row, the reason it is inactive — is the row's
+                  TOOLTIP (TooltipLayer reads the <label>'s title). An inactive
+                  input is therefore `aria-disabled` with a guarded onChange,
+                  never `disabled`: WebKit drops the tooltip of a disabled
+                  control, and here the tooltip is the only place the reason
+                  is written. */}
               {!isEvalMode() && (
                 <div
                   className="toolbar__export-format"
@@ -638,37 +670,107 @@ export function Toolbar() {
                   </label>
                   <label
                     className={`toolbar__export-check${glbAvail.ok ? '' : ' toolbar__export-check--off'}`}
+                    title={
+                      glbAvail.ok
+                        ? fillTemplate(t(GLB_EXPORT_KEYS.popoverNoteGlb, language), { file: glbFile })
+                        : (glbUnavailableText(glbAvail, language) ?? undefined)
+                    }
                   >
                     <input
                       type="radio"
                       name="fs-export-format"
                       checked={exportFormat === 'glb'}
-                      disabled={!glbAvail.ok}
-                      onChange={() => setExportAsGlb(true)}
+                      aria-disabled={!glbAvail.ok || undefined}
+                      onChange={() => {
+                        if (glbAvail.ok) setExportAsGlb(true);
+                      }}
                     />
                     <span>{t(GLB_EXPORT_KEYS.formatGlb, language)}</span>
                   </label>
-                  {!glbAvail.ok && (
-                    <div className="toolbar__export-format-reason">
-                      {glbUnavailableText(glbAvail, language)}
-                    </div>
-                  )}
                 </div>
               )}
-              <label
-                className={`toolbar__export-check${previewMesh && exportFormat !== 'glb' ? '' : ' toolbar__export-check--off'}`}
-              >
-                <input
-                  type="checkbox"
-                  checked={exportIncludeMesh}
-                  disabled={!previewMesh || exportFormat === 'glb'}
-                  onChange={(e) => setExportIncludeMesh(e.target.checked)}
-                />
-                <span>
-                  {t('Include the preview 3D model', language)}
-                  {previewMesh ? ` (${previewMesh.name})` : ''}
-                </span>
-              </label>
+              {/* "Export model": the model the preview SHOWS (engine/exportModel.ts)
+                  — a dropped one (on by default, `exportIncludeMesh`) or a
+                  built-in shape written as an .obj (off by default,
+                  `exportBuiltinModel`, so a plain shader stays a bare .js). A
+                  study session exports only a dropped model, shown or not, as
+                  the study package always has. Never LOCKED while there is a
+                  model: in .glb mode it names the loaded model and reads
+                  ticked — the .glb IS the model — and unticking it can only
+                  mean "the shader file without the model", so it says exactly
+                  that to both flags. */}
+              {(() => {
+                const active = isEvalMode()
+                  ? (previewMesh ? { kind: 'dropped' as const, mesh: previewMesh } : null)
+                  : activePreviewModel(previewShape, previewMesh);
+                const glb = exportFormat === 'glb' && previewMesh !== null;
+                const builtin = !glb && active?.kind === 'builtin' ? active.shape : null;
+                const name = glb
+                  ? previewMesh!.name
+                  : active?.kind === 'dropped'
+                    ? active.mesh.name
+                    : builtin
+                      ? t(BUILTIN_SHAPE_LABEL[builtin], language)
+                      : null;
+                return (
+                  <label
+                    className={`toolbar__export-check${name !== null ? '' : ' toolbar__export-check--off'}`}
+                    title={
+                      name === null
+                        ? t('No custom 3D model is loaded — drop a .obj/.glb/.gltf model or a .splat/.spz/.ply/.ksplat splat onto the 3D preview first.', language)
+                        : glb
+                          ? t(GLB_EXPORT_KEYS.meshNoteGlb, language)
+                          : builtin
+                            ? fillTemplate(t('Adds {name} to the export .zip as an .obj file under models/, tessellated exactly as the preview shows it. Unticked, the shader is exported alone.', language), { name })
+                            : t('The model ships inside the export .zip under models/ — untick to export the shader alone.', language)
+                    }
+                  >
+                    <input
+                      type="checkbox"
+                      checked={glb || (builtin ? exportBuiltinModel : exportIncludeMesh)}
+                      aria-disabled={name === null || undefined}
+                      onChange={(e) => {
+                        if (name === null) return;
+                        if (glb) {
+                          if (!e.target.checked) {
+                            setExportAsGlb(false);
+                            setExportIncludeMesh(false);
+                          }
+                          return;
+                        }
+                        if (builtin) setExportBuiltinModel(e.target.checked);
+                        else setExportIncludeMesh(e.target.checked);
+                      }}
+                    />
+                    <span>
+                      {t('Export model', language)}
+                      {name !== null ? ` (${name})` : ''}
+                    </span>
+                  </label>
+                );
+              })()}
+              {/* What the file carries (engine/exportGraph.ts). Not in a
+                  study session: EXPORT opens the finish dialog there, and the
+                  study package always carries the whole canvas. */}
+              {!isEvalMode() && (
+                <label
+                  className="toolbar__export-check"
+                  title={t(
+                    'Unticked, EXPORT carries only the nodes that feed an Output — the shader as it renders. Tick to export every node, so the file reopens exactly like this canvas. After you type or apply code in the code panel, every node is exported.',
+                    language,
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={exportAllNodes}
+                    onChange={(e) => setExportAllNodes(e.target.checked)}
+                  />
+                  <span>
+                    {t('Include unconnected nodes', language)}
+                    {unconnectedCount > 0 ? ` (${unconnectedCount})` : ''}
+                  </span>
+                </label>
+              )}
               {/* The KTX2 copies (Phase 8). Rendered only where an ENCODER is
                   registered — no build ships one yet, so today this row does
                   not exist — and never in a study session. The format gate is
@@ -690,20 +792,6 @@ export function Toolbar() {
                   />
                   <span>{t(GLB_EXPORT_KEYS.ktx2Row, language)}</span>
                 </label>
-              )}
-              {exportFormat === 'glb' ? (
-                <>
-                  <div className="toolbar__local-note">{t(GLB_EXPORT_KEYS.meshNoteGlb, language)}</div>
-                  <div className="toolbar__local-note">
-                    {fillTemplate(t(GLB_EXPORT_KEYS.popoverNoteGlb, language), { file: glbFile })}
-                  </div>
-                </>
-              ) : (
-                <div className="toolbar__local-note">
-                  {previewMesh
-                    ? t('The model ships inside the export .zip under models/ — untick to export the shader alone.', language)
-                    : t('No custom 3D model is loaded — drop a .obj/.glb/.gltf onto the 3D preview first.', language)}
-                </div>
               )}
             </div>
           )}
@@ -880,8 +968,8 @@ export function Toolbar() {
                 console.error('Could not open the Podest window:', errorText(e)),
               );
             }}
-            title="Open Podest in a separate window — full-screen shader player (drop .js/.tsl shaders, .glb models, .zip)"
-            aria-label="Open Podest"
+            title={t('Open Podest in a separate window — full-screen shader player (drop .js/.tsl shaders, .glb models, .zip)', language)}
+            aria-label={t('Open Podest', language)}
           >
             P
           </button>
@@ -891,8 +979,8 @@ export function Toolbar() {
             href={`${import.meta.env.BASE_URL}podest.html`}
             target="_blank"
             rel="noreferrer noopener"
-            title="Open Podest — full-screen shader player (drop .js/.tsl shaders, .glb models, .zip)"
-            aria-label="Open Podest"
+            title={t('Open Podest — full-screen shader player (drop .js/.tsl shaders, .glb models, .zip)', language)}
+            aria-label={t('Open Podest', language)}
           >
             P
           </a>
@@ -907,8 +995,8 @@ export function Toolbar() {
             href={`${import.meta.env.BASE_URL}ShaderCarousel/`}
             target="_blank"
             rel="noreferrer noopener"
-            title="Open ShaderCarousel — viewer & benchmark suite"
-            aria-label="Open ShaderCarousel"
+            title={t('Open ShaderCarousel — viewer & benchmark suite', language)}
+            aria-label={t('Open ShaderCarousel', language)}
           >
             SC
           </a>
@@ -983,7 +1071,7 @@ export function Toolbar() {
               onClick={() => setVrOpen((o) => !o)}
               aria-haspopup="dialog"
               aria-expanded={vrOpen}
-              title="Benchmark on a VR headset — serve ShaderCarousel over your local network"
+              title={t('Benchmark on a VR headset — serve ShaderCarousel over your local network', language)}
             >
               VR
             </button>
@@ -991,18 +1079,16 @@ export function Toolbar() {
               <div
                 className="toolbar__local-popover toolbar__vr-popover"
                 role="dialog"
-                aria-label="Headset benchmark server"
+                aria-label={t('Headset benchmark server', language)}
               >
                 <div className="toolbar__local-header">
-                  <span className="toolbar__contact-label">Headset benchmark</span>
-                  {vrInfo && <span className="toolbar__vr-live">serving</span>}
+                  <span className="toolbar__contact-label">{t('Headset benchmark', language)}</span>
+                  {vrInfo && <span className="toolbar__vr-live">{t('serving', language)}</span>}
                 </div>
                 {!vrInfo ? (
                   <>
                     <div className="toolbar__local-note toolbar__vr-note">
-                      Serves the bundled ShaderCarousel benchmark suite to
-                      devices on your Wi-Fi (e.g. a Quest headset). Read-only;
-                      nothing else on this machine is exposed.
+                      {t('Serves the bundled ShaderCarousel benchmark suite to devices on your Wi-Fi (e.g. a Quest headset). Read-only; nothing else on this machine is exposed.', language)}
                     </div>
                     <button
                       type="button"
@@ -1010,17 +1096,16 @@ export function Toolbar() {
                       onClick={startVrServer}
                       disabled={vrBusy}
                     >
-                      {vrBusy ? 'Starting…' : 'Start LAN server'}
+                      {t(vrBusy ? 'Starting…' : 'Start LAN server', language)}
                     </button>
                     <div className="toolbar__local-note toolbar__vr-note">
-                      Your OS may ask to allow incoming network connections on
-                      the first start.
+                      {t('Your OS may ask to allow incoming network connections on the first start.', language)}
                     </div>
                   </>
                 ) : (
                   <>
                     <div className="toolbar__local-note toolbar__vr-note">
-                      Open on the headset (same network):
+                      {t('Open on the headset (same network):', language)}
                     </div>
                     <div className="toolbar__vr-url-row">
                       <code className="toolbar__vr-url">{vrInfo.url}</code>
@@ -1029,31 +1114,33 @@ export function Toolbar() {
                         className="toolbar__contact-copy"
                         onClick={() => handleCopy('vr-url', vrInfo.url)}
                       >
-                        {copiedKey === 'vr-url' ? 'Copied' : 'Copy'}
+                        {t(copiedKey === 'vr-url' ? 'Copied' : 'Copy', language)}
                       </button>
                     </div>
                     <div className="toolbar__vr-hint">
-                      <strong>Benches won’t start / can’t enter VR?</strong>{' '}
-                      Browsers enable WebXR and WebGPU only on secure origins,
-                      and a plain LAN address isn’t one. One-time fix per
-                      headset — either:
+                      {/* Split around the <code> runs, one key per text run;
+                          each run is translated in place, which Latvian word
+                          order allows here. The flag's name stays English —
+                          it is what the headset browser's search box shows. */}
+                      <strong>{t('Benches won’t start / can’t enter VR?', language)}</strong>{' '}
+                      {t('Browsers enable WebXR and WebGPU only on secure origins, and a plain LAN address isn’t one. One-time fix per headset — either:', language)}
                       <ol>
                         <li>
-                          In the headset browser open <code>chrome://flags</code>,
-                          search “Insecure origins treated as secure”, add{' '}
+                          {t('In the headset browser open', language)} <code>chrome://flags</code>
+                          {t(', search “Insecure origins treated as secure”, add', language)}{' '}
                           <code>
                             http://{vrInfo.ip}:{vrInfo.port}
                           </code>
-                          , then relaunch the browser.
+                          {t(', then relaunch the browser.', language)}
                         </li>
                         <li>
-                          Or with USB developer mode:{' '}
+                          {t('Or with USB developer mode:', language)}{' '}
                           <code>
                             adb reverse tcp:{vrInfo.port} tcp:{vrInfo.port}
                           </code>{' '}
-                          and open{' '}
-                          <code>http://localhost:{vrInfo.port}/</code> on the
-                          headset instead.
+                          {t('and open', language)}{' '}
+                          <code>http://localhost:{vrInfo.port}/</code>{' '}
+                          {t('on the headset instead.', language)}
                         </li>
                       </ol>
                     </div>
@@ -1063,7 +1150,7 @@ export function Toolbar() {
                       onClick={stopVrServer}
                       disabled={vrBusy}
                     >
-                      {vrBusy ? 'Stopping…' : 'Stop server'}
+                      {t(vrBusy ? 'Stopping…' : 'Stop server', language)}
                     </button>
                   </>
                 )}

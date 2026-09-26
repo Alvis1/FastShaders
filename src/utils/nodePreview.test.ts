@@ -16,7 +16,10 @@ import {
   resolveNodePreview,
   PREVIEW_OUTPUT_ID,
   PREVIEW_CHANNEL,
+  previewTargetId,
 } from './nodePreview';
+import { activeSink, drivingSplatOutput } from './sdfPartition';
+import { previewRouteTargetId, isActiveSinkSelector } from '@/components/NodeEditor/nodes/activeSinkSelector';
 
 /**
  * Preview mode (utils/nodePreview.ts): one node's output routed to the
@@ -270,6 +273,233 @@ describe('previewGraph', () => {
   });
 });
 
+/**
+ * A SPLAT document. While a Splat Output is the active sink the preview shows
+ * a Gaussian-splat scene, which only a module returning `splat` can shade — a
+ * plain Output there would preview the node on nothing. So the route ends on
+ * THAT Splat Output's Color socket, the node cleaned and flagged at its own id.
+ */
+describe('previewGraph on a splat document', () => {
+  const splatNode = (values: Record<string, unknown> = {}, id = 'sp'): AppNode => {
+    const n = { ...makeNode(id, 'splatOutput'), type: 'splatOutput' } as AppNode;
+    return { ...n, data: { ...n.data, values } } as AppNode;
+  };
+  /** pos → sdCircle → Cut (so the splat DRIVES, unflagged), a plain Output
+   *  beside it, and a probe: length(positionLocal). */
+  const doc = (values: Record<string, unknown> = {}) => {
+    const nodes = [
+      makeNode('out', 'output'),
+      makeNode('pos', 'positionLocal'),
+      makeNode('sd', 'sdCircle'),
+      makeNode('len', 'length'),
+      splatNode(values),
+    ];
+    const edges = [
+      makeEdge('pos', 'out', 'sd', 'p'),
+      makeEdge('sd', 'out', 'sp', 'cut'),
+      makeEdge('pos', 'out', 'len', 'v'),
+    ];
+    return { nodes, edges };
+  };
+
+  it('offers nothing to preview on the sink itself', () => {
+    expect(previewableOutputs(splatNode())).toEqual([]);
+  });
+
+  it('routes to the ACTIVE Splat Output’s Color, drops every plain Output and every other sink edge', () => {
+    const { nodes, edges } = doc();
+    expect(drivingSplatOutput(nodes, edges)?.id).toBe('sp'); // the vacuity guard
+    expect(gen(nodes, edges).code).toContain('return { splat: { shape: sp1Shape } };');
+
+    const pg = previewGraph(nodes, edges, { nodeId: 'len', handleId: 'out' });
+    // One route, into the splat's own Color socket; the Cut wire is gone.
+    const route = pg.edges.filter((e) => e.target === 'sp');
+    expect(route).toHaveLength(1);
+    expect(route[0]).toMatchObject({ source: 'len', sourceHandle: 'out', target: 'sp', targetHandle: PREVIEW_CHANNEL });
+    expect(pg.edges.some((e) => e.targetHandle === 'cut')).toBe(false);
+    // The plain Output is GONE — it could not shade a splat scene anyway.
+    expect(pg.nodes.some((n) => n.id === 'out')).toBe(false);
+    expect(pg.nodes.some((n) => n.id === PREVIEW_OUTPUT_ID)).toBe(false);
+    // The splat is the flagged sink of the derived graph, at its own id.
+    expect(activeSink(pg.nodes, pg.edges)?.id).toBe('sp');
+
+    const res = gen(pg.nodes, pg.edges);
+    // Every splat painted with the probe, evaluated at its centre `p`; no cut,
+    // no move, no stored values.
+    expect(res.code).toContain('return { splat: { shade: sp1Shade } };');
+    expect(res.code).toContain(`return vec4(vec3(${res.varNames.get('len')!}), 1);`);
+    expect(res.code).toMatch(/const sp1Shade = Fn\(\(\[p, pw, n, c\]\) => \{\n\s+const positionLocal1 = p;/);
+    expect(res.code).not.toContain('sp1Shape');
+
+    // The store's arrays are never mutated.
+    expect(nodes).toHaveLength(5);
+    expect(edges.map((e) => e.targetHandle)).toEqual(['p', 'cut', 'v']);
+  });
+
+  it('cleans the splat: its swatch, Opacity, Invert, Feather and Size do not survive', () => {
+    const { nodes, edges } = doc({ color: '#ff0000', opacity: 0.3, invert: true, feather: 0.2, size: 2 });
+    const before = gen(nodes, edges).code;
+    expect(before).toContain('invert: true');
+    expect(before).toContain('color(0xff0000)');
+
+    const pg = previewGraph(nodes, edges, { nodeId: 'len', handleId: 'out' });
+    const cleaned = pg.nodes.find((n) => n.id === 'sp')!;
+    expect(data(cleaned).values).toBeUndefined();
+    expect(data(cleaned).activeOutput).toBe(true);
+    expect(data(cleaned).registryType).toBe('splatOutput');
+    expect(cleaned.type).toBe('splatOutput');
+    const code = gen(pg.nodes, pg.edges).code;
+    expect(code).toContain('return { splat: { shade: sp1Shade } };');
+    for (const gone of ['invert', 'feather', 'size:', '0xff0000', '0.3']) expect(code, gone).not.toContain(gone);
+  });
+
+  it('previewTargetId names the splat while it drives, the Output otherwise, null with neither', () => {
+    const { nodes, edges } = doc();
+    expect(previewTargetId(nodes, edges)).toBe('sp');
+    // Unwire the splat: it no longer drives, the plain Output does.
+    expect(previewTargetId(nodes, edges.filter((e) => e.targetHandle !== 'cut'))).toBe('out');
+    // A FLAGGED plain Output outranks a wired splat.
+    const flaggedOut = nodes.map((n) => (n.id === 'out' ? { ...n, data: { ...n.data, activeOutput: true } } as AppNode : n));
+    expect(previewTargetId(flaggedOut, edges)).toBe('out');
+    expect(previewTargetId([makeNode('u', 'uv')], [])).toBeNull();
+    // …and it is exactly the node previewGraph routes to, in every case above.
+    for (const [ns, es] of [[nodes, edges], [flaggedOut, edges]] as const) {
+      const pg = previewGraph(ns as AppNode[], es as AppEdge[], { nodeId: 'len', handleId: 'out' });
+      const routed = pg.edges.find((e) => e.source === 'len' && e.targetHandle === PREVIEW_CHANNEL)!;
+      expect(routed.target).toBe(previewTargetId(ns as AppNode[], es as AppEdge[]));
+    }
+  });
+
+  it('a feeder inside a collapsed group still makes the splat the target', () => {
+    const { nodes } = doc();
+    const group = {
+      ...makeNode('g', 'group'),
+      type: 'group',
+      data: {
+        collapsed: true,
+        collapsedOutputs: [{ socketId: 'gout', originalNodeId: 'sd', originalHandleId: 'out' }],
+        collapsedInputs: [],
+      },
+    } as unknown as AppNode;
+    const edges = [makeEdge('pos', 'out', 'sd', 'p'), makeEdge('g', 'gout', 'sp', 'cut')];
+    expect(previewTargetId([...nodes, group], edges)).toBe('sp');
+  });
+
+  it('a Raymarch Output driving a splat document keeps today’s treatment: the plain Output anchors', () => {
+    const { nodes, edges } = doc();
+    const rm = { ...makeNode('rm', 'raymarchOutput'), type: 'raymarchOutput' } as AppNode;
+    data(rm).activeOutput = true;
+    const f = makeNode('f', 'float', { value: 0.4 });
+    const all = [...nodes, rm, f];
+    const withMarch = [...edges, makeEdge('f', 'out', 'rm', 'field')];
+    expect(previewTargetId(all, withMarch)).toBe('out');
+
+    const pg = previewGraph(all, withMarch, { nodeId: 'len', handleId: 'out' });
+    expect(pg.edges.filter((e) => e.targetHandle === PREVIEW_CHANNEL).map((e) => e.target)).toEqual(['out']);
+    expect(data(pg.nodes.find((n) => n.id === 'rm')!).activeOutput).toBeUndefined();
+    const code = gen(pg.nodes, pg.edges).code;
+    expect(code).not.toMatch(/Loop\(/);
+    expect(code).not.toContain('splat:');
+  });
+});
+
+describe('the route line’s selector (previewRouteTargetId) — the memoised twin of previewTargetId', () => {
+  const splatNode = (id = 'sp', over: Record<string, unknown> = {}): AppNode => {
+    const n = { ...makeNode(id, 'splatOutput'), type: 'splatOutput' } as AppNode;
+    return { ...n, data: { ...n.data, ...over } } as AppNode;
+  };
+  const withData = (n: AppNode, over: Record<string, unknown>) => ({ ...n, data: { ...n.data, ...over } }) as AppNode;
+  const cut = makeEdge('sd', 'out', 'sp', 'cut');
+  const base = [makeNode('out', 'output'), makeNode('pos', 'positionLocal'), makeNode('sd', 'sdCircle'), makeNode('len', 'length')];
+  const baseEdges = [makeEdge('pos', 'out', 'sd', 'p'), makeEdge('pos', 'out', 'len', 'v')];
+  const collapsed = {
+    ...makeNode('g', 'group'),
+    type: 'group',
+    data: {
+      collapsed: true,
+      collapsedOutputs: [{ socketId: 'gout', originalNodeId: 'sd', originalHandleId: 'out' }],
+      collapsedInputs: [],
+    },
+  } as unknown as AppNode;
+  const rm = { ...makeNode('rm', 'raymarchOutput'), type: 'raymarchOutput' } as AppNode;
+
+  /** Every shape the election distinguishes, splat or not. */
+  const cases: Array<[string, AppNode[], AppEdge[]]> = [
+    ['no sink at all', [makeNode('u', 'uv')], []],
+    ['a plain Output only', base, baseEdges],
+    ['an unwired, unflagged splat', [...base, splatNode()], baseEdges],
+    ['a splat driving through Cut', [...base, splatNode()], [...baseEdges, cut]],
+    ['a flagged splat, unwired', [...base, splatNode('sp', { activeOutput: true })], baseEdges],
+    ['a flagged plain Output beside a driving splat',
+      [withData(base[0], { activeOutput: true }), ...base.slice(1), splatNode()], [...baseEdges, cut]],
+    // A flag on a TARGETED Output cannot be honoured (activeSink skips it), so
+    // the wired splat still drives. Reachable in-session: ticking a mesh on the
+    // flagged Output leaves the flag until the next restore normalizes it.
+    ['a flagged TARGETED Output beside a driving splat',
+      [withData(base[0], { activeOutput: true, meshTargets: ['Body'] }), makeNode('out2', 'output'), ...base.slice(1), splatNode()],
+      [...baseEdges, cut]],
+    ['a feeder inside a collapsed group', [...base, splatNode(), collapsed],
+      [makeEdge('pos', 'out', 'sd', 'p'), makeEdge('g', 'gout', 'sp', 'cut')]],
+    ['a flagged Raymarch Output on a splat document',
+      [...base, splatNode(), withData(rm, { activeOutput: true }), makeNode('f', 'float', { value: 0.4 })],
+      [...baseEdges, cut, makeEdge('f', 'out', 'rm', 'field')]],
+    ['two splats, the second one flagged', [...base, splatNode(), splatNode('sp2', { activeOutput: true })], [...baseEdges, cut]],
+  ];
+
+  it.each(cases)('agrees with previewTargetId — %s', (_label, nodes, edges) => {
+    expect(previewRouteTargetId(nodes, edges)).toBe(previewTargetId(nodes, edges));
+  });
+
+  it('the memo the Output cards read names the same sink as activeSink — a flag on a TARGETED Output is not honoured', () => {
+    for (const [label, nodes, edges] of cases) {
+      const truth = activeSink(nodes, edges)?.id ?? null;
+      for (const n of nodes) {
+        expect(isActiveSinkSelector(n.id)({ nodes, edges }), `${label}: ${n.id}`).toBe(n.id === truth);
+      }
+    }
+  });
+
+  it('the vacuity guard: the cases really do name the splat, the Output and nothing', () => {
+    const named = new Set(cases.map(([, n, e]) => previewTargetId(n, e)));
+    expect(named).toEqual(new Set([null, 'out', 'sp', 'sp2']));
+  });
+
+  it('reuses the active-sink memo the Output cards fill: a notify that asked them touches no edge', () => {
+    // The always-mounted route line runs this on EVERY store notify while the
+    // mode is on. previewTargetId repeats the whole election, unwrapping the
+    // edges each time; the selector must answer from the (nodes, edges) memo.
+    const nodes = [...base, splatNode()];
+    let touched = 0;
+    const edges = new Proxy([...baseEdges, cut], {
+      get(t, p, r) {
+        touched++;
+        const v = Reflect.get(t, p, r);
+        return typeof v === 'function' ? v.bind(t) : v;
+      },
+    }) as AppEdge[];
+    // The cards' ask fills the memo for this exact pair.
+    expect(isActiveSinkSelector('sp')({ nodes, edges })).toBe(true);
+    touched = 0;
+    expect(previewRouteTargetId(nodes, edges)).toBe('sp');
+    expect(touched).toBe(0);
+    // …whereas the unmemoised form walks them every time.
+    expect(previewTargetId(nodes, edges)).toBe('sp');
+    expect(touched).toBeGreaterThan(0);
+  });
+
+  it('with no Splat Output on the canvas it never asks the election at all (the old cheap path)', () => {
+    let touched = 0;
+    const edges = new Proxy([...baseEdges], {
+      get(t, p, r) {
+        touched++;
+        return Reflect.get(t, p, r);
+      },
+    }) as AppEdge[];
+    expect(previewRouteTargetId(base, edges)).toBe('out');
+    expect(touched).toBe(0);
+  });
+});
+
 describe('preview mode wiring (source pins)', () => {
   const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8');
   const editor = read('../components/NodeEditor/NodeEditor.tsx');
@@ -287,6 +517,17 @@ describe('preview mode wiring (source pins)', () => {
     const block = editor.slice(i, i + 900);
     expect(block).toContain('PREVIEW_KEEP_SELECTOR');
     expect(block).toContain("document.addEventListener('pointerdown', onPointerDown, true)");
+  });
+
+  it('the route line ends on the node previewGraph routes to, through the MEMOISED selector (never a second reading)', () => {
+    // previewRouteTargetId is pinned equal to previewTargetId above; the route
+    // line is always mounted, so it must ask the memoised form, not repeat the
+    // election per notify.
+    const route = read('../components/NodeEditor/PreviewRoute.tsx');
+    expect(route).toContain('s.nodePreview ? previewRouteTargetId(s.nodes, s.edges) : null');
+    expect(route).not.toContain('previewTargetId(');
+    expect(route).not.toContain('findDefaultOutput');
+    expect(route).not.toContain('unwrapCollapsedGroupEdges');
   });
 
   it('the route line is mounted and the canvas carries fs-previewing', () => {
