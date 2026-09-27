@@ -254,6 +254,81 @@ describe.skipIf(!ready)('route W — built to WGSL (the WebGPU backend)', () => 
   });
 });
 
+/**
+ * `lit: true` — the splat's own SURFACE NORMAL as `n` (loader 0.8 section 9b,
+ * `splatSurfaceNormal`): the thinnest axis of the covariance by inverse power
+ * iteration from the direction to the camera, in world space, facing the
+ * camera. The wrapper reads the addon's OWN covariance nodes (the centerRead
+ * rule: only they are switched to PBO on WebGL), so a lit program fetches
+ * both of them once more. Only the literal `true` lights; a splat whose addon
+ * lacks the covariance nodes keeps the camera-facing `n`, with one warning.
+ */
+describe.skipIf(!ready)('route W — lit: true, the splat surface normal', () => {
+  const T: Any = TSL;
+  const litShade = () => T.Fn(([, , n, c]: Any[]) =>
+    T.vec4(T.mul(c.rgb, T.max(T.dot(n, T.normalize(T.vec3(0.6, 0.8, 0.5))), 0)), 1));
+  const fsNLine = (vs: string) => vs.split('\n').find((l) => /^\s*fsN = /.test(l)) ?? '';
+
+  it('builds on WebGL: the covariance is read through the addon nodes, three steps, the normal matrix, facing the camera', () => {
+    const { s, warns } = wrapped({ shade: litShade(), lit: true });
+    const { vs } = glsl(s);
+    expect(warns).toEqual([]);
+    // 5 addon reads + the wrapper's order and centre + its two covariance reads.
+    expect(count(vs, /texelFetch/g)).toBe(9);
+    expect(vs).toMatch(/fsCovA = /);
+    expect(vs).toMatch(/fsCovB = /);
+    for (const step of ['fsNv1', 'fsNv2', 'fsNv3']) expect(vs, step).toMatch(new RegExp(`\\b${step} = normalize\\(`));
+    expect(vs).not.toMatch(/\bfsNv4\b/);
+    expect(vs).toMatch(/fsNw = normalize\( \( \w+ \* fsNv3 \) \);/);
+    // The start is the OBJECT-space direction to the camera (the fallback).
+    expect(vs).toMatch(/fsNv = normalize\( \( \( \w+ \* vec4\( cameraPosition, 1\.0 \) \)\.xyz - fsP \) \);/);
+    // n is the normal FLIPPED toward the camera (select lowers to an if),
+    // never the camera direction itself.
+    const flip = /if \( \( dot\( fsNw, \( cameraPosition - fsPw \) \) < 0\.0 \) \) \{\s*(\w+) = \( - fsNw \);\s*\} else \{\s*\1 = fsNw;/.exec(vs);
+    expect(flip).not.toBeNull();
+    expect(fsNLine(vs).trim()).toBe(`fsN = ${flip![1]};`);
+  });
+
+  it('unlit: `n` is the direction to the camera and the covariance is never read by the wrapper', () => {
+    for (const lit of [undefined, false, 1, 'true', {}]) {
+      const { vs } = glsl(wrapped({ shade: litShade(), lit }).s);
+      expect(vs, String(lit)).not.toMatch(/fsCovA|fsNw/);
+      expect(count(vs, /texelFetch/g), String(lit)).toBe(7);
+      expect(fsNLine(vs), String(lit)).toMatch(/^\s*fsN = normalize\( \( \w+ - fsPw \) \);$/);
+    }
+  });
+
+  it('an addon without the covariance nodes: one warning, `n` stays the camera direction, the rest still applies', () => {
+    const { F, FS, warns } = page();
+    const s = makeSplat(F);
+    enablePbo(s);
+    const covA = s._buffers.covarianceARead;
+    s._buffers.covarianceARead = undefined;
+    const state: Any = {};
+    expect(FS.internals.wrapSplats(state, s, { shade: litShade(), lit: true })).toBe(1);
+    expect(warns.filter((w) => w.includes('splat lighting unavailable'))).toHaveLength(1);
+    s._buffers.covarianceARead = covA; // the addon's own vertex node still reads it
+    const { vs } = glsl(s);
+    expect(vs).not.toMatch(/fsCovA|fsNw/);
+    expect(vs).toMatch(/vSplatColor = vec4\( fsShade\.xyz/);
+  });
+
+  it('builds on WGSL (the WebGPU backend) with the same normal', (ctx) => {
+    const { s } = wrapped({ shade: litShade(), lit: true });
+    let builder: Any;
+    try {
+      builder = new (THREE as Any).WebGPUBackend().createNodeBuilder(s, stubRenderer(false));
+    } catch (e) {
+      ctx.skip(`r184's WGSLNodeBuilder cannot be constructed here: ${(e as Error).message}`);
+      return;
+    }
+    const { vs } = runBuilder(builder, s);
+    expect(vs).toMatch(/fsCovA/);
+    expect(vs).toMatch(/fsNv3 = normalize\(/);
+    expect(vs).toMatch(/fsNw/);
+  });
+});
+
 describe('route W — the parameter names', () => {
   it('p, pw, n and c are not TSL names, so the loader never injects an import over them', () => {
     // autoInjectTSLImports adds any called name THREE.TSL exports; a future
@@ -394,8 +469,9 @@ describe.skipIf(!ready)('route W — an editor-emitted noise on Cut reads the sp
     const line = (name: string) => vs.split('\n').find((l) => new RegExp(`^\\s*${name} = `).test(l))!;
     // |modelView · (p, 1)| — the centre's distance from the camera.
     expect(line('fsShape')).toMatch(/length\( \( \w+ \* vec4\( fsP, 1\.0 \) \)\.xyz \)/);
-    // −n: the wrapper's facing direction, negated.
-    expect(line('fsShade')).toMatch(/abs\( \( - fsN \) \)/);
+    // normalize(pw − cameraPosition) over the wrapper's world centre — never
+    // −n, which a lit spec turns into the surface normal.
+    expect(line('fsShade')).toMatch(/abs\( normalize\( \( fsPw - cameraPosition \) \) \)/);
     for (const name of ['fsShape', 'fsShade']) expect(line(name), name).not.toMatch(/\bposition\b/);
   });
 

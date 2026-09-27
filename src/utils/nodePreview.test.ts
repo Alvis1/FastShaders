@@ -336,7 +336,7 @@ describe('previewGraph on a splat document', () => {
     expect(edges.map((e) => e.targetHandle)).toEqual(['p', 'cut', 'v']);
   });
 
-  it('cleans the splat: its swatch, Opacity, Invert, Feather and Size do not survive', () => {
+  it('cleans the splat: its swatch, Opacity, Invert, Feather and Size do not survive — and it REPLACES, so the value shows', () => {
     const { nodes, edges } = doc({ color: '#ff0000', opacity: 0.3, invert: true, feather: 0.2, size: 2 });
     const before = gen(nodes, edges).code;
     expect(before).toContain('invert: true');
@@ -344,7 +344,17 @@ describe('previewGraph on a splat document', () => {
 
     const pg = previewGraph(nodes, edges, { nodeId: 'len', handleId: 'out' });
     const cleaned = pg.nodes.find((n) => n.id === 'sp')!;
-    expect(data(cleaned).values).toBeUndefined();
+    // Only `replaceColor`: previewing a node means seeing ITS value, not the
+    // splat's captured colour tinted by it (utils/splatColor.ts).
+    expect(data(cleaned).values).toEqual({ replaceColor: true });
+    // A LIT splat stays lit behind an IDENTITY light, so a previewed Normal
+    // chain reads the surface normal the real shader reads, unshaded.
+    const lit = doc({ lit: true, lightX: -1, lightColor: '#ff0000', ambient: '#102030' });
+    const litPg = previewGraph(lit.nodes, lit.edges, { nodeId: 'len', handleId: 'out' });
+    expect(data(litPg.nodes.find((n) => n.id === 'sp')!).values).toEqual({ replaceColor: true, lit: true, lightColor: '#000000', ambient: '#ffffff' });
+    const litCode = gen(litPg.nodes, litPg.edges).code;
+    expect(litCode).toContain('lit: true');
+    expect(litCode).toContain('add(mul(color(0x000000), max(dot(n, normalize(add(vec3(0.6, 0.8, 0.5), 1e-9))), 0)), color(0xffffff))');
     expect(data(cleaned).activeOutput).toBe(true);
     expect(data(cleaned).registryType).toBe('splatOutput');
     expect(cleaned.type).toBe('splatOutput');

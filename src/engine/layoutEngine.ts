@@ -2,6 +2,7 @@ import dagre from '@dagrejs/dagre';
 import type { AppNode, AppEdge } from '@/types';
 import { getCostScale } from '@/utils/colorUtils';
 import { OUTPUT_DEFAULT_EXPOSED, SPLAT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
+import { SPLAT_LIGHT_PORTS } from '@/utils/splatLight';
 import { NODE_REGISTRY, growsOperands, getFlowNodeType } from '@/registry/nodeRegistry';
 import { nodeBox, hasNodeGlyph, usesOperatorLayout, nodeScale } from '@/components/NodeEditor/nodes/glyphs/NodeGlyph';
 import { COLOR_NODE_SIZE } from '@/components/NodeEditor/nodes/ColorNode';
@@ -118,14 +119,21 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
       return { width: 150, height: 34 + 3 * 14 + rows * 18 };
     }
     case 'splatOutput': {
-      // SplatOutputNode: the same chrome, three labelled sections (Shade /
-      // Cut / Shape, two subdividers) and one 18px row per EXPOSED socket —
-      // four by default (SPLAT_DEFAULT_EXPOSED), at most the def's six. The
-      // `inDegree` floor stands in for rows a wire auto-exposed.
+      // SplatOutputNode: the same chrome, labelled sections (Shade / Cut /
+      // Shape, two subdividers, and a third before Light) and one 18px row
+      // per EXPOSED real socket; four by default (SPLAT_DEFAULT_EXPOSED). A
+      // listed Light socket counts lit or not: an unlit node still draws one a
+      // wire reaches (utils/splatLight.ts, a dormant wire), and wires are not
+      // visible here, so the unwired case over-estimates by a row — the safe
+      // side. A tampered list counts only real sockets. The `inDegree` floor
+      // stands in for rows a wire auto-exposed.
       const listed = (node.data as { exposedPorts?: unknown }).exposedPorts;
-      const shown = Math.min(Array.isArray(listed) ? listed.length : SPLAT_DEFAULT_EXPOSED.length, def?.inputs.length ?? 6);
-      const rows = Math.max(shown, inDegree, 1);
-      return { width: 150, height: 34 + 2 * 14 + rows * 18 };
+      const exposed: readonly unknown[] = Array.isArray(listed) ? listed : SPLAT_DEFAULT_EXPOSED;
+      const ids = new Set(def?.inputs.map((p) => p.id) ?? []);
+      const shownIds = new Set(exposed.filter((p): p is string => typeof p === 'string' && ids.has(p)));
+      const lightBand = [...shownIds].some((p) => SPLAT_LIGHT_PORTS.includes(p)) ? 1 : 0;
+      const rows = Math.max(shownIds.size, inDegree, 1);
+      return { width: 150, height: 34 + (2 + lightBand) * 14 + rows * 18 };
     }
     case 'group':
     case 'note': {

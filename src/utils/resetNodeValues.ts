@@ -58,6 +58,14 @@ const PRESERVED_KEYS: Record<string, readonly string[]> = {
   perlinVec3: ['signed'],
   fbm: ['signed'],
   fbmVec3: ['signed'],
+  // React to light and Replace own colour are the Splat Output's MODES
+  // (utils/splatLight.ts, utils/splatColor.ts), like a noise's range: Reset
+  // restores the numbers and colours, it does not switch the light off or
+  // flip tint into paint. Dropping `lit` here left any wired Light socket
+  // behind on an unlit node — a dead row whose wire the next Apply deleted
+  // silently; switching the light off is setSplatLit's job, which takes the
+  // sockets and wires with it.
+  splatOutput: ['lit', 'replaceColor'],
 };
 
 /**

@@ -187,7 +187,8 @@ function buildHeader(props: PropertyInfo[], tslCode = '', opts: ShaderModuleOpti
     header.push(`//   <script src="${CDN_BASE}/${SPLAT_RUNTIME_FILE}"><${''}/script>`);
     header.push('//   <a-entity splat-model="src: url(scene.splat); kind: splat" shader="src: shader.js"></a-entity>');
     header.push('// splat-model scales the scene to a longest side of 1.6 (its `size`), the frame');
-    header.push('// FastShaders previewed it in; size: 0 keeps the file\'s own units.');
+    header.push('// FastShaders previewed it in. size: 0 keeps the file\'s own units, and every');
+    header.push('// pattern driven by position or UV then follows those units, not the preview\'s.');
   }
   if (tslCode.includes('data:image/')) {
     header.push('//');

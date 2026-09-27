@@ -65,18 +65,23 @@
  *           alone: `assets` is optional, since a module-only export carries
  *           no images.
  *       10. Gaussian splats (section 9b). A module may return
- *           `{ splat: { shade, shape, size, feather, invert } }`; it counts as
+ *           `{ splat: { shade, shape, size, feather, invert, lit } }`; it counts as
  *           the object API (never the Simple-API branch), and every
  *           GaussianSplat under the target (three r186's addon, delivered by
  *           js/fs-splat-0.1.js) keeps its own material while its VERTEX node is
  *           wrapped: shade → vec4(rgb, opacity), shape → vec4(move, cut), size,
  *           each called with (p, pw, n, c) per splat. `cut > 0` removes a splat
- *           (a sign test; `invert: true` flips it), `feather` fades the edge.
- *           A GaussianSplat is skipped by every material, weld and barycentric
+ *           (a sign test; `invert: true` flips it), `feather` fades the edge,
+ *           and `lit: true` hands the functions each splat's own SURFACE
+ *           NORMAL as `n` (the thinnest axis of its covariance, facing the
+ *           camera) instead of the direction to the camera, so a shade can
+ *           light it. A GaussianSplat is skipped by every material, weld and
+ *           barycentric
  *           traverse, so a module WITHOUT `splat` leaves the addon's material
  *           alone. The wrapper reads two private addon fields
  *           (`_buffers.centerRead`, `_sort.orderRead`); without them it warns
- *           and edits nothing.
+ *           and edits nothing. `lit` also reads `_buffers.covarianceARead` /
+ *           `covarianceBRead`; without them `n` stays the camera direction.
  *      Written for three r184. 0.6, 0.5 and 0.4 are FROZEN: shaders exported
  *      against them fetch them from the CDN by URL, so they never change.
  *      Later 0.8.x edits are ADDITIVE only — no renamed state field, method,
@@ -200,6 +205,8 @@ var WARN_SPLAT_SHAPE =
   "[FastShaders] splat shading skipped: this GaussianSplat lacks _buffers.centerRead, _sort.orderRead or its material's vertexNode (a different three.js splat addon?). It renders unedited.";
 var WARN_SPLAT_SH =
   "[FastShaders] splat shading skipped: this GaussianSplat carries view-dependent colour (spherical harmonics), which cannot be shaded on the WebGL backend. Load it through FastShadersSplat.parseBytes, which drops them. It renders unedited.";
+var WARN_SPLAT_LIT =
+  "[FastShaders] splat lighting unavailable: this GaussianSplat lacks _buffers.covarianceARead / covarianceBRead, so `n` stays the direction to the camera.";
 // A name out of someone's model file: quoted, cut at 40 characters.
 function mpName(s) {
   if (typeof s !== "string") return "(too long)";
@@ -1680,7 +1687,7 @@ function unbary(state) {
 // (9b) Gaussian splats: the vertex-node wrapper (header delta 10)
 // ---------------------------------------------------------------------------
 //
-// A module may return `{ splat: { shade, shape, size, feather, invert } }`.
+// A module may return `{ splat: { shade, shape, size, feather, invert, lit } }`.
 // The target's GaussianSplats (three r186's addon, built by js/fs-splat-0.1.js)
 // keep their own NodeMaterial; what changes is its VERTEX node, wrapped per
 // INSTANCE (a node graph is never shared between two splats):
@@ -1692,7 +1699,8 @@ function unbary(state) {
 //           WebGL, where only the addon's nodes get setPBO(true)
 //   pw    = modelWorldMatrix * (p, 1)
 //   n     = normalize(cameraPosition - pw): the direction the billboard
-//           faces (a splat has no normal)
+//           faces (a splat has no normal) — or, with `lit: true` (the
+//           literal), the splat's own SURFACE NORMAL (below)
 //   c     = the addon's vSplatColor, read back through the named varying
 //           after the addon assigned it (rgb clamped, alpha * alphaScale)
 //   shape(p, pw, n, c) → vec4(move.xyz, cut)
@@ -1709,6 +1717,25 @@ function unbary(state) {
 // Cut keeps its inside; `invert: true` (the literal) flips it; `feather` fades
 // alpha by clamp(1 - cut / feather, 0, 1). A quad the addon itself culled stays
 // culled. Everything runs per VERTEX (4 per splat), never per pixel.
+//
+// `lit: true` — the surface normal. A captured splat is usually a flat
+// disc lying on the surface it was fitted to, so its THINNEST axis is the
+// surface normal (the convention Blender 5.3 relights splats with, in Cycles
+// and EEVEE alike). The addon folds rotation and scale into the covariance at
+// load, Sigma = R S^2 R^T, packed as covA = (xx, xy, xz, yy), covB = (yz, zz);
+// the thinnest axis is the eigenvector of its smallest eigenvalue. It is found
+// by three steps of inverse power iteration on the adjugate of Sigma (divided
+// by its trace first, so the size of the splat never reaches float32's
+// limits, plus 1e-9 I so a degenerate splat cannot divide by zero), STARTED
+// FROM the object-space direction to the camera. That start is the fallback:
+// a flat disc converges to its normal (3 steps: 0.004 degrees mean at 10:1,
+// measured in float32), a round splat has nothing to converge to and keeps
+// facing the camera, a needle converges to the camera-facing normal of a
+// cylinder — continuously, with no threshold to pop across. The result goes
+// to world space through the normal matrix and is flipped to face the camera.
+// It reads the addon's own covarianceARead / covarianceBRead nodes (setPBO'd
+// by the addon, the centerRead rule); without them `n` stays the direction to
+// the camera, with one warning.
 //
 // The addon's onBeforeRender re-imposes ITS vertex node every frame, so the
 // wrapper replaces it with one that calls exactly the two public methods it
@@ -1768,6 +1795,32 @@ function probeSplatSpec(TSL, spec) {
   }
 }
 
+// The splat's surface normal for `lit: true` (see the section comment): the
+// thinnest axis of its covariance by inverse power iteration from the
+// direction to the camera, in world space, facing the camera.
+function splatSurfaceNormal(TSL, covA, covB, p, pw) {
+  var cA = covA.toVar("fsCovA");
+  var cB = covB.toVar("fsCovB");
+  var tr = TSL.max(cA.x.add(cA.w).add(cB.y), 1e-20);
+  var xx = cA.x.div(tr).toVar("fsSxx");
+  var xy = cA.y.div(tr).toVar("fsSxy");
+  var xz = cA.z.div(tr).toVar("fsSxz");
+  var yy = cA.w.div(tr).toVar("fsSyy");
+  var yz = cB.x.div(tr).toVar("fsSyz");
+  var zz = cB.y.div(tr).toVar("fsSzz");
+  // adj(Sigma) + 1e-9 I, row by row (symmetric).
+  var a0 = TSL.vec3(yy.mul(zz).sub(yz.mul(yz)).add(1e-9), xz.mul(yz).sub(xy.mul(zz)), xy.mul(yz).sub(xz.mul(yy))).toVar("fsAdj0");
+  var a1 = TSL.vec3(a0.y, xx.mul(zz).sub(xz.mul(xz)).add(1e-9), xy.mul(xz).sub(xx.mul(yz))).toVar("fsAdj1");
+  var a2 = TSL.vec3(a0.z, a1.z, xx.mul(yy).sub(xy.mul(xy)).add(1e-9)).toVar("fsAdj2");
+  var camObj = TSL.modelWorldMatrixInverse.mul(TSL.vec4(TSL.cameraPosition, 1)).xyz;
+  var v = TSL.normalize(camObj.sub(p)).toVar("fsNv");
+  for (var i = 0; i < 3; i++) {
+    v = TSL.normalize(TSL.vec3(TSL.dot(a0, v), TSL.dot(a1, v), TSL.dot(a2, v))).toVar("fsNv" + (i + 1));
+  }
+  var w = TSL.normalize(TSL.modelNormalMatrix.mul(v)).toVar("fsNw");
+  return TSL.select(TSL.dot(w, TSL.cameraPosition.sub(pw)).lessThan(0), w.negate(), w);
+}
+
 function restoreSplat(rec) {
   if (rec.restored) return;
   rec.restored = true;
@@ -1816,6 +1869,15 @@ function wrapSplat(state, node, spec) {
   var shapeFn = typeof spec.shape === "function" ? spec.shape : null;
   var hasSize = isSplatValue(spec.size);
   var invert = spec.invert === true;
+  // `lit` needs the addon's covariance nodes; without them `n` stays the
+  // direction to the camera (one warning) and everything else still applies.
+  var covARead = buffers.covarianceARead;
+  var covBRead = buffers.covarianceBRead;
+  var lit = spec.lit === true;
+  if (lit && !(covARead && typeof covARead.element === "function" && covBRead && typeof covBRead.element === "function")) {
+    warnOnce("splat-lit", WARN_SPLAT_LIT);
+    lit = false;
+  }
   var vcol = TSL.varyingProperty("vec4", "vSplatColor");
   // A throw while the shader is BUILT puts THIS splat back before the error
   // goes on, so the next frame draws it unedited instead of failing every
@@ -1834,7 +1896,9 @@ function wrapSplat(state, node, spec) {
       var idx = orderRead.element(TSL.instanceIndex).toVar("fsIdx");
       var p = centerRead.element(idx).xyz.toVar("fsP");
       var pw = TSL.modelWorldMatrix.mul(TSL.vec4(p, 1)).xyz.toVar("fsPw");
-      var n = TSL.normalize(TSL.cameraPosition.sub(pw)).toVar("fsN");
+      var n = lit
+        ? splatSurfaceNormal(TSL, covARead.element(idx), covBRead.element(idx), p, pw).toVar("fsN")
+        : TSL.normalize(TSL.cameraPosition.sub(pw)).toVar("fsN");
       var c = vcol.toVar("fsC");
       var args = [p, pw, n, c];
       var shape = shapeFn ? shapeFn(p, pw, n, c).toVar("fsShape") : null;

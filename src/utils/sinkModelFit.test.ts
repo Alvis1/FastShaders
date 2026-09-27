@@ -56,6 +56,61 @@ describe('sinkModelIssue', () => {
     expect(sinkModelIssue(nodes, edges, SPHERE)).toBe('splat-needs-splat');
   });
 
+  it('an UNLIT Splat Output fed by a Normal on a shown splat: the rim would be flat — says to React to light', () => {
+    const nw = makeNode('nw', 'normalWorld');
+    const nl = makeNode('nl', 'normalLocal');
+    const dot = makeNode('d', 'dot');
+    const om = makeNode('om', 'oneMinus');
+    // Normal (world) → Dot → One Minus → Color, two hops from the sink.
+    const rim = [makeEdge('nw', 'out', 'd', 'a'), makeEdge('d', 'out', 'om', 'x'), makeEdge('om', 'out', 'sp', 'color')];
+    expect(sinkModelIssue([nw, dot, om, sink('sp', 'splatOutput')], rim, SPLAT)).toBe('splat-normal-faces-camera');
+    // The object-space Normal too — both read `n` inside a splat program.
+    expect(sinkModelIssue([nl, sink('sp', 'splatOutput')], [makeEdge('nl', 'out', 'sp', 'move')], SPLAT)).toBe('splat-normal-faces-camera');
+    // Lit: `n` IS a surface normal there, so nothing to say.
+    expect(sinkModelIssue([nw, dot, om, sink('sp', 'splatOutput', { values: { lit: true } })], rim, SPLAT)).toBeNull();
+    // Only the literal `true` lights.
+    expect(sinkModelIssue([nw, dot, om, sink('sp', 'splatOutput', { values: { lit: 'true' } })], rim, SPLAT)).toBe('splat-normal-faces-camera');
+    // No Normal upstream: fine, as before.
+    expect(sinkModelIssue([f, sink('sp', 'splatOutput')], [makeEdge('f1', 'out', 'sp', 'opacity')], SPLAT)).toBeNull();
+    // A Normal that does not reach the sink says nothing.
+    expect(sinkModelIssue([nw, f, sink('sp', 'splatOutput')], [makeEdge('f1', 'out', 'sp', 'opacity'), makeEdge('nw', 'out', 'd', 'a')], SPLAT)).toBeNull();
+    // Not shown: the splat's own advice wins (drop / pick it).
+    expect(sinkModelIssue([nw, dot, om, sink('sp', 'splatOutput')], rim, MESH)).toBe('splat-needs-splat');
+    // An IMPLICIT read counts too: a noise whose stored position is a normal
+    // is emitted as mx_noise_float(n) inside the splat program.
+    const nz = makeNode('nz', 'perlin', { pos: 'normalWorld', scale: 1 });
+    expect(sinkModelIssue([nz, sink('sp', 'splatOutput')], [makeEdge('nz', 'out', 'sp', 'color')], SPLAT)).toBe('splat-normal-faces-camera');
+    // …while the same noise with its position WIRED reads the wire instead.
+    const pos = makeNode('pos', 'positionLocal');
+    expect(sinkModelIssue([pos, nz, sink('sp', 'splatOutput')], [makeEdge('pos', 'out', 'nz', 'pos'), makeEdge('nz', 'out', 'sp', 'color')], SPLAT)).toBeNull();
+    // Unlit, a Light socket is read by NOTHING: a Normal reaching only one is
+    // no flat rim (the wire is dormant — utils/splatLight.ts).
+    expect(sinkModelIssue([nw, sink('sp', 'splatOutput')], [makeEdge('nw', 'out', 'sp', 'lightX')], SPLAT)).toBeNull();
+    expect(sinkModelIssue([nw, f, sink('sp', 'splatOutput')], [makeEdge('nw', 'out', 'sp', 'ambient'), makeEdge('f1', 'out', 'sp', 'opacity')], SPLAT)).toBeNull();
+    // A cycle in a tampered edge list cannot hang the walk.
+    const loop = [...rim, makeEdge('om', 'out', 'd', 'b'), makeEdge('d', 'out', 'om', 'x')];
+    expect(sinkModelIssue([nw, dot, om, sink('sp', 'splatOutput')], loop, SPLAT)).toBe('splat-normal-faces-camera');
+  });
+
+  it('the Normal walk is kept while the graph means the same (a drag frame), and redone when it does not', () => {
+    const nw = makeNode('nw', 'normalWorld');
+    const sp = sink('sp', 'splatOutput');
+    const edges = [makeEdge('nw', 'out', 'sp', 'color')];
+    const nodes = [nw, sp];
+    expect(sinkModelIssue(nodes, edges, SPLAT)).toBe('splat-normal-faces-camera');
+    // A drag: new arrays, new node objects, the SAME data — the same answer.
+    const dragged = nodes.map((n) => ({ ...n, position: { x: n.position.x + 5, y: n.position.y } }));
+    expect(sinkModelIssue(dragged, [...edges], SPLAT)).toBe('splat-normal-faces-camera');
+    // The Normal swapped for a Float (new data): walked again, nothing to say.
+    const swapped = [makeNode('nw', 'float'), sp];
+    expect(sinkModelIssue(swapped, edges, SPLAT)).toBeNull();
+    // …and a rewire is a semantic change too.
+    expect(sinkModelIssue(nodes, [makeEdge('nw', 'out', 'sp', 'lightY')], SPLAT)).toBeNull();
+    expect(sinkModelIssue(nodes, edges, SPLAT)).toBe('splat-normal-faces-camera');
+    const src = readFileSync(join(__dirname, 'sinkModelFit.ts'), 'utf8');
+    expect(src).toContain('sameGraphSemantics(last.nodes as AppNode[], nodes as AppNode[], last.edges as AppEdge[], edges as AppEdge[])');
+  });
+
   it('a driving Raymarch Output: any mesh is a window; a splat has no surface', () => {
     const nodes = [f, out('o'), sink('rm', 'raymarchOutput')];
     const edges = [makeEdge('f1', 'out', 'rm', 'field')];
@@ -108,8 +163,15 @@ describe('the canvas note fires on a WIRE, not on a Model pick', () => {
 
   it('posts only on a graph-caused change, never over a note or in a study session', () => {
     const at = PREVIEW.indexOf('const lastFitRef = useRef(');
-    const effect = PREVIEW.slice(at, PREVIEW.indexOf('}, [sinkIssue, shownModelKey]);', at));
+    const end = PREVIEW.indexOf('}, [sinkIssue, shownModelKey, litSplats]);', at);
+    expect(end).toBeGreaterThan(at);
+    const effect = PREVIEW.slice(at, end);
     expect(effect).toContain('shownModelKey !== prev.shownModelKey');
+    // A React to light change in the same step is a SETTING, not a wire: the
+    // Normal notice asks for that very box, so unticking it must not post
+    // "tick React to light".
+    expect(PREVIEW).toContain('const litSplats = useAppStore((s) => litSplatCount(s.nodes));');
+    expect(effect).toContain('litSplats !== prev.litSplats');
     expect(effect).toContain('sinkIssue === prev.issue');
     expect(effect).toContain('isEvalMode()');
     expect(effect).toContain('if (store.importNote) return;');

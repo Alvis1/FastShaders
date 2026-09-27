@@ -6,6 +6,10 @@ import { getNodeValues } from '@/types';
 import type { AppNode, ShaderNodeData } from '@/types';
 import { effectiveExposedPorts, toggleExposedPort } from '@/utils/exposedPorts';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
+import { removeEdgesForPort } from '@/utils/edgeUtils';
+import { isSplatLit, isSplatLightColorPort, splatLitValues, SPLAT_LIGHT_PORTS } from '@/utils/splatLight';
+import { isSplatReplaceColor, splatReplaceColorValues } from '@/utils/splatColor';
+import { hasTrueFlag, withTrueFlag } from '@/utils/trueFlag';
 import { splatCountLine, SPLAT_COUNT_HINT_KEY } from '@/utils/splatCount';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { NumberRow, NodeActions } from './menuShared';
@@ -15,6 +19,7 @@ import {
   SPLAT_CLEAR_SWATCH,
   splatStoredColor,
   splatClearable,
+  SplatLightColorPicker,
 } from '../nodes/SplatOutputNode';
 
 /** The one splat setting that is not a socket: keep the OUTSIDE of the cut
@@ -23,17 +28,60 @@ export const SPLAT_INVERT_KEY = 'Invert cut';
 export const SPLAT_INVERT_HINT_KEY =
   'Remove the splats where Cut is below zero instead of above it — a distance field wired to Cut then keeps its outside.';
 
+/** The Shade section's switch: Color REPLACES the captured colour instead of
+ *  tinting it (utils/splatColor.ts). Off — the default — Color multiplies. */
+export const SPLAT_REPLACE_COLOR_KEY = 'Replace own colour';
+export const SPLAT_REPLACE_COLOR_HINT_KEY =
+  'Color replaces the colour each splat was captured with — tick it when Color is built from Vertex Color, or that colour counts twice. Left unticked, Color multiplies it like a coloured gel: white keeps a splat as it was, black darkens it.';
+
+/** The Light section's switch: the loader's surface normal plus the key
+ *  light the section's rows set (utils/splatLight.ts). */
+export const SPLAT_LIT_KEY = 'React to light';
+export const SPLAT_LIT_HINT_KEY =
+  'Light each splat with the key light below, using its flattest axis as its surface normal — the way Blender relights splats. The captured colour already holds the light of the capture, so the side away from the light darkens.';
+
 /**
  * `values` with Invert switched: `invert: true` added, or the key DELETED —
  * never `false`, so a node switched back off is byte-for-byte the node that
- * was never touched (the absent-key rule; emission counts only the literal
- * `true`). A fresh object; the input is never mutated.
+ * was never touched (the flag rule, utils/trueFlag.ts; emission counts only
+ * the literal `true`). A fresh object; the input is never mutated.
  */
 export function splatInvertValues(values: Readonly<Record<string, unknown>>, on: boolean): Record<string, unknown> {
-  const next: Record<string, unknown> = { ...values };
-  if (on) next.invert = true;
-  else delete next.invert;
-  return next;
+  return withTrueFlag(values, 'invert', on);
+}
+
+/**
+ * Switch a Splat Output's light (utils/splatLight.ts). ON writes `lit: true`
+ * — ONE updateNodeData, so one undo entry. OFF deletes the key, hides the five
+ * Light sockets and drops their wires, as unticking each would, so no wire is
+ * left into a light that no longer exists — ONE bracket, one undo entry — and
+ * KEEPS their stored values, so switching back on restores the same light (a
+ * code-panel Apply carries them across the resync too: carrySplatLightValues,
+ * utils/splatLight.ts; and Reset Values keeps `lit` itself). The exposed
+ * list is written only when it really listed a Light socket: a node on the
+ * implicit default keeps no list, so switching the light on and off again
+ * leaves the node that was never touched. A call that would change nothing
+ * returns before any write (a bracket clears the redo stack even when its
+ * body writes nothing).
+ */
+export function setSplatLit(nodeId: string, on: boolean): void {
+  const { nodes, updateNodeData } = useAppStore.getState();
+  const node = nodes.find((n) => n.id === nodeId);
+  if (!node || isSplatLit((node.data as { values?: unknown }).values) === on) return;
+  const values = getNodeValues(node);
+  if (on) {
+    updateNodeData(nodeId, { values: splatLitValues(values, true) } as unknown as Partial<ShaderNodeData>);
+    return;
+  }
+  const exposed = effectiveExposedPorts(node);
+  const patch: { values: Record<string, unknown>; exposedPorts?: string[] } = { values: splatLitValues(values, false) };
+  if (exposed.some((p) => SPLAT_LIGHT_PORTS.includes(p))) {
+    patch.exposedPorts = exposed.filter((p) => !SPLAT_LIGHT_PORTS.includes(p));
+  }
+  asOneHistoryEntry(() => {
+    for (const port of SPLAT_LIGHT_PORTS) removeEdgesForPort(nodeId, port);
+    updateNodeData(nodeId, patch as unknown as Partial<ShaderNodeData>);
+  });
 }
 
 /**
@@ -45,12 +93,25 @@ export function splatInvertValues(values: Readonly<Record<string, unknown>>, on:
  * drops its wires (`toggleExposedPort`) but KEEPS its stored value — a Feather
  * or Size set here applies whether or not its socket is on the node.
  *
- * Two things the march menu does not have:
+ * Four things the march menu does not have:
  *
+ *   • REPLACE OWN COLOUR, after the Shade rows: `values.replaceColor = true` or
+ *     the key deleted (the Invert rule), ONE `updateNodeData`. Unticked — the
+ *     default — a wired or picked Color TINTS each splat's captured colour.
  *   • INVERT CUT, a checkbox writing `values.invert = true` or deleting the key
  *     — never `false`, so an untouched node and a node switched back off are
  *     the same document (the absent-key rule; emission counts only the literal
  *     `true`). ONE `updateNodeData`, so ONE undo entry.
+ *   • REACT TO LIGHT, heading the Light section: `values.lit = true` or the
+ *     key deleted (the Invert rule). The five Light rows are listed only
+ *     while it is on — they do nothing otherwise. Switching it OFF also hides
+ *     those sockets on the node and drops their wires, as unticking each one
+ *     would, so no wire is left into a light that no longer exists; their
+ *     stored values are KEPT, so switching back on restores the same light —
+ *     across a code-panel Apply as well (`carrySplatLightValues`). A Light row
+ *     is also listed while a wire reaches it, lit or not, so any such wire can
+ *     be unticked here.
+ *     One bracket, one undo entry.
  *   • THE SPLAT COUNT the preview reported for the loaded scene
  *     (`previewSplatFacts`, session-only), in the Material Settings menu's
  *     texture-memory style. Absent while no splat is loaded, and while one is
@@ -65,6 +126,10 @@ export function SplatSettingsMenu({ nodeId }: { nodeId: string }) {
   // Only while the preview SHOWS the model — the cost bar's selector, verbatim.
   const splatFacts = useAppStore((s) => (s.previewShowsModel ? s.previewSplatFacts : null));
   const node = useAppStore((s) => s.nodes.find((n) => n.id === nodeId)) as AppNode | undefined;
+  // The node's own wires (the menu is mounted only while open): a Light row is
+  // listed whenever its socket is wired, lit or not, so a wire that reached an
+  // unlit node (a file can carry one) can always be unticked here.
+  const edges = useAppStore((s) => s.edges);
   const def = NODE_REGISTRY.get('splatOutput');
   if (!node || !def) return null;
 
@@ -75,7 +140,9 @@ export function SplatSettingsMenu({ nodeId }: { nodeId: string }) {
   // Read RAW and strictly, exactly as graphToCode does: node data is
   // untrusted, and only the literal `true` inverts.
   const rawValues = (node.data as { values?: unknown }).values;
-  const inverted = !!rawValues && typeof rawValues === 'object' && (rawValues as Record<string, unknown>).invert === true;
+  const inverted = hasTrueFlag(rawValues, 'invert');
+  const lit = isSplatLit(rawValues);
+  const replaceColor = isSplatReplaceColor(rawValues);
   const countLine = splatCountLine(splatFacts, language);
 
   const setValue = (key: string, v: string | number) => {
@@ -98,6 +165,11 @@ export function SplatSettingsMenu({ nodeId }: { nodeId: string }) {
   const toggleInvert = () => {
     updateNodeData(nodeId, { values: splatInvertValues(values, !inverted) } as unknown as Partial<ShaderNodeData>);
   };
+  const toggleLit = () => setSplatLit(nodeId, !lit);
+  // ONE updateNodeData, so ONE history entry.
+  const toggleReplaceColor = () => {
+    updateNodeData(nodeId, { values: splatReplaceColorValues(values, !replaceColor) } as unknown as Partial<ShaderNodeData>);
+  };
 
   const checkboxStyle: React.CSSProperties = { width: 14, height: 14, cursor: 'pointer', accentColor: 'var(--border-focus)', margin: 0 };
   const rowStyle: React.CSSProperties = {
@@ -107,6 +179,17 @@ export function SplatSettingsMenu({ nodeId }: { nodeId: string }) {
   const mutedStyle: React.CSSProperties = { fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' };
 
   const valueEditor = (portId: string) => {
+    if (isSplatLightColorPort(portId)) {
+      return (
+        <SplatLightColorPicker
+          portId={portId}
+          values={values}
+          className="context-menu__color"
+          onPick={(hex) => setValue(portId, hex)}
+          onClear={() => clearValue(portId)}
+        />
+      );
+    }
     if (config.colorPorts.includes(portId)) {
       const stored = splatStoredColor(values[portId]);
       return (
@@ -161,9 +244,25 @@ export function SplatSettingsMenu({ nodeId }: { nodeId: string }) {
         <div key={section.label}>
           <div className="context-menu__divider" />
           <div className="context-menu__category">{t(section.label, language)}</div>
+          {section.label === 'Light' && (
+            <div style={rowStyle}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', cursor: 'pointer' }} title={t(SPLAT_LIT_HINT_KEY, language)}>
+                <input
+                  type="checkbox"
+                  checked={lit}
+                  onChange={toggleLit}
+                  style={checkboxStyle}
+                />
+                {t(SPLAT_LIT_KEY, language)}
+              </label>
+            </div>
+          )}
           {section.ports.map((portId) => {
             const port = def.inputs.find((p) => p.id === portId);
             if (!port) return null;
+            // The light's rows only while it is on — they do nothing otherwise —
+            // or while a wire reaches one (see `edges`).
+            if (!lit && SPLAT_LIGHT_PORTS.includes(portId) && !edges.some((e) => e.target === nodeId && e.targetHandle === portId)) return null;
             return (
               <div key={portId} style={rowStyle}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', cursor: 'pointer', minWidth: 120 }} title={t('Show socket', language)}>
@@ -179,6 +278,19 @@ export function SplatSettingsMenu({ nodeId }: { nodeId: string }) {
               </div>
             );
           })}
+          {section.ports.includes('color') && (
+            <div style={rowStyle}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', cursor: 'pointer' }} title={t(SPLAT_REPLACE_COLOR_HINT_KEY, language)}>
+                <input
+                  type="checkbox"
+                  checked={replaceColor}
+                  onChange={toggleReplaceColor}
+                  style={checkboxStyle}
+                />
+                {t(SPLAT_REPLACE_COLOR_KEY, language)}
+              </label>
+            </div>
+          )}
           {section.ports.includes('cut') && (
             <div style={rowStyle}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', cursor: 'pointer' }} title={t(SPLAT_INVERT_HINT_KEY, language)}>

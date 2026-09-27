@@ -607,7 +607,7 @@ const SPLAT_NUMBER_RE = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/;
  *   shade, shape    a bare identifier (the emitted `sp1Shade` / `sp1Shape` Fn)
  *   size, feather   an identifier / member chain (a Fn or a captured node) or
  *                   a FINITE numeric literal
- *   invert          the literal `true` only
+ *   invert, lit     the literal `true` only
  *
  * Anything else — an unknown key, a call, an expression, `invert: 1` — is
  * dropped. The last occurrence of a key wins, as in the JS literal, and the
@@ -627,10 +627,10 @@ function translateSplatBody(src: string): string | null {
     if (key === 'shade' || key === 'shape') ok = SPLAT_FN_RE.test(val);
     else if (key === 'size' || key === 'feather') {
       ok = SPLAT_NODE_REF_RE.test(val) || (SPLAT_NUMBER_RE.test(val) && Number.isFinite(Number(val)));
-    } else if (key === 'invert') ok = val === 'true';
+    } else if (key === 'invert' || key === 'lit') ok = val === 'true';
     if (ok) seen.set(key, val);
   }
-  return ['shade', 'shape', 'size', 'feather', 'invert']
+  return ['shade', 'shape', 'size', 'feather', 'invert', 'lit']
     .filter((k) => seen.has(k))
     .map((k) => `${k}: ${seen.get(k)!}`)
     .join(', ');

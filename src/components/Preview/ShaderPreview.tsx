@@ -59,6 +59,7 @@ import { GLB_IMPORT_KEYS } from '@/utils/glbImportCopy';
 import { useGlbImport } from './useGlbImport';
 import { marchWindowRadius } from '@/utils/sdfPartition';
 import { sinkModelIssue } from '@/utils/sinkModelFit';
+import { litSplatCount } from '@/utils/splatLight';
 import { sinkModelIssueText } from '@/utils/sinkModelCopy';
 import { sanitizeMeshInventory, sanitizeSplatReport } from '@/utils/meshInventory';
 import { MESH_HIGHLIGHT_EVENT, sanitizeHighlightNames, type MeshHighlightDetail } from '@/utils/meshHighlight';
@@ -1990,18 +1991,23 @@ export function ShaderPreview() {
   // …and at the moment a WIRE makes the pairing wrong, the canvas — where the
   // wire was just made — says so once too. Only a GRAPH-caused change: when
   // the shown model changed in the same step, the user is looking at the pane,
-  // whose notice already says it. Never over a note that is still up (an
-  // import report would be replaced), and never in a study session.
+  // whose notice already says it — and so when a Splat Output's "React to
+  // light" changed in it (unticked, or undone), since that is the setting the
+  // Normal notice asks for: telling the user to tick the box they just
+  // unticked is noise (utils/splatLight.ts `litSplatCount`). Never over a note
+  // that is still up (an import report would be replaced), and never in a
+  // study session.
   const shownModelKey = `${previewGeometry}|${previewMesh?.id ?? ''}`;
-  const lastFitRef = useRef({ issue: sinkIssue, shownModelKey });
+  const litSplats = useAppStore((s) => litSplatCount(s.nodes));
+  const lastFitRef = useRef({ issue: sinkIssue, shownModelKey, litSplats });
   useEffect(() => {
     const prev = lastFitRef.current;
-    lastFitRef.current = { issue: sinkIssue, shownModelKey };
-    if (sinkIssue === null || sinkIssue === prev.issue || shownModelKey !== prev.shownModelKey || isEvalMode()) return;
+    lastFitRef.current = { issue: sinkIssue, shownModelKey, litSplats };
+    if (sinkIssue === null || sinkIssue === prev.issue || shownModelKey !== prev.shownModelKey || litSplats !== prev.litSplats || isEvalMode()) return;
     const store = useAppStore.getState();
     if (store.importNote) return;
     store.showImportNote([{ kind: 'sink-model', issue: sinkIssue, name: store.previewMesh?.name ?? '' }]);
-  }, [sinkIssue, shownModelKey]);
+  }, [sinkIssue, shownModelKey, litSplats]);
 
   // What the pane renders, for EXPORT's "Export model" row (engine/exportModel.ts):
   // the raw slider value, since the teapot's resolution IS the subdivision.

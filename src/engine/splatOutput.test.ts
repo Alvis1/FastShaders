@@ -12,6 +12,7 @@ import { scriptToTSL } from './scriptToTSL';
 import { REPO, evalLoader, loaderAvailable, loaderPath, loaderText, type FastShadersApi } from '@/shaderloaderHarness';
 import { makeNode, makeEdge, canonicalSrc, makeRealPng } from '@/test-utils';
 import { SPLAT_FN_PARAMS, SPLAT_SCOPES, drivingSplatOutput, implicitRootOf, scopeRootTypes } from '@/utils/sdfPartition';
+import { SPLAT_MODEL_SIZE } from '@/utils/splatFrame';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { makeDataNodeData } from '@/utils/dataNode';
 import type { AppNode, AppEdge } from '@/types';
@@ -30,6 +31,14 @@ import type { AppNode, AppEdge } from '@/types';
  */
 
 interface Graph { nodes: AppNode[]; edges: AppEdge[] }
+
+/** UV inside a splat Fn: the front projection of the centre (SPLAT_CONSTANTS). */
+const UV = 'p.xy.div(1.6).add(0.5)';
+/** Screen UV inside a splat Fn: the centre's own place on screen, its clip
+ *  position ONE node read twice through the arrow's parameter. */
+const SCREEN_UV = '((clip) => clip.xy.div(clip.w))(cameraProjectionMatrix.mul(modelViewMatrix.mul(vec4(p, 1)))).mul(vec2(0.5, -0.5)).add(0.5)';
+/** Normal (Local) inside a splat Fn: the world `n` back in object space. */
+const NORMAL_LOCAL = 'modelWorldMatrix.transpose().mul(vec4(n, 0)).xyz.normalize()';
 
 /** A Splat Output carrying `values` exactly as given (booleans included). */
 function splat(values: Record<string, unknown> = {}, id = 'sp'): AppNode {
@@ -197,6 +206,63 @@ function cases(): Record<string, Graph> {
         makeEdge('ad', 'out', 'sp', 'cut'),
       ],
     },
+    // TINT, NOT PAINT (utils/splatColor.ts): Color multiplies the captured
+    // colour unless `replaceColor` says it replaces it.
+    'replace: a wired colour paints over': {
+      nodes: [makeNode('c', 'color', { hex: '#ff0000' }), splat({ replaceColor: true })],
+      edges: [makeEdge('c', 'out', 'sp', 'color')],
+    },
+    'replace: a stored swatch (flagged)': { nodes: [flag(splat({ color: '#2d6cdf', replaceColor: true }))], edges: [] },
+    'replace, lit, with opacity': { nodes: [flag(splat({ color: '#2d6cdf', replaceColor: true, lit: true, opacity: 0.5 }))], edges: [] },
+    // The owner's report: a Checker built from UV on Color — now a projected,
+    // tinting checkerboard (uv → mul → floor → add → mod → mix).
+    'a UV checker on Color (projected, tinting)': {
+      nodes: [
+        makeNode('uv', 'uv'), makeNode('m', 'mul', { b: 8 }), makeNode('fl', 'floor'), makeNode('sx', 'split'),
+        makeNode('ad', 'add'), makeNode('md', 'mod', { y: 2 }), makeNode('ca', 'color', { hex: '#fafafa' }),
+        makeNode('cb', 'color', { hex: '#212121' }), makeNode('mx', 'mix'), splat(),
+      ],
+      edges: [
+        makeEdge('uv', 'out', 'm', 'a'), makeEdge('m', 'out', 'fl', 'x'), makeEdge('fl', 'out', 'sx', 'v'),
+        makeEdge('sx', 'x', 'ad', 'a'), makeEdge('sx', 'y', 'ad', 'b'), makeEdge('ad', 'out', 'md', 'x'),
+        makeEdge('ca', 'out', 'mx', 'a'), makeEdge('cb', 'out', 'mx', 'b'), makeEdge('md', 'out', 'mx', 't'),
+        makeEdge('mx', 'out', 'sp', 'color'),
+      ],
+    },
+    // LIT — "React to light" (utils/splatLight.ts): a key light inside the
+    // shade Fn, and `lit: true` on the return (the loader's surface normal).
+    'lit, the default light (flagged, nothing wired)': { nodes: [flag(splat({ lit: true }))], edges: [] },
+    'lit, a stored colour and a stored light': {
+      nodes: [flag(splat({ lit: true, color: '#2d6cdf', opacity: 0.8, lightX: -1, lightY: 0.25, lightZ: 2, lightColor: '#ffe0b0', ambient: '#203040' }))],
+      edges: [],
+    },
+    'lit, the light wired (a colour, a time-driven direction)': {
+      nodes: [makeNode('lc', 'color', { hex: '#ff8800' }), makeNode('t', 'time'), makeNode('s', 'sin'), flag(splat({ lit: true }))],
+      edges: [makeEdge('lc', 'out', 'sp', 'lightColor'), makeEdge('t', 'out', 's', 'x'), makeEdge('s', 'out', 'sp', 'lightX')],
+    },
+    'lit, an ambient that depends on the splat (read per splat)': {
+      nodes: [makeNode('pw', 'positionWorld'), makeNode('len', 'length'), flag(splat({ lit: true }))],
+      edges: [makeEdge('pw', 'out', 'len', 'v'), makeEdge('len', 'out', 'sp', 'ambient')],
+    },
+    'lit, a wired colour and a cut': {
+      nodes: [pos(), sd(), makeNode('c', 'color', { hex: '#88ccff' }), splat({ lit: true, feather: 0.05 })],
+      edges: [makeEdge('pos', 'out', 'sd', 'p'), makeEdge('sd', 'out', 'sp', 'cut'), makeEdge('c', 'out', 'sp', 'color')],
+    },
+    // Normal (Local) is `n` back in OBJECT space (SPLAT_CONSTANTS) — bound to
+    // `n` itself it read a world normal the turning model slid under.
+    'lit, the local normal on Color (object space)': {
+      nodes: [makeNode('nl', 'normalLocal'), makeNode('ab', 'abs'), splat({ lit: true })],
+      edges: [makeEdge('nl', 'out', 'ab', 'x'), makeEdge('ab', 'out', 'sp', 'color')],
+    },
+    // Screen UV: the centre's place on screen, its clip position read ONCE.
+    'a screen-uv pattern on Color': {
+      nodes: [makeNode('su', 'screenUV'), makeNode('len', 'length'), splat()],
+      edges: [makeEdge('su', 'out', 'len', 'v'), makeEdge('len', 'out', 'sp', 'color')],
+    },
+    'lit, the normal read by the graph (a rim)': {
+      nodes: [makeNode('nw', 'normalWorld'), makeNode('vd', 'positionViewDirection'), makeNode('d', 'dot'), makeNode('m', 'oneMinus'), splat({ lit: true })],
+      edges: [makeEdge('nw', 'out', 'd', 'a'), makeEdge('vd', 'out', 'd', 'b'), makeEdge('d', 'out', 'm', 'x'), makeEdge('m', 'out', 'sp', 'color')],
+    },
     'everything at once': {
       nodes: [
         pos(), sd(), makeNode('c', 'color', { hex: '#ffcc88' }), makeNode('pw', 'positionWorld'),
@@ -229,18 +295,37 @@ describe('Splat Output — emission', () => {
     expect(code({ nodes, edges: [] })).toContain('  return vec3(1, 0, 0);');
   });
 
-  it('a wired Color drives, and a captured chain is closed over: `vec4(color1, 1)`', () => {
+  it('a wired Color drives, closed over, and TINTS the captured colour: `vec4(mul(c.rgb, color1), 1)`', () => {
     const c = code(cases()['wired colour (captured)']);
     expect(c).toContain('  const color1 = color(0xff0000);');
-    expect(c).toContain('  const sp1Shade = Fn(([p, pw, n, c]) => {\n    return vec4(color1, 1);\n  });');
+    expect(c).toContain('  const sp1Shade = Fn(([p, pw, n, c]) => {\n    return vec4(mul(c.rgb, color1), 1);\n  });');
     expect(c).toContain('  return { splat: { shade: sp1Shade } };');
-    expect(c).toMatch(/^import \{ Fn, color, vec4 \} from 'three\/tsl';/);
+    expect(c).toMatch(/^import \{ Fn, color, mul, vec4 \} from 'three\/tsl';/);
+  });
+
+  it('the owner\'s Checker on Color: its UV is projected per splat, and the board TINTS the captured colour', () => {
+    const c = code(cases()['a UV checker on Color (projected, tinting)']);
+    expect(c).toContain(`    const uv1 = ${UV};`);
+    expect(c).toContain('    return vec4(mul(c.rgb, mix1), 1);');
+  });
+
+  it('`replaceColor` (only the literal true) makes Color REPLACE the captured colour, the colour alone', () => {
+    const g = cases()['wired colour (captured)'];
+    const replaced = { ...g, nodes: g.nodes.map((n) => (n.id === 'sp' ? splat({ replaceColor: true }) : n)) };
+    expect(code(replaced)).toContain('    return vec4(color1, 1);');
+    expect(code({ nodes: [flag(splat({ color: '#2d6cdf', replaceColor: true }))], edges: [] })).toContain('    return vec4(color(0x2d6cdf), 1);');
+    for (const junk of ['true', 1, 'yes', false]) {
+      expect(code({ nodes: [flag(splat({ color: '#2d6cdf', replaceColor: junk }))], edges: [] }), String(junk))
+        .toContain('    return vec4(mul(c.rgb, color(0x2d6cdf)), 1);');
+    }
+    // Nothing wired or stored: the captured colour in both modes, no Fn at all.
+    expect(code({ nodes: [flag(splat({ replaceColor: true }))], edges: [] })).toContain('  return { splat: {} };');
   });
 
   it('an unwired Color is the splat\'s own `c.rgb`, a stored swatch is `color(0x…)`, a stored Opacity its number', () => {
-    expect(code(cases()['stored colour'])).toContain('    return vec4(color(0x2d6cdf), 1);');
+    expect(code(cases()['stored colour'])).toContain('    return vec4(mul(c.rgb, color(0x2d6cdf)), 1);');
     expect(code(cases()['stored opacity'])).toContain('    return vec4(c.rgb, 0.35);');
-    expect(code(cases()['stored colour + opacity'])).toContain('    return vec4(color(0x102030), 0.5);');
+    expect(code(cases()['stored colour + opacity'])).toContain('    return vec4(mul(c.rgb, color(0x102030)), 0.5);');
     // Opacity 1 and no colour is the identity: no shade Fn at all.
     expect(code({ nodes: [flag(splat({ opacity: 1 }))], edges: [] })).toContain('  return { splat: {} };');
     // A non-hex colour and a non-numeric opacity are untouched, never guessed.
@@ -249,10 +334,10 @@ describe('Splat Output — emission', () => {
   });
 
   it('a colour that is not three channels is widened with vec3(): a scalar broadcasts, a vec4 truncates', () => {
-    expect(code(cases()['scalar colour (widened)'])).toContain('    return vec4(vec3(float1), 1);');
+    expect(code(cases()['scalar colour (widened)'])).toContain('    return vec4(mul(c.rgb, vec3(float1)), 1);');
     const c = code(cases()['the splat colour through c (a vec4, truncated)']);
     expect(c).toContain('    const vertexColor1 = c;');
-    expect(c).toContain('    return vec4(vec3(oneMinus1), 1);');
+    expect(c).toContain('    return vec4(mul(c.rgb, vec3(oneMinus1)), 1);');
   });
 
   it('roots bind to the Fn parameters: `p` the centre, `pw` world, `n` the facing direction, `c` the colour', () => {
@@ -267,7 +352,7 @@ describe('Splat Output — emission', () => {
   it('a feeder of BOTH Color and Opacity is emitted ONCE, inside sp1Shade', () => {
     const c = code(cases()['colour and opacity from one feeder']);
     expect(c.match(/const length1 = /g)).toHaveLength(1);
-    expect(c).toContain('    return vec4(vec3(length1), length1);');
+    expect(c).toContain('    return vec4(mul(c.rgb, vec3(length1)), length1);');
   });
 
   it('Cut and Move are the shape Fn: `vec4(0, 0, 0, cut)` unmoved, `vec4(move, cut)` moved', () => {
@@ -346,16 +431,18 @@ describe('Splat Output — emission', () => {
     expect(c).toContain('  return { splat: { shade: sp1Shade, shape: sp1Shape, size: float1, feather: 0.2, invert: true } };');
   });
 
-  it('a uv / screen-UV source is bound to the splat centre inside a Fn, never read per quad corner', () => {
+  it('a uv source is the FRONT PROJECTION of the splat centre inside a Fn, screen UV its place on screen — never the quad corner', () => {
     const c = code(cases()['a uv chain (bound to the splat centre)']);
     expect(c).toContain('  const uv1 = uv();'); // the flat body keeps the real node
-    expect(c).toContain('    const uv1 = vec2(0.5);');
-    expect(c).toMatch(/^import \{[^}]*\bvec2\b[^}]*\} from 'three\/tsl';/);
+    expect(c).toContain(`    const uv1 = ${UV};`);
     const s = code({
       nodes: [makeNode('su', 'screenUV'), makeNode('len', 'length'), splat()],
       edges: [makeEdge('su', 'out', 'len', 'v'), makeEdge('len', 'out', 'sp', 'opacity')],
     });
-    expect(s).toContain('    const screenUV1 = vec2(0.5);');
+    expect(s).toContain(`    const screenUV1 = ${SCREEN_UV};`);
+    expect(s).toMatch(/^import \{[^}]*\bcameraProjectionMatrix\b[^}]*\bmodelViewMatrix\b[^}]*\bvec2\b[^}]*\bvec4\b[^}]*\} from 'three\/tsl';/);
+    // The span is the scene size splat-model bakes to — ONE number.
+    expect(UV).toContain(`div(${SPLAT_MODEL_SIZE})`);
   });
 
   it('NEVER a `Discard(` — in any combination (extractDiscards would lift it out of the Fn)', () => {
@@ -489,6 +576,32 @@ describe('Splat Output — round trips (graph → code → graph → code)', () 
     }
   });
 
+  it('the colour MODE comes back from the return: `mul(c.rgb, X)` a tint (no key), `X` alone `replaceColor: true`', () => {
+    const valuesOf = (g: Graph) => (codeToGraph(code(g)).nodes.find((n) => n.data.registryType === 'splatOutput')!.data as { values: Record<string, unknown> }).values;
+    expect(valuesOf(cases()['stored colour'])).not.toHaveProperty('replaceColor');
+    expect(valuesOf(cases()['stored colour']).color).toBe('#2d6cdf');
+    expect(valuesOf(cases()['replace: a stored swatch (flagged)'])).toMatchObject({ replaceColor: true, color: '#2d6cdf' });
+    expect(valuesOf(cases()['replace, lit, with opacity'])).toMatchObject({ replaceColor: true, lit: true, opacity: 0.5 });
+    // A tint never becomes a Vertex Color → Multiply chain.
+    const tinted = codeToGraph(code(cases()['wired colour (captured)']));
+    expect(tinted.nodes.some((n) => n.data.registryType === 'mul' || n.data.registryType === 'vertexColor')).toBe(false);
+    // Every commutative spelling a hand edit produces is the same TINT — never a
+    // replace with its `c.rgb` operand dropped — and re-emits in the canonical form.
+    const base = code(cases()['wired colour (captured)']);
+    for (const form of ['mul(color1, c.rgb)', 'c.rgb.mul(color1)', 'color1.mul(c.rgb)']) {
+      const edited = base.replace('mul(c.rgb, color1)', form);
+      const r = codeToGraph(edited);
+      const sp = r.nodes.find((n) => n.data.registryType === 'splatOutput')!;
+      expect((sp.data as { values: Record<string, unknown> }).values, form).not.toHaveProperty('replaceColor');
+      expect(r.errors, form).toEqual([]);
+      expect(r.nodes.some((n) => n.data.registryType === 'mul'), form).toBe(false);
+      expect(graphToCode(r.nodes.map((n) => (n.data.registryType === 'splatOutput' ? flag(n) : n)), r.edges).code, form).toBe(base);
+    }
+    // Nothing wired or stored reads `c.rgb` in both modes: the parse cannot
+    // tell, and leaves the key absent (the resync carries it — splatColor.ts).
+    expect(valuesOf({ nodes: [flag(splat({ replaceColor: true, opacity: 0.5 }))], edges: [] })).not.toHaveProperty('replaceColor');
+  });
+
   it('the stored values come back as values, Invert as the literal true', () => {
     const everything = codeToGraph(code(cases()['everything at once']));
     const sp = everything.nodes.find((n) => n.data.registryType === 'splatOutput')!;
@@ -504,17 +617,18 @@ describe('Splat Output — round trips (graph → code → graph → code)', () 
   it('a ROTATED uv (which the parse expands into its math) still reads the splat centre after an Apply', () => {
     // The UV node's rotation form does not come back as one UV node — a
     // pre-existing limit of the parse — so the name `uv1` is bound to the
-    // expanded chain, not to a `uv` node. The Fn's `const uv1 = vec2(0.5);`
-    // must still be read as the ROOT binding, never as a fresh vec2 node that
-    // every consumer would then silently read (it would parse as (0.5, 0)).
+    // expanded chain, not to a `uv` node. The Fn's `const uv1 = <projection>;`
+    // must still be read as the ROOT binding, never as a fresh node chain that
+    // every consumer would then silently read.
     const g: Graph = {
       nodes: [makeNode('uv', 'uv', { channel: 0, tilingU: 1, tilingV: 1, rotation: 0.5 }), makeNode('nz', 'perlin'), splat()],
       edges: [makeEdge('uv', 'out', 'nz', 'pos'), makeEdge('nz', 'out', 'sp', 'opacity')],
     };
     const once = roundTrip(g);
     expect(once.parsed.errors).toEqual([]);
-    expect(once.second).toContain('    const uv1 = vec2(0.5);');
-    expect(once.second).not.toMatch(/const vec2\d+ = vec2\(0\.5, 0\);/);
+    expect(once.second).toContain(`    const uv1 = ${UV};`);
+    // …once: the projection is the binding, never parsed into a node chain.
+    expect(once.second.split(UV).length - 1).toBe(1);
     // …and from there an Apply is a fixed point.
     expect(reparse(once.second, false).second).toBe(once.second);
   });
@@ -530,6 +644,184 @@ describe('Splat Output — round trips (graph → code → graph → code)', () 
     const sp = r.nodes.find((n) => n.data.registryType === 'splatOutput')!;
     expect((sp.data as { values: Record<string, unknown> }).values.invert).toBeUndefined();
     expect(r.nodes.some((n) => n.data.registryType === 'output')).toBe(false);
+  });
+});
+
+describe('Splat Output — React to light (`values.lit`)', () => {
+  /** The body of scope Fn `name`, or '' when it is not emitted. */
+  const fnBody = (c: string, name: string): string => {
+    const start = c.indexOf(`  const ${name} = Fn(([p, pw, n, c]) => {\n`);
+    return start < 0 ? '' : c.slice(start, c.indexOf('\n  });\n', start));
+  };
+  const DEFAULT_LIGHT = '    const sp1Light = add(mul(vec3(0.6, 0.6, 0.6), max(dot(n, normalize(add(vec3(0.6, 0.8, 0.5), 1e-9))), 0)), vec3(0.4, 0.4, 0.4));';
+
+  it('lit: ONE light line inside the shade Fn multiplies the colour, and `lit: true` rides the return', () => {
+    const c = code(cases()['lit, the default light (flagged, nothing wired)']);
+    expect(c).toContain(`  const sp1Shade = Fn(([p, pw, n, c]) => {\n${DEFAULT_LIGHT}\n    return vec4(mul(c.rgb, sp1Light), 1);\n  });`);
+    expect(c).toContain('  return { splat: { shade: sp1Shade, lit: true } };');
+    expect(c.split('\n')[0]).toBe("import { Fn, add, dot, max, mul, normalize, vec3, vec4 } from 'three/tsl';");
+  });
+
+  it('stored values: the direction as numbers, the two colours as `color(0x…)`, beside a stored Color and Opacity', () => {
+    const c = code(cases()['lit, a stored colour and a stored light']);
+    expect(c).toContain('    const sp1Light = add(mul(color(0xffe0b0), max(dot(n, normalize(add(vec3(-1, 0.25, 2), 1e-9))), 0)), color(0x203040));');
+    expect(c).toContain('    return vec4(mul(mul(c.rgb, color(0x2d6cdf)), sp1Light), 0.8);');
+  });
+
+  it('wired light sockets are the wire: a captured colour, a time-driven direction; one per splat is read in the Fn', () => {
+    const wired = code(cases()['lit, the light wired (a colour, a time-driven direction)']);
+    expect(wired).toContain('    const sp1Light = add(mul(color1, max(dot(n, normalize(add(vec3(sin1, 0.8, 0.5), 1e-9))), 0)), vec3(0.4, 0.4, 0.4));');
+    // A scalar on a colour socket is widened, exactly like Color.
+    const perSplat = code(cases()['lit, an ambient that depends on the splat (read per splat)']);
+    expect(fnBody(perSplat, 'sp1Shade')).toContain('    const length1 = length(positionWorld1);');
+    expect(fnBody(perSplat, 'sp1Shade')).toContain(', vec3(length1));');
+  });
+
+  it('only the literal `true` lights; switched off, stored light values emit nothing at all', () => {
+    for (const junk of ['true', 1, 'yes', false, {}]) {
+      const c = code({ nodes: [flag(splat({ lit: junk, lightX: 3 }))], edges: [] });
+      expect(c, String(junk)).toContain('  return { splat: {} };');
+      expect(c, String(junk)).not.toContain('sp1Light');
+    }
+    // An inherited `lit` is not the node's own key.
+    const proto = flag(splat(Object.create({ lit: true }) as Record<string, unknown>));
+    expect(code({ nodes: [proto], edges: [] })).toContain('  return { splat: {} };');
+  });
+
+  it('`lit` comes last in the contract order, after invert', () => {
+    const c = code({ ...cutBySphere({ feather: 0.1, invert: true, lit: true }) });
+    expect(c).toContain('  return { splat: { shade: sp1Shade, shape: sp1Shape, feather: 0.1, invert: true, lit: true } };');
+  });
+
+  it('a light wire with the light OFF (a file can carry one) is DORMANT: its feeder stays flat, no shade Fn, and the module runs', () => {
+    const g: Graph = {
+      nodes: [makeNode('pw', 'positionWorld'), makeNode('len', 'length'), flag(splat())],
+      edges: [makeEdge('pw', 'out', 'len', 'v'), makeEdge('len', 'out', 'sp', 'ambient')],
+    };
+    const c = code(g);
+    expect(c).not.toContain('sp1Light');
+    // No Light socket is read while unlit (splatScopes), so the feeder is an
+    // ordinary flat node nothing reads — never a dead line forcing a shade Fn.
+    expect(fnBody(c, 'sp1Shade')).toBe('');
+    expect(c.slice(c.indexOf('const shader = Fn(() => {'))).toContain('  const length1 = length(positionWorld1);');
+    expect(c).toContain('  return { splat: {} };');
+    expect(() => parse(tslToShaderModule(c), { sourceType: 'module' })).not.toThrow();
+    // The parse keeps the feeder; the WIRE is the resync's to carry
+    // (carryDormantLightEdges — utils/splatLight.test.ts runs it end to end).
+    const r = codeToGraph(c);
+    expect(r.errors).toEqual([]);
+    expect(r.nodes.some((n) => n.data.registryType === 'length')).toBe(true);
+    // Lit, the same wire IS read — in the shade Fn, per splat.
+    const lit = code({ ...g, nodes: [g.nodes[0], g.nodes[1], flag(splat({ lit: true }))] });
+    expect(fnBody(lit, 'sp1Shade')).toContain('    const length1 = length(positionWorld1);');
+  });
+
+  it('the light line\'s name is reserved with the Fns: a property already called sp1Light moves the splat to sp2', () => {
+    const prop = makeNode('pr', 'property_float', { name: 'sp1Light', value: 0.5 });
+    const g: Graph = { nodes: [prop, flag(splat({ lit: true }))], edges: [makeEdge('pr', 'out', 'sp', 'opacity')] };
+    const c = code(g);
+    expect(c).toContain('  const sp1Light = uniform(0.5);');
+    expect(c).toContain(DEFAULT_LIGHT.replace('sp1Light', 'sp2Light'));
+    expect(c).toContain('    return vec4(mul(c.rgb, sp2Light), sp1Light);');
+    // …and the parse tells the property from the light line by WHERE it is.
+    const { parsed, second } = roundTrip(g);
+    expect(parsed.errors).toEqual([]);
+    expect(second).toBe(c);
+  });
+
+  describe('the parse back', () => {
+    const splatOf = (r: ReturnType<typeof codeToGraph>) => r.nodes.find((n) => n.data.registryType === 'splatOutput')!;
+    const valuesOf = (r: ReturnType<typeof codeToGraph>) => (splatOf(r).data as { values: Record<string, unknown> }).values;
+
+    it('the light comes back as the Lit setting: the direction as values, stored colours as swatches, defaults UNSET', () => {
+      const stored = codeToGraph(code(cases()['lit, a stored colour and a stored light']));
+      expect(stored.errors).toEqual([]);
+      expect(valuesOf(stored)).toMatchObject({ lit: true, color: '#2d6cdf', opacity: 0.8, lightX: -1, lightY: 0.25, lightZ: 2, lightColor: '#ffe0b0', ambient: '#203040' });
+      const dflt = codeToGraph(code(cases()['lit, the default light (flagged, nothing wired)']));
+      expect(valuesOf(dflt).lit).toBe(true);
+      expect(valuesOf(dflt)).not.toHaveProperty('lightColor');
+      expect(valuesOf(dflt)).not.toHaveProperty('ambient');
+      // Never a Multiply, Add, Max, Dot or Normalize node for the light.
+      for (const type of ['mul', 'add', 'max', 'dot', 'normalize', 'vec3']) {
+        expect(dflt.nodes.some((n) => n.data.registryType === type), type).toBe(false);
+      }
+    });
+
+    it('wired light sockets come back as edges', () => {
+      const r = codeToGraph(code(cases()['lit, the light wired (a colour, a time-driven direction)']));
+      const sp = splatOf(r);
+      const into = (handle: string) => r.edges.filter((e) => e.target === sp.id && e.targetHandle === handle);
+      expect(into('lightColor')).toHaveLength(1);
+      expect(into('lightX')).toHaveLength(1);
+      expect(into('lightY')).toHaveLength(0);
+    });
+
+    it('a default grey spelled with other spacing is still UNSET', () => {
+      const c = code(cases()['lit, the default light (flagged, nothing wired)']).replace('vec3(0.4, 0.4, 0.4)', 'vec3(0.4,0.4,  0.4)');
+      const r = codeToGraph(c);
+      expect(r.errors).toEqual([]);
+      expect(valuesOf(r)).not.toHaveProperty('ambient');
+    });
+
+    it('`lit: true` without the light line has no graph equivalent: a warning, and the node is not lit', () => {
+      const c = code(cases()['stored colour']).replace('return { splat: { shade: sp1Shade } };', 'return { splat: { shade: sp1Shade, lit: true } };');
+      const r = codeToGraph(c);
+      expect(r.errors.map((e) => e.message).join('\n')).toMatch(/splat\.lit: .*dropped/);
+      expect(r.errors.every((e) => e.severity === 'warning')).toBe(true);
+      expect(valuesOf(r)).not.toHaveProperty('lit');
+    });
+
+    it('a light line without `lit: true` is dropped with a warning — and never becomes a Multiply node', () => {
+      const c = code(cases()['lit, a stored colour and a stored light']).replace(', lit: true } };', ' } };');
+      const r = codeToGraph(c);
+      expect(r.errors.map((e) => e.message).join('\n')).toMatch(/sp1Light needs `lit: true`/);
+      expect(valuesOf(r)).not.toHaveProperty('lit');
+      expect(valuesOf(r).color).toBe('#2d6cdf');
+      expect(r.nodes.some((n) => n.data.registryType === 'mul')).toBe(false);
+    });
+
+    it('`lit: 1` is not the literal: dropped with a warning', () => {
+      const c = code(cases()['lit, the default light (flagged, nothing wired)']).replace('lit: true', 'lit: 1');
+      const r = codeToGraph(c);
+      expect(r.errors.map((e) => e.message).join('\n')).toMatch(/splat\.lit: only the literal true counts/);
+      expect(valuesOf(r)).not.toHaveProperty('lit');
+    });
+
+    it('a hand-written unguarded direction still lights, and re-emits with the zero guard', () => {
+      const c = code(cases()['lit, a stored colour and a stored light']).replace('normalize(add(vec3(-1, 0.25, 2), 1e-9))', 'normalize(vec3(-1, 0.25, 2))');
+      expect(c).toContain('normalize(vec3(-1, 0.25, 2))');
+      const r = codeToGraph(c);
+      expect(r.errors).toEqual([]);
+      expect(valuesOf(r)).toMatchObject({ lit: true, lightX: -1, lightY: 0.25, lightZ: 2 });
+      expect(graphToCode(r.nodes, r.edges).code).toBe(code(cases()['lit, a stored colour and a stored light']));
+    });
+
+    it('an inline noise of the splat centre typed into the light is read INSIDE the shade Fn — an unwired position, never a stored `p`', () => {
+      // The review's probe: the light line's operands are resolved at the
+      // module's return, and without the shade Fn's bindings installed an
+      // `mx_noise_float(p)` there parsed to a STORED `p`, which re-emitted a
+      // bare `p` in the flat body — a ReferenceError at load.
+      const c = code(cases()['lit, the default light (flagged, nothing wired)'])
+        .replace('vec3(0.4, 0.4, 0.4));', 'vec3(mx_noise_float(p)));')
+        .replace("import { Fn,", "import { Fn, mx_noise_float,");
+      const r = codeToGraph(c);
+      expect(r.errors).toEqual([]);
+      const nz = r.nodes.find((n) => n.data.registryType === 'perlin')!;
+      expect(nz).toBeDefined();
+      expect((nz.data as { values?: Record<string, unknown> }).values?.pos).not.toBe('p');
+      expect(r.edges.some((e) => e.source === nz.id)).toBe(true);
+      const again = graphToCode(r.nodes, r.edges).code;
+      const flat = again.slice(again.indexOf('const shader = Fn(() => {'), again.indexOf('  const sp1Shade = Fn('));
+      expect(flat).not.toMatch(/\bmx_noise_float\(p\)/);
+      expect(again).toMatch(/const sp1Shade = Fn\(\(\[p, pw, n, c\]\) => \{\n    const noise1 = mx_noise_float\(p\);/);
+    });
+  });
+
+  it('the module keeps `lit: true` on the whitelist and strips anything else under that key', () => {
+    const c = code(cases()['lit, the default light (flagged, nothing wired)']);
+    expect(tslToShaderModule(c)).toContain('  return { splat: { shade: sp1Shade, lit: true } };');
+    expect(buildShaderModule(c.replace('lit: true', 'lit: alert(1)'))).toContain('  return { splat: { shade: sp1Shade } };');
+    expect(buildShaderModule(c.replace('lit: true', 'lit: 1'))).not.toContain('lit:');
   });
 });
 
@@ -670,7 +962,8 @@ describe('Splat Output — an unwired input never reads the quad (implicit reads
     expect(at('positionWorld')).toContain('mx_noise_float(pw)');
     expect(at('positionLocal')).toContain('mx_noise_float(p)');
     expect(at('normalWorld')).toContain('mx_noise_float(n)');
-    expect(at('screenUV')).toContain('mx_noise_float(vec2(0.5))');
+    expect(at('normalLocal')).toContain(`mx_noise_float(${NORMAL_LOCAL})`);
+    expect(at('screenUV')).toContain(`mx_noise_float(${SCREEN_UV})`);
     // A uniform is the same at every corner: captured from the flat body, not scoped.
     const cam = code(cut(makeNode('nz', 'perlin', { pos: 'cameraPosition', scale: 1 })));
     expect(flatBody(cam)).toContain('  const noise1 = mx_noise_float(cameraPosition);');
@@ -683,7 +976,7 @@ describe('Splat Output — an unwired input never reads the quad (implicit reads
     expect(flatBody(view)).toContain('  const positionView1 = positionView;'); // the flat body keeps the real root
     const shade = fnBody(code(cases()['colour by the view direction and the ray']), 'sp1Shade');
     expect(shade).toContain('    const positionViewDirection1 = modelViewMatrix.mul(vec4(p, 1)).xyz.negate().normalize();');
-    expect(shade).toContain('    const rayDirection1 = n.negate();');
+    expect(shade).toContain('    const rayDirection1 = pw.sub(cameraPosition).normalize();');
     expect(fnBody(code(cases()['move along the world direction']), 'sp1Shape'))
       .toContain('    const positionWorldDirection1 = p.transformDirection(modelWorldMatrix);');
   });
@@ -724,7 +1017,7 @@ describe('Splat Output — an unwired input never reads the quad (implicit reads
   it('an Image with UV unwired samples at the splat\'s own point; a wired Direction still replaces the uv path', () => {
     const c = code({ nodes: [image(), splat()], edges: [makeEdge('img', 'out', 'sp', 'color')] });
     const shade = fnBody(c, 'sp1Shade');
-    expect(shade).toMatch(/const image1 = texture\(_image1_tex, vec2\(0\.5\)[^;]*\)\.rgb;/);
+    expect(shade).toContain(`const image1 = texture(_image1_tex, ${UV}`);
     expect(c).not.toContain('uv(');
     expect(c).not.toMatch(/^import \{[^}]*\buv\b[^}]*\} from 'three\/tsl';$/m);
     // The module-scope decode is emitted once, outside every Fn.
@@ -740,14 +1033,14 @@ describe('Splat Output — an unwired input never reads the quad (implicit reads
       edges: [makeEdge('img', 'out', 'sp', 'color'), makeEdge('img', 'out', 'ab', 'x')],
     });
     expect(flatBody(shared)).toMatch(/const image1 = texture\(_image1_tex, uv\(\)/);
-    expect(fnBody(shared, 'sp1Shade')).toMatch(/const image1 = texture\(_image1_tex, vec2\(0\.5\)/);
+    expect(fnBody(shared, 'sp1Shade')).toContain(`const image1 = texture(_image1_tex, ${UV}`);
   });
 
-  it('the value-ramps and samplers read `vec2(0.5)` in place of uv() inside a Fn', () => {
+  it('the value-ramps and samplers read the front projection in place of uv() inside a Fn', () => {
     for (const type of ['colormap', 'dataRange', 'isolines', 'stripes', 'dataviz', 'wireframe']) {
       const c = code(cut(makeNode('x', type)));
       expect(c, type).not.toContain('uv(');
-      expect(c, type).toContain('vec2(0.5)');
+      expect(c, type).toContain(UV);
       expect(flatBody(c).replace(/const shader = Fn\(\(\) => \{\n/, ''), type).not.toMatch(/^ {2}const (?!sp1)/m);
     }
   });
@@ -765,8 +1058,8 @@ describe('Splat Output — an unwired input never reads the quad (implicit reads
       edges: [makeEdge('d', 'col1', 'v', 'signal'), makeEdge('v', 'out', 'sp', 'color'), makeEdge('d', 'col1', 'ab', 'x')],
     });
     const shade = fnBody(c, 'sp1Shade');
-    expect(shade).toMatch(/texture\(_\w+_tex1, vec2\(vec2\(0\.5\)\.x, 0\.5\)\)\.x/);
-    expect(shade).toContain('vec2(0.5).x');
+    expect(shade).toMatch(new RegExp(`texture\\(_\\w+_tex1, vec2\\(${UV.replace(/[().]/g, '\\$&')}\\.x, 0\\.5\\)\\)\\.x`));
+    expect(shade).toContain(`${UV}.x`);
     expect(shade).not.toContain('uv(');
     expect(flatBody(c)).toMatch(/texture\(_\w+_tex1, vec2\(uv\(\)\.x, 0\.5\)\)\.x/);
     expect(c.match(/^const _\w+_tex1 = new globalThis\.THREE\.DataTexture\(/gm)).toHaveLength(1);
@@ -993,6 +1286,35 @@ describe.skipIf(!canExecute)('Splat Output — the emitted module RUNS (the flat
     });
     expect(c).toMatch(/^ {2}const length1 = length\(positionLocal1\);$/m);
     expect(() => runModule(tslToShaderModule(c)), c).not.toThrow();
+  });
+
+  it('a LIT program builds with the surface normal: the wrapper reads the covariance, the light line reads its `n`', () => {
+    const { vs, warns } = buildOnSplat(runModule(tslToShaderModule(code(cases()['lit, the default light (flagged, nothing wired)']))).splat);
+    expect(warns).toEqual([]);
+    expect(vs).toMatch(/\bfsCovA = /);
+    expect(vs).toMatch(/\bfsNv3 = normalize\(/);
+    const shade = vs.split('\n').find((l) => /^\s*fsShade = /.test(l)) ?? '';
+    // The direction carries its zero guard (SPLAT_LIGHT_DIRECTION_EPSILON).
+    expect(shade).toMatch(/dot\( fsN, normalize\( \( vec3\( 0\.6, 0\.8, 0\.5 \) \+ vec3\( 1e-9 \) \) \) \)/);
+    // Unlit, the same graph reads no covariance at all.
+    const { vs: unlit } = buildOnSplat(runModule(tslToShaderModule(code(cases()['stored colour']))).splat);
+    expect(unlit).not.toMatch(/fsCovA/);
+  });
+
+  it('Screen UV builds ONE clip product; Normal (Local) builds through the transposed world matrix', () => {
+    // The clip position is one node read twice (the arrow's parameter), so TSL
+    // hoists it into ONE temporary and divides by that temporary's w — two
+    // spellings of it built two matrix products per splat vertex.
+    const { vs: screen } = buildOnSplat(runModule(tslToShaderModule(code(cases()['a screen-uv pattern on Color']))).splat);
+    const products = screen.split('\n').filter((l) => /\( cameraProjectionMatrix \* \( modelViewMatrix \* vec4\( fsP, 1\.0 \) \) \)/.test(l));
+    expect(products).toHaveLength(1);
+    const clipVar = /^\s*(\w+) = /.exec(products[0])![1];
+    const shade = screen.split('\n').find((l) => /^\s*fsShade = /.test(l)) ?? '';
+    expect(shade).toContain(`${clipVar}.xy / vec2( ${clipVar}.w )`);
+    // Normal (Local): the world `n` back through the TRANSPOSED world matrix.
+    const { vs: local } = buildOnSplat(runModule(tslToShaderModule(code(cases()['lit, the local normal on Color (object space)']))).splat);
+    const localShade = local.split('\n').find((l) => /^\s*fsShade = /.test(l)) ?? '';
+    expect(localShade).toMatch(/abs\( normalize\( \( transpose\( \w+ \) \* vec4\( fsN, 0\.0 \) \)\.xyz \) \)/);
   });
 
   it('a splat-dependent Feather is taken at the splat CENTRE in the built shader, never at the quad corner', () => {

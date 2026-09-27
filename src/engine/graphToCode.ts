@@ -26,11 +26,14 @@ import {
   MARCH_OUTPUT_TYPE,
   MARCH_SCOPES,
   SPLAT_OUTPUT_TYPE,
-  SPLAT_SCOPES,
+  splatScopes,
   SPLAT_FN_PARAMS,
   type ScopeSpec,
 } from '@/utils/sdfPartition';
 import { effectiveExposedPorts, OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
+import { isSplatLit, SPLAT_LIGHT_COLOR_DEFAULTS, SPLAT_LIGHT_DIRECTION_DEFAULTS, SPLAT_LIGHT_DIRECTION_EPSILON } from '@/utils/splatLight';
+import { isSplatReplaceColor, splatStoredColor } from '@/utils/splatColor';
+import { hasTrueFlag } from '@/utils/trueFlag';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
 import { isUnsignedNoise } from '@/utils/noiseRange';
 import { isWireframeEdges } from '@/utils/wireframeMode';
@@ -547,11 +550,11 @@ export function graphToCode(
     }
     if (def.type === SPLAT_OUTPUT_TYPE) {
       // The splat's four Fns share one base (`sp1Shade`, `sp1Shape`,
-      // `sp1Size`, `sp1Feather`), reserved together like the march's;
-      // codeToGraph recognises them by name AND by the `Fn(…)` declarator
-      // shape.
+      // `sp1Size`, `sp1Feather`), reserved together like the march's, and so
+      // is the lit shade Fn's light line (`sp1Light`); codeToGraph recognises
+      // them by name AND by declarator shape.
       varNames.set(node.id, claimName('sp', {
-        aliases: (n) => [`${n}Shade`, `${n}Shape`, `${n}Size`, `${n}Feather`],
+        aliases: (n) => [`${n}Shade`, `${n}Shape`, `${n}Size`, `${n}Feather`, `${n}Light`],
       }));
       continue;
     }
@@ -721,7 +724,7 @@ export function graphToCode(
   // Build body lines. `bodyLines` is the CURRENT target: the flat shader body
   // for every node of an ordinary graph, and — when a custom sink (Raymarch
   // or Splat Output) DRIVES — one of its scope Fn bodies for the nodes its
-  // partition puts there (utils/sdfPartition.ts, MARCH_SCOPES / SPLAT_SCOPES).
+  // partition puts there (utils/sdfPartition.ts, MARCH_SCOPES / splatScopes).
   // A node can appear in the plan twice (feeding two scopes), which is why
   // this is a plan rather than a plain loop; with no driving custom sink the
   // plan IS `sorted`, so emission is byte-identical to what it was before
@@ -753,7 +756,7 @@ export function graphToCode(
   // before the naming pass.
   const marchNode = customNode && isMarchOutput(customNode) ? customNode : null;
   const splatNode = customNode && isSplatOutput(customNode) ? customNode : null;
-  const specs: readonly ScopeSpec[] = marchNode ? MARCH_SCOPES : splatNode ? SPLAT_SCOPES : [];
+  const specs: readonly ScopeSpec[] = marchNode ? MARCH_SCOPES : splatNode ? splatScopes(splatNode) : [];
   const part = customNode ? marchPartition(sorted, edges, customNode.id, specs) : null;
   const scopeLines = new Map<string, string[]>(specs.map((sp) => [sp.handle, []]));
   const specOfLines = new Map<string[], ScopeSpec>(specs.map((sp) => [scopeLines.get(sp.handle)!, sp]));
@@ -2034,11 +2037,14 @@ export function graphToCode(
   // The module's return is `{ splat: { shade, shape, size, feather, invert } }`
   // — NOT a material. Loader 0.8 finds the Gaussian-splat objects the module
   // is applied to and, inside each one's own vertex stage, calls the Fns once
-  // per SPLAT with `(p, pw, n, c)` (utils/sdfPartition.ts, SPLAT_SCOPES):
+  // per SPLAT with `(p, pw, n, c)` (utils/sdfPartition.ts, splatScopes):
   //
-  //   shade(p, pw, n, c) → vec4(rgb, opacity)   Color (unwired: the splat's
-  //                                             own `c.rgb`, or the stored
-  //                                             swatch) and Opacity
+  //   shade(p, pw, n, c) → vec4(rgb, opacity)   Color TIMES the splat's own
+  //                                             `c.rgb` (a wire or the stored
+  //                                             swatch; unwired, `c.rgb` alone;
+  //                                             `replaceColor`, the colour
+  //                                             alone) and Opacity; LIT, the
+  //                                             rgb times the key light
   //   shape(p, pw, n, c) → vec4(move, cut)      Move and Cut
   //   size(p, pw, n, c)  → float                a Size that depends on the splat
   //   feather(p, pw, n, c) → float              a Feather that depends on the splat
@@ -2046,7 +2052,7 @@ export function graphToCode(
   // r184's `Fn` cannot return a struct, hence the two vec4s. Everything else
   // rides the return line as a VALUE: a stored Size / Feather as a number, a
   // wired one that does not depend on the splat as the captured node, Invert
-  // as the literal `true`. Each Fn and key is OMITTED when it is the identity,
+  // and Lit as the literal `true`. Each Fn and key is OMITTED when it is the identity,
   // so an active sink with nothing to say emits `return { splat: {} };` and
   // the loader draws the splats exactly as the file has them.
   //
@@ -2078,19 +2084,67 @@ export function graphToCode(
     const notVec3 = (shape: number) => shape !== 3;
     const entries: string[] = [];
 
-    // shade → vec4(rgb, opacity)
+    // lit → a key light (utils/splatLight.ts): `lit: true` on the return, so
+    // the loader passes each splat's surface normal as `n`, and ONE light line
+    // inside the shade Fn that multiplies the colour. Its sockets are the
+    // shade scope's (splatScopes), so a light that depends on the splat is
+    // read at its centre. Only the literal `true` lights; an absent key emits
+    // exactly what it did before the light existed. The direction gets
+    // SPLAT_LIGHT_DIRECTION_EPSILON before it is normalised, so a zero vector
+    // (three numbers dragged to 0, or `sin(time)` wired with the other two at
+    // 0, on a paused preview) lights from a fixed diagonal instead of turning
+    // every splat NaN; a real direction is unchanged in float32.
+    const lit = isSplatLit(rawValues);
+    let lightLine: string | null = null;
+    if (lit) {
+      const dir = (key: 'lightX' | 'lightY' | 'lightZ') =>
+        scalarRefOf(edgeOf(key)) ?? num(storedNumber(key, SPLAT_LIGHT_DIRECTION_DEFAULTS[key]));
+      // A wire (widened like Color), the stored swatch, or the default LITERAL
+      // — a `vec3(…)`, which the parse reads back as unset.
+      const colour = (key: 'lightColor' | 'ambient') => {
+        const wired = widenedRefOf(edgeOf(key), notVec3);
+        if (wired) return wired;
+        const stored = splatStoredColor(nv[key]);
+        if (stored) {
+          addImport('three/tsl', 'color');
+          return `color(${hexLiteral(stored)})`;
+        }
+        addImport('three/tsl', 'vec3');
+        return SPLAT_LIGHT_COLOR_DEFAULTS[key].emit;
+      };
+      const lightColour = colour('lightColor');
+      const ambient = colour('ambient');
+      const x = dir('lightX');
+      const y = dir('lightY');
+      const z = dir('lightZ');
+      for (const name of ['add', 'mul', 'max', 'dot', 'normalize', 'vec3']) addImport('three/tsl', name);
+      lightLine = `  const ${base}Light = add(mul(${lightColour}, max(dot(n, normalize(add(vec3(${x}, ${y}, ${z}), ${SPLAT_LIGHT_DIRECTION_EPSILON}))), 0)), ${ambient});`;
+    }
+
+    // shade → vec4(rgb, opacity) — lit, vec4(mul(rgb, sp1Light), opacity).
+    // A wired or stored Color TINTS the captured colour, `mul(c.rgb, colour)`,
+    // unless `replaceColor` (utils/splatColor.ts) makes it the colour alone.
+    // An UNLIT node's Light sockets are in no scope (splatScopes), so a wire a
+    // file carries into one leaves its feeder in the flat body, and the shade
+    // scope holds a node only when one of the terms below reads it.
     const colorRef = widenedRefOf(edgeOf('color'), notVec3);
     const opacityRef = scalarRefOf(edgeOf('opacity'));
-    const storedColor = typeof nv.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(nv.color) ? nv.color : null;
+    const storedColor = splatStoredColor(nv.color);
     const opacity = storedNumber('opacity', 1);
-    if (colorRef || storedColor || opacityRef || opacity !== 1) {
+    const shadeLines = scopeLines.get('shade')!;
+    if (lightLine || colorRef || storedColor || opacityRef || opacity !== 1) {
       let rgb = colorRef;
       if (!rgb && storedColor) {
         addImport('three/tsl', 'color');
         rgb = `color(${hexLiteral(storedColor)})`;
       }
       addImport('three/tsl', 'vec4');
-      pushScopeFn(lines, `${base}Shade`, params, scopeLines.get('shade')!, `vec4(${rgb ?? 'c.rgb'}, ${opacityRef ?? num(opacity)})`);
+      if (rgb && !isSplatReplaceColor(rawValues)) {
+        addImport('three/tsl', 'mul');
+        rgb = `mul(c.rgb, ${rgb})`;
+      }
+      const shaded = lightLine ? `mul(${rgb ?? 'c.rgb'}, ${base}Light)` : rgb ?? 'c.rgb';
+      pushScopeFn(lines, `${base}Shade`, params, lightLine ? [...shadeLines, lightLine] : shadeLines, `vec4(${shaded}, ${opacityRef ?? num(opacity)})`);
       entries.push(`shade: ${base}Shade`);
     }
 
@@ -2139,9 +2193,9 @@ export function graphToCode(
     }
 
     // invert → only the literal `true` counts (node data is untrusted).
-    if (rawValues && typeof rawValues === 'object' && (rawValues as Record<string, unknown>).invert === true) {
-      entries.push('invert: true');
-    }
+    if (hasTrueFlag(rawValues, 'invert')) entries.push('invert: true');
+    // lit → the loader's half of the light: `n` becomes the surface normal.
+    if (lightLine) entries.push('lit: true');
 
     splatEmission = {
       lines,

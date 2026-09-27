@@ -15,6 +15,7 @@ import { PREVIEW_ASSET_RESOLVER_SCRIPT, type PreviewAssetEntry } from './preview
 import type { MaterialSettings } from '@/types';
 import type { PreviewMeshKind } from '@/utils/previewMesh';
 import { isSplatKind, type SplatKind } from '@/utils/splatSniff';
+import { SPLAT_MODEL_SIZE as SPLAT_MODEL_SIZE_NUMBER } from '@/utils/splatFrame';
 import { DECODER_DIR, DECODER_FILES, MAX_DECODER_FILE_BYTES, type DecoderFile } from '@/utils/meshDecoders';
 
 // 'env' = environment-map lighting: NO analytic lights — the material's own
@@ -97,9 +98,10 @@ export const MODEL_FEED_KINDS: Readonly<Record<PreviewMeshKind, 'bytes' | 'text'
  * The normalisation size the `splat-model` component bakes a splat scene to —
  * the same 1.6 `fit-bounds` bakes a mesh to, so SDF cutters and position-driven
  * presets keep their units on a splat (the component normalises the SOURCE
- * arrays; `fit-bounds` returns early on a GaussianSplat).
+ * arrays; `fit-bounds` returns early on a GaussianSplat). The number lives in
+ * utils/splatFrame.ts, which the Splat Output's UV projection reads too.
  */
-const SPLAT_MODEL_SIZE = '1.6';
+const SPLAT_MODEL_SIZE = String(SPLAT_MODEL_SIZE_NUMBER);
 
 /**
  * Build the ES module the preview document runs, for a given TSL body and

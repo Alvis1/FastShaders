@@ -19,6 +19,7 @@ import {
   bindingOfRoot,
   implicitIdentifierOf,
 } from '@/utils/sdfPartition';
+import { SPLAT_LIGHT_COLOR_DEFAULTS, SPLAT_LIGHT_DIRECTION_EPSILON } from '@/utils/splatLight';
 import { generateId } from '@/utils/idGenerator';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
 import { makeTypedEdge } from '@/utils/edgeUtils';
@@ -158,6 +159,39 @@ export function codeToGraph(code: string): CodeToGraphResult {
   const splatFns = new Map<t.Node, SplatFnKind>();
   /** Their declared NAMES, so the return object's `shade: sp1Shade` is known. */
   const splatFnNames = new Set<string>();
+  /**
+   * A LIT shade Fn's light line (utils/splatLight.ts), recognised by NAME
+   * (`sp<n>Light`, reserved by graphToCode) and by SHAPE —
+   *   add(mul(<colour>, max(dot(n, normalize(add(vec3(<x>, <y>, <z>), 1e-9))), 0)), <ambient>)
+   * — and held here: the Lit setting is the PAIR of this line (used by the
+   * shade's `mul(<rgb>, sp<n>Light)`) and the return's `lit: true`, so it is
+   * applied only when the return is read (buildSplatFromObject). A line of any
+   * other shape is ordinary graph content.
+   */
+  let splatLight: { name: string; fn: t.Node; colour: t.Node; ambient: t.Node; dir: [t.Node, t.Node, t.Node]; used: boolean } | null = null;
+  /** `name(…)` with exactly `argc` plain arguments → those arguments, else null. */
+  const callArgs = (node: t.Node | null | undefined, name: string, argc: number): t.Node[] | null => {
+    if (!node || !t.isCallExpression(node) || !t.isIdentifier(node.callee, { name }) || node.arguments.length !== argc) return null;
+    const args = node.arguments as t.Node[];
+    return args.every((a) => t.isExpression(a)) ? args : null;
+  };
+  const matchSplatLightLine = (init: t.Node) => {
+    const sum = callArgs(init, 'add', 2);
+    const key = sum && callArgs(sum[0], 'mul', 2);
+    const clamped = key && callArgs(key[1], 'max', 2);
+    if (!sum || !key || !clamped || foldNumericConstant(clamped[1]) !== 0) return null;
+    const lambert = callArgs(clamped[0], 'dot', 2);
+    if (!lambert || !t.isIdentifier(lambert[0], { name: 'n' })) return null;
+    const unit = callArgs(lambert[1], 'normalize', 1);
+    // `add(vec3(x, y, z), 1e-9)` — the zero-direction guard the emitter writes
+    // (SPLAT_LIGHT_DIRECTION_EPSILON) — or a hand-written bare `vec3(…)`, which
+    // re-emits guarded.
+    const guarded = unit && callArgs(unit[0], 'add', 2);
+    const dirVec = guarded && foldNumericConstant(guarded[1]) === SPLAT_LIGHT_DIRECTION_EPSILON ? guarded[0] : unit?.[0];
+    const dir = callArgs(dirVec, 'vec3', 3);
+    if (!dir) return null;
+    return { colour: key[0], ambient: sum[1], dir: [dir[0], dir[1], dir[2]] as [t.Node, t.Node, t.Node] };
+  };
   const ensureSplatOutput = (): string => {
     if (splatOutputId) return splatOutputId;
     const def = NODE_REGISTRY.get(SPLAT_OUTPUT_TYPE)!;
@@ -169,14 +203,16 @@ export function codeToGraph(code: string): CodeToGraphResult {
   /**
    * A custom sink's Fn PARAMETER → the root node type it stands for: the
    * march's ray position and direction, the splat's centre (`p`, also the
-   * march's), world centre, facing direction and own colour. ONE node per type
-   * per parse, minted only when the flat body did not already declare it.
+   * march's), world centre, world-space facing direction or normal (Normal
+   * (World); Normal (Local) is a constant built from `n`, SPLAT_CONSTANTS) and
+   * own colour. ONE node per type per parse, minted only when the flat body did
+   * not already declare it.
    */
   const ROOT_PARAMS = new Map<string, string>([
     ['p', 'positionLocal'],
     ['dir', 'rayDirection'],
     ['pw', 'positionWorld'],
-    ['n', 'normalLocal'],
+    ['n', 'normalWorld'],
     ['c', 'vertexColor'],
   ]);
   const rootNodeIds = new Map<string, string>();
@@ -239,8 +275,9 @@ export function codeToGraph(code: string): CodeToGraphResult {
    * once the splat's bindings are undone? Structural, over the shapes
    * graphToCode emits; anything else must match as TEXT. A parameter matches
    * itself or a bare global the splat binds to it (`positionGeometry` ↔ `p`),
-   * a per-splat constant a bare global bound to it (`screenUV` ↔
-   * `vec2(0.5)`); a non-computed member's property is a name, never a binding.
+   * a per-splat constant a bare global bound to it (`uv` ↔
+   * `p.xy.div(1.6).add(0.5)`); a non-computed member's property is a name,
+   * never a binding.
    */
   const sameUnderSplatBinding = (first: t.Node, scoped: t.Node, params: readonly string[]): boolean => {
     const text = (n: t.Node): string | null => (n.start != null && n.end != null ? code.slice(n.start, n.end) : null);
@@ -814,11 +851,51 @@ export function codeToGraph(code: string): CodeToGraphResult {
         warnings.push({ message: 'The Splat Output\'s shade function must return vec4(rgb, opacity) — it was dropped.', line: arg.loc?.start.line, severity: 'warning' });
         return;
       }
-      const [rgb, alpha] = args;
+      let [rgb] = args;
+      const alpha = args[1];
+      // A lit shade's `mul(<rgb>, sp<n>Light)`: the light is the Lit setting,
+      // never a Multiply node (buildSplatFromObject pairs it with the return).
+      if (splatLight) {
+        const lit = callArgs(rgb, 'mul', 2);
+        if (lit && t.isIdentifier(lit[1], { name: splatLight.name })) {
+          rgb = lit[0];
+          splatLight.used = true;
+        }
+      }
       // `c.rgb`, the splat's own colour, is the UNWIRED Color socket.
-      const ownColour =
-        t.isMemberExpression(rgb) && !rgb.computed &&
-        t.isIdentifier(rgb.object, { name: 'c' }) && t.isIdentifier(rgb.property, { name: 'rgb' });
+      const isOwnColour = (e: t.Node): boolean =>
+        t.isMemberExpression(e) && !e.computed &&
+        t.isIdentifier(e.object, { name: 'c' }) && t.isIdentifier(e.property, { name: 'rgb' });
+      // `mul(c.rgb, X)` is Color X TINTING the captured colour — the default
+      // (utils/splatColor.ts); any other colour is Color REPLACING it, which
+      // is the node's `replaceColor` setting. Read before the own-colour test,
+      // or the tint would parse as a Vertex Color → Multiply chain and grow the
+      // graph on every Apply. The product is commutative, so the operands may
+      // come in either order and in the method form a hand edit writes
+      // (`c.rgb.mul(X)`, `X.mul(c.rgb)`) — each is the same tint, never a
+      // replace with its `c.rgb` operand silently dropped.
+      const tintOperand = (e: t.Node): t.Node | null => {
+        const fn = callArgs(e, 'mul', 2);
+        if (fn) return isOwnColour(fn[0]) && !isOwnColour(fn[1]) ? fn[1] : isOwnColour(fn[1]) && !isOwnColour(fn[0]) ? fn[0] : null;
+        if (
+          t.isCallExpression(e) && t.isMemberExpression(e.callee) && !e.callee.computed &&
+          t.isIdentifier(e.callee.property, { name: 'mul' }) && e.arguments.length === 1 && t.isExpression(e.arguments[0])
+        ) {
+          const recv = e.callee.object;
+          const arg = e.arguments[0];
+          if (isOwnColour(recv) && !isOwnColour(arg)) return arg;
+          if (isOwnColour(arg) && !isOwnColour(recv)) return recv;
+        }
+        return null;
+      };
+      const tintArg = tintOperand(rgb);
+      let tinted = false;
+      if (tintArg) {
+        rgb = tintArg;
+        tinted = true;
+      }
+      const ownColour = !tinted && isOwnColour(rgb);
+      if (!ownColour && !tinted) (node.data as { values: Record<string, unknown> }).values.replaceColor = true;
       if (!ownColour) {
         const hex = matchStoredChannelValue('color', rgb);
         if (typeof hex === 'string') setNodeValues(node, { color: hex });
@@ -862,6 +939,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
     const target = ensureSplatOutput();
     const node = nodeById(rawNodes, target)!;
     splatFromReturn = true;
+    let litKey = false;
     for (const p of obj.properties) {
       if (p === spec) continue;
       const key = t.isObjectProperty(p) ? propKeyName(p) : null;
@@ -910,8 +988,62 @@ export function codeToGraph(code: string): CodeToGraphResult {
         drop('only the literal true counts');
         continue;
       }
+      if (key === 'lit') {
+        if (t.isBooleanLiteral(value)) {
+          litKey = value.value;
+          continue;
+        }
+        drop('only the literal true counts');
+        continue;
+      }
       drop('not a Splat Output key');
     }
+    // Lit is the PAIR (utils/splatLight.ts): the return's `lit: true` and the
+    // shade Fn's light line, used by its colour. Either half alone has no
+    // graph equivalent, and says so rather than guessing the other half.
+    const light = splatLight && splatLight.used ? splatLight : null;
+    if (litKey && light) applySplatLight(node, light);
+    else if (litKey) {
+      warnings.push({
+        message: 'splat.lit: the shade function has no Splat Output light line (sp<n>Light) using its colour, so the lighting has no graph equivalent — it was dropped.',
+        line: spec.loc?.start.line,
+        severity: 'warning',
+      });
+    } else if (splatLight) {
+      warnings.push({
+        message: `The light line ${splatLight.name} needs \`lit: true\` in the module's splat return and must light the shade's colour — it was dropped.`,
+        line: spec.loc?.start.line,
+        severity: 'warning',
+      });
+    }
+  };
+
+  /** Set a parsed light on the Splat Output: `lit`, the direction's numbers
+   *  (or wires), and the two colours — a stored swatch, a wire, or UNSET for
+   *  the emitted default literal. Applied at the module's return, but the
+   *  operands sit in the SHADE Fn, so they resolve with its bindings installed
+   *  (`inSplatFn`, as `routeSplatReturn` does): an inline `mx_noise_float(p)`
+   *  there is the noise's unwired position, never a stored `p` that would
+   *  re-emit a bare `p` in the flat body — a ReferenceError at load. */
+  const applySplatLight = (node: AppNode, light: NonNullable<typeof splatLight>): void => {
+    const values = (node.data as { values: Record<string, unknown> }).values;
+    values.lit = true;
+    inSplatFn(light.fn, () => {
+      (['lightX', 'lightY', 'lightZ'] as const).forEach((key, i) => {
+        const n = foldNumericConstant(light.dir[i]);
+        if (n !== undefined) values[key] = n;
+        else wireSplatSocket(light.dir[i], key);
+      });
+      for (const key of ['lightColor', 'ambient'] as const) {
+        const expr = key === 'lightColor' ? light.colour : light.ambient;
+        // The default is a grey `vec3(l, l, l)` literal — however it is spaced.
+        const grey = callArgs(expr, 'vec3', 3);
+        if (grey && grey.every((a) => foldNumericConstant(a) === SPLAT_LIGHT_COLOR_DEFAULTS[key].linear)) continue;
+        const hex = matchStoredChannelValue('color', expr);
+        if (typeof hex === 'string') values[key] = hex;
+        else wireSplatSocket(expr, key);
+      }
+    });
   };
 
   // Build the OutputNode and wire its channels from a return/output expression.
@@ -1104,21 +1236,34 @@ export function codeToGraph(code: string): CodeToGraphResult {
           return;
         }
 
+        // A lit shade Fn's light line (see `splatLight`): the Lit setting, read
+        // off by shape and applied with the return — never graph content.
+        if (/^sp\d+Light$/.test(varName)) {
+          const fnNode = path.getFunctionParent()?.node;
+          const matched = fnNode && splatFns.get(fnNode) === 'Shade' ? matchSplatLightLine(init) : null;
+          if (matched) {
+            splatLight = { name: varName, fn: fnNode!, ...matched, used: false };
+            path.skip();
+            return;
+          }
+        }
+
         // Which custom-sink scope Fn (if any) this declarator sits DIRECTLY in.
         const scopeFn = path.getFunctionParent()?.node;
         const inScopeFn = !!scopeFn && (helperReturnTargets.has(scopeFn) || splatFns.has(scopeFn));
 
-        // `const uv1 = vec2(0.5);` inside a splat Fn: a per-corner source bound
-        // to the splat's centre (SPLAT_CONSTANTS). The flat body declared the
-        // real node under the same name (roots are always emitted there too),
-        // so the existing binding IS the root — the root-parameter rule below,
-        // for a constant. Bound by NAME, not by the bound node's type: a UV
-        // node with rotation parses back as its expanded chain, and rebinding
-        // the name to a fresh `vec2(0.5)` node would silently move what every
-        // consumer reads. An UNBOUND name spelled this way is an ordinary
-        // constant and parses as one.
+        // `const uv1 = p.xy.div(1.6).add(0.5);` inside a splat Fn: a per-corner
+        // source bound to the splat's centre (SPLAT_CONSTANTS, matched by exact
+        // TEXT). The flat body declared the real node under the same name
+        // (roots are always emitted there too), so the existing binding IS the
+        // root — the root-parameter rule below, for a constant. Bound by NAME,
+        // not by the bound node's type: a UV node with rotation parses back as
+        // its expanded chain, and rebinding the name to a fresh node would
+        // silently move what every consumer reads. An UNBOUND name spelled
+        // this way is an ordinary expression and parses as one.
         // (Any expression shape: `modelViewMatrix.mul(vec4(p, 1)).xyz`, the
-        // View Position's binding, is a member expression.)
+        // View Position's binding, is a member expression; Screen UV's is a
+        // call of an arrow.)
         if (
           inScopeFn && splatFns.has(scopeFn!) && varToNodeId.has(varName) &&
           init.start != null && init.end != null

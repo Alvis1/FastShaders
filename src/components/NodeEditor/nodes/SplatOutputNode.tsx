@@ -8,7 +8,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { t, portLabel } from '@/i18n';
 import { isActiveSinkSelector } from './activeSinkSelector';
 import { effectiveExposedPorts } from '@/utils/exposedPorts';
-import { getCostColor, getCostTextColor, getContrastColor, HEX6 } from '@/utils/colorUtils';
+import { getCostColor, getCostTextColor, getContrastColor } from '@/utils/colorUtils';
 import { TypedHandle } from '../handles/TypedHandle';
 import { OutputTitle } from './OutputTitle';
 import { useWiredLabels } from './ShaderNode';
@@ -17,6 +17,8 @@ import { DragNumberInput } from '../inputs/DragNumberInput';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
 import type { MarchNodeConfig } from './RaymarchOutputNode';
+import { isSplatLit, isSplatLightColorPort, SPLAT_LIGHT_COLOR_DEFAULTS, SPLAT_LIGHT_PORTS } from '@/utils/splatLight';
+import { splatStoredColor } from '@/utils/splatColor';
 import './OutputNode.css';
 
 /**
@@ -36,6 +38,14 @@ import './OutputNode.css';
  *                              its own `feather` Fn
  *   Shape — Move, Size       → the `shape` Fn's move, and the footprint (a
  *                              splat-dependent Size is its own `size` Fn)
+ *   Light — Light X/Y/Z,     → a LIT node's key light (utils/splatLight.ts):
+ *           Light colour,      a line inside the `shade` Fn that multiplies
+ *           Ambient            the colour, while the loader passes each
+ *                              splat's surface normal as `n`. Switched by
+ *                              "React to light" in the settings menu; its rows
+ *                              show only while the node is lit (or a wire
+ *                              already reaches one — no edge may point at an
+ *                              unmounted socket).
  *
  * Row contract, the Output's: a WIRED socket shows the incoming value as plain
  * text; an unwired one shows its stored-value widget (the Color swatch, the
@@ -57,6 +67,7 @@ export const SPLAT_NODE_CONFIG: MarchNodeConfig = {
     { label: 'Shade', ports: ['color', 'opacity'] },
     { label: 'Cut', ports: ['cut', 'feather'] },
     { label: 'Shape', ports: ['move', 'size'] },
+    { label: 'Light', ports: [...SPLAT_LIGHT_PORTS] },
   ],
   settings: {
     // Multiplies the splat's own alpha; 0 hides it, 1 leaves it as captured.
@@ -65,8 +76,13 @@ export const SPLAT_NODE_CONFIG: MarchNodeConfig = {
     feather: { step: 0.01, decimals: 2, clamp: (v) => Math.max(0, v) },
     // A footprint multiplier. The loader caps the on-screen growth itself.
     size: { step: 0.05, decimals: 2, clamp: (v) => Math.max(0, v) },
+    // The direction the light comes FROM, world space; the emitted line
+    // normalises it, so only the direction matters.
+    lightX: { step: 0.05, decimals: 2, clamp: (v) => v },
+    lightY: { step: 0.05, decimals: 2, clamp: (v) => v },
+    lightZ: { step: 0.05, decimals: 2, clamp: (v) => v },
   },
-  colorPorts: ['color'],
+  colorPorts: ['color', 'lightColor', 'ambient'],
 };
 
 /** The UI string for a Splat Output whose Color stores nothing — every splat
@@ -77,11 +93,9 @@ export const SPLAT_OWN_COLOUR_KEY = 'Own colour';
  *  white), since clearing returns the splat to its own colour, not to white. */
 export const SPLAT_CLEAR_SWATCH = '#ffffff';
 
-/** A stored Color the emitter will actually use — exactly its `#rrggbb` test,
- *  so the node never shows a swatch for a value the module ignores. */
-export function splatStoredColor(v: unknown): string | null {
-  return typeof v === 'string' && HEX6.test(v) ? v : null;
-}
+/** A stored Color the emitter will actually use (utils/splatColor.ts, which
+ *  the emitter and the resync read too). */
+export { splatStoredColor };
 
 /**
  * Does `values` STORE something under `key` for the colour popover's reset row
@@ -97,6 +111,33 @@ export function splatStoredColor(v: unknown): string | null {
  */
 export function splatClearable(values: Readonly<Record<string, unknown>>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(values, key);
+}
+
+/**
+ * A light colour's swatch (Light colour, Ambient) — ONE component for the node
+ * row and the settings menu row, which differ only in `className`. It shows
+ * the stored swatch, else the default the emitter writes (never the unset
+ * look: an unset light colour still lights), and the reset row returns to that
+ * default — offered only while a colour is stored (`splatClearable`).
+ */
+export function SplatLightColorPicker({ portId, values, className, onPick, onClear }: {
+  portId: 'lightColor' | 'ambient';
+  values: Readonly<Record<string, unknown>>;
+  className: string;
+  onPick: (hex: string) => void;
+  onClear: () => void;
+}) {
+  const dflt = SPLAT_LIGHT_COLOR_DEFAULTS[portId].hex;
+  return (
+    <PaletteColorPicker
+      className={className}
+      history="bracket"
+      value={splatStoredColor(values[portId]) ?? dflt}
+      clearColor={dflt}
+      onClear={splatClearable(values, portId) ? onClear : undefined}
+      onPick={onPick}
+    />
+  );
 }
 
 export const SplatOutputNode = memo(function SplatOutputNode({ id, data, selected }: NodeProps<ShaderFlowNode>) {
@@ -116,16 +157,11 @@ export const SplatOutputNode = memo(function SplatOutputNode({ id, data, selecte
   const cost = data.cost ?? 0;
   // Only EXPOSED sockets render — Color, Opacity, Cut and Move by default,
   // Feather and Size one tick away in the settings menu (utils/exposedPorts.ts
-  // SPLAT_DEFAULT_EXPOSED). Handles mount and unmount with the list, so React
-  // Flow must re-measure on every change or an edge into a freshly shown
-  // socket stays undrawn until a reload.
+  // SPLAT_DEFAULT_EXPOSED).
   const exposedList = effectiveExposedPorts({ id, data } as unknown as ShaderFlowNode);
   const exposedKey = exposedList.join('|');
   const exposed = useMemo(() => new Set(exposedKey.split('|')), [exposedKey]);
-  const updateNodeInternals = useUpdateNodeInternals();
-  useEffect(() => {
-    updateNodeInternals(id);
-  }, [id, exposedKey, updateNodeInternals]);
+  const lit = isSplatLit((data as { values?: unknown }).values);
   const costColor = getCostColor(cost, costColorLow, costColorHigh, darkTheme);
   const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
   const headerTextColor = getContrastColor(costColor);
@@ -134,6 +170,21 @@ export const SplatOutputNode = memo(function SplatOutputNode({ id, data, selecte
   // What is arriving on each wired socket (useWiredLabels: the cheap-string
   // key, the unwrapped-edge rule).
   const wiredLabels = useWiredLabels(id);
+
+  /** Is this socket's row on the node? Exposed — and a Light socket only
+   *  while the node is lit, or when a wire already reaches it. */
+  const shown = (portId: string) =>
+    exposed.has(portId) && (lit || !SPLAT_LIGHT_PORTS.includes(portId) || wiredLabels.has(portId));
+  // Handles mount and unmount with the SET of shown rows — the exposed list,
+  // `lit`, and (while unlit) which Light sockets a wire reaches — so React
+  // Flow must re-measure on every change of that set, or an edge into a
+  // freshly shown socket (an undo bringing a wire back) stays undrawn until a
+  // reload. Keyed on the set itself, so no input to it can be forgotten.
+  const handleKey = def.inputs.filter((p) => shown(p.id)).map((p) => p.id).join('|');
+  const updateNodeInternals = useUpdateNodeInternals();
+  useEffect(() => {
+    updateNodeInternals(id);
+  }, [id, handleKey, updateNodeInternals]);
 
   const setValue = (key: string, v: string | number) => {
     updateNodeData(id, { values: { ...values, [key]: v } });
@@ -149,6 +200,17 @@ export const SplatOutputNode = memo(function SplatOutputNode({ id, data, selecte
     const wired = wiredLabels.get(portId);
     if (wired) {
       return <LiveEdgeValue className="shader-node__edge-val output-node__val" {...wired} />;
+    }
+    if (isSplatLightColorPort(portId)) {
+      return (
+        <SplatLightColorPicker
+          portId={portId}
+          values={values}
+          className="output-node__val"
+          onPick={(hex) => setValue(portId, hex)}
+          onClear={() => clearValue(portId)}
+        />
+      );
     }
     if (config.colorPorts.includes(portId)) {
       const stored = splatStoredColor(values[portId]);
@@ -189,7 +251,7 @@ export const SplatOutputNode = memo(function SplatOutputNode({ id, data, selecte
   };
 
   const rows = (ids: string[]) =>
-    def.inputs.filter((p) => ids.includes(p.id) && exposed.has(p.id)).map((port) => (
+    def.inputs.filter((p) => ids.includes(p.id) && shown(p.id)).map((port) => (
       <div key={port.id} className="output-node__row">
         <TypedHandle type="target" position={Position.Left} id={port.id} dataType={port.dataType} label={port.label} />
         {cell(port.id)}
@@ -225,7 +287,7 @@ export const SplatOutputNode = memo(function SplatOutputNode({ id, data, selecte
         />
         {/* A section whose every socket is hidden is skipped outright — an
             empty labelled band would read as a broken node. */}
-        {config.sections.filter((section) => section.ports.some((p) => exposed.has(p))).map((section, i) => (
+        {config.sections.filter((section) => section.ports.some(shown)).map((section, i) => (
           <div key={section.label}>
             {i > 0 && <div className="output-node__subdivider" />}
             <div className="output-node__section">

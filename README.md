@@ -145,9 +145,11 @@ Drag the `.glb` back onto FastShaders and the import dialog offers **Restore** â
 Drop a `.splat`, `.spz`, `.ply` (a Gaussian-splat PLY without spherical harmonics) or `.ksplat` file on the preview, then add a **Splat Output** from the Output tab and wire it:
 
 - **Cut** removes every splat where the value is above zero. A distance field wired to Cut keeps its inside; **Invert** keeps the outside, and **Feather** softens the edge.
-- **Color** and **Opacity** recolour and fade each splat.
+- **Color** tints each splat's own colour: a pattern or a swatch multiplies it, so white keeps a splat as it was and black darkens it. Tick **Replace own colour** (right-click the Splat Output) to paint over it instead, and also whenever your Color is built from **Vertex Color**, or the splat's colour counts twice. **Opacity** fades each splat.
+- Patterns built from **UV**, such as the Checker or Gradient preset or an Image node, are projected onto the splats from the front, like a slide.
 - **Move** displaces each splat. Keep it to small, smooth fields: splats are still depth-sorted by their original position.
 - **Size** scales each splat.
+- **React to light** (right-click the Splat Output) lights each splat with a key light, using its flattest axis as its surface normal, the way Blender relights splats. Set the light's direction, colour and ambient in the same menu. The captured colours already hold the light of the scan, so the side away from the light darkens. A **Normal** node points at the camera until React to light is on, so a rim or fresnel effect needs it.
 
 Up to 1,000,000 splats. View-dependent colour (spherical harmonics) is not shown. This shades splats; it does not edit the file. To crop, delete or clean splats use [SuperSplat](https://superspl.at/editor), then drop its export here. Opening a shader clears a loaded model, so open the shader first and drop the splat after it, or drop both together.
 
@@ -159,7 +161,7 @@ An exported splat shader needs the splat runtime after the two scripts above, an
 <a-entity splat-model="src: url(scene.splat); kind: splat" shader="src: myshader.js" position="0 1.6 -3"></a-entity>
 ```
 
-`splat-model` scales the scene to a longest side of 1.6 units, the frame the shader was authored in; `size: 0` keeps the file's own units.
+`splat-model` scales the scene to a longest side of 1.6 units, the frame the shader was authored in; `size: 0` keeps the file's own units, and every pattern the shader drives from position or UV (a Checker, a noise, an image on Color) then follows those units instead of the ones you previewed.
 
 ## Tech Stack
 

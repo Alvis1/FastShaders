@@ -399,9 +399,10 @@ exports[`the exported shaderloader module is byte-stable > the Splat Output modu
 //   <script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/fs-splat-0.1.js"></script>
 //   <a-entity splat-model="src: url(scene.splat); kind: splat" shader="src: shader.js"></a-entity>
 // splat-model scales the scene to a longest side of 1.6 (its \`size\`), the frame
-// FastShaders previewed it in; size: 0 keeps the file's own units.
+// FastShaders previewed it in. size: 0 keeps the file's own units, and every
+// pattern driven by position or UV then follows those units, not the preview's.
 
-import { color, length, positionLocal, positionWorld, sub, vec4, Fn } from 'three/tsl';
+import { color, length, mul, positionLocal, positionWorld, sub, vec4, Fn } from 'three/tsl';
 
 export const threeRevision = '184';
 
@@ -415,7 +416,7 @@ export default function() {
   const sp1Shade = Fn(([p, pw, n, c]) => {
   const positionWorld1 = pw;
   const length1 = length(positionWorld1);
-  return vec4(color(0x2d6cdf), length1);
+  return vec4(mul(c.rgb, color(0x2d6cdf)), length1);
   });
   const sp1Shape = Fn(([p, pw, n, c]) => {
   const positionLocal1 = p;

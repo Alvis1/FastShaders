@@ -21,7 +21,10 @@ export type SinkModelIssue =
   /** A Raymarch Output drives through a splat. */
   | 'march-on-splat'
   /** A Raymarch Output drives over a dropped model whose per-mesh Outputs are wired. */
-  | 'march-over-mesh-outputs';
+  | 'march-over-mesh-outputs'
+  /** An UNLIT Splat Output drives a shown splat, and a Normal node feeds it — which
+   *  reads the direction to the camera there, so a rim or lit side comes out flat. */
+  | 'splat-normal-faces-camera';
 
 /**
  * The English sentence for each issue — the lv.json key. `{name}` is the
@@ -38,6 +41,8 @@ export const SINK_MODEL_ISSUE_KEY: { readonly [I in SinkModelIssue]: string } = 
     'An SDF Output marches from a mesh surface, and {name} is a Gaussian splat with no surface. Pick “SDF group” or a mesh in the Model menu.',
   'march-over-mesh-outputs':
     'The SDF Output renders the whole of {name}, so the Output nodes for its meshes are ignored. Click an Output’s preview socket to show them again.',
+  'splat-normal-faces-camera':
+    'On {name}, a Normal node points at the camera, so shading that reads it (a rim, a fresnel, a lit side) looks flat. Tick “React to light” in the Splat Output’s settings to give each splat its own surface normal.',
 };
 
 const NAME_MAX = 40;

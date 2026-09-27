@@ -26,14 +26,18 @@
  *
  * The SPLAT OUTPUT (`splatOutput`) is the second custom sink and the same
  * mechanism over a different set of roots: its four Fns — shade (Color,
- * Opacity), shape (Move, Cut), size and feather — are called ONCE PER SPLAT by loader
- * 0.8's vertex wrapper with `(p, pw, n, c)`: the splat's object-space centre,
- * that centre in world space, the direction from it toward the camera (a splat
- * has no normal) and the splat's own colour. A spec is therefore a
- * `ScopeSpec`: the SOCKETS whose feeders it evaluates and the PARAMETERS (each
- * standing in for a set of root types) its Fn takes. The march's specs are the
- * one-socket, one-parameter case, and emit exactly what they did.
+ * Opacity, and a LIT node's five Light sockets), shape (Move, Cut), size and
+ * feather — are called ONCE PER SPLAT by loader 0.8's vertex wrapper with
+ * `(p, pw, n, c)`: the splat's object-space centre, that centre in world
+ * space, a world-space direction `n` (toward the camera, or — on a lit node —
+ * the splat's own surface normal; see SPLAT_PARAMS) and the splat's own
+ * colour. A spec is therefore a `ScopeSpec`: the SOCKETS whose feeders it
+ * evaluates and the PARAMETERS (each standing in for a set of root types) its
+ * Fn takes. The march's specs are the one-socket, one-parameter case, and emit
+ * exactly what they did.
  */
+import { isSplatLit, SPLAT_LIGHT_PORTS } from './splatLight';
+import { SPLAT_MODEL_SIZE } from './splatFrame';
 import type { AppNode, AppEdge } from '@/types';
 // `getNodeValues` lives in types/node.types.ts, which imports nothing at run
 // time; wireframeMode.ts imports nothing at all. Both keep this a leaf.
@@ -115,18 +119,31 @@ export const MARCH_PRIMARY_SOCKETS: readonly string[] = ['field', 'density'];
 
 /**
  * The splat Fns' parameters, in the order loader 0.8 passes them: `p` the
- * splat's object-space centre, `pw` that centre in world space, `n` the
- * direction from it toward the camera — a splat has no normal, so both normal
- * nodes read the direction it faces — and `c` the splat's own colour (a vec4:
- * rgb, and alpha after the file's opacity), which the Vertex Color node stands
- * for.
+ * splat's object-space centre, `pw` that centre in world space, `n` a WORLD
+ * space direction — toward the camera, since a splat has no normal, so the
+ * normal nodes read the direction it faces — and `c` the splat's own colour (a
+ * vec4: rgb, and alpha after the file's opacity), which the Vertex Color node
+ * stands for. A LIT Splat Output (`values.lit`, the module's `lit: true`)
+ * changes what `n` IS: the loader then passes each splat's own surface normal
+ * — the thinnest axis of its covariance, world space, facing the camera — so
+ * the normal nodes read a real normal there. Nothing may therefore derive a
+ * VIEW direction from `n` (see Ray Direction in SPLAT_CONSTANTS).
+ *
+ * `n` is Normal (World) only. Normal (Local) is `n` taken back to OBJECT space
+ * (a constant, SPLAT_CONSTANTS) — bound to `n` itself it read a world normal,
+ * which stays put while the model turns under it, so a model-space pattern
+ * slid across a turning splat.
  */
 export const SPLAT_PARAMS: readonly ScopeParam[] = [
   { name: 'p', roots: new Set(['positionLocal', 'positionGeometry']) },
   { name: 'pw', roots: new Set(['positionWorld']) },
-  { name: 'n', roots: new Set(['normalLocal', 'normalWorld']) },
+  { name: 'n', roots: new Set(['normalWorld']) },
   { name: 'c', roots: new Set(['vertexColor']) },
 ];
+
+/** The root types a splat Fn reads `n` through — the parameter itself, or the
+ *  object-space constant built from it. */
+export const SPLAT_NORMAL_ROOTS: ReadonlySet<string> = new Set(['normalWorld', 'normalLocal']);
 
 /** The splat Fns' parameter list as emitted: `Fn(([p, pw, n, c]) => …)`. */
 export const SPLAT_FN_PARAMS: readonly string[] = SPLAT_PARAMS.map((p) => p.name);
@@ -139,16 +156,48 @@ export const SPLAT_FN_PARAMS: readonly string[] = SPLAT_PARAMS.map((p) => p.name
  * scope they are bound to the splat's centre instead, so every value the Fns
  * return stays a per-SPLAT value (a per-corner Move or Cut would tear the
  * quad apart).
+ *
+ * UV is a FRONT PROJECTION of the centre (2026-09-27): `splat-model` bakes the
+ * scene centred to a longest side of SPLAT_MODEL_SIZE, so `p.xy` over that
+ * size plus 0.5 maps the scene's front to 0–1 (u left to right, v bottom to
+ * top, three's uv convention) — a Checker tiles across the splats, a Gradient
+ * ramps up them and an Image lands on them like a slide, attached to the model
+ * as it turns. It was `vec2(0.5)`, the same point for every splat, which made
+ * every UV pattern one flat colour (the owner's "Checker is all white"). Screen
+ * UV is the centre's own place on screen, three's convention (0,0 at the TOP
+ * left on both backends): clip = P·MV·(p, 1), clip.xy / clip.w · (0.5, −0.5) +
+ * 0.5. The clip position is ONE node read twice (the arrow's parameter), so
+ * TSL computes it once — two spellings of it were two matrix products per
+ * splat vertex. A UV node's own tiling, rotation and channel are still
+ * replaced by the binding — downstream math (a Checker's count) is what scales
+ * it.
+ *
+ * The UV projection is in the frame `splat-model` bakes (its default `size`,
+ * SPLAT_MODEL_SIZE); a page that keeps the file's own units (`size: 0`) moves
+ * every position- and UV-driven pattern with them, which the exported module's
+ * header says (tslToShaderModule.ts).
+ *
+ * Normal (Local) is `n` in OBJECT space: `n` is world space, and a normal goes
+ * back through the TRANSPOSE of the world matrix (the inverse of the normal
+ * matrix the loader took it out with; the upper 3×3 of Mᵀ·(n, 0)).
  */
 export const SPLAT_CONSTANTS: readonly ScopeConstant[] = [
-  { expr: 'vec2(0.5)', imports: ['vec2'], roots: new Set(['uv', 'screenUV']) },
+  { expr: `p.xy.div(${SPLAT_MODEL_SIZE}).add(0.5)`, imports: [], roots: new Set(['uv']) },
+  {
+    expr: '((clip) => clip.xy.div(clip.w))(cameraProjectionMatrix.mul(modelViewMatrix.mul(vec4(p, 1)))).mul(vec2(0.5, -0.5)).add(0.5)',
+    imports: ['cameraProjectionMatrix', 'modelViewMatrix', 'vec2', 'vec4'],
+    roots: new Set(['screenUV']),
+  },
+  { expr: 'modelWorldMatrix.transpose().mul(vec4(n, 0)).xyz.normalize()', imports: ['modelWorldMatrix', 'vec4'], roots: new Set(['normalLocal']) },
   // The view- and world-space readings three derives from `positionLocal` —
   // which in this vertex stage is the quad CORNER too — restated over the
   // centre: `setupPositionView` is `modelViewMatrix.mul(positionLocal).xyz`,
   // the view direction its negation normalised, the world direction
   // `positionLocal.transformDirection(modelWorldMatrix)`, and the Ray
-  // Direction helper's `normalize(positionWorld − cameraPosition)` is exactly
-  // `−n`.
+  // Direction helper's `normalize(positionWorld − cameraPosition)` over the
+  // world centre. That one used to be `n.negate()`, which is the same number
+  // only while `n` is the direction to the camera — a lit Splat Output hands
+  // the Fns the surface normal as `n` instead.
   { expr: 'modelViewMatrix.mul(vec4(p, 1)).xyz', imports: ['modelViewMatrix', 'vec4'], roots: new Set(['positionView']) },
   {
     expr: 'modelViewMatrix.mul(vec4(p, 1)).xyz.negate().normalize()',
@@ -156,7 +205,7 @@ export const SPLAT_CONSTANTS: readonly ScopeConstant[] = [
     roots: new Set(['positionViewDirection']),
   },
   { expr: 'p.transformDirection(modelWorldMatrix)', imports: ['modelWorldMatrix'], roots: new Set(['positionWorldDirection']) },
-  { expr: 'n.negate()', imports: [], roots: new Set(['rayDirection']) },
+  { expr: 'pw.sub(cameraPosition).normalize()', imports: ['cameraPosition'], roots: new Set(['rayDirection']) },
 ];
 
 /**
@@ -164,13 +213,31 @@ export const SPLAT_CONSTANTS: readonly ScopeConstant[] = [
  * loader reads it per VERTEX (its cut test and fade run in the wrapper), so a
  * Feather that depends on the splat must be a Fn of the splat's own centre —
  * a flat node would be read at each quad CORNER and tear the quad.
+ *
+ * The Light sockets (a LIT Splat Output's key light, utils/splatLight.ts)
+ * belong to `shade`: the light line is emitted inside the shade Fn, so a light
+ * that depends on the splat is read at its centre, per splat, like Color.
+ * Only while the node is lit — see `splatScopes`.
  */
 export const SPLAT_SCOPES: readonly ScopeSpec[] = [
-  { handle: 'shade', sockets: ['color', 'opacity'], params: SPLAT_PARAMS, constants: SPLAT_CONSTANTS, implicitRoots: true },
+  { handle: 'shade', sockets: ['color', 'opacity', ...SPLAT_LIGHT_PORTS], params: SPLAT_PARAMS, constants: SPLAT_CONSTANTS, implicitRoots: true },
   { handle: 'shape', sockets: ['move', 'cut'], params: SPLAT_PARAMS, constants: SPLAT_CONSTANTS, implicitRoots: true },
   { handle: 'size', sockets: ['size'], params: SPLAT_PARAMS, constants: SPLAT_CONSTANTS, implicitRoots: true },
   { handle: 'feather', sockets: ['feather'], params: SPLAT_PARAMS, constants: SPLAT_CONSTANTS, implicitRoots: true },
 ];
+
+/** An UNLIT node's scopes: no Light socket is read anywhere (the light line is
+ *  not emitted), so a wire into one is DORMANT and its feeder stays in the
+ *  flat body like any node nothing reads — never a dead line inside `shade`. */
+const SPLAT_SCOPES_UNLIT: readonly ScopeSpec[] = SPLAT_SCOPES.map((sp) =>
+  sp.handle === 'shade' ? { ...sp, sockets: sp.sockets.filter((s) => !SPLAT_LIGHT_PORTS.includes(s)) } : sp,
+);
+
+/** The scopes a Splat Output's program is split into: every Light socket in
+ *  `shade` while the node is lit, none while it is not. */
+export function splatScopes(node: AppNode): readonly ScopeSpec[] {
+  return isSplatLit((node.data as { values?: unknown }).values) ? SPLAT_SCOPES : SPLAT_SCOPES_UNLIT;
+}
 
 /**
  * The noise family — every registry def in the `noise` category
@@ -236,8 +303,8 @@ export function noisePosIdentifier(raw: unknown): string {
  *   stripes, dataNode, wireframe (grid)   always sample at `uv()`
  *
  * A scope with `implicitRoots` binds the returned type like a wired root
- * (`bindingOfRoot`): `p` for a position, `pw`, `n`, and the per-splat
- * `vec2(0.5)` for a uv. A type the scope does not bind — a pasted
+ * (`bindingOfRoot`): `p` for a position, `pw`, `n` (or its object-space
+ * constant), and the per-splat front projection for a uv. A type the scope does not bind — a pasted
  * `cameraPosition`, the edges wireframe's `bary` attribute — is no implicit
  * root, and the node stays where its wires put it.
  *

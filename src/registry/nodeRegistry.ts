@@ -133,7 +133,7 @@ const definitions: NodeDefinition[] = [
     tslImportModule: 'three/tsl',
     inputs: [],
     outputs: [{ id: 'out', label: 'Normal', dataType: 'vec3' }],
-    description: 'Direction the surface faces.',
+    description: 'Direction the surface faces. On a Gaussian splat it points at the camera until React to light is on.',
   },
   {
     // The world-space counterpart of normalLocal. Needed because the preview
@@ -155,7 +155,7 @@ const definitions: NodeDefinition[] = [
     inputs: [],
     outputs: [{ id: 'out', label: 'Normal', dataType: 'vec3' }],
     description:
-      'Surface normal in world space — where the face points after the model\'s own rotation is applied. Compare against world-space directions such as a view vector; the plain Normal node is object space and turns with the model.',
+      'Surface normal in world space — where the face points after the model\'s own rotation is applied. Compare against world-space directions such as a view vector; the plain Normal node is object space and turns with the model. On a Gaussian splat it points at the camera until React to light is on.',
   },
   {
     type: 'tangentLocal',
@@ -205,7 +205,7 @@ const definitions: NodeDefinition[] = [
     outputs: [{ id: 'out', label: 'Color', dataType: 'vec4' }],
     defaultValues: { index: 0 },
     description:
-      'Colour painted onto the model\'s own vertices and stored in the file. The built-in shapes carry none and show plain white; a dropped .glb keeps its data, a dropped .obj loses it. Index picks the colour set. Also: vertex colour, COLOR_0, vertex attribute, mesh id, face id, painted, baked',
+      'Colour painted onto the model\'s own vertices and stored in the file. The built-in shapes carry none and show plain white; a dropped .glb keeps its data, a dropped .obj loses it. On a Gaussian splat it is the colour each splat was captured with — the Splat Output already multiplies Color by it, so a Color built from it needs Replace own colour. Index picks the colour set. Also: vertex colour, COLOR_0, vertex attribute, mesh id, face id, painted, baked, splat colour, own colour',
   },
   {
     type: 'time',
@@ -295,7 +295,7 @@ const definitions: NodeDefinition[] = [
     ],
     outputs: [{ id: 'out', label: 'UV', dataType: 'vec2' }],
     defaultValues: { channel: 0, tilingU: 1.0, tilingV: 1.0, rotation: 0.0 },
-    description: 'Texture coordinates with tiling and rotation. Defaults to geometry UV. Also: texcoord, texture coordinate',
+    description: 'Texture coordinates with tiling and rotation. Defaults to geometry UV. On a Gaussian splat, UV is projected onto the splats from the front. Also: texcoord, texture coordinate',
   },
   // The Image (Texture) node. Usually created by dropping an image file onto
   // the canvas (that path is not an add surface and is never gated); since GLB
@@ -1340,10 +1340,19 @@ const definitions: NodeDefinition[] = [
     // wired to it keeps its inside — never a Discard: a removed splat's quad
     // collapses off screen and costs no raster.
     //
-    // `values.color` (#rrggbb; absent = the splat's own colour) and
-    // `values.invert` (only the literal `true` counts) live in values ONLY,
-    // never in defaultValues — on a ShaderNode-rendered def that map is the
-    // socket list, and an absent key must keep meaning "untouched".
+    // `values.color` (#rrggbb; absent = the splat's own colour),
+    // `values.invert` and `values.lit` (only the literal `true` counts) live
+    // in values ONLY, never in defaultValues — on a ShaderNode-rendered def
+    // that map is the socket list, and an absent key must keep meaning
+    // "untouched".
+    //
+    // LIT ("React to light", utils/splatLight.ts): the return gains
+    // `lit: true`, so loader 0.8 passes each splat's own SURFACE NORMAL as `n`
+    // (the thinnest axis of its covariance, facing the camera — Blender 5.3's
+    // convention), and the shade Fn multiplies the colour by a world-space key
+    // light from the five Light sockets, which come LAST so a drop-connect
+    // still lands on Color. Their direction defaults are in defaultValues (the
+    // Raymarch Output's); the two colours default to an emitted grey literal.
     //
     // Always offered on the Output tab (owner decision D2), not a companion
     // of the Distance-fields switch.
@@ -1359,10 +1368,15 @@ const definitions: NodeDefinition[] = [
       { id: 'feather', label: 'Feather', dataType: 'float' },
       { id: 'move', label: 'Move', dataType: 'vec3' },
       { id: 'size', label: 'Size', dataType: 'float' },
+      { id: 'lightX', label: 'Light X', dataType: 'float' },
+      { id: 'lightY', label: 'Light Y', dataType: 'float' },
+      { id: 'lightZ', label: 'Light Z', dataType: 'float' },
+      { id: 'lightColor', label: 'Light colour', dataType: 'color' },
+      { id: 'ambient', label: 'Ambient', dataType: 'color' },
     ],
     outputs: [],
-    defaultValues: { opacity: 1, feather: 0, size: 1 },
-    description: 'Shade a dropped Gaussian splat model (.splat, .spz, .ply, .ksplat) one splat at a time: tint it, fade it, remove every splat where Cut is above zero (a distance field wired to Cut keeps its inside; Feather softens that edge and Invert keeps the outside instead), move splats by small smooth offsets, or scale them. Every socket is read once per splat, at its centre; the direction a normal reads is the one facing the camera. Also: gaussian splat, point cloud, 3dgs, cut, clip, tint',
+    defaultValues: { opacity: 1, feather: 0, size: 1, lightX: 0.6, lightY: 0.8, lightZ: 0.5 },
+    description: 'Shade a dropped Gaussian splat model (.splat, .spz, .ply, .ksplat) one splat at a time: tint it, fade it, remove every splat where Cut is above zero (a distance field wired to Cut keeps its inside; Feather softens that edge and Invert keeps the outside instead), move splats by small smooth offsets, or scale them. Every socket is read once per splat, at its centre. Color multiplies the colour each splat was captured with (or replaces it, if set to); UV is projected onto the splats from the front, so patterns and pictures land on them as from a projector. A normal faces the camera unless React to light is on, which lights each splat by a key light, using its flattest axis as its surface normal. Also: gaussian splat, point cloud, 3dgs, cut, clip, tint, relight, lit, diffuse',
   },
   {
     // The direction a fragment's view ray travels, world space, unit length —

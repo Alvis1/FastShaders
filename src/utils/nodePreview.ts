@@ -2,6 +2,7 @@ import type { AppNode, AppEdge, OutputNodeData, PortDefinition, ShaderNodeData }
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { findDefaultOutput, isOutputNode } from '@/utils/outputMaterials';
 import { isSinkNode, isSplatOutput, hasActiveFlag, activeSink, ACTIVE_OUTPUT_KEY, SPLAT_OUTPUT_TYPE } from '@/utils/sdfPartition';
+import { isSplatLit } from '@/utils/splatLight';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { generateEdgeId } from '@/utils/idGenerator';
 
@@ -163,8 +164,12 @@ export function resolveNodePreview(
  * would preview the node on nothing. The route ends on THAT Splat Output
  * instead, cleaned the same way — same id, no stored values (so no swatch, no
  * Opacity, no Invert, no Feather or Size), its flag set — and fed on its own
- * Color socket: every splat is painted with the previewed value, evaluated at
- * its centre. Rules 1 and 2 are unchanged (every sink edge drops, every plain
+ * Color socket, set to REPLACE (utils/splatColor.ts): every splat is painted
+ * with the previewed value, evaluated at its centre, rather than tinted by it,
+ * since previewing a node means seeing ITS value. A LIT node stays lit with an
+ * IDENTITY light (black key, white ambient: the light line is exactly 1), so a
+ * previewed Normal chain still reads each splat's surface normal — dropping
+ * `lit` would hand it the camera direction — while the value is not shaded. Rules 1 and 2 are unchanged (every sink edge drops, every plain
  * Output goes, any other flagged sink loses its flag). A march on a splat
  * document keeps today's treatment: while IT is the active sink, the plain
  * Output anchors, and the unwired, unflagged splat cannot drive.
@@ -190,6 +195,9 @@ export function previewGraph(
         registryType: SPLAT_OUTPUT_TYPE,
         label: NODE_REGISTRY.get(SPLAT_OUTPUT_TYPE)?.label ?? 'Splat Output',
         cost: 0,
+        values: isSplatLit((splat.data as { values?: unknown }).values)
+          ? { replaceColor: true, lit: true, lightColor: '#000000', ambient: '#ffffff' }
+          : { replaceColor: true },
         [ACTIVE_OUTPUT_KEY]: true,
       },
     } as unknown as AppNode;

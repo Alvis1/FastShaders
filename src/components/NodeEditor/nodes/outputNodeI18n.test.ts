@@ -90,10 +90,10 @@ describe('the output nodes are translated on every surface', () => {
     const sections = [...MARCH.matchAll(/\{ label: '([^']+)', ports:/g)].map((m) => m[1]);
     expect(sections.length).toBeGreaterThan(3);
     const splatSections = [...SPLAT.matchAll(/\{ label: '([^']+)', ports:/g)].map((m) => m[1]);
-    expect(splatSections).toEqual(['Shade', 'Cut', 'Shape']);
+    expect(splatSections).toEqual(['Shade', 'Cut', 'Shape', 'Light']);
     sections.push(...splatSections);
     // The splat's own UI strings: the "Own colour" state and its menu.
-    for (const label of ['Own colour', 'Splat Settings', 'Invert cut']) expect(t(label, 'lv'), label).not.toBe(label);
+    for (const label of ['Own colour', 'Splat Settings', 'Invert cut', 'React to light', 'Replace own colour']) expect(t(label, 'lv'), label).not.toBe(label);
     // The Latvian names (owner, 2026-09-26): a Gaussian-splat scene is "Gausa
     // pleķu aina", one splat "pleķis". The marching sink is named after what it
     // renders — "SDF Output" / "SDF Izvade" (owner, 2026-09-26, replacing

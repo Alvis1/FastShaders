@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { marchPartition } from './sdfPartition';
 import { makeNode, makeEdge } from '@/test-utils';
+import type { AppNode } from '@/types';
 
 const part = (nodes: ReturnType<typeof makeNode>[], edges: ReturnType<typeof makeEdge>[], id: string) => {
   const p = marchPartition(nodes, edges, id);
@@ -93,10 +94,34 @@ describe('the ScopeSpec generalisation', () => {
     expect(scopeRootTypes(background)).toEqual(new Set(DIR_ROOT_TYPES));
   });
 
+  it('an UNLIT Splat Output reads no Light socket: a wire into one is dormant and its feeder in no scope', async () => {
+    const { SPLAT_SCOPES, splatScopes, SPLAT_NORMAL_ROOTS } = await import('./sdfPartition');
+    const node = (values: Record<string, unknown>) => {
+      const n = makeNode('sp', 'splatOutput');
+      return { ...n, data: { ...n.data, values } } as AppNode;
+    };
+    expect(splatScopes(node({ lit: true }))).toBe(SPLAT_SCOPES);
+    const unlit = splatScopes(node({}));
+    expect(unlit.map((sp) => [sp.handle, sp.sockets])).toEqual([
+      ['shade', ['color', 'opacity']], ['shape', ['move', 'cut']], ['size', ['size']], ['feather', ['feather']],
+    ]);
+    // Only the literal own `true` lights (the flag rule).
+    expect(splatScopes(node({ lit: 'true' }))).toBe(unlit);
+    // positionWorld → length → Ambient: scoped while lit, flat (in no scope) while not.
+    const nodes = [makeNode('pw', 'positionWorld'), makeNode('len', 'length'), makeNode('sp', 'splatOutput')];
+    const edges = [makeEdge('pw', 'out', 'len', 'v'), makeEdge('len', 'out', 'sp', 'ambient')];
+    expect([...marchPartition(nodes, edges, 'sp', SPLAT_SCOPES).scopes.get('shade')!]).toContain('len');
+    const dormant = marchPartition(nodes, edges, 'sp', unlit);
+    for (const set of dormant.scopes.values()) expect(set.has('len')).toBe(false);
+    // Both normal nodes read `n` — the one question the Normal notice asks.
+    expect([...SPLAT_NORMAL_ROOTS].sort()).toEqual(['normalLocal', 'normalWorld']);
+  });
+
   it('the splat has four scopes over the SAME four parameters and one per-corner constant', async () => {
     const { SPLAT_SCOPES, SPLAT_PARAMS, SPLAT_FN_PARAMS, SPLAT_PRIMARY_SOCKETS, bindingOfRoot, paramOfRoot } = await import('./sdfPartition');
     expect(SPLAT_SCOPES.map((s) => [s.handle, s.sockets])).toEqual([
-      ['shade', ['color', 'opacity']],
+      // A lit node's key light is read in the shade Fn, per splat.
+      ['shade', ['color', 'opacity', 'lightX', 'lightY', 'lightZ', 'lightColor', 'ambient']],
       ['shape', ['move', 'cut']],
       ['size', ['size']],
       // Feather is read per vertex by the loader's cut test, so a
@@ -105,18 +130,35 @@ describe('the ScopeSpec generalisation', () => {
     ]);
     // …but it refines a cut, it is not one: wiring it alone does not drive.
     expect(SPLAT_PRIMARY_SOCKETS).not.toContain('feather');
+    // Nor does a light: it only lights what Color and Opacity already shade.
+    for (const light of ['lightX', 'lightY', 'lightZ', 'lightColor', 'ambient']) expect(SPLAT_PRIMARY_SOCKETS).not.toContain(light);
     for (const s of SPLAT_SCOPES) expect(s.params).toBe(SPLAT_PARAMS);
     expect(SPLAT_FN_PARAMS).toEqual(['p', 'pw', 'n', 'c']);
     const shade = SPLAT_SCOPES[0];
     const roots: [string, string][] = [
       ['positionLocal', 'p'], ['positionGeometry', 'p'], ['positionWorld', 'pw'],
-      ['normalLocal', 'n'], ['normalWorld', 'n'], ['vertexColor', 'c'],
+      ['normalWorld', 'n'], ['vertexColor', 'c'],
     ];
     for (const [type, param] of roots) expect(paramOfRoot(shade, type), type).toBe(param);
     // A per-corner source is a constant, not a parameter.
     expect(paramOfRoot(shade, 'uv')).toBeNull();
-    expect(bindingOfRoot(shade, 'uv')).toEqual({ expr: 'vec2(0.5)', imports: ['vec2'] });
-    expect(bindingOfRoot(shade, 'screenUV')?.expr).toBe('vec2(0.5)');
+    // `n` is WORLD space, so Normal (Local) is a constant: `n` back in object
+    // space through the transposed world matrix — bound to `n` itself it read
+    // a world normal that stayed put while the model turned under it.
+    expect(paramOfRoot(shade, 'normalLocal')).toBeNull();
+    expect(bindingOfRoot(shade, 'normalLocal')).toEqual({
+      expr: 'modelWorldMatrix.transpose().mul(vec4(n, 0)).xyz.normalize()',
+      imports: ['modelWorldMatrix', 'vec4'],
+    });
+    // UV: the FRONT projection of the centre over the baked 1.6 scene; screen
+    // UV: the centre's own place on screen (top-left origin, three's).
+    expect(bindingOfRoot(shade, 'uv')).toEqual({ expr: 'p.xy.div(1.6).add(0.5)', imports: [] });
+    // The clip position is ONE node read twice (the arrow's parameter), so
+    // TSL computes it once (splatOutput.test.ts measures the built shader).
+    expect(bindingOfRoot(shade, 'screenUV')).toEqual({
+      expr: '((clip) => clip.xy.div(clip.w))(cameraProjectionMatrix.mul(modelViewMatrix.mul(vec4(p, 1)))).mul(vec2(0.5, -0.5)).add(0.5)',
+      imports: ['cameraProjectionMatrix', 'modelViewMatrix', 'vec2', 'vec4'],
+    });
     expect(bindingOfRoot(shade, 'positionWorld')).toEqual({ expr: 'pw', imports: [] });
     expect(bindingOfRoot(shade, 'time')).toBeNull();
   });
@@ -364,13 +406,19 @@ describe('implicitRootOf — the reads an UNWIRED input makes', () => {
     const s = SPLAT_SCOPES[0];
     expect(implicitIdentifierOf(s, 'p')).toBe('positionGeometry');
     expect(implicitIdentifierOf(s, 'pw')).toBe('positionWorld');
-    expect(implicitIdentifierOf(s, 'n')).toBe('normalLocal');
+    expect(implicitIdentifierOf(s, 'n')).toBe('normalWorld');
     expect(implicitIdentifierOf(s, 'c')).toBe('vertexColor');
-    expect(implicitIdentifierOf(s, 'vec2(0.5)')).toBe('screenUV');
+    const uvExpr = bindingOfRoot(s, 'uv')!.expr;
+    const screenExpr = bindingOfRoot(s, 'screenUV')!.expr;
+    const localNormalExpr = bindingOfRoot(s, 'normalLocal')!.expr;
+    expect(implicitIdentifierOf(s, uvExpr)).toBe('uv');
+    expect(implicitIdentifierOf(s, screenExpr)).toBe('screenUV');
+    expect(implicitIdentifierOf(s, localNormalExpr)).toBe('normalLocal');
+    expect(implicitIdentifierOf(s, 'vec2(0.5)')).toBeNull();
     expect(implicitIdentifierOf(s, 'q')).toBeNull();
     expect(implicitIdentifierOf(s, 'modelViewMatrix.mul(vec4(p, 1)).xyz')).toBe('positionView');
     // …and every answer binds back to the expression it came from.
-    for (const expr of ['p', 'pw', 'n', 'c', 'vec2(0.5)']) {
+    for (const expr of ['p', 'pw', 'n', 'c', uvExpr, screenExpr, localNormalExpr]) {
       expect(bindingOfRoot(s, implicitIdentifierOf(s, expr)!)?.expr, expr).toBe(expr);
     }
   });
@@ -440,7 +488,15 @@ describe('marchPartition — implicit roots scope the splat, and ONLY the splat'
     expect(bindingOfRoot(s, 'positionView')).toEqual({ expr: 'modelViewMatrix.mul(vec4(p, 1)).xyz', imports: ['modelViewMatrix', 'vec4'] });
     expect(bindingOfRoot(s, 'positionViewDirection')?.expr).toBe('modelViewMatrix.mul(vec4(p, 1)).xyz.negate().normalize()');
     expect(bindingOfRoot(s, 'positionWorldDirection')).toEqual({ expr: 'p.transformDirection(modelWorldMatrix)', imports: ['modelWorldMatrix'] });
-    expect(bindingOfRoot(s, 'rayDirection')).toEqual({ expr: 'n.negate()', imports: [] });
+    // Over the world centre — never `n.negate()`: a LIT Splat Output hands
+    // the Fns the surface normal as `n`, which is no view direction.
+    expect(bindingOfRoot(s, 'rayDirection')).toEqual({ expr: 'pw.sub(cameraPosition).normalize()', imports: ['cameraPosition'] });
+    // The ONE constant built from `n` is Normal (Local) — `n` back in object
+    // space, still a normal, never a view direction.
+    for (const c of s.constants ?? []) {
+      if (c.roots.has('normalLocal')) continue;
+      expect(c.expr, [...c.roots].join()).not.toMatch(/\bn\b/);
+    }
     for (const m of MARCH_SCOPES) {
       for (const type of ['positionView', 'positionViewDirection', 'positionWorldDirection']) expect(scopeRootTypes(m).has(type), `${m.handle} ${type}`).toBe(false);
     }

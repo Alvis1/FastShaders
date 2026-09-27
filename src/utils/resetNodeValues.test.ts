@@ -192,6 +192,31 @@ describe('resetNodeValues — the noise range flag is payload, not a setting', (
   });
 });
 
+describe('resetNodeValues — a Splat Output\'s React to light is its mode, not a setting', () => {
+  // Dropping `lit` switched the light off while any wired Light socket stayed:
+  // a dead row on an unlit node, whose wire the next Apply deleted silently.
+  // Switching the light off is setSplatLit's job (it takes the wires too).
+  it('keeps replaceColor: true too — Reset restores numbers, it never flips paint back into tint', () => {
+    const out = resetNodeValues(def('splatOutput'), { replaceColor: true, color: '#ff0000', opacity: 0.3 } as unknown as Record<string, string | number>);
+    expect(out.replaceColor).toBe(true);
+    expect(out).not.toHaveProperty('color');
+  });
+
+  it('keeps lit: true and resets the light\'s numbers and colours', () => {
+    // `values` is typed string | number, but node data really holds these
+    // booleans (getNodeValues keeps them) — which is what Reset receives.
+    const out = resetNodeValues(def('splatOutput'), { lit: true, lightX: -2, lightColor: '#ff0000', opacity: 0.3, invert: true } as unknown as Record<string, string | number>);
+    expect(out.lit).toBe(true);
+    expect(out.lightX).toBe(0.6);
+    expect(out).not.toHaveProperty('lightColor');
+    expect(out.opacity).toBe(1);
+  });
+
+  it('a lit node at its default light is at defaults — Reset is not offered for the mode alone', () => {
+    expect(isAtDefaultValues(def('splatOutput'), { opacity: 1, feather: 0, size: 1, lightX: 0.6, lightY: 0.8, lightZ: 0.5, lit: true } as unknown as Record<string, string | number>)).toBe(true);
+  });
+});
+
 describe('resetNodeValues — the Image node\'s glTF mapping is payload, not a setting', () => {
   const mapping: Record<string, string | number> = {
     orientation: 'gltf', normalGreen: 'flip', uvSet: 2,

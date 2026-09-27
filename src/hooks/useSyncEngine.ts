@@ -13,6 +13,8 @@ import { carryModelMeshes, isOutputNode } from '@/utils/outputMaterials';
 import { carryMaterialSettings, pairResyncNodes, placeParsedOutputs } from '@/utils/resyncPairing';
 import { sinkCosts } from '@/utils/nodeCost';
 import { carryInactiveSinks } from '@/utils/sinkCarry';
+import { carryDormantLightEdges, carrySplatLightValues } from '@/utils/splatLight';
+import { carrySplatReplaceColor, splatStoredColor } from '@/utils/splatColor';
 import { isDirectAssignmentCode } from '@/engine/evaluateTSLScript';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import { sameGraphSemantics } from '@/utils/graphSemantics';
@@ -339,6 +341,23 @@ export function useSyncEngine() {
                 }
               }
             }
+            // A Splat Output's values the module cannot carry — the light's,
+            // all of them while the parsed node is unlit (a dormant light) and
+            // a wired socket's value while lit (utils/splatLight.ts), and
+            // `replaceColor` while Color is neither wired nor stored, the one
+            // case its return reads the same in both modes (utils/splatColor.ts).
+            if (merged.data.registryType === 'splatOutput') {
+              const oldValues = (match.data as { values?: unknown }).values;
+              if (oldValues && typeof oldValues === 'object') {
+                const old = oldValues as Record<string, unknown>;
+                const wiredIn = (port: string) => result.edges.some((e) => e.target === newNode.id && e.targetHandle === port);
+                const parsedValues = (merged.data as { values?: Record<string, unknown> }).values ?? {};
+                const lit = carrySplatLightValues(parsedValues, old, wiredIn) ?? parsedValues;
+                const colorFed = wiredIn('color') || splatStoredColor(lit.color) !== null;
+                const carried = carrySplatReplaceColor(lit, old, colorFed) ?? lit;
+                if (carried !== parsedValues) (merged.data as Record<string, unknown>).values = carried;
+              }
+            }
             const oldExposed = (match.data as { exposedPorts?: string[] }).exposedPorts;
             if (oldExposed) {
               let next: string[] = oldExposed;
@@ -492,6 +511,24 @@ export function useSyncEngine() {
               finalNodes = [...finalNodes, ...inactiveSinks.nodes];
               remappedEdges.push(...inactiveSinks.edges);
             }
+
+            // Wires into an UNLIT Splat Output's Light sockets are in no line
+            // of the module, so the parse cannot rebuild them (utils/splatLight.ts
+            // `carryDormantLightEdges`, the edge half of the light-value carry
+            // in `mergeMatch`). Inside this gate like every carry above: with
+            // `unpositioned` nodes the old graph may be a different shader (a
+            // bare-script import), where type-only pairing hands unrelated nodes
+            // the old ids and would wire the new document's Light socket from
+            // the previous one's feeder (review 2026-09-27). Before the
+            // auto-expose below, so the carried socket stays on the node.
+            const dormantLight = carryDormantLightEdges(
+              oldNodes,
+              finalNodes,
+              realOldEdges,
+              remappedEdges,
+              new Set(finalNodes.map((n) => n.id)),
+            );
+            if (dormantLight.length > 0) remappedEdges.push(...dormantLight);
           }
 
           // Preserve group nodes from the old graph — codeToGraph doesn't know about

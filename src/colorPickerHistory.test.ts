@@ -54,12 +54,14 @@ const SITES: { file: string; history: 'bracket' | 'none'; count: number; why: st
   {
     file: 'components/NodeEditor/nodes/SplatOutputNode.tsx',
     history: 'bracket',
-    count: 1,
-    why: 'the Splat Output Color swatch is a stored value that emits color(0x…) in the shade Fn — graph content, undoable; its reset row deletes the key (Own colour)',
+    count: 2,
+    why: 'the Splat Output Color swatch is a stored value that emits color(0x…) in the shade Fn — graph content, undoable; its reset row deletes the key (Own colour). The second is SplatLightColorPicker, the ONE Light colour / Ambient swatch of a lit node (emitted as color(0x…) in the light line — graph content too), which the node row and the settings menu row both render',
   },
   {
     file: 'components/NodeEditor/menus/SplatSettingsMenu.tsx',
     history: 'bracket',
+    // count is 1 BECAUSE the Light colours go through SplatLightColorPicker,
+    // counted (and pinned 'bracket') in SplatOutputNode.tsx above.
     count: 1,
     why: 'the same stored Splat Output Color, edited from its settings menu — graph content, undoable',
   },

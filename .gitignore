@@ -26,6 +26,9 @@ vite.config.d.ts
 
 # Local test assets dropped into the app (3D models etc.) — not part of the repo
 .claude/_AppTestRes/
+# ~32 MB of models, splats and HDRIs used for manual testing — a "deploy"
+# commits whatever is pending, and binaries in history bloat every clone.
+Tests/Objects/
 
 # Machine-local editor config (ShaderCarousel Live Server holds a local TLS key passphrase)
 ShaderCarousel/.vscode/
