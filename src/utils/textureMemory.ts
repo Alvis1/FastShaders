@@ -73,7 +73,7 @@
  */
 import type { AppNode, AppEdge } from '@/types';
 import { getNodeValues } from '@/types';
-import { activeSink, isCustomSink } from './sdfPartition';
+import { activeSink, isCustomSink, buildIncoming, closure } from './sdfPartition';
 import { contributingOutputs, parseChannelHandle, outputMaterials, materialTargetNames } from './outputMaterials';
 import { validImageDataUrl } from './imageNode';
 import { isImageChannelHandle } from './imageChannels';
@@ -231,7 +231,7 @@ export function textureMemory(inputs: readonly TextureMemoryInput[]): TextureMem
  */
 export function graphTextureMemory(nodes: readonly AppNode[], unwrappedEdges: readonly AppEdge[]): TextureMemory {
   // EVERY Output that reaches the module, walked as ONE set — the `costSeeds`
-  // rule, restated here for the same reason the BFS below is: a driving
+  // rule, restated here because nodeCost may not be imported (header): a driving
   // custom sink (Raymarch or Splat Output) suppresses every plain Output and
   // seeds alone, otherwise each targeted Output samples its own textures. A
   // single-sink walk counted only the default material's, which since the
@@ -242,22 +242,9 @@ export function graphTextureMemory(nodes: readonly AppNode[], unwrappedEdges: re
   const seeds = sink && isCustomSink(sink) ? [sink] : contributingOutputs(nodes);
   if (seeds.length === 0) return NO_TEXTURE_MEMORY;
 
-  // Reverse BFS from the seeds -- the same walk as nodeCost's `sumReachable`,
-  // restated here (ten lines) because nodeCost may not be imported (header).
-  const incoming = new Map<string, string[]>();
-  for (const e of unwrappedEdges) {
-    const list = incoming.get(e.target);
-    if (list) list.push(e.source);
-    else incoming.set(e.target, [e.source]);
-  }
-  const visited = new Set<string>();
-  const queue = seeds.map((n) => n.id);
-  for (let head = 0; head < queue.length; head++) {
-    const id = queue[head];
-    if (visited.has(id)) continue;
-    visited.add(id);
-    for (const src of incoming.get(id) ?? []) if (!visited.has(src)) queue.push(src);
-  }
+  // The reverse walk the cost pass runs, from the same seeds.
+  const incoming = buildIncoming(unwrappedEdges);
+  const visited = closure(seeds.map((n) => n.id), (id) => incoming.get(id) ?? []);
 
   // Environment is a plain Output's channel, on any material (`env`, `m<n>:env`)
   // that graphToCode EMITS: material 0 always, an added one only while it names

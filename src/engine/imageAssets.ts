@@ -39,26 +39,11 @@ import { FS_PLACEHOLDER_RE } from './glbShaderContract';
 export const IMAGE_ASSET_PREFIX = 'fs-asset:';
 
 /**
- * Matches a placeholder string literal. The key class is `[^"]+` so the match
- * can never run past the closing quote; an unrecognized key simply isn't in the
- * asset map and is left verbatim (the image then fails `decode()` and hits the
- * existing 1x1 black fallback).
- *
- * The LITERAL lives in engine/glbShaderContract.ts (FS_PLACEHOLDER_RE), the
- * zero-import leaf the single-GLB reader (utils/glbShaderExtras.ts) and
- * writer share: that reader may not import this module, which reaches the
- * store. This is the SAME object, not a copy.
+ * Matches a placeholder string literal. The SAME object as glbShaderContract's
+ * FS_PLACEHOLDER_RE (a leaf the single-GLB reader can import), never a copy.
+ * It is /g: iterate with `matchAll`, since `test`/`exec` carry `lastIndex` over.
  */
-const PLACEHOLDER_RE = FS_PLACEHOLDER_RE;
-/**
- * The ONE exported copy of that regex, shared by the sandboxed preview's
- * asset feed (engine/previewAssetFeed.ts, GLB Phase 6 S3) and the single-GLB
- * export's asset table (Phase 7) — whichever needs "which keys does this
- * module reference" iterates it, never a second literal. It is a /g regex:
- * iterate it with `matchAll` (which clones it) rather than `test`/`exec`,
- * whose `lastIndex` would carry over between callers.
- */
-export const IMAGE_PLACEHOLDER_RE = PLACEHOLDER_RE;
+export const IMAGE_PLACEHOLDER_RE = FS_PLACEHOLDER_RE;
 
 export interface ImageAsset {
   /** Map key — `<sanitized node id>-<payload hash>`. */
@@ -69,22 +54,6 @@ export interface ImageAsset {
   src: string;
   /** Sanitized single-line `//` comment describing the image (no leading space). */
   comment: string;
-}
-
-/**
- * FNV-1a (32-bit) over the stored payload. The hash rides in the placeholder so
- * that changing an image's BYTES always changes the generated code — consumers
- * (the debounced preview rebuild, the srcDoc memo) key their invalidation on
- * the code string, and without it swapping in a different image of identical
- * dimensions would leave `code` untouched and the preview stale. It also keys
- * the decode memo below, so the same digest decides both identities. The
- * round is `fnv1a32Hex` (utils/payloadDigest.ts), the one FNV-1a copy, moved
- * there verbatim so these placeholders are byte-identical. It is asked through
- * `payloadDigests` (below), which only remembers what that round returned, so
- * the placeholder a memo hit produces is the one a fresh hash would.
- */
-function hashPayload(s: string): string {
-  return payloadDigests.get(s);
 }
 
 /** Node ids reach us from imported project JSON — reduce to a literal-safe class. */
@@ -146,6 +115,9 @@ let counters = { digests: 0, decodes: 0 };
  * payload strings alive, but those are the strings the store already shares
  * between nodes and history entries (Phase 2). After a NEW or an import, old
  * ones stay pinned until evicted, as the decode memo's `src` values do.
+ *
+ * The hash rides in the placeholder so changed BYTES change the generated code
+ * (consumers invalidate on the code string), and it keys the decode memo too.
  *
  * Twice the decode memo's bounds, so for ordinary payloads this is not the
  * tighter of the two: every decode lookup is preceded by a digest lookup of the
@@ -235,7 +207,7 @@ export function imageAssetFor(
   // lookup anyway — this replaces that with one hash and a short key. The hash
   // itself is memoized too (`payloadDigests`), so a pass that changed no
   // payload runs no FNV round at all.
-  const payloadHash = hashPayload(raw);
+  const payloadHash = payloadDigests.get(raw);
   const decoded = memoPayload(
     `${valueNum(values.width)}x${valueNum(values.height)}|${raw.length}|${payloadHash}`,
     () => {
@@ -293,7 +265,7 @@ export function collectImageAssets(nodes: AppNode[]): Map<string, string> {
  */
 export function inlineImageAssets(code: string, assets: Map<string, string>): string {
   if (assets.size === 0 || !code.includes(IMAGE_ASSET_PREFIX)) return code;
-  return code.replace(PLACEHOLDER_RE, (whole, key: string) => {
+  return code.replace(IMAGE_PLACEHOLDER_RE, (whole, key: string) => {
     const src = assets.get(key);
     return src === undefined ? whole : `"${src}"`;
   });

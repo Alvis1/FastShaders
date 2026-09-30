@@ -86,8 +86,12 @@ describe('the DOM half', () => {
     expect(editor).toContain("setAttribute('data-fs-labels-shown', '')");
     expect(editor).toContain("removeAttribute('data-fs-labels-shown')");
     expect(editor).not.toContain("classList.add('fs-labels-shown')");
-    // Node ids come out of .fastshader files, so the selector is escaped.
-    expect(editor).toContain('CSS.escape(peekNodeId)');
+    // Node ids come out of .fastshader files, so the selector is escaped —
+    // in the ONE helper every node-wrapper lookup goes through.
+    expect(editor).toContain('nodeEl(peekNodeId)');
+    const helper = readFileSync(new URL('./nodeElement.ts', import.meta.url), 'utf8');
+    expect(helper).toContain('[data-id="${CSS.escape(id)}"]');
+    expect(editor).not.toContain('.react-flow__node[data-id=');
   });
 
   it('shows the label the socket already has, in its one placement', () => {

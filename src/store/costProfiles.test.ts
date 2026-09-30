@@ -3,7 +3,7 @@ import { useAppStore, VR_HEADSETS, resolveDeviceBudget, resolveDeviceTextureDim 
 import { getCost, setCostOverrides } from '@/utils/nodeCost';
 import { parseCostFile, buildProfileFile } from '@/utils/costOverride';
 import complexityData from '@/registry/complexity.json';
-import { makeNode, makeEdge } from '@/test-utils';
+import { makeNode, makeEdge, stubLocalStorage } from '@/test-utils';
 import type { AppNode } from '@/types';
 
 const BASE = (complexityData as { costs: Record<string, number> }).costs;
@@ -15,6 +15,7 @@ function seedGraph() {
     nodes: [makeNode('out', 'output'), makeNode('v', 'voronoi')],
     edges: [makeEdge('v', 'out', 'out', 'color')],
     costProfiles: [],
+    costBudgetOverrides: Object.create(null) as Record<string, number>,
     selectedHeadsetId: 'quest3',
     totalCost: 0,
   });
@@ -22,12 +23,7 @@ function seedGraph() {
 
 describe('cost profiles (store lifecycle)', () => {
   beforeEach(() => {
-    const store: Record<string, string> = {};
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => store[k] ?? null,
-      setItem: (k: string, v: string) => { store[k] = v; },
-      removeItem: (k: string) => { delete store[k]; },
-    });
+    stubLocalStorage();
     seedGraph();
   });
 

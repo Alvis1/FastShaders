@@ -186,15 +186,18 @@ export const ColorNode = memo(function ColorNode({
       >{label}</span>
       {/* Portals to the body (or the fullscreen element), so nesting it here
           costs the node nothing — it never becomes a child of the swatch and
-          never scales with the canvas zoom. */}
-      <ColorPickerPopover
-        anchor={nodeRef.current}
-        open={pickerOpen}
-        onClose={closePicker}
-        value={hex}
-        onPick={handlePick}
-        history="bracket"
-      />
+          never scales with the canvas zoom. Mounted only while open, so a
+          closed node carries none of the popover's hooks. */}
+      {pickerOpen && (
+        <ColorPickerPopover
+          anchor={nodeRef.current}
+          open={pickerOpen}
+          onClose={closePicker}
+          value={hex}
+          onPick={handlePick}
+          history="bracket"
+        />
+      )}
       <TypedHandle
         type="source"
         position={handlePosition}

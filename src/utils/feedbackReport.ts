@@ -128,10 +128,10 @@ function group(n: number): string {
 /**
  * Byte size at a sensible unit; models run from a few KB to tens of MB.
  *
- * THE app-wide one: `engine/imageAssets.ts` sizes the line comment beside every
- * emitted image `.src` with it too, so keep the output ASCII — no locale digit
- * grouping, i.e. never `group()`'s `toLocaleString`: that comment ships inside
- * exported `.js` files.
+ * `engine/imageAssets.ts` sizes the comment beside every emitted image `.src`
+ * with it too, and that ships inside exported `.js` files — so the output must
+ * stay ASCII (never `group()`'s `toLocaleString`). The locale-aware formatter
+ * for a notice is `formatSize.formatMiB`.
  */
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -175,20 +175,6 @@ function projectRows(p: FeedbackProject): [string, string][] {
 }
 
 /**
- * Which backend the sandboxed preview will run on, as a diagnostic string.
- *
- * MIRRORS `__fsForceWebGL2()` emitted by `engine/tslToPreviewHTML.ts` — that
- * function is emitted as source-code strings for the iframe, so it cannot be
- * imported and called here. `feedbackReport.test.ts` guards the pair against
- * drift by asserting both agree on the UA shapes that matter; if you change the
- * rule in one place, that test fails until you change it in the other.
- *
- * This matters because the app's most-reported symptom — "the preview is
- * blank" — has historically been a backend question (three r184's WebGPU path
- * does not paint on Apple WebKit), and a report that answers it up front is the
- * difference between a diagnosable ticket and a round trip.
- */
-/**
  * The platform half of the rule, as the REASON it forces (null = platform
  * doesn't force). Split out so ShaderPreview's WGSL/GLSL toggle can derive
  * its locked state from the SAME statement of the rule instead of a third
@@ -211,6 +197,20 @@ export function platformWebGL2Reason(
   return null;
 }
 
+/**
+ * Which backend the sandboxed preview will run on, as a diagnostic string.
+ *
+ * MIRRORS `__fsForceWebGL2()` emitted by `engine/tslToPreviewHTML.ts` — that
+ * function is emitted as source-code strings for the iframe, so it cannot be
+ * imported and called here. `feedbackReport.test.ts` guards the pair against
+ * drift by asserting both agree on the UA shapes that matter; if you change the
+ * rule in one place, that test fails until you change it in the other.
+ *
+ * This matters because the app's most-reported symptom — "the preview is
+ * blank" — has historically been a backend question (three r184's WebGPU path
+ * does not paint on Apple WebKit), and a report that answers it up front is the
+ * difference between a diagnosable ticket and a round trip.
+ */
 export function previewBackend(
   userAgent: string,
   platform: string,

@@ -1,11 +1,9 @@
 /**
  * THE ONE COPY MODULE of the single-GLB export (Phase 7; integration §3 C14):
  * every sentence the export shows, kept out of the components so a node test
- * can render each one in both languages (the limitNoticeCopy precedent).
- * Step 4 holds the build's words — why a `.glb` could not be built, the
- * "too large to open again" pre-flight with its "Export WebP only" pair, and
- * the report lines after a build; Step 7 adds the popover, availability and
- * modal strings here too, never in a second module.
+ * can render each one in both languages (the limitNoticeCopy precedent):
+ * the build's refusals, the pre-flight, the report lines, the popover,
+ * availability and modal strings — never in a second module.
  *
  * Every sentence with a placeholder is filled in ONE `fillTemplate` pass (a
  * file name spelling `{limit}` cannot capture a later slot); a `{name}` is
@@ -20,7 +18,7 @@ import type { SingleGlbTooLarge } from './exportPreflight';
 import type { GlbRepackSize } from './glbRepack';
 import type { SingleGlbRefusalReason } from '@/engine/exportSingleGlb';
 import type { GlbSlotNote, GlbSlotProblem } from '@/engine/glbExportPlan';
-import type { GlbExportAvailability } from './glbExportAvailability';
+import type { GlbExportAvailability, GlbExportUnavailable } from './glbExportAvailability';
 import type { Ktx2Refusal } from './ktx2Encoder';
 import { FS_EMBED_ASSET_BYTES_MAX, FS_EMBED_ASSETS_MAX, FS_EMBED_TOTAL_BYTES_MAX } from '@/engine/glbShaderContract';
 
@@ -69,13 +67,8 @@ export const GLB_EXPORT_KEYS = {
   reportProblems:
     'Texture slots that other viewers will show without a texture, because the shader no longer takes them straight from the model’s textures: {n}.',
   reportApproximated: 'Some texture placements could only be approximated for other viewers.',
-  // ── Step 7: the EXPORT popover, the availability line and the modal ──────
-  formatBundle: 'Shader file (.js — a .zip when it carries images or the model)',
-  formatGlb: 'One .glb: the 3D model with its textures and this shader inside',
+  // ── Step 7: the availability line and the modal ─────────────────────────
   unavailableUnreadable: '{name} could not be read for packing, so it can only be exported inside a .zip.',
-  meshNoteGlb: 'The .glb is the model itself, so it always carries it — untick to export the shader file without the model instead.',
-  popoverNoteGlb:
-    'Exports {file}. Any 3D viewer opens it as an ordinary model; in A-Frame, a-frame-shaderloader 0.8 runs the shader inside with shader="src: model". Use src: model only for files you trust.',
   exportTitleGlb:
     'Download {file} — the 3D model with its textures and this shader inside; a-frame-shaderloader 0.8 runs it with shader="src: model"',
   building: 'Building {file}…',
@@ -252,25 +245,25 @@ export function glbExportReportLines(
   return glbExportReportNoteLines(size, problems, notes, ktx2).map((l) => glbExportNoteLineText(l, lang));
 }
 
+/** The build refusal that says the same thing. The record is exhaustive, so a
+ *  new reason fails `tsc` here rather than rendering as nothing. */
+const UNAVAILABLE_AS_REFUSAL = {
+  'no-model': 'no-model',
+  obj: 'not-gltf',
+  splat: 'splat-model',
+  'external-data': 'external-data',
+} as const satisfies Record<Exclude<GlbExportUnavailable, 'unreadable'>, SingleGlbRefusalReason>;
+
 /**
- * Why one `.glb` is not on offer (`glbExportAvailability`) — the popover's
- * reason line under the disabled radio, and the failed dialog's `{reason}`
- * when the build refuses for the same cause. The switch is exhaustive, so a
- * new reason fails `tsc` here rather than rendering as nothing.
+ * Why one `.glb` is not on offer (`glbExportAvailability`) — EXPORT's tooltip
+ * while a dropped model it cannot pack is on screen (Toolbar
+ * `exportWhyNotGlb`: why the export is the `.zip`), and the failed dialog's
+ * `{reason}` when the build refuses for the same cause.
  */
 export function glbUnavailableText(a: GlbExportAvailability, lang: Language): string | null {
   if (a.ok) return null;
-  const name = quoted(a.name);
-  switch (a.reason) {
-    case 'no-model':
-      return t(K.noModel, lang);
-    case 'obj':
-      return fillTemplate(t(K.notGltf, lang), { name: name ?? '.obj' });
-    case 'splat':
-      return fillTemplate(t(K.notGltfSplat, lang), { name: name ?? '.splat' });
-    case 'external-data':
-      return fillTemplate(t(K.externalData, lang), { name: name ?? '.gltf' });
-    case 'unreadable':
-      return fillTemplate(t(K.unavailableUnreadable, lang), { name: name ?? '.glb' });
+  if (a.reason === 'unreadable') {
+    return fillTemplate(t(K.unavailableUnreadable, lang), { name: quoted(a.name) ?? '.glb' });
   }
+  return glbExportRefusalText(UNAVAILABLE_AS_REFUSAL[a.reason], lang, { name: a.name });
 }

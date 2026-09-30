@@ -1,35 +1,14 @@
 /**
  * Pure decision layer for the drop-time image re-encode: which pixel
- * dimensions to target, and which codecs to try in which order.
+ * dimensions to target, and which codecs to try in which order. Split out of
+ * `imageImport.ts` (DOM-only) so every rule is node-testable.
  *
- * Split out of `imageImport.ts` (DOM-only, untestable under the node env) so
- * every rule that can be reasoned about without a canvas is node-testable.
- *
- * ── Power of two ──────────────────────────────────────────────────────────
- * ALWAYS, under "convert" (owner rule, 2026-09-10: "use power of two always;
- * jump up if it is near 80 percent"). Per axis, INDEPENDENTLY:
- *
+ * Power of two: ALWAYS under "convert", per axis INDEPENDENTLY —
  *   - already a power of two → unchanged;
  *   - at or above POT_ROUND_UP_RATIO (80 %) of the next power of two → round
  *     UP to it (1920 → 2048, 1700 → 2048), unless that exceeds the device cap;
  *   - otherwise → round DOWN (1080 → 1024, 1600 → 1024, 1280 → 1024).
- *
- * So the largest growth on an axis is 1/0.8 = 1.25× and the largest shrink
- * just under 1.6×; 1920×1080 lands on 2048×1024 (+1 % pixels), never on a
- * square. Nothing in three r184 REQUIRES POT — WebGL2 and WebGPU both sample
- * NPOT textures with RepeatWrapping and full mips — so this is a deliberate
- * texture-hygiene choice, and it is what makes the resolution ladder a clean
- * 2048 / 1024 / 512 / 256 sequence.
- *
- * What it replaced: a conservative snap that took the NEAREST power of two
- * only when the move was within 1.25× up / 1.15× down (so 1280×720 stayed
- * NPOT), and skipped binary-alpha cutouts and low-colour sources entirely
- * because a bilinear resample frays a cutout's edge and blurs pixel art.
- * Those skips are GONE with "always" — such images are now resampled too, and
- * that damage is real. The escape hatch is unchanged: the caller keeps the
- * pre-POT encode as the node's "original" (see imageOriginCache), "Revert to
- * original" restores it exactly, and declining conversion at drop time ("No"
- * in the import dialog) still stores the image untouched.
+ * Why: docs/dev/images-and-textures.md § What the conversion does.
  */
 
 /** An axis at or above this fraction of the NEXT power of two rounds UP to it;
@@ -41,30 +20,9 @@ export const POT_MIN_DIM = 64;
 export const MAX_TEXTURE_DIM = 8192;
 
 /**
- * The resolution ladder offered by the Image node's settings menu — POWER-OF-
- * TWO sizes derived from the ORIGINAL source, so a user who dropped a 4 K photo
- * onto a node that only ever shows a blurred backdrop can spend a tenth of the
- * bandwidth on it.
- *
- * The top rung is the original snapped by the SAME rule the drop applies
- * (`potTarget`, 80 % round-up, capped at the device) — so a freshly converted
- * image is ON the ladder at its top rung — and each further rung halves both
- * axes, which keeps every rung a power of two. Anchored to the ORIGINAL rather
- * than to what is currently stored, which is what makes the choice reversible:
- * an anchor that moved with each pick could only ever descend.
- *
- * `original` marks a rung whose size IS the source's (a source that was
- * already a power of two within the cap); picking it restores the original
- * rather than re-encoding it. Any other source's exact size is not a rung —
- * "Revert to original" is the way back to it.
- *
- * The floor is a SHORT-side rule, so a panorama is not cut off early by its
- * long side still being generous. It is 8 px (owner, 2026-09-10: "allow to go
- * as low as 8px") — it was 64 behind a fixed list of four rungs, but a tiny
- * texture is a legitimate thing to want: a palette strip, a pixel-art source,
- * a deliberately blocky look with Nearest filtering. So the ladder halves until
- * the short side would drop below the floor, and a 2048×1024 original offers
- * eight rungs down to 16×8.
+ * The Image node's resolution ladder: POWER-OF-TWO sizes anchored to the
+ * ORIGINAL (top rung = its `potTarget`, each further rung halves both axes) down
+ * to this SHORT-side floor. See docs/dev/images-and-textures.md § RESOLUTION.
  */
 export const RESOLUTION_MIN_DIM = 8;
 
@@ -128,9 +86,7 @@ export interface EncodeCaps {
 }
 
 /** One pass over the decoded pixels; drives the codec choice (an image with
- *  alpha never becomes a JPEG). It also carried a binary-alpha flag and a
- *  distinct-colour count for the POT skip rules until 2026-09-10, when the
- *  snap became unconditional and nothing read them any more. */
+ *  alpha never becomes a JPEG). */
 export interface PixelStats {
   /** Any pixel with alpha < 255. */
   alpha: boolean;

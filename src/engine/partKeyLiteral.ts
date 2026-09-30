@@ -13,48 +13,10 @@
  */
 import { safeJsonReviver } from '@/utils/safeJson';
 
-// ── moduleStringLiteral ─────────────────────────────────────────────────────
-//
-// A mesh name (and a glTF material name in a model signature) as a JS string
-// literal that is safe in BOTH places the generated module lands:
-//
-//  - `JSON.stringify` is the base, because a name is not an identifier —
-//    `Body.001` and `my mesh` are both legal, so the key must be quoted;
-//  - `*/` is escaped because the exported `.js` carries the project block as a
-//    BLOCK COMMENT, and an unescaped star-slash in any string of the module
-//    would end that comment early;
-//  - `<` is escaped because the module is inlined into an HTML `<script>` by
-//    tslToPreviewHTML, and the HTML tokenizer ends that element at the first
-//    `</script` in the raw text no matter that it sits inside a JS string
-//    literal. A mesh name is attacker-chosen (it comes out of a dropped glTF,
-//    and out of the `meshTarget` a shared `.fastshader` carries), so a name
-//    spelling `x</script><img src=x onerror=…>` would close the script early
-//    and run as live markup. In the sandboxed preview that is contained by the
-//    opaque origin, but the XR popup is a TOP-LEVEL document at the app's real
-//    origin, where it would be arbitrary code with the user's storage.
-//    Escaping `<` alone is enough — every breakout sequence (`</script`,
-//    `<!--`, `<script`) starts with one.
-//  - U+2028/U+2029 are escaped because they are JS LINE TERMINATORS that
-//    `JSON.stringify` leaves raw: `parseBody` and `scriptToTSL` match the
-//    return object one LINE at a time, so a raw one splits the return line
-//    and the whole return is kept as a body statement — no colorNode
-//    translation, no `parts: {}`, every index section silently painting
-//    nothing. A signature name admits any string, so a dropped `.glb` reaches
-//    this.
-//
-// Every escape keeps the string's VALUE identical: `/`, `<` and the two
-// separators parse back to themselves, so the emitted key still matches the
-// mesh exactly.
-// (`tslToPreviewHTML` escapes the whole embedded module the same way — this is
-// the source-side half of a defence written at both ends, because the sink
-// protects every other string in the module and this protects the key wherever
-// else it is written.)
-//
-// Names reaching here have already passed `isUsableMeshName` (a mesh name) or
-// `sanitizeModelSignature` (a signature name — which admits ANY string, `"}:,`
-// included, so the escaping here is load-bearing); this is the encoding step,
-// not the validation step. Moved here verbatim from graphToCode's private
-// `partKeyLiteral` (GLB Phase 5 Step 5), which now aliases it.
+// A mesh or signature name as a JS string literal, safe in a block comment
+// (star-slash), an inline <script> (`<`) and the line-at-a-time return parse
+// (U+2028/9, which JSON.stringify leaves raw). Every escape keeps the VALUE;
+// encoding, not validation: docs/dev/outputs-and-materials.md, per-mesh rule (5).
 export function moduleStringLiteral(s: string): string {
   return JSON.stringify(s)
     .replace(/\*\//g, '*\\u002F')
@@ -64,24 +26,9 @@ export function moduleStringLiteral(s: string): string {
 }
 
 /**
- * The colon that separates a `parts` entry's KEY from its body.
- *
- * Not `indexOf(':')`: the key is a JSON string literal and a mesh name may
- * legally contain a colon. three's `PropertyBinding.sanitizeNodeName` strips
- * `:` so no glTF name reaches here with one — but OBJ names never pass through
- * that sanitizer, so a Maya-style `g Char:Body` really does land in the scene
- * as `Char:Body`, and `isUsableMeshName` deliberately admits it (refusing it
- * would hide a mesh that is visibly right there). Splitting on the first colon
- * cut INSIDE the literal, the body then failed the `{` check, and the whole
- * part was skipped: the canvas showed the mesh targeted, the code panel showed
- * the part, and the module silently omitted it — the mesh rendered the default
- * material with no error and no warning chip, because the name IS in the
- * inventory. Exactly the "right-looking source, wrong picture, no error"
- * failure the parts block is written to avoid.
- *
- * Walks the leading string literal honouring backslash escapes, then returns
- * the next colon. -1 when the entry does not start with a string literal (the
- * caller's `"` check rejects it anyway) or the literal never closes.
+ * The colon that ends a `parts` entry's KEY. Not `indexOf(':')`: the key is a
+ * JSON string literal and an OBJ mesh name may contain a colon (`Char:Body`), see
+ * docs/dev/outputs-and-materials.md, per-mesh rule (5). -1 if it never closes.
  */
 export function partEntryColon(entry: string): number {
   let i = 0;

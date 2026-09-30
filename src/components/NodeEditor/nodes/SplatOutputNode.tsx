@@ -8,7 +8,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { t, portLabel } from '@/i18n';
 import { isActiveSinkSelector } from './activeSinkSelector';
 import { effectiveExposedPorts } from '@/utils/exposedPorts';
-import { getCostColor, getCostTextColor, getContrastColor } from '@/utils/colorUtils';
+import { useCostChrome } from './useCostChrome';
 import { TypedHandle } from '../handles/TypedHandle';
 import { OutputTitle } from './OutputTitle';
 import { useWiredLabels } from './ShaderNode';
@@ -143,11 +143,6 @@ export function SplatLightColorPicker({ portId, values, className, onPick, onCle
 export const SplatOutputNode = memo(function SplatOutputNode({ id, data, selected }: NodeProps<ShaderFlowNode>) {
   const def = NODE_REGISTRY.get('splatOutput')!;
   const config = SPLAT_NODE_CONFIG;
-  const costColorLow = useAppStore((s) => s.costColorLow);
-  const costColorHigh = useAppStore((s) => s.costColorHigh);
-  // `codeEditorTheme` is the app-wide dark switch (the store field keeps its
-  // historical name); the header mixes into the card, which follows it.
-  const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const setActiveOutput = useAppStore((s) => s.setActiveOutput);
   const language = useAppStore((s) => s.language);
@@ -162,9 +157,7 @@ export const SplatOutputNode = memo(function SplatOutputNode({ id, data, selecte
   const exposedKey = exposedList.join('|');
   const exposed = useMemo(() => new Set(exposedKey.split('|')), [exposedKey]);
   const lit = isSplatLit((data as { values?: unknown }).values);
-  const costColor = getCostColor(cost, costColorLow, costColorHigh, darkTheme);
-  const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
-  const headerTextColor = getContrastColor(costColor);
+  const { costColor, headerTextColor, costTextColor } = useCostChrome(cost);
   const values = getNodeValues({ id, data } as unknown as ShaderFlowNode);
 
   // What is arriving on each wired socket (useWiredLabels: the cheap-string

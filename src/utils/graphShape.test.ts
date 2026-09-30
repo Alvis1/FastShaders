@@ -10,6 +10,7 @@ import {
 import { loadGraph } from '@/store/useAppStore';
 import { getNodeValues } from '@/types';
 import type { AppNode } from '@/types';
+import { stubLocalStorage } from '@/test-utils';
 
 /**
  * The element-shape gate for the untrusted graph restore paths.
@@ -125,12 +126,7 @@ describe('loadGraph survives a poisoned fs:graph', () => {
   afterAll(() => vi.unstubAllGlobals());
 
   function stub(payload: unknown) {
-    const store: Record<string, string> = { 'fs:graph': JSON.stringify(payload) };
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => store[k] ?? null,
-      setItem: (k: string, v: string) => { store[k] = v; },
-      removeItem: (k: string) => { delete store[k]; },
-    });
+    stubLocalStorage({ 'fs:graph': JSON.stringify(payload) });
   }
 
   it('returns the repaired graph rather than null, so the demo graph cannot replace it', () => {

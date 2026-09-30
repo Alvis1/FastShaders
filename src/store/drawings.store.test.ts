@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { HISTORY_IDLE } from '@/test-utils';
+import { HISTORY_IDLE, stubLocalStorage } from '@/test-utils';
 import { useAppStore, loadGraph, setGraphPersistence, cancelPendingGraphSave } from './useAppStore';
 import type { DrawStroke } from '@/utils/drawings';
 import { MAX_STROKES } from '@/utils/drawings';
@@ -21,12 +21,7 @@ describe('store drawings slice', () => {
   beforeEach(() => {
     cancelPendingGraphSave();
     vi.useFakeTimers();
-    const mem: Record<string, string> = {};
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => mem[k] ?? null,
-      setItem: (k: string, v: string) => { mem[k] = v; },
-      removeItem: (k: string) => { delete mem[k]; },
-    });
+    stubLocalStorage();
     setGraphPersistence(true);
     // Full history reset between scenarios — a prior undo() leaves isUndoRedo
     // true, which (correctly) suppresses the next pushHistory.

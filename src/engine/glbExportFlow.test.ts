@@ -1,5 +1,5 @@
 /**
- * The EXPORT flow when the Format is one `.glb` (engine/exportShader.ts's
+ * The EXPORT flow when the export is one `.glb` (engine/exportShader.ts's
  * `buildShaderExportChecked`), over the REAL store and the REAL composer: the
  * three user surfaces hand it a pre-flight ask and the GLB dialog's UI, and it
  * comes back with either a `.glb`, the `.js`/`.zip` bundle, or null.
@@ -21,7 +21,9 @@ import {
 import { graphToCode } from './graphToCode';
 import { readFsGlbPointers } from './glbShaderContract';
 import { parseGlbContainer } from '@/utils/glbContainer';
+import { readZip } from '@/utils/zipReader';
 import { createPreviewMesh, type PreviewMesh } from '@/utils/previewMesh';
+import type { PreviewShape } from './exportModel';
 import { safeJsonReviver } from '@/utils/safeJson';
 import { canonicalSrc, fakeWebp, makeEdge, makeNode, makeRealPng, repackBaseGlb } from '@/test-utils';
 import type { AppEdge, AppNode } from '@/types';
@@ -59,7 +61,7 @@ function graph(signature: string[] = SIG): { nodes: AppNode[]; edges: AppEdge[] 
   return { nodes: [out, img], edges: [makeEdge('T', 'out', 'out', 'm1:color')] };
 }
 
-function setStore(g: { nodes: AppNode[]; edges: AppEdge[] }, previewMesh: PreviewMesh | null, asGlb = true) {
+function setStore(g: { nodes: AppNode[]; edges: AppEdge[] }, previewMesh: PreviewMesh | null, includeMesh = true, previewShape: PreviewShape | null = null) {
   cancelPendingGraphSave();
   useAppStore.setState({
     nodes: g.nodes,
@@ -69,8 +71,8 @@ function setStore(g: { nodes: AppNode[]; edges: AppEdge[] }, previewMesh: Previe
     shaderPalettes: [],
     shaderName: 'Golden',
     previewMesh,
-    exportAsGlb: asGlb,
-    exportIncludeMesh: true,
+    previewShape,
+    exportIncludeMesh: includeMesh,
     importNote: null,
   });
 }
@@ -135,7 +137,8 @@ afterAll(() => {
     shaderPalettes: [],
     previewMesh: null,
     code: '',
-    exportAsGlb: false,
+    previewShape: null,
+    exportIncludeMesh: true,
     importNote: null,
   });
   vi.unstubAllGlobals();
@@ -207,7 +210,7 @@ describe('when it is not a .glb', () => {
     expect(calls).toEqual([]);
   });
 
-  it('the flag alone is not enough: no model at all is the bundle too', async () => {
+  it('no model at all is the bundle', async () => {
     setStore(graph(), null);
     const { ui, calls } = stubUi();
     const out = await buildShaderExportChecked({ preflight, glb: ui, delivery: 'download' });
@@ -215,12 +218,67 @@ describe('when it is not a .glb', () => {
     expect(calls).toEqual([]);
   });
 
-  it('the flag off exports the bundle even with a packable model loaded', async () => {
+  it('a save with the model excluded is the bundle even with a packable model loaded', async () => {
     setStore(graph(), mesh(), false);
     const { ui, calls } = stubUi();
     const out = await buildShaderExportChecked({ preflight, glb: ui, delivery: 'download' });
     expect(out?.kind === 'js' || out?.kind === 'zip').toBe(true);
     expect(calls).toEqual([]);
+  });
+});
+
+/**
+ * EXPORT is CONTEXTUAL (engine/exportModel.ts): the model the preview SHOWS
+ * makes the button a `.glb`, a built-in shape makes it the shader file, and
+ * the popover's smaller button is the other way for one export.
+ */
+describe('EXPORT follows the preview', () => {
+  const SHOWN: PreviewShape = { geometry: 'custom', subdivision: 4, marchWindow: 1 };
+  const SPHERE: PreviewShape = { geometry: 'sphere', subdivision: 4, marchWindow: 1 };
+  const names = async (bytes: Uint8Array) => (await readZip(bytes)).map((e) => e.name);
+
+  it('the model on screen: EXPORT is the .glb', async () => {
+    setStore(graph(), mesh(), true, SHOWN);
+    const { ui, calls } = stubUi();
+    const out = await buildShaderExportChecked({ preflight, glb: ui, delivery: 'write', model: 'shown' });
+    expect(out?.kind).toBe('glb');
+    expect(calls[0]).toBe('begin:golden.glb');
+  });
+
+  it('the model on screen: "Export .zip" is the bundle WITH the model, and no dialog', async () => {
+    setStore(graph(), mesh(), true, SHOWN);
+    const { ui, calls } = stubUi();
+    const out = await buildShaderExportChecked({ preflight, glb: ui, delivery: 'download', model: 'shown', variant: 'alternate' });
+    if (!out || out.kind !== 'zip') throw new Error('expected a .zip, got ' + JSON.stringify(out?.kind));
+    expect(await names(out.bytes)).toContain('models/statue.glb');
+    expect(calls).toEqual([]);
+  });
+
+  it('a built-in shape on screen: EXPORT is the shader file without the parked model', async () => {
+    setStore(graph(), mesh(), true, SPHERE);
+    const { ui, calls } = stubUi();
+    const out = await buildShaderExportChecked({ preflight, glb: ui, delivery: 'download', model: 'shown' });
+    if (!out || out.kind === 'glb') throw new Error('expected the bundle, got ' + JSON.stringify(out?.kind));
+    // The graph embeds an image, so the bundle is a .zip — but with no model.
+    expect(out.kind).toBe('zip');
+    expect((await names(out.bytes)).some((n) => n.startsWith('models/'))).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  it('a Work-folder write back to a tracked .js/.zip stays the bundle (bundleOnly)', async () => {
+    setStore(graph(), mesh(), true, SHOWN);
+    const { ui, calls } = stubUi();
+    const out = await buildShaderExportChecked({ preflight, glb: ui, delivery: 'write', scope: 'whole', bundleOnly: true });
+    if (!out || out.kind !== 'zip') throw new Error('expected a .zip, got ' + JSON.stringify(out?.kind));
+    expect(await names(out.bytes)).toContain('models/statue.glb');
+    expect(calls).toEqual([]);
+  });
+
+  it('…while a save of the same document still packs the loaded model', async () => {
+    setStore(graph(), mesh(), true, SPHERE);
+    const { ui } = stubUi();
+    const out = await buildShaderExportChecked({ preflight, glb: ui, delivery: 'write' });
+    expect(out?.kind).toBe('glb');
   });
 });
 

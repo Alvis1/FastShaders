@@ -86,6 +86,16 @@ describe('adversarial dataNode payloads', () => {
     expect(Array.from(decoded!.columns[1])).toEqual([3, 4]);
   });
 
+  it('decodes once per values object, and again for a replaced one', () => {
+    const data = makeDataNodeData(sample, 0);
+    const first = decodeDataNode(data.values);
+    expect(decodeDataNode(data.values)).toBe(first);
+    const replaced = decodeDataNode({ ...data.values });
+    expect(replaced).not.toBe(first);
+    expect(replaced).toEqual(first);
+    expect(decodeDataNode(null as unknown as Record<string, number>)).toBeNull();
+  });
+
   it('sanitizeDataNodes empties an over-cap payload but keeps the node', () => {
     const big = 'A'.repeat(MAX_DATA_ENCODED_CHARS + 1);
     const nodes = [

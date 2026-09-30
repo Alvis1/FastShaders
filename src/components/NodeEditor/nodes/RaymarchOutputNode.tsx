@@ -8,7 +8,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { t, portLabel } from '@/i18n';
 import { isActiveSinkSelector } from './activeSinkSelector';
 import { effectiveExposedPorts } from '@/utils/exposedPorts';
-import { getCostColor, getCostTextColor, getContrastColor } from '@/utils/colorUtils';
+import { useCostChrome } from './useCostChrome';
 import { TypedHandle } from '../handles/TypedHandle';
 import { OutputTitle } from './OutputTitle';
 import { useWiredLabels } from './ShaderNode';
@@ -102,12 +102,6 @@ export const MARCH_COLOR_DEFAULTS: Record<string, string> = { color: '#ffffff', 
 export const RaymarchOutputNode = memo(function RaymarchOutputNode({ id, data, selected }: NodeProps<ShaderFlowNode>) {
   const def = NODE_REGISTRY.get('raymarchOutput')!;
   const config = MARCH_NODE_CONFIG;
-  const costColorLow = useAppStore((s) => s.costColorLow);
-  const costColorHigh = useAppStore((s) => s.costColorHigh);
-  // The header mixes into the card, and the card follows the theme
-  // (getCostColor). `codeEditorTheme` is the app-wide dark switch; the store
-  // field keeps its historical name.
-  const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const setActiveOutput = useAppStore((s) => s.setActiveOutput);
   const language = useAppStore((s) => s.language);
@@ -127,9 +121,7 @@ export const RaymarchOutputNode = memo(function RaymarchOutputNode({ id, data, s
   useEffect(() => {
     updateNodeInternals(id);
   }, [id, exposedKey, updateNodeInternals]);
-  const costColor = getCostColor(cost, costColorLow, costColorHigh, darkTheme);
-  const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
-  const headerTextColor = getContrastColor(costColor);
+  const { costColor, headerTextColor, costTextColor } = useCostChrome(cost);
   const values = getNodeValues({ id, data } as unknown as ShaderFlowNode);
 
   // What is arriving on each wired socket — the Output node's two-step

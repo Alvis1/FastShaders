@@ -1,21 +1,22 @@
 /**
- * The EXPORT popover's Format choice, pinned from SOURCE — the vitest env is
- * `node`, so none of these components can be mounted, and every rule below is
- * one a wrong wiring would break silently:
+ * CONTEXTUAL EXPORT (owner, 2026-09-28), pinned from SOURCE — the vitest env
+ * is `node`, so none of these components can be mounted, and every rule below
+ * is one a wrong wiring would break silently:
  *
- *  - the study never sees the row (the popover IS reachable there by
- *    right-click), and the engine refuses the path even if it did;
- *  - the popover carries no prose: every row explains itself — and an
- *    inactive row says why — in its TOOLTIP, so an inactive input is
- *    `aria-disabled` with a guarded onChange, never `disabled` (WebKit drops
- *    the tooltip of a disabled control);
- *  - the "Export model" row names the SHOWN model (a built-in shape too) and
- *    is never locked while there is one;
+ *  - EXPORT writes what the preview SHOWS (engine/exportModel.ts): a packable
+ *    model the `.glb`, a built-in shape the shader file; the popover's ONE
+ *    smaller button is the other way for one export, never in a study session
+ *    (the popover IS reachable there by right-click), and the engine refuses
+ *    the `.glb` path even if it were;
+ *  - the popover carries no prose: every row explains itself in its TOOLTIP,
+ *    so an inactive input is `aria-disabled` with a guarded onChange, never
+ *    `disabled` (WebKit drops the tooltip of a disabled control);
+ *  - a study session keeps its "Export model" checkbox (`exportIncludeMesh`);
  *  - only EXPORT honours the unconnected-nodes row; NEW and the Work folder
  *    always save the whole canvas;
- *  - every surface asks `effectiveExportFormat` rather than the raw flag, or
- *    the Work-folder tooltip predicts a `.glb` while the write lands a `.zip`;
- *  - the flag is session-only: never in history, the autosave or a file.
+ *  - every surface asks `exportFormatFor` with ITS surface, or the Work-folder
+ *    tooltip predicts a `.glb` while the write lands a `.zip`;
+ *  - there is no stored format: nothing in history, the autosave or a file.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -30,27 +31,35 @@ const WORK_FOLDER = read('components/Layout/WorkFolder.tsx');
 const EXPORT_SHADER = read('engine/exportShader.ts');
 
 describe('the Toolbar popover', () => {
-  it('renders the Format group only outside a study session', () => {
-    const at = TOOLBAR.indexOf('className="toolbar__export-format"');
-    expect(at).toBeGreaterThan(-1);
-    const gate = TOOLBAR.lastIndexOf('{!isEvalMode() && (', at);
-    expect(gate).toBeGreaterThan(-1);
-    // Nothing else opens between the gate and the group.
-    expect(TOOLBAR.slice(gate, at)).not.toContain('{exportOpen');
-  });
-
   const POPOVER = TOOLBAR.slice(
     TOOLBAR.indexOf('className="toolbar__local-popover toolbar__export-popover"'),
     TOOLBAR.indexOf('{__FS_DESKTOP__ && <WorkFolder />}'),
   );
 
-  it('an unavailable .glb radio is aria-disabled and says why in its row tooltip', () => {
-    expect(POPOVER).toContain('aria-disabled={!glbAvail.ok || undefined}');
-    // The guard is what makes aria-disabled inert: a click still reaches onChange.
-    expect(POPOVER).toContain('if (glbAvail.ok) setExportAsGlb(true);');
-    expect(POPOVER).toMatch(/: \(glbUnavailableText\(glbAvail, language\) \?\? undefined\)/);
-    expect(POPOVER).toContain('GLB_EXPORT_KEYS.popoverNoteGlb');
-    // Never `disabled`: WebKit drops a disabled control's tooltip, which is the reason.
+  it('EXPORT and the smaller button ask the CONTEXTUAL decision, never a stored choice', () => {
+    expect(TOOLBAR).toContain("const exportFormat = useAppStore((s) => exportFormatFor(s, isEvalMode(), 'primary'));");
+    expect(TOOLBAR).toContain('const exportAlt = useAppStore((s) => exportAlternate(s, isEvalMode()));');
+    // The Format radio and the sticky model rows are gone.
+    expect(TOOLBAR).not.toContain('toolbar__export-format');
+    expect(TOOLBAR).not.toContain('exportAsGlb');
+    expect(TOOLBAR).not.toContain('exportBuiltinModel');
+  });
+
+  it('the ONE smaller button: only when there is another way out, and it runs that one export', () => {
+    const at = POPOVER.indexOf('className="toolbar__export-alt"');
+    expect(at).toBeGreaterThan(-1);
+    // Rendered only while exportAlternate offers something — null in a study
+    // session, so the study popover never grows a download.
+    const gate = POPOVER.lastIndexOf('{exportAlt !== null && (', at);
+    expect(gate).toBeGreaterThan(-1);
+    const button = POPOVER.slice(at, POPOVER.indexOf('</button>', at));
+    expect(button).toContain("runExport('alternate');");
+    expect(button).toContain('setExportOpen(false);');
+    expect(button).toContain("t('Export with model ({name})', language)");
+    expect(button).toContain("t('Export .zip', language)");
+    // Its explanation is its tooltip, per way out.
+    expect(button).toMatch(/title=\{\s*exportAlt === 'with-model'/);
+    // Never `disabled`: WebKit drops a disabled control's tooltip.
     expect(POPOVER).not.toMatch(/\sdisabled=\{/);
   });
 
@@ -60,27 +69,46 @@ describe('the Toolbar popover', () => {
     expect(read('components/Layout/Toolbar.css')).not.toContain('toolbar__export-format-reason');
   });
 
-  it('the "Export model" row names the shown model and is never locked while there is one', () => {
-    const row = POPOVER.slice(POPOVER.indexOf("t('Export model', language)") - 3500);
-    expect(row).toContain('activePreviewModel(previewShape, previewMesh)');
-    // Inactive only when there is no model at all.
-    expect(POPOVER).toContain('aria-disabled={name === null || undefined}');
-    // A built-in shape rides its own flag; the dropped model keeps exportIncludeMesh.
-    expect(POPOVER).toContain('checked={glb || (builtin ? exportBuiltinModel : exportIncludeMesh)}');
-    expect(POPOVER).toContain('if (builtin) setExportBuiltinModel(e.target.checked);');
-    // A study session names only a dropped model — it never exports a shape.
-    expect(row).toContain("? (previewMesh ? { kind: 'dropped' as const, mesh: previewMesh } : null)");
-    // In .glb mode unticking means "the shader file without the model" — both flags.
-    const glbBranch = row.slice(row.indexOf('if (glb) {'), row.indexOf('if (builtin) setExportBuiltinModel'));
-    expect(glbBranch).toContain('setExportAsGlb(false);');
-    expect(glbBranch).toContain('setExportIncludeMesh(false);');
-    expect(POPOVER).toContain('GLB_EXPORT_KEYS.meshNoteGlb');
-    // The format radio never writes the mesh flag.
-    const group = POPOVER.slice(
-      POPOVER.indexOf('className="toolbar__export-format"'),
-      POPOVER.indexOf("t(GLB_EXPORT_KEYS.formatGlb, language)"),
-    );
-    expect(group).not.toContain('setExportIncludeMesh');
+  it("EXPORT's tooltip says SHOWN, and why an unpackable model on screen is not the .glb", () => {
+    expect(TOOLBAR).toContain('when the graph embeds images or a custom 3D model is shown in the preview');
+    expect(TOOLBAR).not.toContain('custom preview mesh is loaded');
+    expect(TOOLBAR).toContain("!isEvalMode() && shownForExport?.kind === 'dropped'");
+    expect(TOOLBAR).toContain('glbUnavailableText(glbExportAvailability(shownForExport.mesh), language)');
+    expect(TOOLBAR).toContain("${exportWhyNotGlb ? `${exportWhyNotGlb} ` : ''}");
+  });
+
+  it('every new EXPORT / A-Frame string has its Latvian entry', () => {
+    const ui = (JSON.parse(read('i18n/lv.json')) as { ui: Record<string, string> }).ui;
+    const keys = [
+      'Export with model ({name})',
+      'Export .zip',
+      'Download a .zip: the shader with {name} as an .obj file under models/, tessellated exactly as the preview shows it. EXPORT itself downloads the shader alone.',
+      'Download a .zip instead of the .glb: the shader file with {name} under models/ and its images as files — for pages that load the shader and the model separately.',
+      'Download the shader — .js with the FastShaders project embedded (drag it back in to continue); becomes a .zip with the image and 3D-model files alongside when the graph embeds images or a custom 3D model is shown in the preview',
+      'A ready-to-run VR page on the model the export .zip carries. Put {file} and models/{model} next to it and serve the folder over http(s) — file:// blocks the shader load.',
+    ];
+    const editor = read('components/CodeEditor/CodeEditor.tsx');
+    for (const k of keys) {
+      // The key is really spelled in the source it is claimed for…
+      expect(TOOLBAR.includes(k) || editor.includes(k), k).toBe(true);
+      // …and translated (not left as the English text).
+      expect(ui[k], k).toBeTypeOf('string');
+      expect(ui[k], k).not.toBe(k);
+    }
+    // Every {placeholder} survives the translation.
+    for (const k of keys) for (const ph of k.match(/\{\w+\}/g) ?? []) expect(ui[k], `${k} ${ph}`).toContain(ph);
+  });
+
+  it('a study session keeps its "Export model" checkbox, and only there', () => {
+    const at = POPOVER.indexOf("t('Export model', language)");
+    expect(at).toBeGreaterThan(-1);
+    const gate = POPOVER.lastIndexOf('{isEvalMode() && (', at);
+    expect(gate).toBeGreaterThan(-1);
+    const row = POPOVER.slice(gate, at);
+    expect(row).toContain('checked={exportIncludeMesh}');
+    // Inactive only when there is no model at all, and the guard makes it inert.
+    expect(row).toContain('aria-disabled={!previewMesh || undefined}');
+    expect(row).toContain('if (previewMesh) setExportIncludeMesh(e.target.checked);');
   });
 
   it('the unconnected-nodes row: outside a study, and only EXPORT reads it', () => {
@@ -96,12 +124,18 @@ describe('the Toolbar popover', () => {
   });
 
   it('EXPORT keeps the study branch above the wrapper and guards a second press', () => {
-    const call = TOOLBAR.indexOf('buildShaderExportChecked(');
-    const evalBranch = TOOLBAR.lastIndexOf('if (isEvalMode()) {', call);
+    // The click answers the study session BEFORE it runs the export.
+    const click = TOOLBAR.slice(TOOLBAR.indexOf('className="toolbar__export"'));
+    const evalBranch = click.indexOf('if (isEvalMode()) {');
+    const run = click.indexOf('runExport();');
     expect(evalBranch).toBeGreaterThan(-1);
-    expect(TOOLBAR.slice(evalBranch, call)).toContain('setEvalFinishOpen(true)');
-    expect(TOOLBAR).toContain('if (exportBusyRef.current) return;');
+    expect(run).toBeGreaterThan(evalBranch);
+    expect(click.slice(evalBranch, run)).toContain('setEvalFinishOpen(true)');
+    // Both buttons share ONE runner, which holds the second-press guard.
+    const runner = TOOLBAR.slice(TOOLBAR.indexOf('const runExport = '), TOOLBAR.indexOf('buildShaderExportChecked('));
+    expect(runner).toContain('if (exportBusyRef.current) return;');
     expect(TOOLBAR).toContain("delivery: 'download'");
+    expect(TOOLBAR).toContain('...(variant ? { variant } : {}),');
     expect(TOOLBAR).not.toContain('buildShaderBundleChecked(');
   });
 });
@@ -155,7 +189,7 @@ describe('every user surface goes through the one wrapper', () => {
   });
 });
 
-describe('the engine gate and the derived flag', () => {
+describe('the engine gate and the contextual decision', () => {
   it('isEvalMode is answered BEFORE the first single-GLB call', () => {
     const fn = EXPORT_SHADER.slice(EXPORT_SHADER.indexOf('export async function buildShaderExportChecked'));
     const body = fn.slice(0, fn.indexOf('\n}\n'));
@@ -163,7 +197,8 @@ describe('the engine gate and the derived flag', () => {
     const prepare = body.indexOf('prepareSingleGlb');
     expect(gate).toBeGreaterThan(-1);
     expect(prepare).toBeGreaterThan(gate);
-    expect(body).toContain("effectiveExportFormat(s.exportAsGlb, s.previewMesh, false) !== 'glb'");
+    expect(body).toContain("const surface = asks.model !== 'shown' ? 'document' : asks.variant === 'alternate' ? 'alternate' : 'primary';");
+    expect(body).toContain("exportFormatFor(s, false, surface) !== 'glb'");
     expect(body).toContain('buildShaderBundleChecked(asks.preflight, graph, model)');
     // The telemetry chokepoint stays on the download tail. The pattern is
     // ASSEMBLED, because evalHooks.test.ts scans every file under src/ for the
@@ -171,33 +206,26 @@ describe('the engine gate and the derived flag', () => {
     expect(EXPORT_SHADER).toMatch(new RegExp(['evalLog', "\\('export'"].join('')));
   });
 
-  it('no surface reads the raw flag except through effectiveExportFormat', () => {
+  it('every surface asks exportFormatFor with ITS surface', () => {
+    expect(WORK_FOLDER).toContain("exportFormatFor(s, isEvalMode(), 'document')");
+    const editor = read('components/CodeEditor/CodeEditor.tsx');
+    expect(editor).toContain("useAppStore((s) => exportFormatFor(s, isEvalMode(), 'primary'))");
     for (const [name, src] of [
       ['Toolbar', TOOLBAR],
       ['WorkFolder', WORK_FOLDER],
-      ['CodeEditor', read('components/CodeEditor/CodeEditor.tsx')],
+      ['CodeEditor', editor],
       ['exportShader', EXPORT_SHADER],
     ] as const) {
-      for (const m of src.matchAll(/\.exportAsGlb\b/g)) {
-        const line = src.slice(src.lastIndexOf('\n', m.index) + 1, src.indexOf('\n', m.index));
-        // Either the value goes straight into the decision, or the line is the
-        // plain store selector that feeds it one render later.
-        const ok =
-          line.includes('effectiveExportFormat(') ||
-          line.trim() === 'const exportAsGlb = useAppStore((s) => s.exportAsGlb);';
-        expect(ok, `${name}: ${line.trim()}`).toBe(true);
-      }
-      // …and nothing branches on the raw flag.
-      expect(src, name).not.toMatch(/\bexportAsGlb\s*(\?|&&|\|\||===|!==)/);
+      // The leaf takes the model to pack; only exportModel.ts decides which.
+      expect(src, name).not.toContain('effectiveExportFormat(');
     }
   });
 
-  it('the flag is session-only: no history, no autosave, no project block', () => {
+  it('there is no stored format: no flag in the store, history, autosave or project block', () => {
     const store = read('store/useAppStore.ts');
-    const snapshot = store.slice(store.indexOf('function snapshotOf'), store.indexOf('function snapshotOf') + 2000);
-    expect(snapshot).not.toContain('exportAsGlb');
-    expect(store).not.toContain("'fs:exportAsGlb'");
-    expect(store).toContain('exportAsGlb: asGlb === true');
+    for (const gone of ['exportAsGlb', 'exportBuiltinModel', 'setExportAsGlb', 'setExportBuiltinModel']) {
+      expect(store, gone).not.toMatch(new RegExp(`\\b${gone}\\b`));
+    }
     const project = EXPORT_SHADER.slice(EXPORT_SHADER.indexOf('export function buildProjectState'));
     expect(project.slice(0, project.indexOf('\n}\n'))).not.toContain('exportAsGlb');
   });
@@ -227,17 +255,33 @@ describe('the Work folder opens a .glb', () => {
     expect(WORK_FOLDER).toContain("fsRefusalNotice(shown, 'damaged', language)");
   });
 
-  it('opening one adopts the FORMAT, so Save writes back to that file', () => {
-    // Without it `bundleKind` is still 'js'/'zip', `workFolderSaveName` re-extends
-    // the tracked name, and the next Save forks a sibling while `waves.glb` keeps
+  it('opening one brings its model back, and Save — a DOCUMENT save — packs it into a .glb again', () => {
+    // Otherwise `bundleKind` is 'js'/'zip', `workFolderSaveName` re-extends the
+    // tracked name, and the next Save forks a sibling while `waves.glb` keeps
     // the pre-edit shader — silently, since the folder holds no such sibling to
-    // confirm over.
+    // confirm over. The 'document' surface packs the LOADED model whatever the
+    // preview shows (exportModel.test.ts pins that), so no flag is adopted.
     const branch = WORK_FOLDER.slice(
       WORK_FOLDER.indexOf('await importShaderGlb(entry.fileName, bytes)'),
       WORK_FOLDER.indexOf("} else if (/\\.zip$/i.test(entry.fileName))"),
     );
     expect(branch.length).toBeGreaterThan(0);
-    expect(branch).toContain('setExportAsGlb(true)');
+    expect(branch).not.toContain('setExportAsGlb');
+    expect(WORK_FOLDER).toContain("const documentFormat = useAppStore((s) => exportFormatFor(s, isEvalMode(), 'document'));");
+  });
+
+  it('…but a tracked .js/.zip is written back as the bundle, never forked into a .glb', () => {
+    // The Save asks the family BEFORE it builds, and the tooltip predicts the same.
+    expect(WORK_FOLDER).toContain("documentFormat === 'glb' && !keepsBundleFormat(trackedFile) && !untrackedBundle");
+    // Nothing tracked (a relaunch): the folder is asked, and a failed listing
+    // falls back to the document rule instead of blocking the save.
+    const save = WORK_FOLDER.slice(WORK_FOLDER.indexOf('const save = useCallback('));
+    expect(save).toContain("if (!bundleOnly && origin === null && exportFormatFor(useAppStore.getState(), isEvalMode(), 'document') === 'glb') {");
+    expect(save).toContain("invokeDesktop<WorkFolderEntry[]>('work_folder_list').catch(() => [] as WorkFolderEntry[])");
+    expect(save).toContain('bundleOnly = untrackedKeepsBundle(');
+    expect(save.indexOf('bundleOnly = untrackedKeepsBundle(')).toBeLessThan(save.indexOf('buildShaderExportChecked('));
+    expect(WORK_FOLDER).toContain('...(bundleOnly ? { bundleOnly: true as const } : {}),');
+    expect(EXPORT_SHADER).toContain("asks.bundleOnly === true ||");
   });
 
   it('a study session neither lists nor opens one', () => {
@@ -246,10 +290,25 @@ describe('the Work folder opens a .glb', () => {
   });
 });
 
-describe('the code panel follows the format', () => {
+describe('the code panel follows the EXPORT button', () => {
   it("the A-Frame tab hangs the shader on the model, and each tab's label names its own file", () => {
     const src = read('components/CodeEditor/CodeEditor.tsx');
-    expect(src).toContain("...(exportFormat === 'glb' ? { modelFile: glbFileName } : {})");
+    // A .glb export: the page stands on the .glb; otherwise on the model the
+    // .zip ships under models/, when it ships one (tslToAFrameHTML `bundledModel`).
+    expect(src).toContain("...(exportFormat === 'glb' ? { modelFile: glbFileName } : { bundledModel })");
+    // The bundle's model is named from the SAME decision the button builds from…
+    expect(src).toContain("const choice = exportModelChoice(s, false, 'primary');");
+    // …and a study session keeps the primitive page it always had.
+    const key = src.slice(src.indexOf('const bundledModelKey = useAppStore((s) => {'));
+    expect(key.slice(0, key.indexOf('});'))).toContain("if (isEvalMode()) return '';");
+  });
+
+  it('both embed tabs follow the SHOWN geometry live, with the snapshot only as the fallback', () => {
+    const src = read('components/CodeEditor/CodeEditor.tsx');
+    expect(src).toContain('const shownGeometry = useAppStore((s) => (isEvalMode() ? null : (s.previewShape?.geometry ?? null)));');
+    expect(src).toContain('const pageGeometry = shownGeometry ?? fallbackGeometry;');
+    expect(src).toContain('[marchWindow, embedStamp],');
+    expect(src.split('geometry: pageGeometry,').length - 1).toBe(2);
     expect(src).toContain('GLB_EXPORT_KEYS.tabAFrameGlb');
     expect(src).toContain('GLB_EXPORT_KEYS.tabThreeGlb');
     // The Three.js page stays on the .js export.

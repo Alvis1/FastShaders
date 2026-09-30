@@ -47,7 +47,6 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-sizing: border-box;
   height: var(--ctl-size);
   line-height: 1;
   font-family: var(--font-sans);
@@ -162,8 +161,7 @@
 
 /* The box that REMAINS once the pointer is released (React Flow's own drag
    wrapper for the selected set) stands 5px off the CARDS it holds — a selected
-   node casts an 8px shadow and rides toward the light, so a tight box cuts
-   through both.
+   node casts an 8px shadow, so a tight box cuts through it.
 
    It is a PSEUDO-ELEMENT and not an `outline-offset`, for two independent
    reasons. React Flow sizes that rectangle from each node's MEASURED layout
@@ -185,10 +183,7 @@
   content: '';
   position: absolute;
   /* Just the pad on top/left; right/bottom add the per-selection cost-scale
-     shortfall NodeEditor publishes as --fs-sel-dr / --fs-sel-db.
-     The rise term that used to be folded in here is gone with the movement
-     itself (2026-09-09, see NodeBase.css): selected cards no longer translate
-     toward the light, so the rectangle has nothing to reach out for. */
+     shortfall NodeEditor publishes as --fs-sel-dr / --fs-sel-db. */
   inset:
     calc(-1 * var(--fs-sel-pad))
     calc(-1 * (var(--fs-sel-dr, 0px) + var(--fs-sel-pad)))
@@ -320,26 +315,8 @@
   flex-wrap: wrap;
   justify-content: flex-start;
   max-width: calc(100% - 30px);
-  /* No `margin-bottom` override: React Flow's own `.react-flow__panel` margin
-     is 15px on every side, so the bar now sits the same distance from the pane's
-     bottom edge as from its left one — which is what makes it read as parked in
-     the corner rather than floating above it.
-
-     It used to add `--ctl-size + 8px` to clear the asset bar's resize grip,
-     which hung --ctl-size above the bar's top edge into the bottom of this
-     pane. That grip sat at 90% (far right) and this bar at the left, so on any
-     ordinary pane width they were hundreds of px apart — and the tab is gone
-     now; the bar's seam reaches only 4px up (--fs-seam-hit).
-
-     They can only meet on a very narrow pane — and there the wrap saves it.
-     MEASURED at the splitter's minimum (320px pane, draw cluster expanded, the
-     widest the bar ever gets): the two BOXES do overlap, bar [15,506,305,590]
-     against grip [266,579,310,607], but every one of the bar's 7 controls is
-     still hit-testable at its own bottom-right corner, because the bar has
-     wrapped to three rows by then and its bottom row does not reach that far
-     right. The overlap is padding against tab. So this stays a plain corner
-     inset; don't reintroduce a clearance margin for a collision that does not
-     land on anything. */
+  /* No margin override: React Flow's 15px panel margin parks the bar in the
+     corner; the retired asset-bar grip is why one used to exist. */
 }
 /* Import one-liner (top-centre). Deliberately NOT a modal: a conversion that
    fell back is information about the browser, not a decision — it must not

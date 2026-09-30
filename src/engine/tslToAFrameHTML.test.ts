@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildAFrameEmbedHTML, parseShaderModuleSchema } from './tslToAFrameHTML';
+import { buildAFrameEmbedHTML, bundledModelForPage, parseShaderModuleSchema } from './tslToAFrameHTML';
+import { meshPairingSnippet } from '@/utils/exportBundle';
 import { tslToShaderModule, CDN_BASE, LOADER_FILE, type PropertyInfo } from './tslToShaderModule';
 
 /** graphToCode-style TSL with a float property, a colour property and a mic. */
@@ -349,5 +350,119 @@ export default shader;
       expect(b, geometry).toBe(a);
       expect(a, geometry).toContain('shader="src: x.js;');
     }
+  });
+});
+
+/**
+ * The BUNDLE's model (rule 3's fourth exception): when the `.zip` export ships
+ * a model under models/, the page hangs the sibling `.js` on that model
+ * instead of a sphere. WITHOUT `bundledModel` every byte is today's.
+ */
+describe('buildAFrameEmbedHTML: bundledModel (the .zip ships the model)', () => {
+  const bare = tslToShaderModule(TSL_BARE);
+  const withProps = tslToShaderModule(TSL_WITH_PROPS);
+
+  it('loads a glTF/GLB from models/ with gltf-model and the sibling .js', () => {
+    const out = buildAFrameEmbedHTML(bare, { shaderFile: 'glow.js', bundledModel: { file: 'rock.glb', kind: 'glb' } });
+    expect(out).toContain(
+      '    <a-entity gltf-model="url(models/rock.glb)" position="0 1.6 -3" shader="src: glow.js"></a-entity>\n',
+    );
+    expect(out).not.toContain('a-sphere');
+    expect(out).not.toContain('src: model');
+    expect(buildAFrameEmbedHTML(bare, { shaderFile: 'g.js', bundledModel: { file: 'scene.gltf', kind: 'gltf' } }))
+      .toContain('gltf-model="url(models/scene.gltf)"');
+  });
+
+  it('loads an OBJ with obj-model, the README snippet\'s spelling', () => {
+    const out = buildAFrameEmbedHTML(bare, { shaderFile: 'g.js', bundledModel: { file: 'utah-teapot.obj', kind: 'obj' } });
+    expect(out).toContain('<a-entity obj-model="obj: url(models/utah-teapot.obj)" position="0 1.6 -3" shader="src: g.js"></a-entity>');
+    // The same pairing the bundle's README prints.
+    expect(meshPairingSnippet({ name: 'utah-teapot.obj', kind: 'obj', bytes: new Uint8Array() }, 'g.js'))
+      .toContain('obj-model="obj: url(models/utah-teapot.obj)"');
+  });
+
+  it('keeps the uniform rows under src:, aligned to the a-entity tag', () => {
+    const out = buildAFrameEmbedHTML(withProps, { shaderFile: 'x.js', bundledModel: { file: 'rock.glb', kind: 'glb' } });
+    const lines = out.split('\n');
+    const openAt = lines.findIndex((l) => l.includes('<a-entity '));
+    const col = (needle: string, from: number) => {
+      const i = lines.findIndex((l, n) => n >= from && l.includes(needle));
+      return lines[i].indexOf(needle);
+    };
+    expect(lines[openAt]).toBe('    <a-entity gltf-model="url(models/rock.glb)"');
+    expect(col('position=', openAt + 1)).toBe(col('gltf-model=', openAt));
+    expect(col('shader="', openAt + 1)).toBe(col('gltf-model=', openAt));
+    expect(col('speed:', openAt + 1)).toBe(col('src:', openAt + 1));
+    expect(out).toContain('shader="src: x.js;');
+  });
+
+  it('carries no segments and no radius: a model brings its own geometry', () => {
+    const DISPLACE = `import { Fn, uniform, vec3, sin, positionLocal, normalLocal } from 'three/tsl';
+
+const shader = Fn(() => {
+  const amount = uniform(0.2);
+  const wave = sin(positionLocal.y.mul(8)).mul(amount);
+  return { color: vec3(1, 0.5, 0), position: positionLocal.add(normalLocal.mul(wave)) };
+});
+
+export default shader;
+`;
+    const out = buildAFrameEmbedHTML(tslToShaderModule(DISPLACE), {
+      shaderFile: 'd.js',
+      bundledModel: { file: 'rock.glb', kind: 'glb' },
+      geometry: 'marchSphere',
+      marchWindow: 4,
+    });
+    expect(out).not.toContain('segments-');
+    expect(out).not.toContain('radius=');
+  });
+
+  it('the .glb export wins: modelFile set, bundledModel is ignored', () => {
+    const out = buildAFrameEmbedHTML(bare, { shaderFile: 'x.js', modelFile: 'x.glb', bundledModel: { file: 'rock.glb', kind: 'glb' } });
+    expect(out).toBe(buildAFrameEmbedHTML(bare, { shaderFile: 'x.js', modelFile: 'x.glb' }));
+  });
+
+  it('cannot be broken out of by a hostile model name', () => {
+    const out = buildAFrameEmbedHTML(bare, { shaderFile: 'x.js', bundledModel: { file: '../"><script>x</script>.glb', kind: 'glb' } });
+    expect(out).toContain('gltf-model="url(models/..scriptxscript.glb)"');
+    expect(out).not.toContain('<script>x');
+    for (const file of ['', '.', '..', '"";']) {
+      expect(buildAFrameEmbedHTML(bare, { shaderFile: 'x.js', bundledModel: { file, kind: 'obj' } }))
+        .toContain('obj-model="obj: url(models/model.obj)"');
+    }
+  });
+
+  it('without bundledModel (absent or null) the page is byte-identical to today\'s', () => {
+    for (const geometry of ['sphere', 'plane', 'cube', 'custom', 'teapot'] as const) {
+      const a = buildAFrameEmbedHTML(withProps, { shaderFile: 'x.js', geometry });
+      expect(buildAFrameEmbedHTML(withProps, { shaderFile: 'x.js', geometry, bundledModel: null }), geometry).toBe(a);
+      expect(buildAFrameEmbedHTML(withProps, { shaderFile: 'x.js', geometry, bundledModel: undefined }), geometry).toBe(a);
+    }
+  });
+});
+
+describe('bundledModelForPage: which models/ file the page stands on', () => {
+  it('a dropped glTF/GLB/OBJ is loaded', () => {
+    expect(bundledModelForPage({ name: 'rock.glb', kind: 'glb' }, null)).toEqual({ file: 'rock.glb', kind: 'glb' });
+    expect(bundledModelForPage({ name: 'a.gltf', kind: 'gltf' }, null)).toEqual({ file: 'a.gltf', kind: 'gltf' });
+    expect(bundledModelForPage({ name: 'a.obj', kind: 'obj' }, null)).toEqual({ file: 'a.obj', kind: 'obj' });
+  });
+
+  it('the teapot and bunny .obj are loaded — no primitive reproduces them', () => {
+    expect(bundledModelForPage({ name: 'utah-teapot.obj', kind: 'obj' }, 'teapot')).toEqual({ file: 'utah-teapot.obj', kind: 'obj' });
+    expect(bundledModelForPage({ name: 'stanford-bunny.obj', kind: 'obj' }, 'bunny')).toEqual({ file: 'stanford-bunny.obj', kind: 'obj' });
+  });
+
+  it('a shape a primitive reproduces keeps the primitive (tessellated, welded)', () => {
+    for (const shape of ['sphere', 'cube', 'plane', 'marchSphere']) {
+      expect(bundledModelForPage({ name: `${shape}.obj`, kind: 'obj' }, shape), shape).toBeNull();
+    }
+  });
+
+  it('a Gaussian splat, or no model, is the primitive page', () => {
+    for (const kind of ['splat', 'spz', 'ply', 'ksplat']) {
+      expect(bundledModelForPage({ name: `s.${kind}`, kind }, null), kind).toBeNull();
+    }
+    expect(bundledModelForPage(null, null)).toBeNull();
   });
 });

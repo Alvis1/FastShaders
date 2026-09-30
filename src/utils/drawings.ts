@@ -18,6 +18,7 @@
  *      compounding.
  */
 import { HEX6 } from '@/utils/colorUtils';
+import { valueNum } from './valueCoerce';
 
 export interface DrawStroke {
   id: string;
@@ -54,7 +55,7 @@ export function isValidStrokeColor(c: unknown): c is string {
 
 /** One finite, in-bounds coordinate or `null` if unusable. */
 function cleanCoord(n: unknown): number | null {
-  const v = typeof n === 'number' ? n : Number(n);
+  const v = valueNum(n);
   if (!Number.isFinite(v)) return null;
   return Math.max(-COORD_LIMIT, Math.min(COORD_LIMIT, v));
 }
@@ -99,12 +100,12 @@ export function sanitizeDrawings(input: unknown): DrawStroke[] {
     totalPoints += pts.length;
 
     const width =
-      Math.max(MIN_STROKE_WIDTH, Math.min(MAX_STROKE_WIDTH, Number(s.width) || 3));
+      Math.max(MIN_STROKE_WIDTH, Math.min(MAX_STROKE_WIDTH, valueNum(s.width) || 3));
 
     out.push({
       id: typeof s.id === 'string' && s.id ? s.id : `stroke_${out.length}_${pts.length}`,
       color: (s.color as string).toLowerCase(),
-      opacity: quantizeOpacity(Number(s.opacity)),
+      opacity: quantizeOpacity(valueNum(s.opacity)),
       width,
       points: pts,
     });

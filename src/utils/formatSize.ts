@@ -1,14 +1,18 @@
 /**
- * The ONE formatter for a byte size printed in a notice ("… is 64.1 MB, over
- * the 64 MB limit"). Pure and dependency-free apart from the Language type, so
- * every surface that reports a measured size against a cap prints it the same
- * way — four packages had each drafted their own copy, and they disagreed on
- * rounding, grouping and the decimal separator.
- *
- * NB `WorkFolder.tsx` has an unrelated local function called `formatSize` (the
- * folder listing's second line). It is not this module.
+ * The ONE formatter for a byte size printed in a NOTICE ("… is 64.1 MB, over
+ * the 64 MB limit"), so every surface reporting a size against a cap agrees on
+ * rounding, grouping and the decimal separator. For ASCII output that ships
+ * inside exported code use `feedbackReport.formatBytes`.
  */
 import type { Language } from '@/i18n';
+
+/** A compact size for a LISTING or a hover title (Work-folder rows, texture
+ *  cells): whole KB under 1 MB, one decimal above. Never for a notice —
+ *  `formatMiB` rounds UP against a cap, which prints every texture as "1". */
+export function formatKbMb(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
 
 /** Bytes → the number printed before "MB" in a notice. MB means MiB (bytes / 2^20).
  *  At most one decimal. Latvian gets a decimal comma. Never grouped.

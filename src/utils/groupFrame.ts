@@ -28,6 +28,37 @@ import type { AppNode } from '@/types';
 export const MIN_GROUP_W = 120;
 export const MIN_GROUP_H = 80;
 
+/** A user frame's inner padding and header height — ONE set for every builder
+ *  (`groupSelection`, the expand's member fit, the dropped-shader Add). */
+export const GROUP_PADDING = 24;
+export const GROUP_HEADER_H = 22;
+/**
+ * Extra room above the topmost member, on top of GROUP_PADDING.
+ *
+ * A member's cost badge is absolutely positioned at `top: -14px` and rides
+ * the card's cost-scale transform (up to 1.35x, so ~19px above the card).
+ * With only the padding between the header and the card, a costly node's badge
+ * sat flush against the header bar — the number and the group title read as
+ * one collided row. This buys the badge its own clear band.
+ */
+export const GROUP_BADGE_CLEARANCE = 14;
+/** The box assumed for a node the DOM has never measured. */
+export const EST_NODE_W = 160;
+export const EST_NODE_H = 60;
+
+/** A node's box: measured, else authored, else the estimate above. */
+export function measuredNodeSize(node: AppNode): { w: number; h: number } {
+  const n = node as AppNode & {
+    measured?: { width?: number; height?: number };
+    width?: number;
+    height?: number;
+  };
+  return {
+    w: n.measured?.width ?? n.width ?? EST_NODE_W,
+    h: n.measured?.height ?? n.height ?? EST_NODE_H,
+  };
+}
+
 /**
  * A group frame's authored size, wherever that node happens to carry it.
  *

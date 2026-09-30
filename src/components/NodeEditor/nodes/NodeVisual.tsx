@@ -96,6 +96,36 @@ const noop = () => {};
 /** Node-body stack: px down per extra channel layer (mirrors ShaderNode). */
 const STACK_STEP_Y = 3;
 
+/** Static socket dot with the live handle's exact classes/geometry.
+ *  data-port/data-io let the designer's delegated drag/click gestures
+ *  identify sockets without owning the DOM. */
+const StaticHandle = ({ side, dataType, port, label, style }: {
+  side: 'left' | 'right';
+  dataType: Parameters<typeof getTypeColor>[0];
+  port: string;
+  label?: string;
+  style?: CSSProperties;
+}) => (
+  <span
+    className={`react-flow__handle react-flow__handle-${side} typed-handle`}
+    title={label}
+    data-port={port}
+    data-io={side === 'left' ? 'in' : 'out'}
+    style={{ background: getTypeColor(dataType), ...style }}
+  />
+);
+
+/** Connected-input value label — the SAME element ShaderNode renders. */
+const EdgeVal = ({ state }: { state: PortPreviewState }) => (
+  <span
+    className="shader-node__edge-val"
+    style={state.mode === 'live' ? { color: '#2D6CDF' } : undefined}
+    title={state.mode === 'live' ? 'live edge value' : 'inferred range'}
+  >
+    {state.val || '…'}
+  </span>
+);
+
 export function NodeVisual({
   def: rawDef,
   catColor,
@@ -178,36 +208,6 @@ export function NodeVisual({
   const num = (k: string) => Number(values?.[k] ?? dv[k] ?? 0);
   const change = onValueChange ?? noop;
   const interactiveStyle: CSSProperties | undefined = interactive ? { pointerEvents: 'auto' } : undefined;
-
-  /** Static socket dot with the live handle's exact classes/geometry.
-   *  data-port/data-io let the designer's delegated drag/click gestures
-   *  identify sockets without owning the DOM. */
-  const StaticHandle = ({ side, dataType, port, label, style }: {
-    side: 'left' | 'right';
-    dataType: Parameters<typeof getTypeColor>[0];
-    port: string;
-    label?: string;
-    style?: CSSProperties;
-  }) => (
-    <span
-      className={`react-flow__handle react-flow__handle-${side} typed-handle`}
-      title={label}
-      data-port={port}
-      data-io={side === 'left' ? 'in' : 'out'}
-      style={{ background: getTypeColor(dataType), ...style }}
-    />
-  );
-
-  /** Connected-input value label — the SAME element ShaderNode renders. */
-  const EdgeVal = ({ state }: { state: PortPreviewState }) => (
-    <span
-      className="shader-node__edge-val"
-      style={state.mode === 'live' ? { color: '#2D6CDF' } : undefined}
-      title={state.mode === 'live' ? 'live edge value' : 'inferred range'}
-    >
-      {state.val || '…'}
-    </span>
-  );
 
   /**
    * The swatch an UNWIRED colour port shows — the replica's half of what
@@ -309,7 +309,7 @@ export function NodeVisual({
                 moves nothing. */}
             {hasNodeGlyph(def.type, design) && (
               <div className="shader-node__op-glyph" data-nd-glyph={interactive ? '' : undefined} style={interactiveStyle}>
-                <NodeGlyph type={def.type} value={num('value')} size={34} design={design} />
+                <NodeGlyph type={def.type} size={34} design={design} />
               </div>
             )}
             {/* ShaderNode's own cell — the wire → colour swatch → number box
@@ -414,7 +414,7 @@ export function NodeVisual({
         >
           {hasNodeGlyph(def.type, design) && (
             <div className="shader-node__glyph" data-nd-glyph={interactive ? '' : undefined} style={interactiveStyle}>
-              <NodeGlyph type={def.type} value={num('value')} size={30} design={design} />
+              <NodeGlyph type={def.type} size={30} design={design} />
             </div>
           )}
 
@@ -478,16 +478,9 @@ export function NodeVisual({
                     {/* Colour row — the same swatch a colour OPERAND gets;
                         see `colorSwatch` for the interactive/inert split. */}
                     {row.settingKey && row.settingType === 'color' && colorSwatch(row.settingKey)}
-                    {row.settingType === 'vec3' && row.vecBaseKey && (
+                    {(row.settingType === 'vec3' || row.settingType === 'vec2') && row.vecBaseKey && (
                       <span className="shader-node__vec-group">
-                        {['x', 'y', 'z'].map((a) => (
-                          <DragNumberInput key={a} compact value={num(`${row.vecBaseKey}_${a}`)} onChange={(v) => change(`${row.vecBaseKey}_${a}`, v)} />
-                        ))}
-                      </span>
-                    )}
-                    {row.settingType === 'vec2' && row.vecBaseKey && (
-                      <span className="shader-node__vec-group">
-                        {['x', 'y'].map((a) => (
+                        {(row.settingType === 'vec3' ? ['x', 'y', 'z'] : ['x', 'y']).map((a) => (
                           <DragNumberInput key={a} compact value={num(`${row.vecBaseKey}_${a}`)} onChange={(v) => change(`${row.vecBaseKey}_${a}`, v)} />
                         ))}
                       </span>

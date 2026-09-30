@@ -112,7 +112,7 @@ describe('L2 — the opt-in is never spelled where the app runs a shader', () =>
     const preview = read('src/components/Preview/ShaderPreview.tsx');
     const at = preview.indexOf('const handleOpenVR = useCallback(');
     expect(at).toBeGreaterThan(-1);
-    const body = preview.slice(at, preview.indexOf('}, [previewCode', at));
+    const body = preview.slice(at, preview.indexOf('}, [previewGeometry', at));
     expect(body).toContain('new Blob([previewMesh.bytes]');
     expect(read('src/engine/tslToPreviewHTML.ts')).not.toContain('glbFile');
   });

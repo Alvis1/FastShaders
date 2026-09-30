@@ -1,5 +1,6 @@
 import type { AppNode, AppEdge, NodeDefinition, GeneratedCode, ShaderNodeData, OutputMaterial } from '@/types';
 import { valueNum, valueStr } from '@/utils/valueCoerce';
+import { HEX6, storedHex6 } from '@/utils/colorUtils';
 import { getNodeValues } from '@/types';
 import {
   defaultOutput,
@@ -42,7 +43,7 @@ import { readSoundSettings } from '@/utils/soundSettings';
 import {
   SOUND_CHANNELS,
   soundUniformName,
-  micChannelForHandle,
+  soundChannelForHandle,
   isSoundNodeType,
   soundVarBase,
 } from '@/utils/soundAnalysis';
@@ -187,19 +188,10 @@ function numericParam(
 }
 
 /**
- * Sampling coordinate in [0, 1]: uv.x (linear) or normalized radius from a
- * chosen center (radial/concentric). Shared by Stripes and Data Viz — ONE
- * reader for the four `values` keys AND the expression they build, because the
- * two emitter branches used to carry byte-identical copies of both halves and
- * a change to one would have silently emitted a different picture from the
- * other. The radius floor keeps the divide finite on a stored 0.
- *
- * Returns the flag as well as the expression: `vec2` only needs importing on
- * the radial path, and that decision belongs to the caller's import collector.
- *
- * `uvBase` is the coordinate the ramp is read along — `uv()` everywhere but a
- * Splat Output Fn, which passes the splat's own sample point (the emission
- * loop's `implicitBinding`).
+ * Sampling coordinate in [0, 1]: uv.x, or the normalized radius from a chosen
+ * centre. The ONE reader Stripes and Data Viz share; the radius floor keeps the
+ * divide finite. `radial` tells the caller to import `vec2`; `uvBase` is `uv()`
+ * except inside a Splat Output Fn (the loop's `unwiredUv`).
  */
 function rampCoord(nv: Record<string, string | number>, uvBase = 'uv()'): { radial: boolean; expr: string } {
   const radial = valueNum(nv.radial ?? 0) >= 0.5;
@@ -218,24 +210,10 @@ function rampCoord(nv: Record<string, string | number>, uvBase = 'uv()'): { radi
 export const VALID_SWIZZLE = new Set(['x', 'y', 'z', 'w']);
 
 /**
- * The RGB-to-HSL node's per-component output handles ⇄ the vector components
- * they read. ONE emitted `const toHsl1 = toHsl(rgb);` serves all three sockets
- * (`resolveEdgeRef` swizzles it); `codeToGraph.resolveMemberExpr` uses the
- * inverse to map `toHsl1.x` straight back to the `h` handle instead of minting
- * a Split node — without which every Apply would splice a Split between the
- * node and its consumers and the graph would grow without bound.
- *
- * **These two maps must change together** — swapping one direction silently
- * exchanges Saturation and Lightness across a round trip (pinned by test).
- * `out` is absent on purpose: it means the whole vec3 and falls through to the
- * bare variable name, which is what keeps every pre-existing graph
- * byte-identical.
- *
- * Maps, not object literals: both are indexed by adversarial strings (an
- * edge's sourceHandle out of a .fastshader; a member-expression property out
- * of pasted code), and a bare Record resolves 'constructor'/'toString' through
- * the prototype chain to a truthy Function — which would ride into the emitted
- * module (a SyntaxError) or an edge handle. Same reason VALID_SWIZZLE is a Set.
+ * RGB-to-HSL output handles ⇄ the components of its ONE emitted call; a drift
+ * pair that must change together (see docs/dev/codegen.md, `toHsl`). `out` is
+ * absent on purpose: it is the whole vec3. Maps, not Records: the keys are
+ * adversarial strings and a Record resolves 'constructor' to a Function.
  */
 export const TOHSL_HANDLE_TO_COMPONENT = new Map<string, string>([['h', 'x'], ['s', 'y'], ['l', 'z']]);
 export const TOHSL_COMPONENT_TO_HANDLE = new Map<string, string>([['x', 'h'], ['y', 's'], ['z', 'l']]);
@@ -250,7 +228,7 @@ export const TOHSL_COMPONENT_TO_HANDLE = new Map<string, string>([['x', 'h'], ['
  */
 export function hexLiteral(value: unknown): string {
   const s = String(value ?? '');
-  return /^#[0-9a-fA-F]{6}$/.test(s) ? `0x${s.slice(1)}` : '0x000000';
+  return HEX6.test(s) ? `0x${s.slice(1)}` : '0x000000';
 }
 
 interface GraphIndex {
@@ -302,29 +280,15 @@ function inEdge(gidx: GraphIndex, id: string, handle: string): AppEdge | undefin
 }
 
 /**
- * Does any edge leave this Texture (Image) node from a CHANNEL socket
- * (Alpha/R/G/B, utils/imageChannels.ts)? Then its sample is emitted WIDE
- * (`.rgba`, a vec4) and every consumer reads a swizzle of it; otherwise it
- * stays the `.rgb` vec3 it has always been, byte for byte.
- *
- * The ONE predicate: the image branch (which sample to emit) and
- * resolveEdgeRef (which reference to hand out) both ask it, because two copies
- * could disagree and emit `image1.a` on a vec3 — a vec3 has no `.w`, so the
- * whole module fails to compile. Reads the UNWRAPPED edges this pass indexed,
- * so a channel edge crossing a collapsed frame still counts. `out`, a null
- * handle and every tampered id are not channels, so they never switch modes.
+ * Does any edge leave this Image node from a CHANNEL socket (Alpha/R/G/B)?
+ * Then the sample is emitted WIDE (`.rgba`) and consumers read swizzles. The
+ * ONE predicate the image branch and resolveEdgeRef share, over the unwrapped
+ * edges; see docs/dev/images-and-textures.md.
  */
 function imageSampleIsWide(gidx: GraphIndex, id: string): boolean {
   for (const e of outEdges(gidx, id)) if (isImageChannelHandle(e.sourceHandle)) return true;
   return false;
 }
-
-// A mesh name (and a signature name) as a JS string literal safe inside a
-// block comment and an inline <script>: THE encoder (rule R5) now lives in the
-// partKeyLiteral.ts leaf, shared with the module layer and the lazy
-// scriptToTSL chunk, where its full reasoning is written down. Aliased so
-// every call site below reads exactly as before.
-const partKeyLiteral = moduleStringLiteral;
 
 export function graphToCode(
   nodes: AppNode[],
@@ -345,26 +309,11 @@ export function graphToCode(
   const gidx = buildGraphIndex(sorted, edges);
 
   /**
-   * A property whose output feeds NOTHING is not emitted at all — no
-   * `uniform(...)` line, no import, and therefore no `export const schema` entry
-   * and no `<a-entity shader="…">` attribute row. It used to emit regardless, so
-   * an orphaned property advertised a settable `params.myKnob` on the exported
-   * module that could not change a single pixel; `utils/connectedUniforms.ts`
-   * was already hiding those rows from the preview's Uniforms overlay for
-   * exactly that reason.
-   *
-   * "Has an outgoing edge", NOT connectedUniforms' stronger "reaches an emitting
-   * Output": codegen legitimately runs on graphs with no Output at all — every
-   * built-in preset and texture is emitted that way, and so is a saved group —
-   * and the stronger rule would strip every property they own.
-   *
-   * `edges` was unwrapped at the top of this function, so a property inside a
-   * COLLAPSED group is judged on its real edges: collapse state cannot change
-   * what compiles.
-   *
-   * Read by BOTH the import collector and the body loop — two passes over the
-   * same nodes, and if they disagree the module carries an unused `uniform`
-   * import (which is what happened when only the body was filtered).
+   * A property feeding NOTHING is not emitted: no uniform line, no import, no
+   * schema entry. "Has an outgoing edge", not "reaches an Output": presets,
+   * textures and saved groups are emitted with no Output at all. Judged on the
+   * UNWRAPPED edges, and read by BOTH the import collector and the body loop.
+   * Pinned by orphanedUniforms.test.ts.
    */
   const isOrphanedProperty = (node: AppNode): boolean =>
     (node.data.registryType === 'property_float' ||
@@ -512,20 +461,16 @@ export function graphToCode(
       continue;
     }
 
-    // Live-audio nodes have the same aliasing problem as data nodes: the node
-    // emits `<var>_<channel>` identifiers, not `<var>`, so claiming only the
-    // base leaves `mic1_bass` free for a user property to take — and the emitted
-    // `const mic1_bass = uniform(0);` then collides with the property's own
-    // `const mic1_bass = uniform(...)`. Duplicate declaration = SyntaxError =
-    // the whole module fails to load, not just this node.
+    // The Sound node has the data node's aliasing problem: it emits
+    // `<var>_<channel>` (`sound1_bass`), so claiming only the base would let a
+    // property take that name: a duplicate declaration, and the module is dead.
     if (isSoundNodeType(def.type)) {
       const refChannels = new Set<SoundChannel>();
       for (const e of outEdges(gidx, node.id)) {
-        refChannels.add(micChannelForHandle(e.sourceHandle));
+        refChannels.add(soundChannelForHandle(e.sourceHandle));
       }
       varNames.set(node.id, claimName(soundVarBase(def.type), {
-        // Both the uniform AND its gained twin (`_mic1_bass`) share the Fn-body
-        // namespace, so both must be reserved or a user property could take one.
+        // The uniform AND its gained twin (`_sound1_bass`) are both reserved.
         aliases: (name) =>
           [...refChannels].flatMap((ch) => {
             const u = soundUniformName(name, ch);
@@ -617,25 +562,13 @@ export function graphToCode(
   const usedHelpers: string[] = [];
 
   /**
-   * Channel count of the specific OUTPUT PORT an edge leaves from.
-   *
-   * Node-level inference is not enough: a multi-output node reports the shape
-   * of `outputs[0]`, so Data Viz (out: vec3, value: float) claimed 3 channels
-   * even for an edge leaving its scalar `value` socket — and the Output-channel
-   * widening was skipped, putting a bare float in colorNode again by a second
-   * route. The declared port type wins; node-level inference is the fallback
-   * for `any`-typed ports (arithmetic chains).
-   *
-   * Defined HERE, above the emission loop, because the dataviz-family branches
-   * need it too: nothing validates connection types, so a vec3 can land on a
-   * scalar `value` input and would otherwise reach `vec2(<vec3>, 0.5)`, which is
-   * a compile error rather than a wrong picture.
+   * Channel count of the OUTPUT PORT an edge leaves from: the declared port
+   * type wins, node-level inference is the fallback for `any` ports. See
+   * docs/dev/codegen.md "Edge VALUES are read per SOURCE SOCKET".
    */
   const shapeOfEdgeSource = (edge: AppEdge): number => {
     const srcNode = gidx.nodeById.get(edge.source);
-    // ONE per-handle port lookup, shared with the visual layer
-    // (cpuEvaluator.getEdgeOutputShape) so codegen and the on-card channel
-    // counts cannot drift. `registry` is injectable here, hence the argument.
+    // The ONE per-handle lookup, shared with cpuEvaluator.getEdgeOutputShape.
     const declared = srcNode ? portShapeForHandle(srcNode, edge.sourceHandle ?? 'out', registry) : 0;
     if (declared > 0) return declared;
     return getNodeOutputShape(edge.source, nodes, edges);
@@ -654,27 +587,10 @@ export function graphToCode(
   };
 
   /**
-   * The COLOUR an edge carries, or the stored hex when nothing is wired — the
-   * ramp endpoints of Data Stripes / Data Viz.
-   *
-   * The deliberate inverse of `scalarRefOf`: that one NARROWS with `.x` because
-   * the dataviz family's other inputs are scalars, which is exactly wrong for a
-   * colour — it would throw away two channels of every colour wired in. A
-   * 1-channel source is WIDENED with `vec3()` instead, the same rule the Output
-   * node's colour channels use. That widen is load-bearing, not cosmetic:
-   * three's `MathNode.getInputType` picks the LONGEST operand and pads or
-   * truncates silently, so a mix of two scalars compiles to a scalar with no
-   * error while `shapeOfEdgeSource` still reports 3 from the registry port —
-   * and the Output node then splats it into alpha.
-   *
-   * `resolveExposedParam` is NOT usable here: its unwired fallback is
-   * `Number(raw)`, and `Number('#1b2a4a')` is NaN. The unwired branch returns
-   * exactly the `color(0x…)` string this emitter has always produced, so a node
-   * with nothing wired stays byte-identical.
+   * The COLOUR an edge carries (a ramp endpoint), or `color(0x…)` of the stored
+   * hex when nothing is wired. The inverse of `scalarRefOf`: a 1-channel source
+   * is WIDENED with `vec3()`, never narrowed. See docs/dev/node-types.md, ramp ends.
    */
-  // `fallbackHex` is `unknown` so a caller can hand in the node's own REGISTRY
-  // default without coercing it — `hexLiteral` already validates and degrades
-  // to 0x000000 on anything that isn't a #rrggbb string.
   const colorRefOf = (edge: AppEdge | undefined, storedHex: unknown, fallbackHex: unknown): string => {
     if (edge) {
       const ref = resolveEdgeRef(edge, varNames, gidx);
@@ -801,6 +717,12 @@ export function graphToCode(
       for (const name of b.imports) addImport('three/tsl', name);
       return b.expr;
     };
+    /** The uv an unwired read samples: the scope's binding, else `uv()`. */
+    const unwiredUv = (): string => {
+      const scoped = implicitBinding('uv');
+      if (!scoped) addImport('three/tsl', 'uv');
+      return scoped ?? 'uv()';
+    };
     /** Emit a node's module-scope setup (a baked texture) ONCE, however many
      *  scope Fns — or a scope Fn and the flat body — emit the node itself: a
      *  second copy would redeclare the same module-scope `const`, a
@@ -894,14 +816,13 @@ export function graphToCode(
         addImport('three/tsl', 'float');
         let bakedAny = false;
         // Inside a splat Fn the sample row is the splat's own (implicitBinding).
-        let uvBase: string | null = null;
+        let uvBase = 'uv()';
         for (const ci of [...usedCols].sort((a, b) => a - b)) {
           const col = decoded?.columns[ci];
           if (col && col.length > 0) {
             if (!bakedAny) {
               addImport('three/tsl', 'texture');
-              uvBase = implicitBinding('uv');
-              if (!uvBase) addImport('three/tsl', 'uv');
+              uvBase = unwiredUv();
               addImport('three/tsl', 'vec2');
               bakedAny = true;
             }
@@ -913,72 +834,17 @@ export function graphToCode(
               );
               setupLines.push(`${texVar}.needsUpdate = true;`);
             }
-            bodyLines.push(`  const ${varName}_col${ci} = texture(${texVar}, vec2(${uvBase ?? 'uv()'}.x, 0.5)).x;`);
+            bodyLines.push(`  const ${varName}_col${ci} = texture(${texVar}, vec2(${uvBase}.x, 0.5)).x;`);
           } else {
             bodyLines.push(`  const ${varName}_col${ci} = float(0.0);`);
           }
         }
       }
     } else if (def.type === 'imageNode') {
-      // Image node: the dropped image rides inside the module as a compressed
-      // data: URL, decoded at module scope with top-level await (the
-      // shaderloader `await import()`s the blob module, so the texture is
-      // ready before first render; a garbage payload fails decode() and falls
-      // back to a 1×1 black texture instead of rejecting the whole module).
-      //
-      // What lands HERE is a short `fs-asset:` PLACEHOLDER, not the payload —
-      // `inlineImageAssets` (engine/imageAssets.ts) expands it at the surfaces
-      // that actually run or export the module (preview iframe, XR popup,
-      // A-Frame tab, Download Shader). The editor's TSL tab shows this generated
-      // text verbatim, and a word-wrapped 600K-char data: URL buries the shader
-      // under thousands of rows. Nothing is lost: image nodes are already
-      // one-way through codeToGraph, so the payload here was never read back.
-      //
-      // SHARING: nodes holding the same payload (the exact re-encoded `src`,
-      // never the FNV hash) share ONE Image element, declared by the first
-      // node emitted with it; only that owner's placeholder appears in the
-      // code. Those with the same texture-object spec as well (colour space,
-      // filter, wrap, flipY) sample ONE texture; a node whose spec differs (a
-      // colour and a data map of one picture) builds its own Texture over
-      // that shared element, which is pixel-neutral. UV math
-      // (tile, offset, the Flip X/Y checkboxes, a wired uv or Direction) is
-      // per node, in the sample's uv expression, and never enters the key.
-      // The node's `flipY` value is one of those uv mirrors, not
-      // `Texture.flipY`. Points stay per node: each node is a real sample.
-      //
-      // CHANNEL SOCKETS (Alpha/R/G/B, utils/imageChannels.ts): ONE sample,
-      // swizzled at the consumer by resolveEdgeRef — the toHsl shape. Four
-      // `texture()` calls would be four fetches, since TSL never merges
-      // TextureNodes. While no channel socket is wired (imageSampleIsWide)
-      // this branch is byte-identical to what it emitted before the sockets
-      // existed: `.rgb`, and consumers read the bare variable. Once one is,
-      // the sample is `.rgba` and `out` reads its `.rgb`. It must stay the
-      // MEMBER form, never a bare `texture(...)` declarator: codeToGraph drops
-      // a call-object member with a warning, which keeps an Apply inert,
-      // whereas a bare call becomes an `unknown` node that re-emits
-      // `_imageN_tex` after the Apply dropped its declaration — a
-      // ReferenceError that kills the whole module. Channel sockets set
-      // nothing on the Texture OBJECT, so the planner's share key is unmoved.
-      //
-      // glTF MAPPING (utils/imageUvMapping.ts, the ONE reader; every key read
-      // EXACTLY, so an absent, junk or default key emits today's bytes). The
-      // ORIENTATION is the only one that lands on the Texture object — the
-      // spec's `flipY` — so it is the only one in the share key. The UV set
-      // (`uv(n)`), the KHR_texture_transform (applied FIRST, as one mat2 of
-      // precomputed constants plus an offset) and the glTF sense of the Flip
-      // X box are uv math here; the normal-map green flip is channel math in
-      // resolveOutputChannels. Order: base (wired uv ?? uv(n) ?? uv()) →
-      // transform → mirror → tile → offset; a wired Direction replaces all.
-      //
-      // SECURITY: the stored payload is NEVER interpolated verbatim — the
-      // graph JSON is adversarial. imageAssetFor (called by the planner)
-      // strict-validates it via decodeImageNode and re-encodes the emitted
-      // `data:` literal from the decoded bytes (canonical btoa alphabet, MIME
-      // from the regex whitelist capture); the placeholder and its trailing comment are built from a
-      // character whitelist. So no attacker-controlled character reaches this
-      // module's source text on either path. Emitted as FLAT statements (never
-      // an async IIFE — codeToGraph's ReturnStatement visitor would mistake its
-      // `return` for the shader output).
+      // Image node: FLAT module-scope statements with top-level await, never an
+      // async IIFE. The payload rides as an `fs-asset:` placeholder re-encoded
+      // from the decoded bytes; ONE sample, swizzled per consumer and kept in
+      // MEMBER form; uv math is per node. See docs/dev/images-and-textures.md.
       const nv = getNodeValues(node);
       const wide = imageSampleIsWide(gidx, node.id);
       const placed = imagePlanner.place(node.id, nv);
@@ -1005,29 +871,11 @@ export function graphToCode(
         // quad's (absent) uv attribute — see implicitBinding.
         const scopedUv = !uvRef && !dirRef ? implicitBinding('uv') : null;
         if (!uvRef && !scopedUv) addImport('three/tsl', 'uv');
-        // UV-space transform settings (NodeSettingsMenu). All Number-coerced —
-        // never interpolate stored strings. The raw sample renders mirrored
-        // left-right in the preview pipeline, so the CORRECTED orientation
-        // (u' = 1-u) is the baked-in default; the user-facing "Flip X" toggle
-        // (default off/unchecked) mirrors RELATIVE to that corrected look —
-        // checking it cancels the correction and yields the raw sample. Each
-        // flip is `1-c`, emitted as mul/add so it composes with a connected
-        // uv source.
+        // The `1-u` correction is the baked-in DEFAULT, so Flip X mirrors relative
+        // to the corrected look. Numbers only, never a stored string.
         const numVal = (key: string, dflt: number) => {
           const v = valueNum(nv[key]);
           return Number.isFinite(v) ? v : dflt;
-        };
-        // Tile/offset can be exposed as sockets — a wired edge overrides the
-        // stored value (same contract as the uv node's params). Refs are
-        // generated identifiers, literals go through num(): nothing
-        // attacker-controlled reaches the emitted text.
-        const paramExpr = (key: string, dflt: number): string => {
-          const pEdge = inEdge(gidx, node.id, key);
-          if (pEdge) {
-            const ref = resolveEdgeRef(pEdge, varNames, gidx);
-            if (ref) return ref;
-          }
-          return num(numVal(key, dflt));
         };
         const mapping = readImageUvMapping(nv);
         const gltf = mapping.orientation === 'gltf';
@@ -1037,10 +885,11 @@ export function graphToCode(
         // the card's thumbnail uses on both axes.
         const mirrorX = gltf ? numVal('flipX', 0) >= 0.5 : numVal('flipX', 0) < 0.5;
         const mirrorY = numVal('flipY', 0) >= 0.5;
-        const tileX = paramExpr('tileX', 1);
-        const tileY = paramExpr('tileY', 1);
-        const offsetX = paramExpr('offsetX', 0);
-        const offsetY = paramExpr('offsetY', 0);
+        // Tile/offset can be sockets: a wired edge overrides the stored number.
+        const tileX = numericParam(node, 'tileX', 1, varNames, gidx);
+        const tileY = numericParam(node, 'tileY', 1, varNames, gidx);
+        const offsetX = numericParam(node, 'offsetX', 0, varNames, gidx);
+        const offsetY = numericParam(node, 'offsetY', 0, varNames, gidx);
         // A wired UV input wins over the UV set; the literal digit comes from
         // the reader's closed 1..3 table, never from the stored value.
         let uvExpr = uvRef ?? scopedUv ?? (mapping.uvSet > 0 ? `uv(${mapping.uvSet})` : 'uv()');
@@ -1048,13 +897,9 @@ export function graphToCode(
         // imported exactly when used (a rotation-only transform needs only
         // mat2). On the legacy path it is the old `uvExpr !== base` test.
         let usesVec2 = false;
-        // glTF texture transform (KHR_texture_transform), applied FIRST — mesh
-        // UV → texture UV — so Flip/Tile/Offset below keep acting on the
-        // picture. Constants only (gltfUvMatrix, num()): nothing stored reaches
-        // the text. With ALL-NUMBER arguments TSL's mat2 builds a THREE.Matrix2,
-        // whose constructor is ROW-major, so the rows m00 m01 / m10 m11 go out
-        // in reading order (m00, m01, m10, m11). NODE arguments (RotateNode's)
-        // take the column-major JoinNode path instead — never pass one here.
+        // glTF texture transform, applied FIRST, as constants only. ROW-major:
+        // all-number arguments build a THREE.Matrix2; never pass a NODE here
+        // (pinned by imageUvTransformTsl.test.ts).
         if (mapping.transform) {
           const m = gltfUvMatrix(mapping.transform);
           if (m.m01 !== 0 || m.m10 !== 0) {
@@ -1111,32 +956,19 @@ export function graphToCode(
       const nv = getNodeValues(node);
       const bf = valueNum(nv.baseFrequency ?? 80);
       const dens = valueNum(nv.density ?? 1.5);
-      // Ramp endpoints go out as `color(0x…)`, NOT `vec3(r/255, …)`.
-      // THREE.Color converts a hex from sRGB into the renderer's linear working
-      // space (ColorManagement, on by default since r152); a bare vec3 of
-      // hex/255 does not, so the same swatch rendered lighter here than on a
-      // Color node, and the two endpoints were interpolated in the wrong space.
-      // A wired ramp colour wins over the stored swatch (the exposedPorts
-      // rule); unwired emits the identical `color(0x…)` as before, so a node
-      // with nothing wired is byte-stable. The unwired-and-unstored fallback is
-      // the node's OWN registry default rather than a hex copied into this
-      // file: the two literals used to live here as well as in nodeRegistry.ts,
-      // so moving one would have silently changed what a legacy graph (whose
-      // `values` predate the swatch) emits — and the break would have surfaced
-      // as an unexplained builtinByteStability snapshot failure far from the
-      // edit.
+      // Ramp ends go out as `color(0x…)` (sRGB decoded), never `vec3(hex/255)`;
+      // the unstored fallback is the REGISTRY default, never a literal here.
+      // See docs/dev/node-types.md.
       const lo = colorRefOf(inEdge(gidx, node.id, 'lowColor'), nv.lowColor, def.defaultValues?.lowColor);
       const hi = colorRefOf(inEdge(gidx, node.id, 'highColor'), nv.highColor, def.defaultValues?.highColor);
       // Radial ("target"/tree-ring) mode: index the data by distance from a
       // choosable center instead of uv.x, so the bands become concentric rings.
-      const scopedUv = implicitBinding('uv');
-      const { radial, expr: coordExpr } = rampCoord(nv, scopedUv ?? undefined);
+      const { radial, expr: coordExpr } = rampCoord(nv, unwiredUv());
       // How strongly the stripes darken the value-color. 0 = a clean value
       // heatmap (no stripes, colour alone shows the data); ~0.75 = bold stripes.
       const lineStrength = Math.min(Math.max(valueNum(nv.lineStrength ?? 0.75), 0), 1);
       addImport('three/tsl', 'float');
       addImport('three/tsl', 'color');
-      if (!scopedUv) addImport('three/tsl', 'uv');
       addImport('three/tsl', 'mix');
       addImport('three/tsl', 'dFdx');
       addImport('three/tsl', 'dFdy');
@@ -1223,10 +1055,8 @@ export function graphToCode(
       // see the Stripes branch above for why it is not a literal here.
       const lo = colorRefOf(inEdge(gidx, node.id, 'lowColor'), nv.lowColor, def.defaultValues?.lowColor);
       const hi = colorRefOf(inEdge(gidx, node.id, 'highColor'), nv.highColor, def.defaultValues?.highColor);
-      const scopedUv = implicitBinding('uv');
-      const { radial, expr: coordExpr } = rampCoord(nv, scopedUv ?? undefined);
+      const { radial, expr: coordExpr } = rampCoord(nv, unwiredUv());
       addImport('three/tsl', 'color');
-      if (!scopedUv) addImport('three/tsl', 'uv');
       addImport('three/tsl', 'mix');
       if (radial) addImport('three/tsl', 'vec2');
 
@@ -1302,9 +1132,7 @@ export function graphToCode(
         // Unwired: ramp across uv.x, so a freshly dropped Colormap node shows
         // the map it is set to instead of a flat colour. (Inside a splat Fn,
         // across the splat's own sample point — implicitBinding.)
-        const scopedUv = implicitBinding('uv');
-        if (!scopedUv) addImport('three/tsl', 'uv');
-        tExpr = `${scopedUv ?? 'uv()'}.x`;
+        tExpr = `${unwiredUv()}.x`;
       }
 
       if (levels >= 2) {
@@ -1340,26 +1168,12 @@ export function graphToCode(
 
       let src = scalarRefOf(valueEdge);
       if (!src) {
-        const scopedUv = implicitBinding('uv');
-        if (!scopedUv) addImport('three/tsl', 'uv');
-        src = `${scopedUv ?? 'uv()'}.x`;
+        src = `${unwiredUv()}.x`;
       }
 
-      // A user-authored formula, when there is one. Reached ONLY when
-      // `values.formula` is a string that parses under the Data Range grammar
-      // AND folds without producing a non-finite constant. Every other case —
-      // absent key, a number/array/object, over-length, an unknown name, a
-      // homoglyph, a divide by zero on this dataset — falls through to the
-      // built-in chains below, which are byte-for-byte what this node has always
-      // emitted, so every already-saved graph and already-exported `.js` is
-      // unchanged.
-      //
-      // The user's string cannot contribute a single character to the output;
-      // see utils/dataRangeFormula.ts for why that is structural rather than
-      // filtered. No verdict cache is needed (unlike isSafeUnknownExpression,
-      // which runs Babel): this is a hand-rolled scan over <=512 chars, cheaper
-      // than the columnStats call three lines above that sorts the whole column
-      // on every pass.
+      // A user-authored formula: used only when it parses AND folds to finite
+      // constants; anything else falls through to the built-in chains, byte for
+      // byte. PARSE-THEN-RE-EMIT (utils/dataRangeFormula.ts), cheap enough uncached.
       let expr: string | null = null;
       let rejected: FormulaErrorCode | null = null;
       const parsed = parseFormula(nv.formula);
@@ -1373,17 +1187,9 @@ export function graphToCode(
         rejected = parsed.err.code;
       }
 
-      // Say WHY in the generated source when an authored formula was refused.
-      // The canvas chip cannot: half the rejections (`non-finite` — a divisor
-      // that folds to zero) depend on the wired column's statistics, which a
-      // node component has no cheap way to see, and a shared `.fastshader`
-      // would otherwise render as the plain method with nothing anywhere
-      // explaining the difference. A comment reaches the code panel, the Output
-      // tab and the downloaded `.js`, so the recipient sees it too.
-      //
-      // Byte-stability is unaffected: this needs `hasCustomFormula`, so an
-      // absent key — and every non-string a corrupt file can produce — still
-      // emits exactly what it always did.
+      // Say WHY in the generated source when an authored formula was refused:
+      // half the rejections depend on the wired column, which the canvas chip
+      // cannot see. An absent key still emits exactly what it always did.
       if (rejected && hasCustomFormula(nv.formula)) {
         bodyLines.push(
           `  // Data Range: custom formula ignored (${formulaErrorSummary(rejected)}) — using the ${mode} formula.`,
@@ -1429,9 +1235,7 @@ export function graphToCode(
       const valueEdge = inEdge(gidx, node.id, 'value');
       let src = scalarRefOf(valueEdge);
       if (!src) {
-        const scopedUv = implicitBinding('uv');
-        if (!scopedUv) addImport('three/tsl', 'uv');
-        src = `${scopedUv ?? 'uv()'}.x`;
+        src = `${unwiredUv()}.x`;
       }
 
       const p = `_${varName}_p`;
@@ -1460,20 +1264,11 @@ export function graphToCode(
         `  const ${varName} = mix(${ln}, ${avg}, ${fw}.mul(2.0).sub(1.0).clamp(0.0, 1.0));`,
       );
     } else if (def.type === 'wireframe') {
-      // Wireframe: Isolines' construction, run on a VECTOR so one chain covers
-      // every line direction at once and a `max` combines them — two lines
-      // crossing must read as one line, not as a double-bright junction.
-      //
-      // The two modes differ only in what the distance-to-a-line vector IS:
-      //   grid  — 0.5 - |fract(uv * density) - 0.5|, per uv axis  (vec2)
-      //   edges — the barycentric coordinate itself, per triangle edge (vec3),
-      //           which is 0 exactly on an edge and 1 at the opposite corner
-      // Everything after that is byte-identical between them.
-      //
-      // Type safety comes from three's own rule: `MathNode.getInputType`
-      // promotes every operand to the LONGEST one, so `.max(0.00001)`,
-      // `.smoothstep(vecN, hw)` and `mix(vecN, vecN, vecN)` all resolve to the
-      // vector width and the float constants beside them are widened.
+      // Wireframe: Isolines' construction on a VECTOR, combined with `max` so two
+      // crossing lines read as one. The modes differ only in the distance vector:
+      //   grid  — 0.5 - |fract(uv * density) - 0.5|, per uv axis (vec2)
+      //   edges — the barycentric coordinate, 0 exactly on an edge (vec3)
+      // three widens the float constants beside it (MathNode.getInputType).
       const edges = isWireframeEdges(getNodeValues(node));
       addImport('three/tsl', 'dFdx');
       addImport('three/tsl', 'dFdy');
@@ -1501,9 +1296,7 @@ export function graphToCode(
       } else {
         addImport('three/tsl', 'vec2');
         const densityExpr = numericParam(node, 'density', 10, varNames, gidx);
-        const scopedUv = implicitBinding('uv');
-        if (!scopedUv) addImport('three/tsl', 'uv');
-        bodyLines.push(`  const ${p} = ${scopedUv ?? 'uv()'}.mul(${densityExpr});`);
+        bodyLines.push(`  const ${p} = ${unwiredUv()}.mul(${densityExpr});`);
       }
 
       // Distance to the nearest line, per axis (grid) or per edge (edges).
@@ -1555,31 +1348,11 @@ export function graphToCode(
       // maths — so codeToGraph reads it back as this one node.
       bodyLines.push(`  const ${varName} = rayDirection();`);
     } else if (def.type === 'time') {
-      // Time node: elapsed seconds, optionally scaled by the `speed` multiplier
-      // edited in Node Settings. Handled BEFORE the generic
-      // `inputs.length === 0 && defaultValues` branch, which would emit
-      // `time(1)` — `time` is a uniform NODE OBJECT (three's nodes/utils/
-      // Timer.js), not a callable, so that would be a runtime TypeError.
-      //
-      // speed === 1 (and legacy nodes with no stored speed, and any value that
-      // does not coerce to a finite number) emits the historical bare reference
-      // BYTE-FOR-BYTE so no already-exported shader changes. Note Number('') and
-      // Number(null) are 0, not NaN — those land on a real `.mul(0)`, which is
-      // the same frozen-time result the UI can already produce, not an escape.
-      // The multiplied form is a METHOD
-      // CHAIN, not `mul(time, k)`: it needs no extra import (same convention as
-      // the noise `scale` param below), and the bare-`time` receiver is a shape
-      // nothing in src/ or Tests/ writes by hand, so codeToGraph can collapse it
-      // back without ever eating a user's real Multiply node.
-      //
-      // `values` is adversarial (.fastshader / localStorage): Number() kills the
-      // array-stringification vector and isFinite() kills NaN/±Infinity. Do NOT
-      // route this through resolveExposedParam — that helper is String()-only.
-      //
-      // `speed` is also an opt-in INPUT socket. A wired edge overrides the
-      // stored number (the exposedPorts rule) and emits the same method-chain
-      // shape with the upstream var in place of the literal, so the two forms
-      // stay one thing for codeToGraph to collapse.
+      // Time: BEFORE the generic zero-input branch, which would emit `time(1)`;
+      // `time` is a uniform node OBJECT, not a callable (a runtime TypeError).
+      // Speed 1, absent or non-finite emits the bare reference byte for byte;
+      // otherwise the METHOD CHAIN `time.mul(k)`, the one shape codeToGraph
+      // collapses back. See docs/dev/node-types.md, Time node speed.
       const speedEdge = inEdge(gidx, node.id, 'speed');
       const speedRef = speedEdge ? resolveEdgeRef(speedEdge, varNames, gidx) : null;
       const rawSpeed = Number(getNodeValues(node).speed);
@@ -1592,47 +1365,18 @@ export function graphToCode(
             : `  const ${varName} = ${def.tslFunction}.mul(${num(speed)});`,
       );
     } else if (isSoundNodeType(def.type)) {
-      // Mic / Audio Input: four live 0–1 values emitted as ORDINARY NUMERIC
-      // UNIFORMS. Both nodes emit the IDENTICAL shape and differ only in their
-      // variable base (`mic1_…` vs `aud1_…`), which is what lets the preview
-      // pump route each one back to its own capture session.
-      //
-      // This shape is the whole design. `const mic1_bass = uniform(0);` means
-      // the entire transport is the fs:uniform postMessage channel that already
-      // exists — nothing new crosses the preview sandbox boundary except
-      // numbers — and buildShaderModule's `uniformLineRe` pass rewrites the
-      // line to `params.mic1_bass` and records a `{type:'number'}` schema entry
-      // with no changes to PropertyInfo or collectShaderProperties. So the
-      // DOWNLOADED module has four real properties an embedding page can drive.
-      // Emitting anything cleverer (a data texture, a custom node type) would
-      // trade that away for nothing the preview can use.
-      //
-      // Handled BEFORE the generic `inputs.length === 0 && defaultValues`
-      // branch, which would emit `(0.8)` — the tslFunction is empty because
-      // these are hand-emitted, and their defaultValues are the analyser
-      // settings, not a constructor argument. Same trap the Time node avoids.
-      //
-      // Only CONSUMED channels are emitted (the Data node's `usedCols` rule):
-      // an unwired channel would otherwise ship a dead slider in the exported
-      // schema and in podest's auto-generated uniform list.
-      //
-      // The default is 0, not a mid-scale value: an unarmed mic, a downloaded
-      // file, and podest must all render the same defined "silence" state
-      // rather than a value that looks like signal.
+      // Sound: four ORDINARY numeric uniforms (`sound1_bass = uniform(0)`), one
+      // per CONSUMED channel, so only numbers cross the sandbox. BEFORE the
+      // generic zero-input branch; 0 is silence. See docs/dev/node-types.md.
       const wanted = new Set(
-        outEdges(gidx, node.id).map((e) => micChannelForHandle(e.sourceHandle)),
+        outEdges(gidx, node.id).map((e) => soundChannelForHandle(e.sourceHandle)),
       );
       if (wanted.size > 0) {
         // The generic import collection keys off `def.tslFunction`, which is
         // empty here, so `uniform` must be requested explicitly.
         addImport('three/tsl', 'uniform');
-        // Gain is a SEPARATE statement, never `uniform(0).mul(g)`: the
-        // uniform line has to stay a bare literal for buildShaderModule's
-        // `uniformLineRe` to rewrite it into `params.<name>` and record a
-        // schema entry. Fold the multiply into it and the property vanishes
-        // from the export AND the shaderloader stops binding it, which breaks
-        // the live preview too. Method chain — no extra import, same
-        // convention as the noise `scale` and the Time node's `speed`.
+        // Gain is a SEPARATE statement: the uniform line must stay a bare
+        // literal for buildShaderModule's `uniformLineRe` to rewrite it.
         const gainExpr = micGainExpr(node, varNames, gidx);
         for (const ch of SOUND_CHANNELS) {
           if (!wanted.has(ch)) continue;
@@ -1673,19 +1417,9 @@ export function graphToCode(
         posExpr = `${posExpr}.mul(${scaleExpr})`;
       }
 
-      // The 0–1 remap wraps the FINISHED call, not posExpr — the scale `.mul()`
-      // above rides INSIDE the call parens, so appending there would rescale the
-      // coordinate instead of the output. Method chain, so no new import (same
-      // convention as the scale param and Time's speed). `.mul(0.5).add(0.5)`
-      // broadcasts per channel on the vec3 variants.
-      //
-      // Gated on the def TYPE as well as the stored value: `values` is
-      // adversarial, and a tampered `.fastshader` putting `signed: 0` on a
-      // voronoi node would otherwise emit a remap that codeToGraph is required
-      // to REFUSE to collapse — the round trip would then grow junk nodes on
-      // every Apply. Symmetric gates make the round trip correct by
-      // construction. An absent/garbage flag falls through to the historical
-      // bare call, byte for byte.
+      // The 0–1 remap wraps the FINISHED call, never posExpr, and is gated on the
+      // def TYPE as well as the stored flag (codeToGraph's gate is symmetric). An
+      // absent flag emits the bare call. See docs/dev/node-types.md, noise range.
       let noiseExpr = `${def.tslFunction}(${posExpr})`;
       if (isUnsignedNoise(def.type, nv)) {
         noiseExpr = `${noiseExpr}.mul(0.5).add(0.5)`;
@@ -1700,18 +1434,10 @@ export function graphToCode(
       addImport('three/tsl', 'color');
       bodyLines.push(`  const ${varName} = uniform(color(${hexLiteral(nv.hex)}));`);
     } else if (def.inputs.length === 0 && def.defaultValues) {
-      // Type constructors with default values.
-      //
-      // `values` is ADVERSARIAL (.fastshader / fs:graph / pasted TSL — a string
-      // literal argument round-trips straight into this slot via codeToGraph's
-      // extractLiteral), and this module is executed by the XR popup at the
-      // app's REAL origin, so the emitted argument must be a literal WE
-      // construct, never an interpolated stored string.
-      //
-      // Which literal is decided by the REGISTRY DEFAULT's type, not by the
-      // stored value's: the old `startsWith('#')` test only caught hex-SHAPED
-      // strings, so a stored `"0xff0000); evil(); color(0"` skipped hexLiteral
-      // entirely and was spliced in verbatim.
+      // Type constructors with default values. `values` is ADVERSARIAL and the
+      // XR popup runs this module at the real origin, so the argument is a
+      // literal WE construct. The REGISTRY default's type picks which: testing
+      // the stored value let `"0xff0000); evil(); color(0"` through verbatim.
       const nodeValues = getNodeValues(node);
       const defaultKey = Object.keys(def.defaultValues)[0];
       const dflt = Object.values(def.defaultValues)[0];
@@ -1722,11 +1448,9 @@ export function graphToCode(
         : num(Number.isFinite(n) ? n : Number(dflt));
       bodyLines.push(`  const ${varName} = ${def.tslFunction}(${formatted});`);
     } else if (def.type === 'hsl' || def.type === 'toHsl') {
-      // HSL↔RGB: neither `hsl` nor `toHsl` exist in three/tsl, so we emit
-      // module-local helper Fn declarations (see buildColorHelpers below) and
-      // call them here. The helpers are auto-included whenever either node is
-      // used; the matching `path.skip()` in codeToGraph prevents round-trip
-      // pollution of the graph.
+      // HSL↔RGB: neither `hsl` nor `toHsl` exists in three/tsl, so the module
+      // carries helper Fns (engine/moduleHelpers.ts) and codeToGraph skips them
+      // by name.
       const call = def.type === 'hsl' ? 'hsl' : 'toHsl';
       const fallback = def.type === 'hsl' ? '0, 0, 0' : 'vec3(0, 0, 0)';
       const argExpr = def.type === 'hsl'
@@ -1759,9 +1483,9 @@ export function graphToCode(
     }
   }
 
-  // The helper block, in table order (see usedHelperNames above). hsl/toHsl
-  // and the march's rayDirection are called from dedicated branches, so they
-  // are recorded here by def presence rather than by emitted callee.
+  // The helper block, in table order. hsl/toHsl and rayDirection are emitted
+  // by dedicated branches that never touch usedHelperNames, so they are
+  // recorded here by def instead.
   for (const n of sorted) {
     const d = registry.get(n.data.registryType);
     if (d && (d.type === 'hsl' || d.type === 'toHsl' || d.type === 'rayDirection')) usedHelperNames.add(d.tslFunction);
@@ -1773,16 +1497,9 @@ export function graphToCode(
   }
 
   // ===== Raymarch Output =====
-  // Emitted AFTER every ordinary node (it is the sink): the per-step functions
-  // capture the flat body by closure, so everything they need is declared
-  // above them. The march is ONE IIFE returning a single vec4 (final RGB +
-  // coverage) — surface and volume are shaded INSIDE it, so no struct / outer
-  // variable writes are needed (measured: those are fragile on r184). Wire
-  // Field and it sphere-traces to a lit surface; wire Density and it
-  // integrates a self-lit volume; wire both and the volume sits in front of
-  // the surface. The material is double-sided so the ray starts at the camera
-  // on a back face (inside a large Window), and Background fills what the ray
-  // never hit.
+  // Emitted AFTER every ordinary node: its per-step Fns capture the flat body by
+  // closure. ONE IIFE returning ONE vec4 (RGB + coverage), surface and volume
+  // shaded inside it. See docs/dev/sdf-and-raymarch.md.
   let sdfEmission: { lines: string[]; discardLine: string | null; returnLine: string } | null = null;
   if (marchNode && part) {
     const node = marchNode;
@@ -1793,15 +1510,7 @@ export function graphToCode(
     const fieldRef = fieldEdge ? resolveEdgeRef(fieldEdge, varNames, gidx) : null;
     const densityRef = densityEdge ? resolveEdgeRef(densityEdge, varNames, gidx) : null;
     if (fieldRef || densityRef) {
-      const paramExpr = (key: string, dflt: number): string => {
-        const e = inEdge(gidx, node.id, key);
-        if (e) {
-          const ref = resolveEdgeRef(e, varNames, gidx);
-          if (ref) return ref;
-        }
-        const v = valueNum(nv[key]);
-        return num(Number.isFinite(v) ? v : dflt);
-      };
+      const paramExpr = (key: string, dflt: number): string => numericParam(node, key, dflt, varNames, gidx);
       const lines: string[] = [];
       // A per-step chain (Field/Density scalar, or Color/Emissive/Glow colour),
       // a function of the ray POSITION `p`.
@@ -1843,7 +1552,7 @@ export function graphToCode(
       // the Color swatch's stored value, or a literal fallback.
       const cap = (v: string | null, at: string): string | null =>
         v == null ? null : v.startsWith('@CAP@') ? v.slice(5) : `${v}(${at})`;
-      const storedColor = typeof nv.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(nv.color) ? nv.color : null;
+      const storedColor = storedHex6(nv.color);
       let colorName: string | null = posFn('color', 'Color', scopeLines.get('color')!, part.scopes.get('color')!);
       if (colorName == null && storedColor) {
         addImport('three/tsl', 'color');
@@ -1876,7 +1585,7 @@ export function graphToCode(
           lines.push(`  const ${base}${suffix} = ${widened};`);
           return `${base}${suffix}`;
         }
-        const stored = typeof nv[handle] === 'string' && /^#[0-9a-fA-F]{6}$/.test(nv[handle] as string) ? (nv[handle] as string) : null;
+        const stored = storedHex6(nv[handle]);
         if (stored) {
           addImport('three/tsl', 'color');
           lines.push(`  const ${base}${suffix} = color(${hexLiteral(stored)});`);
@@ -2034,33 +1743,9 @@ export function graphToCode(
   }
 
   // ===== Splat Output =====
-  // The module's return is `{ splat: { shade, shape, size, feather, invert } }`
-  // — NOT a material. Loader 0.8 finds the Gaussian-splat objects the module
-  // is applied to and, inside each one's own vertex stage, calls the Fns once
-  // per SPLAT with `(p, pw, n, c)` (utils/sdfPartition.ts, splatScopes):
-  //
-  //   shade(p, pw, n, c) → vec4(rgb, opacity)   Color TIMES the splat's own
-  //                                             `c.rgb` (a wire or the stored
-  //                                             swatch; unwired, `c.rgb` alone;
-  //                                             `replaceColor`, the colour
-  //                                             alone) and Opacity; LIT, the
-  //                                             rgb times the key light
-  //   shape(p, pw, n, c) → vec4(move, cut)      Move and Cut
-  //   size(p, pw, n, c)  → float                a Size that depends on the splat
-  //   feather(p, pw, n, c) → float              a Feather that depends on the splat
-  //
-  // r184's `Fn` cannot return a struct, hence the two vec4s. Everything else
-  // rides the return line as a VALUE: a stored Size / Feather as a number, a
-  // wired one that does not depend on the splat as the captured node, Invert
-  // and Lit as the literal `true`. Each Fn and key is OMITTED when it is the identity,
-  // so an active sink with nothing to say emits `return { splat: {} };` and
-  // the loader draws the splats exactly as the file has them.
-  //
-  // NEVER a `Discard(`: a statement-level Discard inside a nested Fn body is
-  // lifted into the module-scope `__pixel` wrapper by `extractDiscards`, and
-  // a cut is the loader's VALUE test anyway (`cut > 0` removes, a sign test —
-  // so a distance field wired to Cut keeps its inside; the quad collapses off
-  // screen and costs no raster).
+  // The return is `{ splat: { shade, shape, size, feather, invert, lit } }`, NOT
+  // a material: Fns of `(p, pw, n, c)` returning VALUES, each omitted when it is
+  // the identity, and NEVER a `Discard(`. See docs/dev/splats.md.
   let splatEmission: { lines: string[]; discardLine: null; returnLine: string } | null = null;
   if (splatNode && part) {
     const node = splatNode;
@@ -2084,16 +1769,9 @@ export function graphToCode(
     const notVec3 = (shape: number) => shape !== 3;
     const entries: string[] = [];
 
-    // lit → a key light (utils/splatLight.ts): `lit: true` on the return, so
-    // the loader passes each splat's surface normal as `n`, and ONE light line
-    // inside the shade Fn that multiplies the colour. Its sockets are the
-    // shade scope's (splatScopes), so a light that depends on the splat is
-    // read at its centre. Only the literal `true` lights; an absent key emits
-    // exactly what it did before the light existed. The direction gets
-    // SPLAT_LIGHT_DIRECTION_EPSILON before it is normalised, so a zero vector
-    // (three numbers dragged to 0, or `sin(time)` wired with the other two at
-    // 0, on a paused preview) lights from a fixed diagonal instead of turning
-    // every splat NaN; a real direction is unchanged in float32.
+    // lit: `lit: true` on the return plus ONE light line in the shade Fn; only
+    // the literal `true` lights. The epsilon keeps a zero direction from turning
+    // every splat NaN (docs/dev/splats.md).
     const lit = isSplatLit(rawValues);
     let lightLine: string | null = null;
     if (lit) {
@@ -2173,11 +1851,8 @@ export function graphToCode(
       if (size !== 1) entries.push(`size: ${num(size)}`);
     }
 
-    // feather → exactly like size: a Fn when it depends on the splat, the
-    // captured node when it does not, the stored number when it is not 0 (a
-    // hard cut). The loader reads it per VERTEX, inside its cut test and fade,
-    // so a splat-dependent Feather emitted flat would be read at each quad
-    // CORNER — a different value per corner tears the quad.
+    // feather → exactly like size; a Fn when it depends on the splat, because
+    // the loader reads it per VERTEX and a flat one would tear the quad.
     const featherEdge = edgeOf('feather');
     const featherRef = scalarRefOf(featherEdge);
     if (featherEdge && featherRef) {
@@ -2204,46 +1879,15 @@ export function graphToCode(
     };
   }
 
-  // Handle output node — resolve all connected channels.
-  //
-  // Picked from the NODES array, not from `sorted`. `topologicalSort` seeds
-  // Kahn's queue with every in-degree-0 node, so an UNWIRED Output always sorts
-  // BEFORE a wired one: `sorted.find` would pick the empty one and emit the red
-  // `vec3(1, 0, 0)` fallback, turning a working shader red the instant a second
-  // Output existed. Array order is creation order and is stable under wiring.
-  //
-  // The node supplying the module's TOP-LEVEL channels — `defaultOutput`: the
-  // flagged-and-untargeted Output, else the first untargeted one, else NULL —
-  // and NONE while a custom sink (Raymarch or Splat Output) is the active
-  // sink: then the plain Output's wiring is ignored outright, and an active
-  // Raymarch Output with nothing wired falls through to the "nothing wired"
-  // sentinel below exactly as an empty plain Output does, rather than silently
-  // handing the picture to a node the user did not choose. (An active Splat
-  // Output always has its own return, `{ splat: {} }` at the least.)
-  //
-  // NULL IS A REAL ANSWER and needs no `material0Target` test beside it: a
-  // document whose every Output is targeted has no default material, so the
-  // module emits `parts` alone and loader 0.6/0.8 leaves every unclaimed mesh
-  // on its authored one. That used to be `findDefaultOutput` plus exactly that
-  // test, because ONE node supplied both the default channels and every part;
-  // the parts come from `outputs` below now, so the question here narrowed to
-  // "which node is the default material" — which is the only form that is
-  // ARRAY-ORDER INDEPENDENT. `findDefaultOutput` reads `outputs[0]`, so with a
-  // targeted Output ahead of an untargeted one in the array the module silently
-  // lost its top-level channels, and `liftChildrenAfterParents` can put it
-  // there with an ordinary drag-into-a-group.
+  // The DEFAULT material: `defaultOutput` over NODES, never `sorted` (an unwired
+  // Output sorts before a wired one), and none while a custom sink drives. NULL
+  // is a real answer: a document whose every Output is targeted emits `parts`
+  // alone. See docs/dev/outputs-and-materials.md, "Several output nodes".
   const defaultNode = customNode ? null : defaultOutput(nodes);
   /**
-   * THE Output nodes whose `parts` / `materialParts` entries reach the module,
-   * in the module's own (emitRank, id) order — `contributingOutputs`, the ONE
-   * place that answer is made (the `costSeeds` shape): the default above plus
-   * every TARGETED Output, each supplying its own entry whatever the active
-   * flag says.
-   *
-   * The custom-sink check stays HERE rather than inside `contributingOutputs`,
-   * because `customNode` was resolved over `sorted` — the topologically sorted
-   * list — and `activeSink`'s fallbacks are array-order dependent, so asking
-   * the same question over `nodes` could elect a different sink.
+   * THE Outputs whose `parts` / `materialParts` entries reach the module, in
+   * (emitRank, id) order. The custom-sink check stays HERE: `customNode` was
+   * resolved over `sorted`, and asking again over `nodes` could elect another.
    */
   const outputs = customNode ? [] : contributingOutputs(nodes);
   const outputById = new Map(outputs.map((n) => [n.id, n] as const));
@@ -2281,7 +1925,7 @@ export function graphToCode(
    * the Data Viz `value` → Displacement flow, where the scalar height is meant
    * to stay scalar so normal-mode displacement can scale the normal by it.
    * `emissive` is included because the loader copies emissiveNode into
-   * colorNode when no colour is wired (line ~283).
+   * colorNode when no colour is wired (0.8.js, `buildMaterial`).
    */
   const ALPHA_BEARING_CHANNELS = new Set(['color', 'emissive']);
 
@@ -2304,20 +1948,10 @@ export function graphToCode(
     const handleOf = (ch: string) => channelHandle(materialIndex, ch);
     const channels: Record<string, string> = {};
     let discardRef: string | null = null;
-    // Stored per-channel values (the Output node's on-node widgets). Read
-    // DIRECTLY from data — getNodeValues() deliberately returns {} for output
-    // nodes. Three rules keep this safe and byte-stable:
-    //  * an ABSENT key emits nothing, so every pre-widget graph (and every
-    //    built-in preset/texture) emits byte-identically;
-    //  * a wired edge always wins — the widget's number is dead the moment an
-    //    edge lands (same contract as ShaderNode's exposed params);
-    //  * emission is gated on the channel being EXPOSED, so what the node
-    //    shows is exactly what emits — a tampered .fastshader carrying a
-    //    value on a hidden channel cannot make the shader differ from the
-    //    canvas (ShaderSettingsMenu clears the value when hiding a channel).
-    // Values are adversarial (.fastshader / localStorage): numbers go through
-    // Number()+num(), colors through the hexLiteral whitelist — nothing is
-    // interpolated verbatim.
+    // Stored per-channel values, read DIRECTLY from data. An ABSENT key emits
+    // nothing, a wired edge always wins, and emission is gated on the channel
+    // being EXPOSED; numbers and hexes are re-emitted, never interpolated.
+    // See docs/dev/outputs-and-materials.md.
     const outValues = (material?.values ?? {}) as Record<string, unknown>;
     const outExposed = new Set(
       materialIndex === 0
@@ -2340,7 +1974,7 @@ export function graphToCode(
         addImport('three/tsl', 'float');
         return `float(${num(n)})`;
       }
-      if (COLOR_VALUE_CHANNELS.has(ch) && typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v)) {
+      if (COLOR_VALUE_CHANNELS.has(ch) && typeof v === 'string' && HEX6.test(v)) {
         if (ch === 'normal') {
           // The DEFAULT normal color #8080ff is the flat tangent-space
           // "no perturbation" texel — an identity override, so it emits
@@ -2376,26 +2010,9 @@ export function graphToCode(
             addImport('three/tsl', 'float');
             channels[ch] = `vec3(float(${ref}))`;
           } else if (ALPHA_BEARING_CHANNELS.has(ch) && shapeOfEdgeSource(edge) !== 3) {
-            // Anything that ISN'T already 3 channels gets normalised to vec3
-            // here, rather than left for the renderer to reinterpret.
-            //
-            // three's NodeMaterial.setupDiffuseColor does
-            // `vec4(this.colorNode)`, and TSL splats a 1-channel node across
-            // ALL FOUR components — so a bare `mx_noise_float(...)` wired to
-            // Color silently became the ALPHA too (diffuseColor.a = noise),
-            // making the surface flicker/vanish as if Opacity or Discard were
-            // connected when neither is. `vec3(x)` fixes alpha at the
-            // material's own opacity while giving the intended grey ramp.
-            //
-            // The gate is `!== 3`, not `=== 1`, because the SAME leak runs the
-            // other way: `vec4(vec4)` is an identity cast, so a Vec4 node (or
-            // an Append grown to 4) wired to Color hands its `w` straight to
-            // alpha — and a fresh Vec4's w is 0, i.e. fully transparent.
-            // `vec3(vec4expr)` truncates to `.xyz` and alpha returns to 1.0
-            // via format's `vec4(vec3, 1.0)` path. Alpha must come ONLY from
-            // the opacity channel.
-            //
-            // Scoped to the alpha-bearing channels only (see the set above).
+            // Alpha comes ONLY from the opacity channel: `vec4(float)` splats
+            // and `vec4(vec4)` hands `w` to alpha, hence `!== 3`, not `=== 1`.
+            // See docs/dev/codegen.md.
             addImport('three/tsl', 'vec3');
             channels[ch] = `vec3(${ref})`;
           } else if (
@@ -2403,27 +2020,12 @@ export function graphToCode(
             sourceNode?.data.registryType === 'imageNode' &&
             !isImageChannelHandle(edge.sourceHandle)
           ) {
-            // Only the Color (`out`) socket carries a packed normal: a channel
-            // socket (Alpha/R/G/B) is a scalar and takes the plain path below,
-            // like any float source. In wide mode the ref is `imageN.rgb`, so
-            // this emits `normalMap(image1.rgb)` — the same value as the bare
-            // vec3 variable.
-            //
-            // An image wired into Normal is a tangent-space normal MAP, not a raw
-            // normal — its texels are packed unit vectors in [0,1]. Decode with
-            // TSL's normalMap() node: it remaps [0,1]→[-1,1], applies the TBN
-            // (tangent→view) transform and normalizes. Assigning the raw sample
-            // to normalNode instead would leave every component ≥0, unnormalized
-            // and un-rotated → a flat, blue-biased surface. normalMap() assumes
-            // LINEAR input, so the Image node is auto-switched to the 'data'
-            // colorSpace when it is connected here (NodeEditor onConnect).
+            // An image on its Color (`out`) socket is a tangent-space normal
+            // MAP: decode it with normalMap(). A channel socket is a scalar and
+            // takes the plain path. See docs/dev/images-and-textures.md.
             addImport('three/tsl', 'normalMap');
-            // glTF on a primitive without TANGENT: GLTFLoader flips
-            // normalScale.y for the derivative tangent frame (GLTFLoader.js
-            // `normalScale.y *= - 1`). The importer records it as
-            // normalGreen:'flip'; NormalMapNode multiplies xy by this scale.
-            // Inside the channel-handle gate above, so a scalar socket is
-            // never decoded, flipped or not.
+            // glTF without TANGENT: the importer's recorded green flip becomes
+            // the normal scale, as GLTFLoader does.
             if (readImageUvMapping(getNodeValues(sourceNode)).normalGreenFlip) {
               addImport('three/tsl', 'vec2');
               channels[ch] = `normalMap(${ref}, vec2(1, -1))`;
@@ -2437,25 +2039,10 @@ export function graphToCode(
       }
     }
 
-    // Environment channel — the one channel whose value is the TEXTURE, not a
-    // sampled vec3. The loader assigns it to material.envNode, and three's
-    // EnvironmentNode wraps a texture-valued env in pmremTexture() (prefiltered
-    // radiance + irradiance IBL, blurred by the roughness channel, reflectivity
-    // from metalness). Handing it the image's `texture(tex, uv).rgb` sample
-    // instead would bake one fixed texel as a flat ambient — so an image source
-    // is special-cased to reference the texture its share group declared (for
-    // a sharer, ANOTHER node's var). Guarded on the planner having placed the
-    // node, i.e. on a texture var that was actually declared: the
-    // invalid-payload fallback path emits NO texture var, and referencing it
-    // would be a ReferenceError that kills the whole module. And guarded on the
-    // Color (`out`) socket: the texture OBJECT is what that socket means to
-    // Environment, while Alpha/R/G/B are scalars and take the ordinary path
-    // below (`imageN.a`, vec3-widened by its declared width) — otherwise an
-    // Alpha wire would silently become full-colour IBL. Any other source
-    // is a legitimate envNode too — three uses the node directly, so e.g. a
-    // Color node acts as a uniform ambient environment; non-3-channel shapes
-    // are widened to vec3 like the alpha-bearing channels so the lighting
-    // model's radiance stays well-typed on both backends.
+    // Environment is the one channel whose value is the TEXTURE, never the
+    // sampled vec3, guarded on the planner having declared that var and on the
+    // Color (`out`) socket. Any other source is widened to vec3. See
+    // docs/dev/outputs-and-materials.md, "Environment maps".
     const envEdge = inEdge(gidx, outputNode.id, handleOf('env'));
     if (!envEdge) {
       // Stored env color: a constant ambient environment (EnvironmentNode
@@ -2507,22 +2094,9 @@ export function graphToCode(
       }
     }
     if (discardEdge) {
-      // The condition is compiled as `bool(<ref>)`, and three's NodeBuilder
-      // widens a non-1-channel FLOAT to `all( <vecN> )` — which is declared only
-      // over bvecN in GLSL ES 3.00 / vecN<bool> in WGSL. Measured against a real
-      // WebGL2 context: `ERROR: 'all' : no matching overloaded function found`,
-      // i.e. the whole fragment program fails to link and the mesh vanishes at
-      // EVERY value, with nothing surfaced to the user. Nothing here validates
-      // connection types, so a Colour / Vec3 / vec3-noise / Image source lands
-      // on this port routinely.
-      //
-      // LOGIC nodes are exempt: their vector output really IS a bvecN, and
-      // `all( greaterThan(vec3, vec3) )` is both valid and the correct reading
-      // ("every channel passed"). Coercing it to `.x` would silently narrow the
-      // test to the x channel.
-      //
-      // Scalar sources are untouched (`scalarRefOf` returns the plain ref at
-      // shape 1), so every existing export stays byte-identical.
+      // The condition compiles as `bool(<ref>)`, and a non-scalar float becomes
+      // `all(vecN)`, a link error: coerce to a scalar, EXCEPT for logic nodes,
+      // whose vector really is a bvecN. See docs/dev/codegen.md, Discard.
       const discardSrc = gidx.nodeById.get(discardEdge.source);
       const discardDef = discardSrc ? registry.get(discardSrc.data.registryType) : undefined;
       const ref = discardDef?.category === 'logic'
@@ -2547,20 +2121,10 @@ export function graphToCode(
     ? `  Discard(${defaultResolved.discardRef});`
     : null;
 
-  // Every TARGETED material becomes a `parts` entry. Re-validated here even
-  // though the restore paths sanitize: emission is the gate that decides what
-  // becomes CODE, and a material can reach this without ever passing a restore
-  // (the node UI writes them, codeToGraph mints them, and the store is mutable
-  // from anywhere in the session).
-  //
-  // FIRST CLAIM WINS for a duplicate name, decided by `planNamedParts` — the
-  // ONE first-claim loop, shared with the node's shadowed mark so emission and
-  // the node cannot disagree. A duplicate arrives only from a hand-edited or
-  // foreign file (the picker MOVES a mesh), and a `parts` map has one slot per
-  // mesh — so the later one is shadowed here and the node marks that section,
-  // because a silently inert material is exactly the kind of thing nobody
-  // reports as a bug. The entry cap is `MAX_PART_ENTRIES`, every name the
-  // sanitizer can admit, so it never drops a mesh the node shows.
+  // Every TARGETED material becomes a `parts` entry, re-validated here because
+  // emission is the gate that decides what becomes CODE. FIRST CLAIM WINS for a
+  // duplicate mesh name, decided by the ONE cross-node plan the node's shadowed
+  // mark shares. See docs/dev/outputs-and-materials.md, per-mesh materials.
   const parts: {
     name: string;
     channels: Record<string, string>;
@@ -2569,25 +2133,11 @@ export function graphToCode(
     settings: string[];
   }[] = [];
   {
-    // Resolved ONCE per material, not once per mesh: the channels are the
-    // material's, so N meshes emit N entries pointing at the same expressions.
-    // A section that emits no entry is never resolved (its imports never land),
-    // and sections resolve in (node, section) order, so the import order is
-    // unchanged for the one-node case every existing document is.
-    //
-    // Its Transparent / Side / Alpha clip / Depth write ride the same body,
-    // AFTER the channels and the discard key, in the LOADER's spelling
-    // (`side: 2`), so the code panel, the module and a bare-script import
-    // speak one vocabulary; the loader (0.6 and 0.8) applies all four per
-    // part. Resolved here with the channels, so N meshes carry N byte-identical
-    // bodies — which the parse's merge relies on. Index 0 is the node-level
-    // settings, so a TARGETED material 0 carries its own into its part. And
-    // `materialSettingProps` is the security gate: the restore paths only
-    // check that `materialSettings` is an object. Settings that emit nothing
-    // leave the body exactly as it was.
-    //
-    // NESTED by node id, never a joined composite key: a node id comes out of a
-    // `.fastshader` and may spell any separator at all.
+    // Resolved ONCE per material, not once per mesh, so N meshes carry N
+    // byte-identical bodies (the parse's merge relies on it). The four settings
+    // ride the same body in the LOADER's spelling; `materialSettingProps` is
+    // the security gate. NESTED by node id, never a joined key: an id out of a
+    // `.fastshader` may spell any separator.
     const bySection = new Map<string, Map<number, {
       channels: Record<string, string>;
       discardRef: string | null;
@@ -2611,37 +2161,10 @@ export function graphToCode(
   }
 
   // Every IMPORT-BUILT index section becomes a `materialParts` entry keyed by
-  // its glTF material index, through `planIndexParts` — the index twin of
-  // `planNamedParts`, shared with the node's shadowed mark and the mirror plan,
-  // so none of the three can disagree about which section a material belongs
-  // to. Nothing is emitted without a VALID signature (the loader applies the
-  // table only against an exactly-equal model, R3), and entries go out in
-  // ascending index order, the canonical order the parse restores. Resolved
-  // after the name sections, so a graph with no index section resolves, and
-  // emits, exactly as before.
-  //
-  // ONE signature governs the whole table (`planIndexPartsAcross`): the
-  // sanitizer replicates `modelSignature` onto every index node and detaches
-  // any whose copy differs, so there is never a choice to make. It is read off
-  // the LOWEST-RANKED contributing Output that carries an index section —
-  // exactly the node `materialPartsMirrorPlanAcross` reads it from, so the
-  // table and its loader-0.6 mirrors can never describe two different models.
-  //
-  // NOT off `outputNode`: since `unfoldOutputMaterials` splits a node per
-  // material, an import-built document's index sections are SIBLINGS of the
-  // untargeted default, which carries no signature at all (the sanitizer keeps
-  // one only beside a surviving index section). Reading it there emitted the
-  // `vec3(1, 0, 0)` sentinel for every GLB-built shader — the whole
-  // `materialParts` table gone, with `errors: []`.
-  //
-  // The "signature but no index section anywhere" case is byte-neutral either
-  // way: `planIndexPartsAcross` then yields no entries, and the `indexParts
-  // .length > 0 && signature` guard below is what actually writes the key.
-  //
-  // `moduleSignatureOf` is that lookup, shared with the Output node — whose
-  // red-sentinel swatch asks "does this module emit any part at all", which is
-  // this same table's emptiness. Two spellings of "which signature governs the
-  // module" is exactly the drift the cross-node plans were extracted to stop.
+  // its glTF material index, in ascending order, and only beside a VALID
+  // signature (R3). ONE signature governs the table: `moduleSignatureOf`, read
+  // off the lowest-ranked contributing Output holding an index binding, never
+  // off the untargeted default. See docs/dev/outputs-and-materials.md.
   const signature = moduleSignatureOf(outputs);
   const indexParts: {
     index: number;
@@ -2676,28 +2199,15 @@ export function graphToCode(
   const channelEntries = Object.entries(channels);
 
   if (parts.length > 0 || indexParts.length > 0) {
-    // A `parts` key can only ride the OBJECT form, so its presence forces the
-    // shape — the bare-node forms below cannot carry it.
-    //
-    // An EMPTY default material emits parts ALONE: loader 0.6 then leaves every
-    // unclaimed mesh on the material the model was authored with, which is the
-    // whole point of shading just one mesh. The red `vec3(1, 0, 0)` fallback is
-    // deliberately NOT emitted here, and that is a behaviour decision rather
-    // than an omission: it is the "you have wired nothing yet" sentinel for a
-    // shader that has nothing else to say, and once a mesh material exists the
-    // user HAS said something — painting every other mesh red would throw away
-    // the model's own materials to announce a state they can see on the node.
-    // It also makes the shape round-trip: a parts-only module parses to an
-    // empty material 0 and re-emits parts-only.
-    //
-    // The lone-Output case is untouched: with no parts at all, an unwired
-    // Output still emits `return vec3(1, 0, 0);` in the branch below.
+    // A `parts` key can only ride the OBJECT form. An EMPTY default emits
+    // parts ALONE, never the red sentinel, so unclaimed meshes keep their
+    // authored material and the shape round-trips (per-mesh rule 2).
     const defaultProps = channelEntries;
     // A targeted output with nothing wired still emits its entry. It must:
     // the parse is what re-creates the node, so an omitted entry means the
     // Output and its edges vanish on the next code-panel Apply. The same holds
     // for an unwired index section (`"3": {  }`).
-    const partProps = parts.map((part) => `${partKeyLiteral(part.name)}: { ${partBody(part)} }`);
+    const partProps = parts.map((part) => `${moduleStringLiteral(part.name)}: { ${partBody(part)} }`);
     const props = defaultProps.map(([k, v]) => `${k}: ${v}`).join(', ');
     const lead = props ? `${props}, ` : '';
     // ONE line, always: `parseBody` reads the return from a single source line,
@@ -2707,9 +2217,9 @@ export function graphToCode(
     if (parts.length > 0) pieces.push(`parts: { ${partProps.join(', ')} }`);
     if (indexParts.length > 0 && signature) {
       pieces.push(`materialParts: { ${indexParts
-        .map((part) => `${partKeyLiteral(String(part.index))}: { ${partBody(part)} }`)
+        .map((part) => `${moduleStringLiteral(String(part.index))}: { ${partBody(part)} }`)
         .join(', ')} }`);
-      pieces.push(`modelSignature: { materials: [${signature.map(partKeyLiteral).join(', ')}] }`);
+      pieces.push(`modelSignature: { materials: [${signature.map(moduleStringLiteral).join(', ')}] }`);
     }
     returnLine = `  return { ${lead}${pieces.join(', ')} };`;
   } else if (channelEntries.length === 0) {
@@ -2771,18 +2281,10 @@ export function graphToCode(
 
 
 /**
- * Build an append node's vector constructor over ALL its wired operands.
- *
- * The output size is the SUM of the operands' channel counts (connected =
- * evaluate upstream; unconnected = scalar = 1), and a GPU vector holds at most
- * 4 — there is no vec5. So the sum is capped at 4, and, crucially, the
- * ARGUMENTS are capped with it: an operand that would overflow the vec4 is
- * swizzled down to the components that still fit, and operands past the fourth
- * channel are dropped entirely.
- *
- * Trimming the arguments is what makes the cap real. Clamping only the
- * constructor emitted `vec4(vec3A, vec3B)` for two vec3s — a 4-slot
- * constructor handed 6 components, which is not valid TSL.
+ * An append node's vector constructor over ALL its wired operands. The size is
+ * the SUM of the operands' channels, capped at 4, and the ARGUMENTS are capped
+ * with it: an overflowing operand is swizzled down, later ones are dropped
+ * (`vec4(vec3A, vec3B)` is not valid TSL).
  */
 function buildAppendConstructor(
   args: string[],
@@ -2809,21 +2311,9 @@ function buildAppendConstructor(
 }
 
 /**
- * Channel count each of an append node's operands contributes, in socket order.
- *
- * Widths come from `shapeOfEdgeSource` — the PER-HANDLE lookup — never from a
- * node-level count. The argument text beside these numbers is built by
- * `resolveEdgeRef`, which IS handle-aware, so a node-level count desynchronised
- * the two for every source whose non-head output narrows (`toHsl`'s h/s/l,
- * `dataviz`'s `value`): `toHsl.h -> a` plus a float on `b` reported 3 + 1 and
- * emitted `vec4(toHsl1.x, float1)` — a four-slot constructor handed two
- * components, which is not valid TSL, so the whole module failed to compile.
- * Wiring all three of h/s/l was worse: `vec4(toHsl1.x, toHsl1.y.x)`, silently
- * dropping the Lightness wire and putting `.x` on a float. Same handle-blind
- * class the edge-value convention documents.
- *
- * An unwired operand counts 1 — it still emits a `0` argument, so it still
- * spends a channel.
+ * Channel count of each append operand, in socket order, from the PER-HANDLE
+ * `shapeOfEdgeSource`, never a node-level count (`toHsl.h` is 1, not 3). An
+ * unwired operand counts 1: it still emits a `0` argument.
  */
 function appendOperandChannels(
   node: AppNode,
@@ -2844,20 +2334,9 @@ function appendOperandChannels(
 }
 
 /**
- * The multiplier a Mic node applies to every channel, or null for "none".
- *
- * `gain` is an exposed parameter socket, so a wired edge overrides the stored
- * number (the exposedPorts rule). It is applied in the SHADER rather than in
- * the analyser precisely so that a wire can drive it — an AnalyserNode lives on
- * the CPU and no shader value can reach it (which is also why `smoothing` is
- * deliberately NOT exposable; see isExposableKey).
- *
- * Returns null when the gain is exactly 1 and unwired, so the emission stays
- * BYTE-IDENTICAL to the ungained form and no already-exported shader changes.
- *
- * The stored value goes through `readSoundSettings` for its clamp — `values` is
- * adversarial (`.fastshader` / localStorage) — and never through
- * `resolveExposedParam`, which is `String()`-only.
+ * The multiplier the Sound node applies to every channel: the wired `gain`,
+ * else the stored one clamped by `readSoundSettings`, or null when it is
+ * exactly 1 and unwired (byte-identical to the ungained form).
  */
 function micGainExpr(
   node: AppNode,
@@ -2897,15 +2376,12 @@ function resolveEdgeRef(
     return base ? `${base}_${edge.sourceHandle}` : null;
   }
 
-  // Mic / Audio Input: each channel is emitted as its own `<var>_<channel>`
-  // uniform (the node has no single value), so address the channel by its
-  // handle id. `micChannelForHandle` is the SAME normalization the emitter
-  // used, so a hand-edited handle in a `.fastshader` resolves to a variable
-  // that exists.
+  // Sound: each channel is its own `<var>_<channel>` uniform, addressed by the
+  // handle through `soundChannelForHandle`, the emitter's own normalization.
   if (isSoundNodeType(sourceNode.data.registryType)) {
     const base = varNames.get(sourceNode.id);
     if (!base) return null;
-    const u = soundUniformName(base, micChannelForHandle(edge.sourceHandle));
+    const u = soundUniformName(base, soundChannelForHandle(edge.sourceHandle));
     // With gain applied, downstream reads the SCALED variable, not the raw
     // uniform — the uniform line itself must stay a bare `uniform(0)` so
     // buildShaderModule's uniformLineRe still turns it into a schema property.
@@ -2983,28 +2459,10 @@ function resolveArguments(
       const ref = resolveEdgeRef(edge, varNames, gidx);
       if (ref) return ref;
     }
-    // No connection: use node's stored value, then the registry default for this
-    // port, then the chain identity, then a bare placeholder. Consulting
-    // defaultValues keeps a legacy node (created before the default existed, so
-    // it has no stored value) in sync with the evaluator/UI — e.g. min's unwired
-    // `b` emits `min(a, 1)`, not `min(a, 0)`; an unwired mul operand emits `1`.
-    //
-    // Every step renders through num(): `values` is adversarial (see
-    // numericParam), and the old String() spliced a stored
-    // `"1); evil(); float(1"` verbatim into the emitted module. A stored value
-    // that is not a finite number falls through to the registry default —
-    // exactly what a legacy node with no stored value already does — so every
-    // legit graph emits byte-identically. `Number(undefined)` is NaN, so the
-    // old `!== undefined` guards are subsumed by the isFinite tests.
-    // `valueNum`, not `Number()`: `values` is adversarial and ToPrimitive
-    // THROWS on a tampered entry (`{"tileX":{"toString":1}}` out of a shared
-    // `.fastshader`). This is the GENERIC resolver — every node type's stored
-    // port values pass through it — and it runs inside graphToCode, inside the
-    // sync engine, inside a render, with no error boundary above it: the throw
-    // blanks the whole app, and the autosave then writes the poisoned graph
-    // back so every reload blanks again. `valueNum` is a drop-in: it differs
-    // from `Number()` only where `Number()` would throw, so every legitimate
-    // graph still emits byte-identically (utils/valueCoerce.ts).
+    // No connection: stored value, then the registry default for this port,
+    // then the chain identity, then `0`; every step through num(), never
+    // String(). `valueNum`, because `values` is adversarial and Number() can
+    // THROW on a tampered entry. See docs/dev/codegen.md and utils/valueCoerce.ts.
     const stored = valueNum(nodeVals[input.id]);
     if (Number.isFinite(stored)) return num(stored);
     const dflt = Number(def.defaultValues?.[input.id]);
@@ -3028,16 +2486,9 @@ function resolveExposedParam(
     const ref = resolveEdgeRef(edge, varNames, gidx);
     if (ref) return ref;
   }
-  // The REGISTRY default before the hardcoded 1. This path never consulted the
-  // def at all, so a node whose `values` are missing the key fell to 1 for
-  // everything: a uv node with empty values emitted `uv(1)` plus a full
-  // 1-radian (57°) rotation chain, while cpuEvaluator assumed channel 0 and
-  // rotation 0. Not reachable from today's creation paths — newNodeValues and
-  // codeToGraph both seed `values` from defaultValues — so this is hardening
-  // for legacy graphs and hand-edited `.fastshader` input, and it matters more
-  // now that more defs declare defaults. Byte-identical for every complete
-  // node: noise `scale` is 1 either way, `pos` is intercepted below, and uv's
-  // four keys are always seeded by both creation paths.
+  // The REGISTRY default before the hardcoded 1, so a node whose `values` lack
+  // the key agrees with cpuEvaluator; byte-identical for every complete node.
+  // See docs/dev/codegen.md.
   const registryDefault = NODE_REGISTRY.get(node.data.registryType)?.defaultValues?.[key];
   const raw = nodeValues?.[key] ?? registryDefault ?? 1;
   // `pos` is the ONE identifier-bearing key that reaches here: codeToGraph

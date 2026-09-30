@@ -33,18 +33,13 @@ const NOISE_UV_SCALE = 4;
  */
 function appendOperands(
   nodeId: string,
-  nodes: AppNode[],
-  edges: AppEdge[],
-  nodeIndex?: Map<string, AppNode>,
-  edgeIndex?: Map<string, AppEdge[]>,
+  nodeIndex: Map<string, AppNode>,
+  edgeIndex: Map<string, AppEdge[]>,
 ) {
-  const node = nodeIndex ? nodeIndex.get(nodeId) : nodes.find((n) => n.id === nodeId);
+  const node = nodeIndex.get(nodeId);
   const def = NODE_REGISTRY.get(node?.data.registryType ?? '');
   if (!node || !def) return [];
-  const targetEdges = edgeIndex
-    ? edgeIndex.get(nodeId) ?? []
-    : edges.filter((e) => e.target === nodeId);
-  const connected = targetEdges
+  const connected = (edgeIndex.get(nodeId) ?? [])
     .filter((e) => typeof e.targetHandle === 'string')
     .map((e) => e.targetHandle as string);
   return effectiveInputs(def, connected, false, Object.keys(getNodeValues(node)));
@@ -230,26 +225,9 @@ export function getUnwrappedEdges(nodes: AppNode[], edges: AppEdge[]): AppEdge[]
 }
 
 /**
- * Is `nodeId` fed by a Time node (or a Time node itself)? Exactly
- * `hasTimeUpstream(nodeId, nodes, getUnwrappedEdges(nodes, edges))`, but O(1)
- * per call: the whole answer is ONE forward BFS memoized on the shared ctx.
- *
- * Prefer this to `hasTimeUpstream` in anything that runs per notify or per
- * frame. The per-node form rebuilds two whole-graph Maps on EVERY call, and
- * the render layer asks once per connected edge per node card per store
- * notify — which React Flow fires at refresh rate through a drag. Measured at
- * 85-93% of all per-notify selector work on a 150n/220e graph.
- *
- * It also closes the raw-edges trap by construction: the walk runs over
- * `ctx.edges`, so a Time node feeding INTO a collapsed group stays visible.
- * That is the bug `getUnwrappedEdges`' contract warns about and which two
- * callers (EdgeInfoCard, PreviewNode) were live instances of.
- *
- * Invalidation is free and exact: the set hangs off the ctx, and
- * `sameGraphSemantics` mints a new ctx on any `data`-reference change (which
- * is where `registryType` lives) or any edge-endpoint change — so adding,
- * removing or rewiring a Time node rebuilds it, while a position-only drag
- * frame reuses it.
+ * Every node fed by a Time node (Time nodes included): ONE forward BFS over the
+ * UNWRAPPED edges, memoized on the ctx. Use it instead of `hasTimeUpstream` in
+ * anything that runs per notify or per frame (measurements: buildTimeUpstreamSet).
  */
 export function getTimeUpstreamSet(nodes: AppNode[], edges: AppEdge[]): ReadonlySet<string> {
   const ctx = getCtx(nodes, edges);
@@ -258,18 +236,10 @@ export function getTimeUpstreamSet(nodes: AppNode[], edges: AppEdge[]): Readonly
 }
 
 /**
- * Is `nodeId` fed by a sampled FIELD — a node whose value varies across the
- * surface (uv/screenUV, the geometry attributes, the noise family) — or one
- * itself? Memoized on the shared ctx exactly like `getTimeUpstreamSet`, and
- * seeded by the SAME table that gives those nodes their analytical range
- * (`analyticalRange`), so the two can't drift.
- *
- * This is the "is the deterministic value the whole story?" question. For a
- * field node it is not: `evaluate` samples ONE point (uv's centre, noise's
- * fixed lattice UV), and that one number is meaningless as a bound — which is
- * why every consumer of a field's value must fall back to interval arithmetic
- * instead of treating the sample as a degenerate range. See the `det`
- * shortcut in computeRange and `preferRange` in ShaderNode's edgeValueLabel.
+ * Every node fed by a sampled FIELD (fields included), memoized on the ctx and
+ * seeded by `analyticalRange` so the two cannot drift. A field's evaluated
+ * value is ONE sample, never a bound: consumers must take the interval path
+ * (docs/dev/codegen.md, "A SAMPLED FIELD's value is not its range").
  */
 export function getFieldUpstreamSet(nodes: AppNode[], edges: AppEdge[]): ReadonlySet<string> {
   const ctx = getCtx(nodes, edges);
@@ -289,7 +259,7 @@ export function evaluateNodeOutput(
   const ctx = getCtx(nodes, edges);
   const cache = evalCacheFor(ctx, time);
   try {
-    return evaluate(nodeId, nodes, ctx.edges, time, cache, ctx.edgeIndex, ctx.nodeIndex);
+    return evaluate(nodeId, time, cache, ctx.edgeIndex, ctx.nodeIndex);
   } catch (e) {
     // The cache is persistent per graph version — an exception mid-walk would
     // otherwise leave cycle-guard sentinels behind as poisoned nulls.
@@ -323,32 +293,22 @@ export function getNodeOutputShape(
   nodeId: string,
   nodes: AppNode[],
   edges: AppEdge[],
-  visited: Set<string> = new Set(),
-  nodeIndex?: Map<string, AppNode>,
 ): number {
-  // Top-level calls (fresh visited set) route through the shared ctx: cached
-  // result, pre-unwrapped edges, prebuilt indexes. Mid-recursion re-entries
-  // (legacy callers passing their own visited/nodeIndex) skip the cache —
-  // a shape computed under a cycle short-circuit is entry-point dependent
-  // and must not be memoized as the node's canonical shape.
-  if (visited.size === 0) {
-    const ctx = getCtx(nodes, edges);
-    const hit = ctx.shapeCache.get(nodeId);
-    if (hit !== undefined) return hit;
-    const result = computeShape(nodeId, nodes, ctx.edges, visited, ctx.nodeIndex, ctx.edgeIndex);
-    ctx.shapeCache.set(nodeId, result);
-    return result;
-  }
-  return computeShape(nodeId, nodes, edges, visited, nodeIndex ?? buildNodeIndex(nodes), undefined);
+  // Only this TOP-LEVEL answer is cached: computeShape recurses on itself, and
+  // a shape computed under a cycle short-circuit depends on the entry point.
+  const ctx = getCtx(nodes, edges);
+  const hit = ctx.shapeCache.get(nodeId);
+  if (hit !== undefined) return hit;
+  const result = computeShape(nodeId, new Set(), ctx.nodeIndex, ctx.edgeIndex);
+  ctx.shapeCache.set(nodeId, result);
+  return result;
 }
 
 function computeShape(
   nodeId: string,
-  nodes: AppNode[],
-  edges: AppEdge[],
   visited: Set<string>,
   nidx: Map<string, AppNode>,
-  edgeIndex: Map<string, AppEdge[]> | undefined,
+  edgeIndex: Map<string, AppEdge[]>,
 ): number {
   if (visited.has(nodeId)) return 1;
   visited.add(nodeId);
@@ -365,34 +325,27 @@ function computeShape(
     if (concrete > 0) return concrete;
   }
 
-  const targetEdges = edgeIndex
-    ? edgeIndex.get(nodeId) ?? []
-    : edges.filter((e) => e.target === nodeId);
+  const targetEdges = edgeIndex.get(nodeId) ?? [];
 
   // 2. 'any' output — infer from inputs.
   // Append concatenates: total = sum of ALL its operand shapes (it grows past
   // a/b), clamped to [2, 4] — the vec4 ceiling graphToCode also emits under.
   if (def.type === 'append') {
     let total = 0;
-    for (const inp of appendOperands(nodeId, nodes, edges, nidx, edgeIndex)) {
+    for (const inp of appendOperands(nodeId, nidx, edgeIndex)) {
       const e = targetEdges.find((edge) => edge.targetHandle === inp.id);
       if (!e) {
         total += 1;
         continue;
       }
-      // Per SOURCE SOCKET, not per node — the same rule graphToCode's
-      // `appendOperandChannels` follows. A node-level width overstates every
-      // source whose non-head output narrows (`toHsl`'s h/s/l, `dataviz`'s
-      // `value`): `toHsl.h -> a` counted 3, so the card advertised a vec4 while
-      // the emitter wrote `vec2(toHsl1.x, …)`, and the two surfaces disagreed
-      // about the same wire. `portShapeForHandle` is the ONE per-handle port
-      // lookup, shared with codegen so they cannot drift; 0 means unresolved
-      // (an `any` port), which falls back to whole-node inference.
+      // Width per SOURCE SOCKET (graphToCode's `appendOperandChannels` rule): a
+      // node-level width overstates toHsl's h/s/l and dataviz's `value`.
+      // 0 = an `any` port or unknown handle, so infer from the whole node.
       const src = nidx.get(e.source);
       const declared = src && e.sourceHandle ? portShapeForHandle(src, e.sourceHandle) : 0;
       total += declared > 0
         ? declared
-        : computeShape(e.source, nodes, edges, visited, nidx, edgeIndex);
+        : computeShape(e.source, visited, nidx, edgeIndex);
     }
     return Math.min(Math.max(total, 2), 4);
   }
@@ -402,42 +355,23 @@ function computeShape(
   for (const input of def.inputs) {
     const e = targetEdges.find((edge) => edge.targetHandle === input.id);
     if (e) {
-      // Per SOURCE SOCKET, the append branch's rule above: a node-level width
-      // overstates every narrowing socket (toHsl's h/s/l, dataviz's `value`).
-      // `toHsl.h → mul → Color` counted 3, so the Output node skipped its
-      // vec3() widen and the float splatted into alpha. 0 = an `any` port (or
-      // a null/unknown handle) → whole-node inference.
+      // Per SOURCE SOCKET, as in the append branch (pinned by socketWidthPins.test.ts).
       const src = nidx.get(e.source);
       const declared = src && e.sourceHandle ? portShapeForHandle(src, e.sourceHandle) : 0;
       const s = declared > 0
         ? declared
-        : computeShape(e.source, nodes, edges, visited, nidx, edgeIndex);
+        : computeShape(e.source, visited, nidx, edgeIndex);
       if (s > maxShape) maxShape = s;
     }
   }
   return maxShape;
 }
 
-/* ────────────────────────────────────────────────────────────────────────────
- * Per-SOURCE-HANDLE projection.
- *
- * `evaluate` is keyed by node id and returns the node's WHOLE vector; the
- * socket an edge leaves from is applied here, at the consumer. That split is
- * deliberate and load-bearing: `evaluate`/`computeRange` write a null sentinel
- * under the node id BEFORE recursing (their cycle guards), so keying the cache
- * by node+handle would give a cycle re-entering the same node through a
- * different socket its own sentinel — it would slip past the guard and recurse
- * until the stack blows, which a hand-edited `.fastshader` can reach
- * (topologicalSort only warns about cycles).
- *
- * Handle-blindness was harmless until now because no node returned different
- * numbers per socket — split/dataNode/dataviz evaluate to null and a mic
- * channel is a uniform 0 — so a wrong socket degraded to an honest "…". The
- * RGB-to-HSL node is the first whose evaluator returns three genuinely
- * different values, so without this projection its Saturation socket would
- * print Hue in live blue: a manufactured lie, the exact defect class the
- * time-driven labels were just fixed for.
- * ──────────────────────────────────────────────────────────────────────────── */
+// ── Per-SOURCE-HANDLE projection ─────────────────────────────────────────────
+// `evaluate` is keyed by node id and returns the WHOLE vector; the socket is
+// applied at the CONSUMER. A per-handle cache key would hand a cycle its own
+// sentinel and recurse until the stack blows (docs/dev/codegen.md, "Edge VALUES
+// are read per SOURCE SOCKET").
 
 /** Which channel of the source node's vector this output handle carries, or
  *  null for "the whole vector" (`out`, an unknown handle, a tampered id).
@@ -574,17 +508,6 @@ export function portShapeForHandle(
   return port ? shapeOfDataType(port.dataType) : 0;
 }
 
-/** Get the first channel as a scalar (for backward compat). */
-export function evaluateNodeScalar(
-  nodeId: string,
-  nodes: AppNode[],
-  edges: AppEdge[],
-  time: number,
-): number | null {
-  const result = evaluateNodeOutput(nodeId, nodes, edges, time);
-  return result !== null && result.length > 0 ? result[0] : null;
-}
-
 // Index edges by target node ID for O(1) lookup
 function buildEdgeIndex(edges: AppEdge[]): Map<string, AppEdge[]> {
   const index = new Map<string, AppEdge[]>();
@@ -605,12 +528,10 @@ function buildNodeIndex(nodes: AppNode[]): Map<string, AppNode> {
 
 function evaluate(
   nodeId: string,
-  nodes: AppNode[],
-  edges: AppEdge[],
   time: number,
   cache: Map<string, EvalResult>,
-  edgeIndex?: Map<string, AppEdge[]>,
-  nodeIndex?: Map<string, AppNode>,
+  idx: Map<string, AppEdge[]>,
+  nidx: Map<string, AppNode>,
 ): EvalResult {
   if (cache.has(nodeId)) return cache.get(nodeId)!;
 
@@ -618,9 +539,6 @@ function evaluate(
   // this node short-circuits to null instead of recursing forever. The real
   // result overwrites the sentinel at the end of this function.
   cache.set(nodeId, null);
-
-  const idx = edgeIndex ?? buildEdgeIndex(edges);
-  const nidx = nodeIndex ?? buildNodeIndex(nodes);
 
   const node = nidx.get(nodeId);
   if (!node) return null;
@@ -638,7 +556,7 @@ function evaluate(
       // Projected onto the socket the edge LEAVES (see handleChannels): a wire
       // from toHsl's Saturation must contribute S, not channel 0's Hue.
       const upstream = sliceEval(
-        evaluate(edge.source, nodes, edges, time, cache, idx, nidx),
+        evaluate(edge.source, time, cache, idx, nidx),
         handleChannels(nidx.get(edge.source), edge.sourceHandle),
       );
       if (upstream !== null && upstream.length > 0) return upstream[0];
@@ -654,7 +572,7 @@ function evaluate(
     const edge = nodeEdges.find((e) => e.targetHandle === portId);
     if (edge) {
       return sliceEval(
-        evaluate(edge.source, nodes, edges, time, cache, idx, nidx),
+        evaluate(edge.source, time, cache, idx, nidx),
         handleChannels(nidx.get(edge.source), edge.sourceHandle),
       );
     }
@@ -662,19 +580,10 @@ function evaluate(
     return [v !== undefined ? Number(v) : fallback];
   };
 
-  /**
-   * A vec3 INPUT SOCKET, read the way the emitted helpers read one.
-   *
-   * The SDF nodes take one vec3 socket per group (Transform's Move/Turn/Scale,
-   * Repeat's Spacing/Limit, Box's Half size, Deform's Stretch), and an unwired
-   * one carries a single scalar — the port's registry default. The helpers
-   * broadcast that with `vec3()`, so this must too, or the card's live numbers
-   * would disagree with the picture for every unwired group: `vec3(0.5)` is a
-   * 1x1x1 box, where reading 0.5 into x alone is a flat sheet.
-   *
-   * A short wired vector fills from its LAST component, matching TSL, so a vec2
-   * into a vec3 socket behaves the same on both sides.
-   */
+  // A vec3 INPUT SOCKET, read as the emitted SDF helpers read one: an unwired
+  // scalar default BROADCASTS (`vec3(0.5)` is a box, not a flat sheet) and a
+  // short wired vector fills from its LAST component, matching TSL
+  // (docs/dev/sdf-and-raymarch.md).
   const vec3Input = (portId: string, fallback: number): [number, number, number] => {
     const v = channelInput(portId, fallback);
     if (!v || v.length === 0) return [fallback, fallback, fallback];
@@ -741,13 +650,9 @@ function evaluate(
       break;
     }
     case 'soundNode':
-      // Constant silence, never live — and 0 rather than a mid-scale value on
-      // purpose. This evaluator drives the node-card thumbnails and also runs
-      // inside node-editor.html, which has no preview iframe and no capture at
-      // all; 0.5 would make a card disagree with the 3D preview (which really
-      // is 0 until the user arms the mic) and with a downloaded shader. A card
-      // that reads black because the mic is silent is honest; one that reads
-      // grey because the evaluator guessed is a bug report waiting to happen.
+      // Constant silence, never live, and 0 rather than a mid-scale guess: the
+      // 3D preview and a downloaded shader really are 0 until capture is armed,
+      // and node-editor.html has no capture at all.
       result = [0];
       break;
     case 'float':
@@ -845,10 +750,8 @@ function evaluate(
     }
     case 'smoothstep': {
       const e0 = scalarInput('edge0', 0), e1 = scalarInput('edge1', 1);
-      // 0, not 0.5: the registry now declares edge0/edge1 but deliberately NOT
-      // `x`, so codegen emits the bare '0' for an unwired signal port. Seeding
-      // 0.5 here made the card disagree with the shader on exactly the node
-      // whose whole job is a threshold.
+      // 0, not 0.5: the registry deliberately declares no default for `x`, so
+      // codegen emits a bare '0' for the unwired signal and the card must agree.
       const x = channelInput('x', 0);
       result = x ? x.map((v) => {
         const t = Math.max(0, Math.min(1, (v - e0) / (e1 - e0 || 1)));
@@ -872,12 +775,8 @@ function evaluate(
       const cond = scalarInput('condition', 0);
       const a = channelInput('a', 0);
       const b = channelInput('b', 0);
-      // TRUTHINESS, not a 0.5 threshold — three builds the condition as
-      // `bool(cond)` (ConditionalNode), so 0.2 takes the TRUE branch on the
-      // GPU. The old `>= 0.5` made the card show the OPPOSITE branch for any
-      // condition in (0, 0.5), and since the editor now remaps noise to 0…1 a
-      // source lands in that window constantly. Second instance of the trap
-      // already documented for the Output node's Discard channel.
+      // TRUTHINESS, not a 0.5 threshold: three builds `bool(cond)`, so 0.2 takes
+      // the TRUE branch on the GPU (docs/dev/codegen.md, `select`).
       result = cond !== 0 ? a : b;
       break;
     }
@@ -945,7 +844,7 @@ function evaluate(
       // what the emitted vecN holds rather than a longer phantom vector.
       const parts: number[] = [];
       let unevaluable = false;
-      for (const inp of appendOperands(nodeId, nodes, edges, nidx, idx)) {
+      for (const inp of appendOperands(nodeId, nidx, idx)) {
         if (parts.length >= 4) break;
         const v = channelInput(inp.id, 0);
         // Null propagation: one unevaluable operand makes the whole append
@@ -986,7 +885,7 @@ function evaluate(
       let v: number;
       // The remap follows the node's own range flag, so the CPU value agrees
       // with the emitted shader instead of asserting 0-1 for both modes.
-      const unsignedNoise = isUnsignedNoise(type, getNodeValues(node));
+      const unsignedNoise = isUnsignedNoise(type, values);
       if (type === 'perlin' || type === 'perlinVec3') {
         v = perlin2D(px, py);
         if (unsignedNoise) v = (v + 1) * 0.5;
@@ -1216,14 +1115,14 @@ function evaluate(
     }
     case 'sdfModify': {
       const d = scalarInput('d', 0), a = scalarInput('amount', 0.05);
-      const mode = getNodeValues(node).mode;
+      const mode = values.mode;
       result = [mode === 'shell' ? Math.abs(d) - a : mode === 'scale' ? d * a : d - a];
       break;
     }
     case 'sdfDeform': {
       const p = channelInput('p', 0);
       const k = scalarInput('amount', 1);
-      const mode = getNodeValues(node).mode;
+      const mode = values.mode;
       if (p) {
         const x = p[0] ?? 0, y = p[1] ?? 0, z = p[2] ?? 0;
         if (mode === 'bend') {
@@ -1277,22 +1176,11 @@ function hue2rgb(p: number, q: number, t: number): number {
   return p;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Range evaluation
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// For nodes the deterministic evaluator can't handle (procedural textures and
-// anything downstream of them), we still want to show *something* useful in the
-// EdgeInfoCard. Range evaluation produces per-channel min/max bounds by:
-//   1. Special-casing nodes with known analytical ranges (UV/screenUV in
-//      [0, 1], MaterialX noise variants in [0, 1] per channel).
-//   2. Falling through to deterministic eval — when it succeeds, the range is
-//      degenerate (`min === max === value`).
-//   3. Propagating ranges through arithmetic operations using interval math.
-//
-// For chains downstream of a noise node (e.g., `sub(perlinNoise, 0.5)`),
-// interval arithmetic on the noise's [0, 1] range gives the correct downstream
-// bounds without needing to evaluate the GPU function on the CPU.
+// ── Range evaluation ─────────────────────────────────────────────────────────
+// Per-channel min/max bounds for the value labels, in this order:
+//   1. a sampled FIELD returns its analytical range (`analyticalRange`);
+//   2. a field-FREE chain returns its evaluated value as a degenerate range;
+//   3. everything else propagates its inputs' ranges by interval arithmetic.
 
 export interface RangeResult {
   min: number[];
@@ -1328,38 +1216,22 @@ function rangeOfValue(v: number[]): RangeResult {
 }
 
 /**
- * The analytically-known range of a SAMPLED FIELD — a node whose value varies
- * across the surface, so the deterministic evaluator's answer for it is one
- * arbitrary point rather than the whole story. Returns null for every other
- * node (constants, uniforms, operators), which is what makes this table serve
- * two jobs at once: `computeRange` returns it directly, and
- * `getFieldUpstreamSet` uses `!== null` as its BFS seed predicate. Keeping
- * them one table is deliberate — a field added here without a matching seed
- * would silently reintroduce the collapse the `det` gate exists to prevent.
+ * The analytically-known range of a SAMPLED FIELD (a value that varies across
+ * the surface), null for every other node. ONE table with two jobs:
+ * `computeRange` returns it, and `getFieldUpstreamSet` seeds its BFS from
+ * `!== null`, so a field added here is a seed by construction.
  */
 function analyticalRange(node: AppNode): RangeResult | null {
   const type = node.data.registryType;
   const def = NODE_REGISTRY.get(type);
   if (!def) return null;
 
-  // UV/screenUV: span [0, 1] across the surface even though point-sampling
-  // returns the centre (0.5, 0.5). Range is more useful here than the sample.
+  // UV/screenUV span [0, 1] across the surface (the sample is only the centre).
   if (type === 'uv' || type === 'screenUV') return { min: [0, 0], max: [1, 1] };
 
-  // Geometry attributes with well-defined bounds. Normals, tangents, and view
-  // directions are unit vectors → every channel lies in [-1, 1].
-  //
-  // `normalWorld` belongs here for the same reason `normalLocal` does — three
-  // builds it as `normalView.transformDirection(cameraViewMatrix)`, and
-  // transformDirection ends in `normalize()` (MathNode.js TRANSFORM_DIRECTION),
-  // so it is unit BY CONSTRUCTION. It was missing, which is exactly the wire
-  // the four fresnel presets feed into `dot`, so those edges reported a bare
-  // `…` while the `normalLocal` beside them in this very list reported a range.
-  //
-  // The box is per-channel, so it cannot express |v| = 1 — (1,1,1) is inside it
-  // and has length √3. That is a limitation of RangeResult's shape, shared with
-  // every entry here, not a wrong bound: it is still the tightest AXIS-ALIGNED
-  // box a unit vector can occupy.
+  // Unit vectors: every channel lies in [-1, 1]. `normalWorld` is unit by
+  // construction (three's transformDirection ends in normalize()). The box is
+  // per-channel, so it cannot express |v| = 1: the tightest axis-aligned bound.
   if (
     type === 'normalLocal' || type === 'tangentLocal' || type === 'normalWorld' ||
     type === 'positionWorldDirection' || type === 'positionViewDirection'
@@ -1367,51 +1239,28 @@ function analyticalRange(node: AppNode): RangeResult | null {
     return { min: [-1, -1, -1], max: [1, 1, 1] };
   }
 
-  // Wireframe coverage: 0 off a line, 1 on one, and every value between at the
-  // antialiased edges. A FIELD like uv/noise rather than a value — it varies
-  // per pixel and depends on screen-space derivatives, which the CPU evaluator
-  // has no equivalent of, so the honest answer is the range and never a sample.
-  // Seeding it here is also what puts everything downstream of a Wireframe on
-  // the interval path instead of collapsing to one arbitrary number.
+  // Wireframe coverage is 0…1 per pixel and depends on screen-space
+  // derivatives, which the CPU has no equivalent of: a range, never a sample.
   if (type === 'wireframe') return { min: [0], max: [1] };
 
-  // Vertex colours are a normalized attribute (glTF permits only normalized
-  // byte/short component types for COLOR_0), so every channel is [0, 1] —
-  // including alpha, which is 1 for the vec3 case because VertexColorNode is
-  // vec4 whatever the file's itemSize.
-  //
-  // A RANGE, deliberately not an `evaluate` case returning [1,1,1,1]: white is
-  // only what the MISSING-attribute fallback emits, and asserting it as the
-  // value would be a confident lie the moment a coloured .glb is dropped. Four
-  // channels to match portShapeForHandle's shapeOfDataType('vec4'), so
-  // handleChannels / evaluateEdgeRange project consistently.
+  // Vertex colours are a normalized attribute, vec4 whatever the file's
+  // itemSize. A RANGE, not an `evaluate` case: white is only what the
+  // MISSING-attribute fallback emits.
   if (type === 'vertexColor') return { min: [0, 0, 0, 0], max: [1, 1, 1, 1] };
 
-  // A sampled image. Every channel of an 8-bit texture lies in [0, 1]: sRGB
-  // decoding maps [0,1]→[0,1], a data map is read raw, and the 1×1 fallback is
-  // opaque black. Four channels because the node's WHOLE vector is the rgba
-  // SAMPLE (the Alpha socket needs a channel to project); `out` projects the
-  // first three (handleChannels). A range, never an `evaluate` case: the pixels
-  // decode asynchronously in the DOM from an adversarial payload, so no CPU
-  // value can be claimed. Seeding it here also makes it a FIELD, so everything
-  // below an image takes the interval path instead of the [0,1]-scalar guess
-  // portRange used for an unknown upstream.
+  // A sampled image: four channels because the WHOLE vector is the rgba sample
+  // (`out` projects the first three, handleChannels). Never an `evaluate` case:
+  // the pixels decode asynchronously from an adversarial payload.
   if (type === 'imageNode') return { min: [0, 0, 0, 0], max: [1, 1, 1, 1] };
 
-  // Model-space positions follow the preview convention: fit-bounds rescales
-  // geometry so the longest axis spans 1.6 (matching primitive framing), so
-  // each channel sits within roughly [-0.8, 0.8].
+  // Model-space positions: fit-bounds rescales geometry so the longest axis
+  // spans 1.6, so each channel sits within roughly [-0.8, 0.8].
   if (type === 'positionGeometry' || type === 'positionLocal') {
     return { min: [-0.8, -0.8, -0.8], max: [0.8, 0.8, 0.8] };
   }
 
-  // MaterialX noise. NOT a property of the category any more: perlin/fBm carry
-  // a per-node range flag, and cellNoise/voronoi were always [0, 1]. This block
-  // used to assert [0, 1] for everything — which is exactly why the signed GPU
-  // output came as a surprise, since the editor's own edge cards had been
-  // reporting 0…1 for a shader emitting -1…1. vec2/vec3 variants share the same
-  // per-channel bound, just with more channels; exact analytical ranges per
-  // noise function still aren't worth the complexity.
+  // MaterialX noise: perlin/fBm follow their per-node range flag (absent =
+  // signed), cellNoise/voronoi are always [0, 1]; same bound on every channel.
   if (def.category === 'noise') {
     const n = shapeOfDataType(def.outputs[0].dataType);
     const signedNoise = hasNoiseRangeFlag(type) && !isUnsignedNoise(type, getNodeValues(node));
@@ -1481,31 +1330,28 @@ function computeRange(
   edges: AppEdge[],
   time: number,
   cache: Map<string, RangeResult | null>,
-  nodeIndex?: Map<string, AppNode>,
-  edgeIndex?: Map<string, AppEdge[]>,
+  nodeIndex: Map<string, AppNode>,
+  edgeIndex: Map<string, AppEdge[]>,
 ): RangeResult | null {
   if (cache.has(nodeId)) return cache.get(nodeId)!;
   cache.set(nodeId, null); // cycle protection — overwritten below
 
-  const node = nodeIndex ? nodeIndex.get(nodeId) : nodes.find((n) => n.id === nodeId);
+  const node = nodeIndex.get(nodeId);
   if (!node) return null;
   const def = NODE_REGISTRY.get(node.data.registryType);
   if (!def) return null;
 
   const type = node.data.registryType;
   const values = getNodeValues(node);
-  const nodeEdges = edgeIndex
-    ? edgeIndex.get(nodeId) ?? []
-    : edges.filter((e) => e.target === nodeId);
+  const nodeEdges = edgeIndex.get(nodeId) ?? [];
 
   // Resolve a port's range — uses upstream node range if connected, else inline value
   const portRange = (portId: string, fallback: number): RangeResult => {
     const edge = nodeEdges.find((e) => e.targetHandle === portId);
     if (edge) {
-      const src = nodeIndex ? nodeIndex.get(edge.source) : nodes.find((n) => n.id === edge.source);
       const r = sliceRange(
         computeRange(edge.source, nodes, edges, time, cache, nodeIndex, edgeIndex),
-        handleChannels(src, edge.sourceHandle),
+        handleChannels(nodeIndex.get(edge.source), edge.sourceHandle),
       );
       if (r) return r;
       // Upstream is unknown — assume normalized [0, 1] (typical shader range)
@@ -1545,21 +1391,10 @@ function computeRange(
   }
 
   // ─── Try deterministic eval ─────────────────────────────────────────────
-  // For nodes without a special range, the actual evaluated value is the
-  // tightest possible range — but ONLY when the value is a constant across the
-  // surface. Downstream of a FIELD (uv, the geometry attributes, noise) it is
-  // one arbitrary sample, and taking it as the range collapsed every wire below
-  // a field to a single number: `mul(perlin, gradient)` reported a flat `0.00`
-  // between an input reading `0…1` and one reading `-1…1`, because the noise
-  // probe lands on an integer lattice where Perlin is exactly 0. The block
-  // comment above this section always claimed interval arithmetic carried those
-  // chains; it never ran, because `evaluate` learned to sample noise on the CPU
-  // after this shortcut was written and has short-circuited it ever since.
-  //
-  // Only accept a deterministic value as the range when every channel is finite.
-  // A non-finite eval (NaN/Infinity from a poisoned input) must fall through to
-  // interval arithmetic below — otherwise the range collapses to a NaN range and
-  // the EdgeInfoCard renders '…' instead of the real bounds.
+  // The evaluated value is the tightest range ONLY for a field-free chain;
+  // below a field it is one arbitrary sample (docs/dev/codegen.md, "A SAMPLED
+  // FIELD's value is not its range"). A non-finite value falls through to
+  // interval arithmetic rather than collapsing to a NaN range.
   if (!getFieldUpstreamSet(nodes, edges).has(nodeId)) {
     const det = evaluateNodeOutput(nodeId, nodes, edges, time);
     if (det && det.length > 0 && det.every(Number.isFinite)) {
@@ -1569,9 +1404,7 @@ function computeRange(
     }
   }
 
-  // ─── Range propagation through operations ──────────────────────────────
-  // Reached only when eval failed (= upstream contains a texture). We propagate
-  // ranges through the most common ops using interval arithmetic.
+  // ─── Range propagation through operations (interval arithmetic) ────────
   switch (type) {
     case 'add':
       result = naryRange(0, (amin, amax, bmin, bmax) => [amin + bmin, amax + bmax]);
@@ -1623,11 +1456,6 @@ function computeRange(
       result = unaryRange(x, (lo, hi) => [Math.sqrt(Math.max(0, lo)), Math.sqrt(Math.max(0, hi))]);
       break;
     }
-    // The five below were missing while the deterministic shortcut covered for
-    // them: every chain reaching one had already collapsed to a probe value, so
-    // interval arithmetic never got here. With the `det` gate in place they are
-    // the difference between a real bound and a bare '…' on any wire below a
-    // field — `pow` alone carries all four fresnel presets.
     case 'exp': {
       const x = portRange('x', 0);
       result = unaryRange(x, (lo, hi) => [Math.exp(lo), Math.exp(hi)]);
@@ -1696,11 +1524,9 @@ function computeRange(
       break;
     }
     case 'hsl':
+    case 'toHsl':
       // Both conversions are closed over the unit cube whatever the input —
       // hsl() builds an RGB triple, toHsl() a normalized (h, s, l).
-      result = { min: [0, 0, 0], max: [1, 1, 1] };
-      break;
-    case 'toHsl':
       result = { min: [0, 0, 0], max: [1, 1, 1] };
       break;
     case 'floor':
@@ -1798,7 +1624,7 @@ function computeRange(
       // keep their bounds instead of silently dropping out of the interval.
       const min: number[] = [];
       const max: number[] = [];
-      for (const inp of appendOperands(nodeId, nodes, edges, nodeIndex, edgeIndex)) {
+      for (const inp of appendOperands(nodeId, nodeIndex, edgeIndex)) {
         if (min.length >= 4) break;
         const r = portRange(inp.id, 0);
         min.push(...r.min.slice(0, 4 - min.length));
@@ -1815,13 +1641,8 @@ function computeRange(
     }
     case 'length':
     case 'distance': {
-      // Euclidean norm of the per-channel intervals — of `v` itself, or of the
-      // element-wise difference for `distance`. The old rule was a flat
-      // [0, Infinity], which the label surfaces both render as a bare '…': that
-      // was the honest answer only while this branch was unreachable for
-      // anything with real bounds, and it is the one place the `det` gate would
-      // otherwise have LOST information (Circle's `distance(uv, 0.5)` reported
-      // its centre sample `0` before and would report nothing now).
+      // Euclidean norm of the per-channel intervals: of `v` itself, or of the
+      // element-wise difference for `distance`.
       const d =
         type === 'length'
           ? portRange('v', 0)
@@ -1860,7 +1681,7 @@ function computeRange(
     }
     case 'sdfModify': {
       const d = portRange('d', 0), a = portRange('amount', 0.05);
-      const mode = getNodeValues(node).mode;
+      const mode = values.mode;
       if (mode === 'scale') {
         const c = [d.min[0] * a.min[0], d.min[0] * a.max[0], d.max[0] * a.min[0], d.max[0] * a.max[0]];
         result = { min: [Math.min(...c)], max: [Math.max(...c)] };

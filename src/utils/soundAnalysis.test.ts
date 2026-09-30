@@ -10,7 +10,6 @@ import {
   soundUniformName,
   isSoundUniformName,
   soundChannelOf,
-  soundVarBaseOf,
   soundVarBase,
   isSoundNodeType,
   SOUND_VAR_BASE,
@@ -141,12 +140,11 @@ describe('uniform names', () => {
     ]) {
       expect(isSoundUniformName(n)).toBe(false);
       expect(soundChannelOf(n)).toBeNull();
-      expect(soundVarBaseOf(n)).toBeNull();
     }
   });
 
   /**
-   * ONE base, and `mic` is it.
+   * ONE base, and `sound` is it.
    *
    * There were two until 2026-09-08 (the Audio Input node emitted `aud`), and
    * the pair had to stay distinct because the preview pump routes each uniform
@@ -164,8 +162,8 @@ describe('uniform names', () => {
   it('resolves the one live-audio base, and no longer honours `aud`', () => {
     expect(SOUND_VAR_BASE).toBe('sound');
     expect(soundVarBase('soundNode')).toBe(SOUND_VAR_BASE);
-    expect(soundVarBaseOf('sound3_bass')).toBe(SOUND_VAR_BASE);
-    expect(soundVarBaseOf('aud3_bass')).toBeNull();
+    expect(isSoundUniformName('sound3_bass')).toBe(true);
+    expect(isSoundUniformName('aud3_bass')).toBe(false);
   });
 
   it('identifies the live-audio node types and nothing else', () => {
@@ -252,5 +250,42 @@ describe('podest.html mic band maths mirrors micAnalysis', () => {
     const whole = analyseSound({ freqBytes: bins, sampleRate: SR });
     expect(podestMean(bins, 0, bins.length)).toBeCloseTo(whole.level, 12);
     expect(podestMean(bins, 5, 5)).toBe(0);
+  });
+
+  /**
+   * The NAME matcher is a twin as well, and it shipped wrong: both of podest's
+   * copies kept the retired `mic` base after the app began emitting
+   * `sound<n>_<channel>`, so podest gave a Sound node's uniforms slider rows and
+   * never drove them. Each copy is held to `isSoundUniformName` over names built
+   * from every base there has been, so podest accepts what the editor accepts,
+   * no more and no less.
+   */
+  it('matches exactly the uniform names the editor treats as live audio', () => {
+    const live = /\n {2}var SOUND_RE = (\/.+\/);\n/.exec(podest);
+    expect(live, 'podest.html no longer declares SOUND_RE').not.toBeNull();
+    // The VR popup's copy sits inside a string the page writes into a document.
+    const baked = /L\.push\(('\s*var SOUND_RE=.+;')\);/.exec(podest);
+    expect(baked, 'podest.html no longer bakes SOUND_RE into the VR popup').not.toBeNull();
+    const bakedLine = new Function(`return ${baked![1]};`)() as string;
+    const bakedRe = /var SOUND_RE=(\/.+\/);/.exec(bakedLine);
+    expect(bakedRe, 'the baked SOUND_RE line changed shape').not.toBeNull();
+
+    const names = ['', 'colorA', 'sound1', 'sound1_', 'sound1_bass2', 'sound_1_bass', 'xsound1_bass'];
+    for (const base of [SOUND_VAR_BASE, 'mic', 'aud', 'Sound']) {
+      for (const n of ['', '1', '7', '12']) {
+        for (const ch of [...SOUND_CHANNELS, 'volume']) names.push(`${base}${n}_${ch}`);
+      }
+    }
+
+    for (const [where, source] of [['page', live![1]], ['VR popup', bakedRe![1]]]) {
+      const re = new Function(`return ${source};`)() as RegExp;
+      expect(re.test('sound1_bass'), `${where}: sound1_bass`).toBe(true);
+      for (const name of names) {
+        const m = re.exec(name);
+        expect(m !== null, `${where}: ${JSON.stringify(name)}`).toBe(isSoundUniformName(name));
+        // Podest reads the channel from group 1, so the group must be the channel.
+        if (m) expect(m[1], `${where}: ${name}`).toBe(soundChannelOf(name));
+      }
+    }
   });
 });

@@ -230,12 +230,6 @@
   margin-top: 4px;
 }
 
-/* NB "+ Add output" is GONE (owner decision D3, 2026-09-18). A material is a
-   NODE now, so the palette tile and Shift+A already add one and the mesh
-   dropdown targets it — and its two cap sentences named `MAX_ADDED_MATERIALS`,
-   which stopped describing anything the moment a node stopped holding a stack.
-   `.output-node__add*` went with it. */
-
 .output-node__title {
   font-size: 10px;
   font-weight: 700;
@@ -259,12 +253,7 @@
   padding: 3px 8px 1px;
 }
 
-/* Port rows */
-.output-node__ports {
-  padding: 0;
-}
-
-/* min-height 18 (was 16, pre-widget): a compact DragNumberInput / color
+/* Port rows. min-height 18 (was 16, pre-widget): a compact DragNumberInput / color
  * swatch is ~13-14px tall, and every row keeps ONE height whether or not it
  * carries a widget — otherwise wiring a channel would shift the handle
  * centers of every row below it. layoutEngine's output estimate already
@@ -349,12 +338,6 @@
 .output-node--sdf .output-node__val {
   width: 32px;
 }
-
-/* NB `.output-node__divider` is GONE. It separated one MATERIAL from the next
-   inside a stacked Output, drawn in the node's own frame colour so the stack
-   read as sections of one framed node; with one material per node there is
-   never a next material to divide from, and the node's own border does that
-   job. `__subdivider` below is the surviving line and now the only one. */
 
 /* Between the Pixel and Vertex sections of ONE material — faint, because the
    two halves belong to the same block. */

@@ -13,6 +13,7 @@
  */
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { makeGlb, TRIANGLE_POSITIONS } from './test-utils';
+import { pad4 } from './utils/glbContainer';
 
 class ProgressEventStub {
   type: string;
@@ -60,11 +61,6 @@ export interface GltfSpec {
 export function materials(names: Array<string | undefined>): Array<{ name?: string }> {
   return names.map((name) => (name === undefined ? {} : { name }));
 }
-
-// Arithmetic, never `(n + 3) & ~3`: a bitwise operator coerces through ToInt32,
-// so that spelling returns a NEGATIVE length from 2**31 up. Harmless at fixture
-// sizes, but it is the shape that made the repacker u32 overflow guard dead code.
-const pad4 = (n: number) => Math.ceil(n / 4) * 4;
 
 export function gltfParts(spec: GltfSpec): { json: Record<string, unknown>; bin: Uint8Array } {
   const blobs = spec.blobs ?? [];

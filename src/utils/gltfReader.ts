@@ -41,11 +41,18 @@
  * enter the store, undo history, the autosave, IndexedDB or a postMessage —
  * `gltfPreviewFacts` is the one adapter whose result may be kept, and it holds
  * only strings and numbers.
+ *
+ * REPORTED, NOT YET READ: `warnings`, `mimeMismatch`/`declaredMime`,
+ * `unsupportedTextures` and `usage.withoutNormals` have no production consumer
+ * (suites only); `sceneMeshes`/`namingExact` are the naming suites' surface.
  */
 
 import { safeJsonReviver } from './safeJson';
 import {
   decodeDataUri,
+  isIndex,
+  isObj,
+  own,
   parseGlbContainer,
   readImageDimensions,
   sniffImageFormat,
@@ -54,6 +61,7 @@ import {
 import {
   GLB_READ_MAX_BYTES,
   MESH_MAX_BYTES,
+  MESHOPT_EXTENSIONS,
   inspectParsedGltf,
   type GltfCompressionReport,
 } from './gltfCompression';
@@ -267,18 +275,6 @@ function refuse(reason: GltfReadRefusalReason, detail: string): never {
 
 type Obj = Record<string, unknown>;
 
-const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
-
-/** An OWN property, or undefined — for keys that come from the file (an
- *  extension name, a camera type), where a plain lookup could reach
- *  Object.prototype. */
-function own(o: Obj, key: string): unknown {
-  return Object.prototype.hasOwnProperty.call(o, key) ? o[key] : undefined;
-}
-
-const isIndex = (v: unknown, length: number): v is number =>
-  typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v < length;
-
 /** An optional index: undefined → null; anything but a valid index refuses. */
 function optIndex(v: unknown, length: number, detail: string): number | null {
   if (v === undefined) return null;
@@ -357,8 +353,6 @@ function extensionList(doc: Obj, key: 'extensionsUsed' | 'extensionsRequired'): 
   for (const e of v) if (typeof e === 'string' && e.length <= 128 && !UNSAFE_CHARS.test(e) && !out.includes(e)) out.push(e);
   return out;
 }
-
-const MESHOPT_EXTENSIONS = ['EXT_meshopt_compression', 'KHR_meshopt_compression'] as const;
 
 /** The meshopt extension objects present on a buffer or bufferView. */
 function meshoptExtensions(o: Obj): Obj[] {
@@ -464,7 +458,7 @@ function read(bytes: Uint8Array, kind: 'glb' | 'gltf'): GltfModelReport {
   //    below 2 — GLTFLoader's own test (`version[0] < 2`), so '10.0' is out.
   const asset = doc.asset;
   const version = isObj(asset) ? asset.version : undefined;
-  if (typeof version !== 'string' || !/^[0-9]/.test(version) || parseInt(version, 10) < 2 || Number(version[0]) < 2) {
+  if (typeof version !== 'string' || !/^[0-9]/.test(version) || Number(version[0]) < 2) {
     refuse('invalid-model', 'asset');
   }
 
@@ -1055,14 +1049,6 @@ export function slotColorSpace(slot: GltfSlot): 'color' | 'data' {
   return slot === 'baseColor' || slot === 'emissive' ? 'color' : 'data';
 }
 
-/** The materials and certainty behind one predicted mesh name, or null. */
-export function meshNameMaterials(
-  m: GltfModelReport,
-  name: string,
-): { materials: readonly (number | null)[]; certain: boolean } | null {
-  return m.meshNameIndex.get(name) ?? null;
-}
-
 /**
  * The loader-0.6 MIRROR names per material index: names that are certain,
  * usable (`isUsableMeshName`) and carried only by meshes of exactly that one
@@ -1127,16 +1113,17 @@ export interface GltfPreviewFacts {
 }
 
 /**
- * The facts AND, when the reader refused, WHY — from the SAME `readGltfModel`
- * call, never a second parse. `undefined` for OBJ (not a glTF). The reason is
+ * The facts (with the compression report) AND, when the reader refused, WHY —
+ * from the SAME `readGltfModel` call, never a second parse. `undefined` for any
+ * kind that is not a glTF. The reason is
  * what the single-GLB export's availability line says (`gltfReadRefusal` on
  * PreviewMesh): an `external-data` .gltf can never be packed, everything else
  * reads as "could not be read".
  */
 export function gltfPreviewFactsOrRefusal(
   bytes: Uint8Array,
-  kind: 'obj' | 'glb' | 'gltf',
-): { facts: GltfPreviewFacts } | { refusal: GltfReadRefusalReason } | undefined {
+  kind: string,
+): { facts: GltfPreviewFacts; compression: GltfCompressionReport } | { refusal: GltfReadRefusalReason } | undefined {
   if (kind !== 'glb' && kind !== 'gltf') return undefined;
   const r = readGltfModel(bytes, kind);
   if (!r.ok) return { refusal: r.refusal.reason };
@@ -1147,7 +1134,7 @@ export function gltfPreviewFactsOrRefusal(
     const materials = e.materials.filter((mat): mat is number => mat !== null);
     if (materials.length > 0) meshMaterials.set(name, { materials, certain: e.certain });
   }
-  return { facts: { signature: r.model.signature.materials.slice(), meshMaterials } };
+  return { facts: { signature: r.model.signature.materials.slice(), meshMaterials }, compression: r.model.compression };
 }
 
 /** The facts for a model's bytes: undefined for OBJ (not a glTF), null when

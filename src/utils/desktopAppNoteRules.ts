@@ -26,8 +26,9 @@ type Lift = 'yes' | 'no' | 'not-under-ignore' | 'zip-size';
  * Exhaustive over `LimitNotice['kind']`: a new notice kind fails `tsc` here
  * until it decides whether the desktop app lifts it. The desktop autosave's two
  * notices are 'no': they are the desktop app's own. `output-sections-trimmed`
- * is 'no' too: the section caps (`MAX_ADDED_MATERIALS`, the mesh-list caps) are
- * the same on both builds, so the desktop app would trim the same file.
+ * is 'no' too: the section caps (`MAX_PARTS`, `MAX_INDEX_MATERIALS`, the
+ * mesh-list caps) are the same on both builds, so the desktop app would trim
+ * the same file.
  */
 const LIFTS: { readonly [K in LimitNotice['kind']]: Lift } = {
   'image-too-large': 'not-under-ignore',

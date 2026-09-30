@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { glbDialogCopy } from '@/utils/glbImportCopy';
 import type { GlbDialogPlan, GlbImportFacts } from '@/utils/glbImportGate';
+import { useModalKeys } from './useModalKeys';
 import './CsvImportModal.css';
 import './GlbImportModal.css';
 
@@ -64,19 +65,14 @@ export function GlbImportModal({ request, phase, progress, portalHost, onChoose 
   const modelOnlyRef = useRef<HTMLButtonElement>(null);
   const open = request !== null;
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onChoose('cancel');
-        return;
-      }
-      if (e.key !== 'Tab') e.stopPropagation();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [open, onChoose]);
+  useModalKeys(open, (e) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      onChoose('cancel');
+      return;
+    }
+    if (e.key !== 'Tab') e.stopPropagation();
+  }, true);
 
   // Initial focus: Model only when it can be pressed, else the panel — never
   // the primary, so Enter cannot replace the shader by reflex.
@@ -111,7 +107,7 @@ export function GlbImportModal({ request, phase, progress, portalHost, onChoose 
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="csv-import-modal__title glb-import-modal__name" id="glb-import-modal-title">
+        <div className="csv-import-modal__title csv-import-modal__file" id="glb-import-modal-title">
           {copy.title}
         </div>
         {copy.facts.length > 0 && (
@@ -133,7 +129,7 @@ export function GlbImportModal({ request, phase, progress, portalHost, onChoose 
         {copy.progress && (
           <div className="glb-import-modal__progress" aria-live="polite">{copy.progress}</div>
         )}
-        <div className="glb-import-modal__heading">{copy.importHeading}</div>
+        <div className="csv-import-modal__heading">{copy.importHeading}</div>
         {/* DOM order IS visual order: the two answers, then the restore when
             it is offered, then Cancel. Tab therefore walks the dialog the way
             it reads, and Cancel — the one that changes nothing — is last

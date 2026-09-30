@@ -45,9 +45,25 @@
  * ONCE, as its exact canonical bytes, and is BOTH the texture image and the
  * module asset (`assets[key]`); a fallback is never an asset.
  */
-import { buildGlbContainer, GLB_JSON_MAX_BYTES, PLACEHOLDER_PNG_DATA_URI, sniffImageFormat } from './glbContainer';
+import {
+  buildGlbContainer,
+  GLB_JSON_MAX_BYTES,
+  IMAGE_MIME_FORMAT,
+  isSafeNonNeg,
+  own,
+  pad4,
+  PLACEHOLDER_PNG_DATA_URI,
+  sniffImageFormat,
+} from './glbContainer';
 import { GLTF_IMAGE_MAX_BYTES, GLTF_READ_CAPS, readGltfModel, type GltfModelReport } from './gltfReader';
-import { MESHOPT_EXTENSIONS, STRIP_WALK_BUDGET, planTextureStrip, stripGltfTextures } from './gltfStrip';
+import {
+  MESHOPT_EXTENSIONS,
+  STRIP_WALK_BUDGET,
+  accessorViewRefs,
+  planTextureStrip,
+  stripGltfTextures,
+  walkTextureAndViewRefs,
+} from './gltfStrip';
 import { fnv1a32Hex } from './payloadDigest';
 import { KTX2_MIME } from './ktx2Encoder';
 import { modelSignatureMatches } from '@/engine/materialPartsContract';
@@ -216,28 +232,12 @@ function refuse(reason: RepackRefusalReason, detail: string): never {
   throw new Refused({ reason, detail });
 }
 
-// ONE 4-alignment. There used to be a second, `(n + 3) & ~3`, written on the
-// next line — and a bitwise operator coerces through ToInt32, so it returned 0
-// at 2^32 and -2147483648 at 3·2^31, which is precisely where the u32 total
-// guard below exists to fire. See that guard.
-const ceil4 = (n: number) => Math.ceil(n / 4) * 4;
-const isSafeNonNeg = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
-
-function own(o: Obj, key: string): unknown {
-  return Object.prototype.hasOwnProperty.call(o, key) ? o[key] : undefined;
-}
-
 const MESHOPT: ReadonlySet<string> = new Set(MESHOPT_EXTENSIONS);
 const MAX_TRANSFORM = 1e6;
 const GENERATOR_RE = /^FastShaders [0-9A-Za-z.+-]{1,64}$/;
-const MIME_FORMAT: ReadonlyMap<string, string> = new Map([
-  ['image/png', 'png'],
-  ['image/jpeg', 'jpeg'],
-  ['image/webp', 'webp'],
-]);
 const SAMPLER_KEYS = ['magFilter', 'minFilter', 'wrapS', 'wrapT'] as const;
 /** The extension that names the KTX2 copies (their MIME is the encoder seam's). */
-export const KTX2_EXTENSION = 'KHR_texture_basisu';
+const KTX2_EXTENSION = 'KHR_texture_basisu';
 
 /** Byte-for-byte equality (the KTX2 copies are de-duplicated by CONTENT). */
 function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
@@ -302,6 +302,8 @@ function dropFsExtras(o: Obj): void {
 
 /* ── truncateDeadTail ────────────────────────────────────────────────────── */
 
+const TAIL_WALK_SKIP: ReadonlySet<string> = new Set(['textures', 'images', 'bufferViews', 'buffers', 'accessors']);
+
 const isExactly = (o: unknown, keys: readonly string[]): o is Obj => {
   if (!isPlainObject(o)) return false;
   const k = Object.keys(o);
@@ -329,50 +331,15 @@ export function truncateDeadTail(doc: Record<string, unknown>): void {
   };
   const texRefs = new Set<number>();
   const viewRefs = new Set<number>();
-  const collect = (root: unknown, skipTop: ReadonlySet<string>) => {
-    const stack: unknown[] = [];
-    if (isPlainObject(root)) {
-      for (const k of Object.keys(root)) {
-        spend();
-        if (!skipTop.has(k)) stack.push(root[k]);
-      }
-    }
-    while (stack.length > 0) {
-      const o = stack.pop();
-      if (Array.isArray(o)) {
-        for (const v of o) {
-          spend();
-          if (typeof v === 'object' && v !== null) stack.push(v);
-        }
-        continue;
-      }
-      if (!isPlainObject(o)) continue;
-      for (const k of Object.keys(o)) {
-        spend();
-        const v = o[k];
-        if ((k === 'texture' || k.endsWith('Texture')) && isPlainObject(v) && isSafeNonNeg(v.index)) texRefs.add(v.index);
-        else if (k === 'bufferView' && isSafeNonNeg(v)) viewRefs.add(v);
-        if (typeof v === 'object' && v !== null) stack.push(v);
-      }
-    }
+  const addView = (v: unknown) => {
+    if (isSafeNonNeg(v)) viewRefs.add(v);
   };
   try {
     // Everything but the arrays being decided about (accessors are scanned flat).
-    collect(doc, new Set(['textures', 'images', 'bufferViews', 'buffers', 'accessors']));
-    const accessors = own(doc, 'accessors');
-    if (Array.isArray(accessors)) {
-      for (const a of accessors) {
-        spend();
-        if (!isPlainObject(a)) continue;
-        if (isSafeNonNeg(a.bufferView)) viewRefs.add(a.bufferView);
-        const sparse = a.sparse;
-        if (!isPlainObject(sparse)) continue;
-        for (const part of ['indices', 'values']) {
-          const p = sparse[part];
-          if (isPlainObject(p) && isSafeNonNeg(p.bufferView)) viewRefs.add(p.bufferView);
-        }
-      }
-    }
+    walkTextureAndViewRefs(doc, TAIL_WALK_SKIP, spend, (info) => {
+      if (isSafeNonNeg(info.index)) texRefs.add(info.index);
+    }, addView);
+    accessorViewRefs(doc, spend, addView);
   } catch (e) {
     if (e instanceof Refused) return;
     throw e;
@@ -568,7 +535,7 @@ function validSampler(s: unknown): s is GlbSamplerSpec {
 
 function validImageBytes(mime: unknown, bytes: unknown): boolean {
   if (typeof mime !== 'string' || !(bytes instanceof Uint8Array)) return false;
-  const format = MIME_FORMAT.get(mime);
+  const format = IMAGE_MIME_FORMAT.get(mime);
   return format !== undefined && bytes.length >= 1 && bytes.length <= GLTF_IMAGE_MAX_BYTES && sniffImageFormat(bytes) === format;
 }
 
@@ -720,7 +687,7 @@ function baseBuffers(doc: Obj, m: GltfModelReport): Uint8Array {
   let nextFallback = 1;
   data.forEach((d, i) => {
     if (d instanceof Uint8Array) {
-      const at = ceil4(cursor);
+      const at = pad4(cursor);
       base.set(i, at);
       newIndex.set(i, 0);
       cursor = at + d.length;
@@ -788,10 +755,10 @@ function layoutGlbRepack(input: RepackInput): Layout {
 
   // Parts, in order.
   const parts: Part[] = [];
-  let cursor = ceil4(baseBin.length);
+  let cursor = pad4(baseBin.length);
   const place = (bytes: Uint8Array): number => {
     parts.push({ offset: cursor, bytes });
-    cursor = ceil4(cursor + bytes.length);
+    cursor = pad4(cursor + bytes.length);
     return parts.length - 1;
   };
 
@@ -1030,14 +997,9 @@ function layoutGlbRepack(input: RepackInput): Layout {
   const json = JSON.stringify(doc);
   const jsonBytes = enc.encode(json).length;
   if (jsonBytes > GLB_JSON_MAX_BYTES) refuse('too-complex', 'json');
-  // A GLB's length field is a u32. `ceil4` and not `(n + 3) & ~3`: ToInt32 made
-  // the old spelling wrap at exactly the sizes this guard is for, so a 4 GiB
-  // file measured 3508 bytes and a 6 GiB one a NEGATIVE size — which
-  // `exportPreflight`'s `n()` reads as 0, so the N1 "too large to open again"
-  // dialog never opened and `repackGlb` threw `new Uint8Array(negative)`
-  // instead. Reaching it needs caps elsewhere to move (the base stops at
-  // 96/256 MiB, the module's assets at 64 MiB), but the guard is now real.
-  const totalBytes = 12 + 8 + ceil4(jsonBytes) + 8 + ceil4(end);
+  // A GLB's length field is a u32. The guard is real only because `pad4` is
+  // arithmetic (glbContainer.ts); pinned at 2^32 and 3·2^31 by glbRepack.test.ts.
+  const totalBytes = 12 + 8 + pad4(jsonBytes) + 8 + pad4(end);
   if (totalBytes > 0xffffffff) refuse('too-complex', 'total');
 
   return {

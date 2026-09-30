@@ -13,7 +13,6 @@ import type {
   GroupNodeData,
   NoteNodeData,
   BoundarySocket,
-  TSLDataType,
 } from '@/types';
 import { getNodeValues } from '@/types';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
@@ -30,7 +29,17 @@ import { autoLayout } from '@/engine/layoutEngine';
 // front end behind `buildCodeGroup` stays out of every page's boot chunk.
 import complexityData from '@/registry/complexity.json';
 import { bridgeEdgesAcrossDeletedNodes, restoreCollapsedEdges, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
-import { MIN_GROUP_W, MIN_GROUP_H, groupFrameSize } from '@/utils/groupFrame';
+import {
+  MIN_GROUP_W,
+  MIN_GROUP_H,
+  GROUP_PADDING,
+  GROUP_HEADER_H,
+  GROUP_BADGE_CLEARANCE,
+  EST_NODE_W,
+  EST_NODE_H,
+  groupFrameSize,
+  measuredNodeSize,
+} from '@/utils/groupFrame';
 import { safeJsonReviver } from '@/utils/safeJson';
 // colorUtils' only import is type-only, so it is a runtime LEAF and its
 // exports are guaranteed initialised by the time anything can reach them —
@@ -40,7 +49,7 @@ import { safeJsonReviver } from '@/utils/safeJson';
 import { HEX6 } from '@/utils/colorUtils';
 import { authoredUniformChange } from '@/utils/uniformOverride';
 import { normalizeChainOperands } from '@/utils/chainOperands';
-import { nodeCostPoints, computeReachableCost, imageNodeCost, getCost } from '@/utils/nodeCost';
+import { nodeCostPoints, computeReachableCost, imageNodeCost, getCost, sinkCosts, sinkBadgesStale, stampSinkCosts } from '@/utils/nodeCost';
 // From the LEAF cost table, not from nodeCost: both of these are called at
 // MODULE SCOPE below (loadCostProfiles + the boot setCostOverrides), and
 // nodeCost sits in an import cycle that runs back through this file — so
@@ -68,7 +77,6 @@ import {
 // The import-free leaf, read at MODULE SCOPE below (the costTable TDZ rule):
 // never glbImportGate or glbImportCopy, which reach the store's own cycle.
 import { ALLOW_MANY_MATERIALS_KEY, allowManyMaterialsFrom } from '@/utils/glbImportLimits';
-import { sinkCosts } from '@/utils/nodeCost';
 import {
   exceedsImageBudget,
   makeImageNodeFromEncode,
@@ -612,7 +620,7 @@ interface HistoryEntry {
 
 const MAX_HISTORY = 50;
 
-function loadRatio(key: string, fallback: number, min = 0.25, max = 0.75): number {
+function loadNumber(key: string, fallback: number, min = 0.25, max = 0.75): number {
   try {
     const v = parseFloat(localStorage.getItem(key) ?? '');
     return isNaN(v) ? fallback : Math.max(min, Math.min(max, v));
@@ -640,18 +648,31 @@ export const RIGHT_SPLIT_MIN = 0.25;
 export const RIGHT_SPLIT_MAX = 0.99;
 
 function loadRightSplitRatio(): number {
-  const v = loadRatio(RIGHT_SPLIT_KEY, NaN, RIGHT_SPLIT_MIN, RIGHT_SPLIT_MAX);
+  const v = loadNumber(RIGHT_SPLIT_KEY, NaN, RIGHT_SPLIT_MIN, RIGHT_SPLIT_MAX);
   if (!Number.isNaN(v)) return v;
   // No new key yet: invert the legacy code-share if there is one. Its own
   // bounds (0.01–0.75) are applied BEFORE the flip, so a collapsed code pane
   // inverts to a near-full preview and then re-clamps.
-  const legacy = loadRatio(RIGHT_SPLIT_LEGACY_KEY, NaN, 0.01, 0.75);
+  const legacy = loadNumber(RIGHT_SPLIT_LEGACY_KEY, NaN, 0.01, 0.75);
   if (Number.isNaN(legacy)) return 0.4;
   return Math.max(RIGHT_SPLIT_MIN, Math.min(RIGHT_SPLIT_MAX, 1 - legacy));
 }
 
 function loadString(key: string, fallback: string): string {
   try { return localStorage.getItem(key) || fallback; } catch { return fallback; }
+}
+
+/** A '1'/'0' preference; anything but an exact '1' reads as off. */
+function loadFlag(key: string): boolean {
+  return loadString(key, '0') === '1';
+}
+
+/** The preference writer: a full quota or a private window must not throw. */
+function saveString(key: string, value: string): void {
+  try { localStorage.setItem(key, value); } catch { /* quota or private mode */ }
+}
+function saveFlag(key: string, on: boolean): void {
+  saveString(key, on ? '1' : '0');
 }
 
 /**
@@ -909,6 +930,12 @@ function snapshotOf(state: {
   return snapshot(state.nodes, state.edges, state.drawings, state.shaderPalettes);
 }
 
+/** The UNGUARDED history record, spread into the `set` that makes the change.
+ *  `pushHistory` is the guarded one (`isUndoRedo`, an open gesture bracket). */
+function recordHistory(state: AppState): Pick<AppState, 'past' | 'future'> {
+  return { past: [...state.past, snapshotOf(state)].slice(-MAX_HISTORY), future: [] };
+}
+
 /**
  * Clean one incoming palette and give it an id unique among the ones this
  * shader already holds. `sanitizePalettes` mints a fresh id here (nothing is
@@ -1126,12 +1153,8 @@ export function parseStoredGraph(input: unknown): StoredGraph | null {
       // so the graph still loads. Edges that referenced them are also pruned
       // below. Nodes saved with the (now-removed) `texturePreview` flow type
       // or any `tslTex_*` registry type fall into this bucket.
-      // Migrate: soundNode moved off ShaderNode onto its own SoundNode component
-      // (flow type 'sound'). Graphs saved before that carry type 'shader' — and a
-      // graph saved between the fold and the rename carries 'mic' — and either
-      // would keep rendering through a component that no longer matches, so
-      // would keep rendering through the old row layout, which no longer has
-      // any soundNode handling at all — so re-derive it.
+      // Migrate: soundNode moved off ShaderNode (type 'shader', briefly 'mic')
+      // onto its own SoundNode component — re-derive the flow type.
       for (const node of data.nodes as { type?: string; data?: { registryType?: string } }[]) {
         if (node?.data?.registryType === 'soundNode') node.type = 'sound';
       }
@@ -1203,13 +1226,13 @@ export function parseStoredGraph(input: unknown): StoredGraph | null {
         }
       }
 
+      // Folded node types (registry/legacyNodeTypes.ts) — before anything reads the def.
+      data.nodes = migrateLegacyNodeTypes(data.nodes);
       // Migrate: image nodes follow the noise nodes' opt-in exposedPorts rules
       // — auto-expose any param port that already has an edge so its socket
       // keeps rendering (graphs saved before the opt-in change, or hand-edited
       // files, may carry edges without the matching exposedPorts entry). Shared
       // with the project-import path so the two surfaces stay in lockstep.
-      // Folded node types (registry/legacyNodeTypes.ts) — before anything reads the def.
-      data.nodes = migrateLegacyNodeTypes(data.nodes);
       autoExposeConnectedParamPorts(data.nodes, data.edges);
 
       // Bound image payloads from a (possibly tampered) localStorage value.
@@ -1432,33 +1455,11 @@ interface AppState {
   // UI
   contextMenu: ContextMenuState;
   /**
-   * The node the pointer is currently over, or null.
-   *
-   * Transient UI state — never persisted, never in history.
-   *
-   * **It currently has no reader.** It existed for exactly one: a hovered node
-   * used to MOVE, and because React Flow computes edge endpoints from node
-   * positions and knows nothing about a CSS translate, TypedEdge subscribed to
-   * this and offset the matching endpoint itself. Lifted nodes stop moving on
-   * 2026-09-09 (NodeBase.css) and that compensation went with them, leaving
-   * this written on every hover for nobody. Removing it is a small, separate
-   * cleanup — the hover LOOK is pure CSS `:hover` and does not need it, and the
-   * `fs-connecting` suppression that pairs with it is CSS too.
-   *
-   * Deliberately the node ID and not a boolean-per-edge: every edge subscribes
-   * with a selector that folds it to a small number ("is my source and/or my
-   * target the hovered node"), which is 0 for every edge but the one or two
-   * that touch it — so a hover re-renders those and nothing else.
-   */
-  hoveredNodeId: string | null;
-  /**
    * PREVIEW MODE — the node whose output is routed to the Output's Color
    * channel for the 3D preview ONLY (utils/nodePreview.ts): the sync engine
    * emits `previewCode` from that rerouted graph while `code`, the export and
-   * the canvas keep the real wiring. Session-only like `hoveredNodeId`: never
-   * persisted, never in history, never in a shared file — looking at a node
-   * is not an edit. A target whose node is gone is reconciled away by the
-   * sync engine on its next pass, so a stale entry cannot outlive its node.
+   * the canvas keep the real wiring. Session-only: never persisted, never in
+   * history, never in a shared file — looking at a node is not an edit.
    */
   nodePreview: NodePreviewTarget | null;
   /** Queue of over-wide CSV drops awaiting a user decision (shown one at a time). */
@@ -1474,25 +1475,9 @@ interface AppState {
    *  (persisted; set via that notice's "Don't show again" checkbox). Distinct
    *  from `ignoreImageLimits` — this hides a warning, it doesn't lift a cap. */
   hideImageDownscaleWarning: boolean;
-  /**
-   * Canvas wheel behaviour: false (default) = a vertical wheel ZOOMS, the
-   * mouse model; true = it PANS, the trackpad model. Persisted to
-   * `fs:trackpadScroll`.
-   *
-   * A SETTING and not a device sniff, which is the whole point. A trackpad's
-   * two-finger swipe and a mouse's wheel notch arrive as the same DOM event,
-   * so telling them apart needs a heuristic — one was built, shipped and
-   * reverted after it read a real macOS mouse as a trackpad and took that
-   * user's zoom away (see the navigation convention in CLAUDE.md, and
-   * NodeEditor's wheel handler). The failure is asymmetric enough, and the
-   * hardware unreachable enough from a test, that the honest answer is to let
-   * the user state which device they are on.
-   *
-   * Defaults to the MOUSE model: it is the historical behaviour, it is what
-   * every node editor does, and a wrong default costs a trackpad user a pan
-   * they can still get (two-finger horizontal, double-tap-drag) rather than
-   * costing a mouse user their zoom, which has no substitute.
-   */
+  /** Canvas wheel: false (default) = a vertical wheel ZOOMS, the mouse model;
+   *  true = it PANS, the trackpad model. Persisted to `fs:trackpadScroll`. A
+   *  SETTING, never a device sniff — see docs/dev/canvas-interaction.md. */
   trackpadScroll: boolean;
   /**
    * The material-gate override for the GLB import dialog (N11): off = a
@@ -1502,17 +1487,9 @@ interface AppState {
    * '1'). A study CONDITION: hidden and reset by cleanSlateForStudy.
    */
   allowManyMaterials: boolean;
-  /**
-   * Which OPTIONAL palette categories are switched on — the ready-made
-   * Textures library and the Distance fields family, both OFF by default and
-   * flipped from the same toolbar right-click list as `trackpadScroll`.
-   * Persisted per category (`fs:showTextures`, `fs:showDistanceFields`).
-   *
-   * An ADD-SURFACE preference only: it decides what the content browser, the
-   * Add-node menu and search OFFER. The registry, codegen, the parser and every
-   * restore path ignore it, so a graph holding those nodes loads and compiles
-   * identically either way. See registry/optionalCategories.ts.
-   */
+  /** Which OPTIONAL palette categories are on (Textures, Distance fields) —
+   *  both off by default, persisted per category. An ADD-SURFACE preference
+   *  only: see registry/optionalCategories.ts. */
   optionalCategories: OptionalCategoryFlags;
   /** Drop-time image conversion (WebP + power-of-two): ask each time, or a
    *  remembered answer. Persisted to `fs:imageConvert`. Conversion is lossy in
@@ -1593,37 +1570,27 @@ interface AppState {
   // DISPLAY-ONLY like the inventory beside it — forgeable, so it is never
   // priced, emitted, persisted or put in history; `setPreviewMesh` clears it.
   previewSplatFacts: PreviewSplatFacts | null;
-  // Whether Export bundles the loaded preview mesh into the zip (the EXPORT
-  // button's right-click setting). SESSION-ONLY like the mesh it governs — a
+  // Whether a DOCUMENT save (NEW, the Work folder, the study package) carries
+  // the loaded preview mesh — the study popover's "Export model" checkbox, and
+  // true everywhere else. SESSION-ONLY like the mesh it governs — a
   // persisted "off" would silently strip models from exports weeks later.
   exportIncludeMesh: boolean;
-  // The EXPORT popover's Format choice: true = ONE .glb (the model, its
-  // textures and this shader inside — engine/exportSingleGlb.ts). SESSION-ONLY
-  // like exportIncludeMesh, so a persisted choice cannot turn a later
-  // session's exports into .glb files nobody asked for. Never read raw: every
-  // surface asks effectiveExportFormat (utils/glbExportAvailability.ts), which
-  // falls back to the bundle while the loaded model cannot be packed and in a
-  // study session.
-  exportAsGlb: boolean;
+  // (No Format flag: EXPORT is CONTEXTUAL — the preview's model decides `.glb`
+  // vs the shader file, engine/exportModel.ts — and the popover's smaller
+  // button is a one-shot, so there is no choice to store.)
   // The EXPORT popover's KTX2 row: add GPU-compressed copies of the textures
   // to a single .glb, for other glTF viewers (Phase 8). SESSION-ONLY like
-  // exportIncludeMesh and exportAsGlb beside it, and OFF by default — the
+  // exportIncludeMesh beside it, and OFF by default — the
   // copies cost bytes and encoding time, and the shader itself never samples
   // them. The row renders only where an encoder is registered, so in a build
   // with none this flag is unreachable and inert.
   exportKtx2: boolean;
   // The EXPORT popover's "Include unconnected nodes" row: false = EXPORT
   // carries only the nodes that feed an Output (engine/exportGraph.ts). OFF by
-  // default and SESSION-ONLY like the three export flags above; NEW's
+  // default and SESSION-ONLY like the two export flags above; NEW's
   // save-first, the Work-folder Save and the study package never read it —
   // they always export the whole canvas.
   exportAllNodes: boolean;
-  // The EXPORT popover's "Export model" row while a BUILT-IN shape is shown
-  // (sphere, cube, plane, Raymarch window, teapot, bunny): ship it as an .obj
-  // under models/ (engine/builtinModelObj.ts). OFF by default — a plain shader
-  // stays a bare .js — and SESSION-ONLY like the flags above. The DROPPED
-  // model keeps `exportIncludeMesh`.
-  exportBuiltinModel: boolean;
   // The preview top bar's WGSL/GLSL toggle — true forces the sandboxed 3D
   // preview onto the WebGL2/GLSL backend (what the immersive popup and Safari
   // always run), so backend-dependent shader behavior is checkable without a
@@ -1656,20 +1623,9 @@ interface AppState {
   drawToolActive: boolean;
   drawEraser: boolean;
 
-  /**
-   * The shader's own colour palettes — SHADER-SCOPED, exactly like `drawings`:
-   * they ride the `fs:graph` autosave, undo history and the
-   * FASTSHADERS_PROJECT_V1 project block, so opening a shader gives you the
-   * palettes it was authored with. There is deliberately NO cross-shader
-   * library; moving a palette between shaders is an explicit file export/import
-   * (which is also what makes it shareable with someone who does not have this
-   * browser profile). `BUILTIN_PALETTES` stay read-only in code and are never
-   * copied in here — the UI shows them below the shader's own.
-   *
-   * Invisible to graphToCode / cpuEvaluator / the sync engine: a palette is
-   * authoring metadata, so it can never change a single byte of emitted shader
-   * code.
-   */
+  /** The shader's own colour palettes — SHADER-SCOPED like `drawings` (autosave,
+   *  history, project block) and invisible to codegen. `BUILTIN_PALETTES` are
+   *  never copied in here. Scope rules: utils/palettes.ts. */
   shaderPalettes: Palette[];
 
   // Graph actions
@@ -1691,20 +1647,12 @@ interface AppState {
     opts?: { history?: boolean },
   ) => void;
   updateNodeData: (nodeId: string, data: Partial<AppNode['data']>) => void;
-  /**
-   * Make an output node THE ACTIVE SINK — the one that drives emission, the
-   * preview wire and window, the cost total, the Uniforms overlay and the
-   * export (utils/sdfPartition.ts `activeSink`). Clicking a node's preview
-   * socket calls this. One history entry: the flag lands on `nodeId` and
-   * leaves every other Output / Raymarch Output in the same write. A no-op
-   * for a non-sink id.
-   */
+  /** Make an output node THE ACTIVE SINK (utils/sdfPartition.ts `activeSink`):
+   *  the flag lands on `nodeId` and leaves every other sink in ONE history
+   *  entry. A no-op for a non-sink id. */
   setActiveOutput: (nodeId: string) => void;
-  /**
-   * Start a fresh shader: the graph becomes a single Output node and edges +
-   * board ink are dropped. One undo entry restores the whole previous document
-   * (nodes, edges and drawings are exactly what a history snapshot holds).
-   */
+  /** Start a fresh shader: a single Output node, no edges, no board ink. One
+   *  undo entry restores the whole previous document. */
   newGraph: () => void;
 
   // Drawing actions
@@ -1723,17 +1671,8 @@ interface AppState {
   setDrawToolActive: (active: boolean) => void;
   setDrawEraser: (eraser: boolean) => void;
 
-  // Palette actions
-  //
-  // ALL FOUR CRUD ACTIONS SNAPSHOT INLINE (see `newGraph`, which documents the
-  // same trap) instead of calling `pushHistory`. `pushHistory` hard-bails while
-  // `coalescingHistory` is set, and the colour picker brackets every pick with
-  // `useHistoryBracket`, which holds that bracket open for a 600 ms IDLE window
-  // AFTER the pick lands. A palette edit made inside that window — "pick a
-  // colour, then hit Add palette", the single most likely real sequence — would
-  // therefore be silently NOT recorded: the edit becomes unrecoverable and the
-  // next Cmd+Z jumps back past the colour pick. Closing the bracket first is
-  // not the fix either; that would split the pick's own single undo entry.
+  // Palette actions. The four CRUD actions record their own history, never
+  // through `pushHistory` — the reason sits on their implementations.
   /** Append one palette (sanitized; id minted locally). Returns the new id, or
    *  null when it had no usable colour or the per-shader cap is full. */
   addPalette: (input: { name?: string; colors: readonly string[]; names?: readonly string[] }) => string | null;
@@ -1763,7 +1702,6 @@ interface AppState {
   requestCodeSync: () => void;
 
   // Complexity actions
-  setTotalCost: (cost: number) => void;
   importCostProfile: (parsed: ParsedCostFile) => void;
   /**
    * Bulk entrance (an exported bundle). Returns how many ROWS landed, which
@@ -1784,27 +1722,15 @@ interface AppState {
   pushHistory: () => void;
   undo: () => void;
   redo: () => void;
-  /**
-   * While true, `pushHistory` collapses to the single snapshot taken by
-   * `beginInteraction`. See `beginInteraction`.
-   */
+  /** True while a gesture bracket is open: `pushHistory` records nothing. */
   coalescingHistory: boolean;
-  /**
-   * How many live `beginInteraction` calls the open bracket carries. The
-   * bracket is a single global flag, but gestures can overlap (a settings
-   * menu's idle-timed text bracket + a DragNumberInput scrub): nesting-aware
-   * begin/end means a deferred close from one gesture can never terminate a
-   * bracket another gesture is still riding — which would flood history with
-   * per-frame full-graph snapshots for the rest of the scrub.
-   */
+  /** How many live `beginInteraction` calls the open bracket carries, so a
+   *  deferred close from one gesture cannot end a bracket another still rides
+   *  (a menu's idle-timed text bracket + a DragNumberInput scrub). */
   interactionDepth: number;
-  /**
-   * Bracket a continuous gesture (e.g. scrubbing a DragNumberInput) so it lands
-   * as ONE undo entry. Snapshots the pre-gesture state once, then suppresses
-   * further pushes — which also stops the per-frame `structuredClone` of the
-   * entire graph — until `endInteraction`. Safe to call when already bracketing
-   * (increments the nesting depth instead of re-snapshotting).
-   */
+  /** Bracket a continuous gesture so it lands as ONE undo entry: snapshots
+   *  once, then suppresses pushes (and the per-frame graph clone) until
+   *  `endInteraction`. Nests. See docs/dev/graph-and-store.md, History. */
   beginInteraction: () => void;
   /** End one `beginInteraction`. Closes the bracket only at depth 0. Idempotent. */
   endInteraction: () => void;
@@ -1814,7 +1740,6 @@ interface AppState {
    *  `ContextMenuPin`), never trailing positional arguments. */
   openContextMenu: (x: number, y: number, type: ContextMenuType, nodeId?: string, edgeId?: string, pin?: ContextMenuPin) => void;
   closeContextMenu: () => void;
-  setHoveredNode: (id: string | null) => void;
   setNodePreview: (target: NodePreviewTarget | null) => void;
   /** Add a CSV import awaiting a decision to the queue. */
   enqueueCsvImport: (item: PendingCsvImport) => void;
@@ -1878,10 +1803,8 @@ interface AppState {
   /** The validated `fs:model-splat` facts (ShaderPreview is the one writer). */
   setPreviewSplatFacts: (facts: PreviewSplatFacts | null) => void;
   setExportIncludeMesh: (include: boolean) => void;
-  setExportAsGlb: (asGlb: boolean) => void;
   setExportKtx2: (on: boolean) => void;
   setExportAllNodes: (all: boolean) => void;
-  setExportBuiltinModel: (on: boolean) => void;
   setPreviewForceWebGL2: (force: boolean) => void;
   setPreviewShowsModel: (shows: boolean) => void;
   setPreviewShape: (shape: PreviewShape | null) => void;
@@ -1961,14 +1884,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
   future: [],
   isUndoRedo: false,
   contextMenu: { open: false, x: 0, y: 0, type: 'canvas' },
-  hoveredNodeId: null,
   nodePreview: null,
   pendingCsvImports: [],
   pendingShaderImports: [],
   pendingLimitNotices: [],
-  ignoreImageLimits: loadString('fs:ignoreImageLimits', '0') === '1',
-  hideImageDownscaleWarning: loadString('fs:hideImageDownscaleWarning', '0') === '1',
-  trackpadScroll: loadString('fs:trackpadScroll', '0') === '1',
+  ignoreImageLimits: loadFlag('fs:ignoreImageLimits'),
+  hideImageDownscaleWarning: loadFlag('fs:hideImageDownscaleWarning'),
+  trackpadScroll: loadFlag('fs:trackpadScroll'),
   allowManyMaterials: allowManyMaterialsFrom(loadString(ALLOW_MANY_MATERIALS_KEY, '0')),
   // Only the exact string '0' turns it off, so a junk value fails SAFE (on) —
   // the same validate-never-coerce rule the optional categories follow.
@@ -1977,9 +1899,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const v = loadString('fs:imageConvert', 'ask');
     return v === 'always' || v === 'never' ? v : 'ask';
   })(),
-  hideImageConvertNotice: loadString('fs:hideImageConvertNotice', '0') === '1',
+  hideImageConvertNotice: loadFlag('fs:hideImageConvertNotice'),
   importNote: null,
-  splitRatio: loadRatio('fs:splitRatio', 0.6),
+  splitRatio: loadNumber('fs:splitRatio', 0.6),
   rightSplitRatio: loadRightSplitRatio(),
   shaderName: loadString('fs:shaderName', DEFAULT_SHADER_NAME),
   selectedHeadsetId: bootSelectedId,
@@ -2039,10 +1961,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   previewMeshInventory: null,
   previewSplatFacts: null,
   exportIncludeMesh: true,
-  exportAsGlb: false,
   exportKtx2: false,
   exportAllNodes: false,
-  exportBuiltinModel: false,
   previewForceWebGL2: false,
   previewShowsModel: true,
   previewShape: null,
@@ -2050,9 +1970,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   // Drawings are hydrated from fs:graph by App.tsx (loadGraph) alongside the
   // graph; tool prefs are their own persisted keys.
   drawings: [],
-  drawColor: (() => { const c = loadString('fs:drawColor', '#e8455f'); return /^#[0-9a-fA-F]{6}$/.test(c) ? c.toLowerCase() : '#e8455f'; })(),
-  drawOpacity: (() => { const v = parseFloat(loadString('fs:drawOpacity', '1')); return isNaN(v) ? 1 : Math.min(1, Math.max(0.05, v)); })(),
-  drawWidth: (() => { const v = parseFloat(loadString('fs:drawWidth', '3')); return isNaN(v) ? 3 : Math.min(200, Math.max(0.5, v)); })(),
+  drawColor: loadHexColor('fs:drawColor', '#e8455f').toLowerCase(),
+  drawOpacity: loadNumber('fs:drawOpacity', 1, 0.05, 1),
+  drawWidth: loadNumber('fs:drawWidth', 3, 0.5, 200),
   drawToolActive: false,
   drawEraser: false,
 
@@ -2211,18 +2131,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // one because it kebabs to the same file the reset would produce. Not
     // undoable (`shaderName` is absent from HistoryEntry), which is acceptable
     // for a visible text box.
-    try { localStorage.setItem('fs:shaderName', DEFAULT_SHADER_NAME); } catch { /* quota */ }
+    saveString('fs:shaderName', DEFAULT_SHADER_NAME);
     set((state) => ({
       shaderName: DEFAULT_SHADER_NAME,
-      // Snapshots inline rather than delegating to pushHistory for the same
-      // reason beginInteraction does: pushHistory honours `isUndoRedo`, and a
-      // not-yet-cleared flag (set by an undo whose sync reconciliation hasn't
-      // run yet) would silently swallow THIS entry — leaving the user's whole
-      // document unrecoverable behind an unundoable clear. A NEW click is
-      // unambiguously a fresh user mutation. Snapshot + clear in ONE `set` so
-      // no subscriber can observe a cleared graph with un-snapshotted history.
-      past: [...state.past, snapshotOf(state)].slice(-MAX_HISTORY),
-      future: [],
+      // recordHistory, which does NOT honour `isUndoRedo`: a stale flag would
+      // swallow this entry behind an unundoable clear. Snapshot + clear in ONE
+      // `set`, so no subscriber sees a cleared graph with its history missing.
+      ...recordHistory(state),
       // A shader needs somewhere to end up, so the blank document is the one
       // node that can't be added back from the palette twice (AddNodeMenu and
       // the tile drop both refuse a second Output).
@@ -2258,9 +2173,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // that on its own — a document already AT the default kebabs to the same
     // file name, so the desktop Work folder would keep treating the shader it
     // last opened as this one's home and replace it on the next Save, silently
-    // (work_folder_write_bytes has no undo). Its own event, not `fs:graph-imported`:
-    // that one arms NodeEditor's import auto-fit, and startNewShader already
-    // schedules its own.
+    // (work_folder_write_bytes has no undo). Its own event, not `fs:graph-imported`
+    // (nothing was imported); NodeEditor arms its fit on either.
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('fs:graph-new'));
     }
@@ -2304,17 +2218,17 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setDrawColor: (color) => {
     const c = /^#[0-9a-fA-F]{6}$/.test(color) ? color.toLowerCase() : get().drawColor;
-    try { localStorage.setItem('fs:drawColor', c); } catch { /* quota */ }
+    saveString('fs:drawColor', c);
     set({ drawColor: c });
   },
   setDrawOpacity: (opacity) => {
     const o = Math.min(1, Math.max(0.05, Number.isFinite(opacity) ? opacity : 1));
-    try { localStorage.setItem('fs:drawOpacity', String(o)); } catch { /* quota */ }
+    saveString('fs:drawOpacity', String(o));
     set({ drawOpacity: o });
   },
   setDrawWidth: (width) => {
     const w = Math.min(200, Math.max(0.5, Number.isFinite(width) ? width : 3));
-    try { localStorage.setItem('fs:drawWidth', String(w)); } catch { /* quota */ }
+    saveString('fs:drawWidth', String(w));
     set({ drawWidth: w });
   },
   setDrawToolActive: (active) => set(active ? { drawToolActive: true } : { drawToolActive: false, drawEraser: false }),
@@ -2325,18 +2239,17 @@ export const useAppStore = create<AppState>()((set, get) => ({
   // effect doesn't re-run and no emitted byte can move. History + autosave pick
   // them up via `shaderPalettes` identity.
   //
-  // Every one of them snapshots INLINE (`past` written in the same `set` as the
-  // mutation) rather than delegating to `pushHistory` — see the interface
-  // declaration above for the 600 ms colour-picker bracket that would otherwise
-  // swallow the entry.
+  // Every CRUD action records through `recordHistory`, never `pushHistory`:
+  // the colour picker holds its bracket open for 600 ms after a pick and
+  // pushHistory bails inside it, so "pick a colour, then Add palette" would go
+  // unrecorded (pinned by palettes.store.test.ts).
   addPalette: (input) => {
     const existing = get().shaderPalettes;
     if (existing.length >= MAX_PALETTES_PER_SHADER) return null;
     const created = makePalette(input, existing);
     if (!created) return null;
     set((state) => ({
-      past: [...state.past, snapshotOf(state)].slice(-MAX_HISTORY),
-      future: [],
+      ...recordHistory(state),
       shaderPalettes: [...state.shaderPalettes, created],
       isUndoRedo: false,
     }));
@@ -2386,20 +2299,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
       // at all — the autosave payload and project block then stay byte-identical
       // to what a build without per-colour names wrote.
       next[idx] = names ? { id: current.id, name, colors, names } : { id: current.id, name, colors };
-      return {
-        past: [...state.past, snapshotOf(state)].slice(-MAX_HISTORY),
-        future: [],
-        shaderPalettes: next,
-        isUndoRedo: false,
-      };
+      return { ...recordHistory(state), shaderPalettes: next, isUndoRedo: false };
     }),
 
   deletePalette: (id) =>
     set((state) => {
       if (!state.shaderPalettes.some((p) => p.id === id)) return state; // see pushHistory
       return {
-        past: [...state.past, snapshotOf(state)].slice(-MAX_HISTORY),
-        future: [],
+        ...recordHistory(state),
         shaderPalettes: state.shaderPalettes.filter((p) => p.id !== id),
         isUndoRedo: false,
       };
@@ -2416,12 +2323,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       const next = [...state.shaderPalettes];
       const [moved] = next.splice(from, 1);
       next.splice(to, 0, moved);
-      return {
-        past: [...state.past, snapshotOf(state)].slice(-MAX_HISTORY),
-        future: [],
-        shaderPalettes: next,
-        isUndoRedo: false,
-      };
+      return { ...recordHistory(state), shaderPalettes: next, isUndoRedo: false };
     }),
 
   setShaderPalettes: (palettes) => set({ shaderPalettes: palettes }),
@@ -2450,18 +2352,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   // the 'code-apply' event is logged at CodeEditor's two Apply gestures.
   requestCodeSync: () => set({ codeSyncRequested: true, previewCode: get().code }),
 
-  // DEAD as of 2026-09-05: nothing invokes this. The cost effect writes
-  // `totalCost` straight through `useAppStore.setState` (useSyncEngine.ts) so
-  // it can collapse with the per-sink cost writes into ONE setState, and
-  // `setSelectedHeadsetId` writes it inside its own `set`. Left in place
-  // because deleting it breaks something a grep for callers cannot see:
-  // evalHooks.test.ts slices this file between `requestCodeSync:` and
-  // `setTotalCost:` to isolate requestCodeSync's body, so removing the name
-  // makes `lastIndexOf` return -1, `slice(start, -1)` swallow the rest of the
-  // file, and the assertion fail with a message blaming requestCodeSync. Move
-  // that fence to a stable neighbour first (e.g. `importCostProfile:`).
-  setTotalCost: (cost) => set({ totalCost: cost }),
-
+  // (`totalCost` has no setter: the cost effect in useSyncEngine.ts and
+  // `setSelectedHeadsetId` each write it inside their own setState.)
   importCostProfile: (parsed) => { get().importCostProfiles([parsed]); },
 
   importCostProfiles: (parsedList, opts) => {
@@ -2563,15 +2455,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
         // close from the outer gesture can't cut this one short.
         return { interactionDepth: state.interactionDepth + 1 };
       }
-      // Snapshots inline rather than delegating to pushHistory because — unlike
-      // pushHistory — this deliberately does NOT honour `isUndoRedo`. That flag
-      // guards the sync engine's own reconciliation right after an undo; a
-      // pointer gesture is unambiguously a fresh user mutation, and letting a
-      // not-yet-cleared flag suppress THIS snapshot while coalescing is switched
-      // on would swallow the entire gesture's history and leave it unundoable.
+      // recordHistory, which does NOT honour `isUndoRedo`: a gesture is a fresh
+      // mutation, and a stale flag would swallow its whole history
+      // (docs/dev/graph-and-store.md, History).
       return {
-        past: [...state.past, snapshotOf(state)].slice(-MAX_HISTORY),
-        future: [],
+        ...recordHistory(state),
         coalescingHistory: true,
         interactionDepth: 1,
         isUndoRedo: false,
@@ -2591,26 +2479,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   pushHistory: () =>
     set((state) => {
-      // Return `state`, NOT `{}`. zustand compares with `Object.is(nextState,
-      // state)` and skips both the merge and the notify only on an identity
-      // hit — an empty object is a fresh identity, so a pushHistory that
-      // decided to do NOTHING still allocated a new store object and re-ran
-      // every mounted selector. updateNodeData calls this on every pointermove
-      // of a bracketed scrub, so it doubled the notification cost of every
-      // gesture: MEASURED at exactly 2 notifications per frame (60 scrub frames
-      // → 120), one real write and one no-op, against ~1,400 selectors on a
-      // 100-node graph. `setHoveredNode` already guards the same way.
-      if (state.isUndoRedo) return state;
-      // One snapshot per bracketed gesture. A value scrub fires a change per
-      // pointermove frame; without this each frame would deep-clone the whole
-      // graph (megabytes once images are embedded) AND bury undo under dozens
-      // of sub-pixel entries.
-      if (state.coalescingHistory) return state;
-      const entry = snapshotOf(state);
-      return {
-        past: [...state.past, entry].slice(-MAX_HISTORY),
-        future: [],
-      };
+      // Return `state`, NOT `{}`: zustand skips the notify only on an identity
+      // hit, and this runs on every pointermove of a bracketed scrub (one
+      // snapshot per gesture) — pinned by historyPayloadSharing.test.ts.
+      if (state.isUndoRedo || state.coalescingHistory) return state;
+      return recordHistory(state);
     }),
 
   undo: () => {
@@ -2666,9 +2539,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
   closeContextMenu: () =>
     set({ contextMenu: { open: false, x: 0, y: 0, type: 'canvas' } }),
 
-  // Guarded so an unchanged hover cannot notify: React Flow fires mouse-enter
-  // per node crossing, and every edge in the graph runs its selector on each
-  // notify.
   setActiveOutput: (nodeId) => {
     const target = get().nodes.find((n) => n.id === nodeId);
     if (!target || !isSinkNode(target)) return;
@@ -2686,9 +2556,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
         return { ...n, data: next } as AppNode;
       }) as AppNode[],
     }));
-  },
-  setHoveredNode: (id) => {
-    if (get().hoveredNodeId !== id) set({ hoveredNodeId: id });
   },
   setNodePreview: (target) => {
     // Value-equal targets are a no-op: the outside-press closer and a
@@ -2820,40 +2687,40 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   setIgnoreImageLimits: (v) => {
-    try { localStorage.setItem('fs:ignoreImageLimits', v ? '1' : '0'); } catch { /* */ }
+    saveFlag('fs:ignoreImageLimits', v);
     set({ ignoreImageLimits: v });
   },
 
   setTrackpadScroll: (v) => {
-    try { localStorage.setItem('fs:trackpadScroll', v ? '1' : '0'); } catch { /* */ }
+    saveFlag('fs:trackpadScroll', v);
     set({ trackpadScroll: v });
   },
 
   setAllowManyMaterials: (v) => {
-    try { localStorage.setItem(ALLOW_MANY_MATERIALS_KEY, v ? '1' : '0'); } catch { /* */ }
+    saveFlag(ALLOW_MANY_MATERIALS_KEY, v);
     set({ allowManyMaterials: v });
   },
 
 
   setOptionalCategory: (id, on) => {
-    try { localStorage.setItem(OPTIONAL_CATEGORY_KEYS[id], on ? '1' : '0'); } catch { /* */ }
+    saveFlag(OPTIONAL_CATEGORY_KEYS[id], on);
     // A fresh object so every subscriber selecting the whole record re-runs;
     // consumers that only need one flag select `s.optionalCategories.<id>`.
     set((state) => ({ optionalCategories: { ...state.optionalCategories, [id]: on } }));
   },
 
   setHideImageDownscaleWarning: (v) => {
-    try { localStorage.setItem('fs:hideImageDownscaleWarning', v ? '1' : '0'); } catch { /* */ }
+    saveFlag('fs:hideImageDownscaleWarning', v);
     set({ hideImageDownscaleWarning: v });
   },
 
   setImageConvertMode: (v) => {
-    try { localStorage.setItem('fs:imageConvert', v); } catch { /* */ }
+    saveString('fs:imageConvert', v);
     set({ imageConvertMode: v });
   },
 
   setHideImageConvertNotice: (v) => {
-    try { localStorage.setItem('fs:hideImageConvertNotice', v ? '1' : '0'); } catch { /* */ }
+    saveFlag('fs:hideImageConvertNotice', v);
     set({ hideImageConvertNotice: v });
   },
 
@@ -2888,7 +2755,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setSplitRatio: (ratio) => {
     const clamped = Math.max(0.25, Math.min(0.75, ratio));
-    try { localStorage.setItem('fs:splitRatio', String(clamped)); } catch { /* */ }
+    saveString('fs:splitRatio', String(clamped));
     set({ splitRatio: clamped });
   },
 
@@ -2898,12 +2765,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // — a ratio can't express "the tab bar's height" without knowing the pane
     // in px, so this stays the persistence-level safety net.
     const clamped = Math.max(RIGHT_SPLIT_MIN, Math.min(RIGHT_SPLIT_MAX, ratio));
-    try { localStorage.setItem(RIGHT_SPLIT_KEY, String(clamped)); } catch { /* */ }
+    saveString(RIGHT_SPLIT_KEY, String(clamped));
     set({ rightSplitRatio: clamped });
   },
 
   setShaderName: (name) => {
-    try { localStorage.setItem('fs:shaderName', name); } catch { /* */ }
+    saveString('fs:shaderName', name);
     set({ shaderName: name });
   },
 
@@ -2936,11 +2803,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setExportIncludeMesh: (include) => set({ exportIncludeMesh: include }),
 
-  setExportAsGlb: (asGlb) => set({ exportAsGlb: asGlb === true }),
   setExportKtx2: (on) => set({ exportKtx2: on === true }),
 
   setExportAllNodes: (all) => set({ exportAllNodes: all === true }),
-  setExportBuiltinModel: (on) => set({ exportBuiltinModel: on === true }),
 
   setPreviewForceWebGL2: (force) => set({ previewForceWebGL2: force }),
 
@@ -2968,7 +2833,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const { costProfiles, nodes, edges } = get();
     const isKnown = VR_HEADSETS.some((h) => h.id === id) || costProfiles.some((p) => p.id === id);
     if (!isKnown) return;
-    try { localStorage.setItem('fs:headsetId', id); } catch { /* */ }
+    saveString('fs:headsetId', id);
     setCostOverrides(costProfiles.find((p) => p.id === id)?.costs ?? null);
     const unwrapped = unwrapCollapsedGroupEdges(nodes, edges);
     // The seed is OMITTED on purpose, which means `costSeeds` — the same
@@ -2981,14 +2846,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // Every sink's own badge, the same rule useSyncEngine's cost effect
     // applies (a device change reprices without a graph change).
     const perSink = sinkCosts(nodes, unwrapped);
-    const badgesStale = nodes.some((n) => perSink.has(n.id) && n.data.cost !== perSink.get(n.id));
+    const badgesStale = sinkBadgesStale(nodes, perSink);
     set((state) => ({
       selectedHeadsetId: id,
       costVersion: state.costVersion + 1,
       totalCost: total,
-      ...(badgesStale
-        ? { nodes: state.nodes.map((n) => (perSink.has(n.id) && n.data.cost !== perSink.get(n.id) ? { ...n, data: { ...n.data, cost: perSink.get(n.id)! } } : n)) as AppNode[] }
-        : {}),
+      ...(badgesStale ? { nodes: stampSinkCosts(state.nodes, perSink) } : {}),
     }));
   },
 
@@ -3013,13 +2876,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
   // what an unvalidated string does to every node header on the canvas.
   setCostColorLow: (hex) => {
     if (!HEX6.test(hex)) return;
-    try { localStorage.setItem('fs:costColorLow', hex); } catch { /* */ }
+    saveString('fs:costColorLow', hex);
     set({ costColorLow: hex });
   },
 
   setCostColorHigh: (hex) => {
     if (!HEX6.test(hex)) return;
-    try { localStorage.setItem('fs:costColorHigh', hex); } catch { /* */ }
+    saveString('fs:costColorHigh', hex);
     set({ costColorHigh: hex });
   },
 
@@ -3029,7 +2892,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // only, so switching themes restores the other theme's backdrop.
     const isDark = get().codeEditorTheme === 'vs-dark';
     const key = isDark ? 'fs:nodeEditorBgColorDark' : 'fs:nodeEditorBgColor';
-    try { localStorage.setItem(key, hex); } catch { /* */ }
+    saveString(key, hex);
     set(
       isDark
         ? { nodeEditorBgColor: hex, nodeEditorBgColorDark: hex }
@@ -3038,7 +2901,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   setCodeEditorTheme: (theme) => {
-    try { localStorage.setItem('fs:codeEditorTheme', theme); } catch { /* */ }
+    saveString('fs:codeEditorTheme', theme);
     // Flip the app-wide chrome (tokens.css [data-theme="dark"]) and swap the
     // effective canvas backdrop to the newly-active theme's remembered color.
     applyThemeAttribute(theme);
@@ -3049,9 +2912,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   setLanguage: (lang) => {
-    try { localStorage.setItem('fs:lang', lang); } catch { /* */ }
+    const from = get().language;
+    saveString('fs:lang', lang);
     applyLangAttribute(lang);
     set({ language: lang });
+    // The ONE chokepoint for both switches (toolbar + the consent/disclosure
+    // dialogs'); a switch before Agree is a no-op, since no session is running.
+    if (from !== lang) evalLog('lang-switch', { from, to: lang });
   },
 
   groupSelection: (nodeIds) => {
@@ -3079,31 +2946,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // React Flow node.position is relative to parentId; if we're moving members
     // out of their parent we'd need to translate, but `sameParent` short-circuits
     // that — positions stay valid as-is.
-    type Measured = AppNode & { measured?: { width?: number; height?: number }; width?: number; height?: number };
-    const getSize = (n: AppNode) => {
-      // A member that is itself a GROUP may carry its size in any of the
-      // places `groupFrameSize` knows about, and `measured` is the pill's box
-      // while it is collapsed — so the frame is built around what is on screen.
-      if (n.type === 'group' && !(n.data as GroupNodeData).collapsed) return groupFrameSize(n);
-      return {
-        w: (n as Measured).measured?.width ?? (n as Measured).width ?? 160,
-        h: (n as Measured).measured?.height ?? (n as Measured).height ?? 60,
-      };
-    };
+    // A member that is itself a GROUP may carry its size in any of the
+    // places `groupFrameSize` knows about, and `measured` is the pill's box
+    // while it is collapsed — so the frame is built around what is on screen.
+    const getSize = (n: AppNode) =>
+      n.type === 'group' && !(n.data as GroupNodeData).collapsed
+        ? groupFrameSize(n)
+        : measuredNodeSize(n);
 
-    const PADDING = 24;
-    const HEADER_H = 22;
-    /**
-     * Extra room above the topmost member, on top of PADDING.
-     *
-     * A member's cost badge is absolutely positioned at `top: -14px` and rides
-     * the card's cost-scale transform (up to 1.35x, so ~19px above the card).
-     * With only PADDING between the header and the card, a costly node's badge
-     * sat flush against the header bar — the number and the group title read as
-     * one collided row. This buys the badge its own clear band.
-     */
-    const BADGE_CLEARANCE = 14;
-    const TOP_PADDING = PADDING + BADGE_CLEARANCE;
+    const TOP_PADDING = GROUP_PADDING + GROUP_BADGE_CLEARANCE;
 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const m of members) {
@@ -3114,10 +2965,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
       maxY = Math.max(maxY, m.position.y + h);
     }
 
-    const groupX = minX - PADDING;
-    const groupY = minY - TOP_PADDING - HEADER_H;
-    const groupW = (maxX - minX) + PADDING * 2;
-    const groupH = (maxY - minY) + TOP_PADDING + PADDING + HEADER_H;
+    const groupX = minX - GROUP_PADDING;
+    const groupY = minY - TOP_PADDING - GROUP_HEADER_H;
+    const groupW = (maxX - minX) + GROUP_PADDING * 2;
+    const groupH = (maxY - minY) + TOP_PADDING + GROUP_PADDING + GROUP_HEADER_H;
 
     const groupId = generateId();
     const groupNode: AppNode = {
@@ -3242,7 +3093,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // then translate the result back onto the selection's old top-left corner
     // so the organized cluster stays where the user had it.
     const absUnits = units.map((n) => ({ ...n, position: absOf(n) }) as AppNode);
-    const laid = autoLayout(absUnits, unitEdges, 'LR');
+    const laid = autoLayout(absUnits, unitEdges);
     let oldMinX = Infinity, oldMinY = Infinity, newMinX = Infinity, newMinY = Infinity;
     for (const n of absUnits) {
       oldMinX = Math.min(oldMinX, n.position.x);
@@ -3460,34 +3311,16 @@ export const useAppStore = create<AppState>()((set, get) => ({
     );
     const nodeById = new Map(state.nodes.map((n) => [n.id, n]));
 
-    /** Look up the data type of a port on a given node, falling back to 'any'. */
-    const portDataType = (
+    /** The registry port behind a handle, or undefined (no node, def or port). */
+    const portDef = (
       nodeId: string,
       handleId: string | null | undefined,
       side: 'input' | 'output',
-    ): TSLDataType => {
+    ) => {
       const n = nodeById.get(nodeId);
-      if (!n) return 'any';
-      const def = NODE_REGISTRY.get(n.data.registryType);
-      if (!def) return 'any';
-      const ports = side === 'input' ? def.inputs : def.outputs;
-      const port = ports.find((p) => p.id === (handleId ?? (side === 'output' ? 'out' : 'in')));
-      return port?.dataType ?? 'any';
-    };
-
-    /** Look up a port's display label. Falls back to the handle id when missing. */
-    const portLabel = (
-      nodeId: string,
-      handleId: string | null | undefined,
-      side: 'input' | 'output',
-    ): string | undefined => {
-      const n = nodeById.get(nodeId);
-      if (!n) return handleId ?? undefined;
-      const def = NODE_REGISTRY.get(n.data.registryType);
-      if (!def) return handleId ?? undefined;
-      const ports = side === 'input' ? def.inputs : def.outputs;
-      const port = ports.find((p) => p.id === (handleId ?? (side === 'output' ? 'out' : 'in')));
-      return port?.label ?? handleId ?? undefined;
+      const def = n && NODE_REGISTRY.get(n.data.registryType);
+      const ports = side === 'input' ? def?.inputs : def?.outputs;
+      return ports?.find((p) => p.id === (handleId ?? (side === 'output' ? 'out' : 'in')));
     };
 
     /** Look up a node's display label, used to name boundary sockets. */
@@ -3559,7 +3392,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
               socketId: `__out_${e.source}_${e.sourceHandle ?? 'out'}`,
               originalNodeId: e.source,
               originalHandleId: e.sourceHandle ?? 'out',
-              dataType: portDataType(e.source, e.sourceHandle, 'output'),
+              dataType: portDef(e.source, e.sourceHandle, 'output')?.dataType ?? 'any',
               name: nodeLabel(e.source),
             };
             outputSocketByPin.set(pinKey, socket);
@@ -3584,12 +3417,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
           const pinKey = `${e.target}\0${e.targetHandle ?? 'in'}`;
           let socket = inputSocketByPin.get(pinKey);
           if (!socket) {
+            const port = portDef(e.target, e.targetHandle, 'input');
             socket = {
               socketId: `__in_${e.target}_${e.targetHandle ?? 'in'}`,
               originalNodeId: e.target,
               originalHandleId: e.targetHandle ?? 'in',
-              dataType: portDataType(e.target, e.targetHandle, 'input'),
-              name: portLabel(e.target, e.targetHandle, 'input'),
+              dataType: port?.dataType ?? 'any',
+              name: port?.label ?? e.targetHandle ?? undefined,
             };
             inputSocketByPin.set(pinKey, socket);
             collapsedInputs.push(socket);
@@ -3737,7 +3571,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
       /** Always available — estimates where a box is missing. */
       padded: { w: number; h: number };
     } => {
-      const PADDING = 24;
       let w = 0;
       let h = 0;
       let exact = true;
@@ -3749,17 +3582,20 @@ export const useAppStore = create<AppState>()((set, get) => ({
         const mw = box.measured?.width ?? box.width;
         const mh = box.measured?.height ?? box.height;
         // React Flow has not measured this node yet — right after a load, or in
-        // a test env with no DOM. The 160x60 guesses below are fine for BUILDING
+        // a test env with no DOM. The estimates below are fine for BUILDING
         // a frame (there is nothing better) but must never become a FLOOR under
         // a size the user really chose: they overestimate a small node badly
         // enough to grow a correct frame on every expand.
         if (mw === undefined || mh === undefined) exact = false;
-        w = Math.max(w, m.position.x + (mw ?? 160));
-        h = Math.max(h, m.position.y + (mh ?? 60));
+        w = Math.max(w, m.position.x + (mw ?? EST_NODE_W));
+        h = Math.max(h, m.position.y + (mh ?? EST_NODE_H));
       }
       return {
         contain: exact ? { w, h } : null,
-        padded: { w: Math.max(w + PADDING, MIN_GROUP_W), h: Math.max(h + PADDING, MIN_GROUP_H) },
+        padded: {
+          w: Math.max(w + GROUP_PADDING, MIN_GROUP_W),
+          h: Math.max(h + GROUP_PADDING, MIN_GROUP_H),
+        },
       };
     };
 
@@ -3930,23 +3766,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set({ savedGroups: next });
   },
 
-  // Both libraries share ONE placement path — see placeLibraryGroup.
-  //
-  // They are reached through a dynamic import rather than at module scope, and
-  // the reason is not the ~40 KB of TSL source they carry: building either one
-  // runs every snippet through `codeToGraph`, so a STATIC import from the store
-  // — which every page in the app loads, node-editor.html and the Node Designer
-  // included — pins the Babel front end (@babel/parser + /traverse + /types)
-  // into the boot chunk for a table nothing touches until someone drops a tile.
-  //
-  // The drop is not visibly deferred: by the time either action can fire, the
-  // content browser has already rendered that tile out of the same module, so
-  // the import resolves from an already-loaded chunk in a microtask, well
-  // inside one frame. `.then` rather than an `async` body so the action still
-  // RETURNS undefined, matching the `=> void` it is declared as — nothing can
-  // usefully await a drop — which is also why the failed-fetch case is caught
-  // here instead of escaping as an unhandled rejection. A library that cannot
-  // be loaded places nothing, which is what a missing library means.
+  // Both libraries share ONE placement path (placeLibraryGroup) and load ON
+  // DEMAND: building either runs `codeToGraph`, so a static import would pin
+  // the Babel chunk into every page's boot (engine/unknownExpression.ts).
   instantiateBuiltinTexture: (textureId, position) => {
     import('@/registry/builtinTextures')
       .then(({ getBuiltinTextures }) => {
@@ -3981,7 +3803,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
       return;
     }
     const { group, members, edges } = cloneGroupSnapshot(saved, position);
-    // React Flow requires the parent container before its children in the array.
     get().pushHistory();
     // Re-run the target repairs against the COMBINED list, not just the
     // group's own nodes: a group may contain an Output (groupSelection filters
@@ -3996,7 +3817,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // ordinary sibling that contributes its own `parts` entry, and an arriving
     // UNTARGETED one an ordinary parked Output, as it already was.
     //
-    // Live graph FIRST, so its active sink keeps the flag and an arriving
+    // The group frame FIRST (React Flow wants a parent before its children),
+    // then the live graph, so its active sink keeps the flag and an arriving
     // Output lands as an ordinary INACTIVE one (`normalizeActiveOutput` keeps
     // the first `true`; the group's copies were cleared at load anyway).
     //

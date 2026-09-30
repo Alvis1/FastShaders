@@ -120,19 +120,11 @@ export const MARCH_PRIMARY_SOCKETS: readonly string[] = ['field', 'density'];
 /**
  * The splat Fns' parameters, in the order loader 0.8 passes them: `p` the
  * splat's object-space centre, `pw` that centre in world space, `n` a WORLD
- * space direction — toward the camera, since a splat has no normal, so the
- * normal nodes read the direction it faces — and `c` the splat's own colour (a
- * vec4: rgb, and alpha after the file's opacity), which the Vertex Color node
- * stands for. A LIT Splat Output (`values.lit`, the module's `lit: true`)
- * changes what `n` IS: the loader then passes each splat's own surface normal
- * — the thinnest axis of its covariance, world space, facing the camera — so
- * the normal nodes read a real normal there. Nothing may therefore derive a
- * VIEW direction from `n` (see Ray Direction in SPLAT_CONSTANTS).
+ * space direction (toward the camera; on a LIT node the splat's own surface
+ * normal) and `c` the splat's own colour (vec4), which Vertex Color reads.
  *
- * `n` is Normal (World) only. Normal (Local) is `n` taken back to OBJECT space
- * (a constant, SPLAT_CONSTANTS) — bound to `n` itself it read a world normal,
- * which stays put while the model turns under it, so a model-space pattern
- * slid across a turning splat.
+ * `n` is Normal (World) only, and nothing may derive a VIEW direction from it.
+ * See docs/dev/splats.md.
  */
 export const SPLAT_PARAMS: readonly ScopeParam[] = [
   { name: 'p', roots: new Set(['positionLocal', 'positionGeometry']) },
@@ -149,37 +141,18 @@ export const SPLAT_NORMAL_ROOTS: ReadonlySet<string> = new Set(['normalWorld', '
 export const SPLAT_FN_PARAMS: readonly string[] = SPLAT_PARAMS.map((p) => p.name);
 
 /**
- * Sources that would make a value differ between the four CORNERS of one
- * splat's quad inside the vertex stage — the quad has no UV attribute, a
- * screen coordinate there is a fragment-only builtin that does not compile,
- * and every position-derived reading is taken at the corner. Inside a splat
- * scope they are bound to the splat's centre instead, so every value the Fns
- * return stays a per-SPLAT value (a per-corner Move or Cut would tear the
- * quad apart).
+ * Roots that would differ between the four CORNERS of one splat's quad in the
+ * vertex stage. Inside a splat scope each is bound to the splat's CENTRE, so
+ * every value the Fns return stays per SPLAT (a per-corner Move or Cut would
+ * tear the quad). See docs/dev/splats.md.
  *
- * UV is a FRONT PROJECTION of the centre (2026-09-27): `splat-model` bakes the
- * scene centred to a longest side of SPLAT_MODEL_SIZE, so `p.xy` over that
- * size plus 0.5 maps the scene's front to 0–1 (u left to right, v bottom to
- * top, three's uv convention) — a Checker tiles across the splats, a Gradient
- * ramps up them and an Image lands on them like a slide, attached to the model
- * as it turns. It was `vec2(0.5)`, the same point for every splat, which made
- * every UV pattern one flat colour (the owner's "Checker is all white"). Screen
- * UV is the centre's own place on screen, three's convention (0,0 at the TOP
- * left on both backends): clip = P·MV·(p, 1), clip.xy / clip.w · (0.5, −0.5) +
- * 0.5. The clip position is ONE node read twice (the arrow's parameter), so
- * TSL computes it once — two spellings of it were two matrix products per
- * splat vertex. A UV node's own tiling, rotation and channel are still
- * replaced by the binding — downstream math (a Checker's count) is what scales
- * it.
- *
- * The UV projection is in the frame `splat-model` bakes (its default `size`,
- * SPLAT_MODEL_SIZE); a page that keeps the file's own units (`size: 0`) moves
- * every position- and UV-driven pattern with them, which the exported module's
- * header says (tslToShaderModule.ts).
- *
- * Normal (Local) is `n` in OBJECT space: `n` is world space, and a normal goes
- * back through the TRANSPOSE of the world matrix (the inverse of the normal
- * matrix the loader took it out with; the upper 3×3 of Mᵀ·(n, 0)).
+ *  - `uv`: a front projection of the centre; `p.xy` spans ±SPLAT_MODEL_SIZE/2.
+ *  - `screenUV`: the centre on screen, top-left origin; the clip position is
+ *    ONE node read twice (the arrow's parameter).
+ *  - `normalLocal`: `n` back in OBJECT space, through the world matrix's
+ *    transpose.
+ *  - the view/world readings three derives from `positionLocal`, restated
+ *    over the centre; `rayDirection` reads `pw`, never `n`.
  */
 export const SPLAT_CONSTANTS: readonly ScopeConstant[] = [
   { expr: `p.xy.div(${SPLAT_MODEL_SIZE}).add(0.5)`, imports: [], roots: new Set(['uv']) },
@@ -189,15 +162,6 @@ export const SPLAT_CONSTANTS: readonly ScopeConstant[] = [
     roots: new Set(['screenUV']),
   },
   { expr: 'modelWorldMatrix.transpose().mul(vec4(n, 0)).xyz.normalize()', imports: ['modelWorldMatrix', 'vec4'], roots: new Set(['normalLocal']) },
-  // The view- and world-space readings three derives from `positionLocal` —
-  // which in this vertex stage is the quad CORNER too — restated over the
-  // centre: `setupPositionView` is `modelViewMatrix.mul(positionLocal).xyz`,
-  // the view direction its negation normalised, the world direction
-  // `positionLocal.transformDirection(modelWorldMatrix)`, and the Ray
-  // Direction helper's `normalize(positionWorld − cameraPosition)` over the
-  // world centre. That one used to be `n.negate()`, which is the same number
-  // only while `n` is the direction to the camera — a lit Splat Output hands
-  // the Fns the surface normal as `n` instead.
   { expr: 'modelViewMatrix.mul(vec4(p, 1)).xyz', imports: ['modelViewMatrix', 'vec4'], roots: new Set(['positionView']) },
   {
     expr: 'modelViewMatrix.mul(vec4(p, 1)).xyz.negate().normalize()',
@@ -417,22 +381,15 @@ export function hasActiveFlag(node: AppNode): boolean {
  * the one that owns the module's top-level channels?
  *
  * "Empty" is exactly what `materialTargetNames(outputMaterials(node)[0])`
- * reports for material 0, restated over the raw fields so this can live in a
- * leaf: no usable name in `meshTargets` (the list), and, when there is no
- * list, none in the older single `meshTarget: { name }` either. A name out of
- * a `.fastshader` that `isUsableMeshName` refuses is NOT a binding — emission
- * would drop it too, so a node bound only to junk really is the default, and
- * counting it as targeted would make the module's default holder differ from
- * the one graphToCode resolves (`material0Target`). utils/activeOutput.test.ts
- * pins the two against a junk sweep ("read one rule"), which is the only thing
- * stopping the restatement drifting.
+ * reports, restated over the raw fields so this can live in a leaf: no usable
+ * name in `meshTargets`, and, when there is no list, none in the older single
+ * `meshTarget: { name }` either. A name `isUsableMeshName` refuses is NOT a
+ * binding (emission would drop it too), so a node bound only to junk is the
+ * default. utils/activeOutput.test.ts pins the restatement against a junk
+ * sweep ("read one rule").
  *
- * A node-level `gltfMaterialIndex` is a binding too. Today no such key
- * survives a restore path (`sanitizeOutputMaterials` deletes it — material 0
- * is never an index section) and `outputMaterials` never reads one, so the
- * clause is inert; it is here because the per-material Output split writes
- * that key at node level, and because `activeSink` also runs on live
- * in-session data that no sanitizer has seen.
+ * A node-level `gltfMaterialIndex` is a binding too (an import-built Output:
+ * written by the unfold, kept by the sanitizer, read by `outputMaterials`).
  */
 export function isUntargetedOutput(node: AppNode): boolean {
   if (node.data.registryType !== 'output') return false;
@@ -466,54 +423,18 @@ function firstWiredCustomSink(nodes: readonly AppNode[], edges: readonly AppEdge
  * preview's wire and window, the cost total, the Uniforms overlay, the export
  * and the A-Frame page all follow it, so it is resolved in exactly one place.
  *
- * Several output nodes (any mix of Output, Raymarch Output and Splat Output)
- * may coexist; the user picks one by clicking its preview socket, which writes
- * `data.activeOutput = true` on that node and clears it on every other sink
- * (`setActiveOutput`). A document that has never had a choice made carries NO
- * flag, and then the historical rule decides: the first WIRED custom sink
- * (`firstWiredCustomSink`), else the LOWEST-RANKED untargeted plain Output
- * (`lowestRankedUntargeted`).
- * That absent-key default is what keeps every saved graph, every built-in and
- * every exported `.js` emitting byte-identically — the `materials` /
- * noise-`signed` precedent: a document that has never been split carries no
- * `emitOrder` at all, every rank is 0, and the tie keeps array order.
+ * Election order: the node carrying `activeOutput: true` (written by
+ * `setActiveOutput`), else the first WIRED custom sink, else the LOWEST-RANKED
+ * untargeted plain Output. An ABSENT flag means "never chose", which keeps
+ * every older graph byte-identical.
  *
- * Deleting the active node simply removes its flag with it, so the fallback
- * takes over; no re-election is needed on any deletion path.
+ * ONLY AN UNTARGETED plain Output may be elected: a targeted one is a `parts`
+ * entry, and electing it would also hand it the module's top-level channels.
  *
- * ONLY AN UNTARGETED plain Output may be elected. A targeted one is a `parts`
- * entry — it shades the meshes it names and nothing else — so electing it
- * would hand it the module's top-level channels as well: the same material
- * painted twice, the module-level copy repainting every mesh no other material
- * claims, while it also became the cost seed, the Uniforms scope, the preview
- * window's owner and Preview mode's target. The retired
- * `nodes.find(registryType === 'output')` fallback picked by ARRAY ORDER, and
- * could therefore land on exactly such a node.
- *
- * MEASURED, so the danger is stated accurately rather than dramatically:
- * `gltfSectionBuilder` pushes the untargeted default (`gi_output`, rank 0)
- * BEFORE any index node, so on all five fixture shapes the first Output of an
- * import-built document is the DEFAULT and array order happens to answer
- * correctly at build time. What makes the array unusable anyway is that it does
- * not STAY that way: `liftChildrenAfterParents` splices a node into a new slot
- * on an ordinary drag-into-a-group and `useSyncEngine` reorders on every Apply,
- * either of which can put a targeted node in front with nothing on screen to
- * show it. The eligibility test is what closes the class, whatever the order;
- * `normalizeActiveOutput` strips the flag from an ineligible node, so the two
- * rules cannot disagree about who may be elected.
- *
- * NULL IS A REAL ANSWER. A document whose every plain Output is TARGETED has
- * no default material at all: the module emits `parts` alone and loader 0.6/0.8
- * leaves every unclaimed mesh on its authored one. Until the Output split there
- * was a LAST-RESORT `nodes.find(registryType === 'output')` term here, so that
- * document still got a sink — because one node then held every material, and
- * every consumer asking "what does this shader render" asked THIS function.
- * Both halves of that are gone: the consumers ask `contributingOutputs` /
- * `costSeeds` for the Output SET, and array order — which is what the term
- * picked by — is not a usable order, since `liftChildrenAfterParents` splices a
- * node into a new slot on an ordinary drag-into-a-group. With several targeted
- * Outputs it would have elected an arbitrary one as the cost seed, the Uniforms
- * scope and the resync's pairing partner, and a layout gesture could move it.
+ * NULL IS A REAL ANSWER: a document whose every plain Output is TARGETED has
+ * no default material and emits `parts` alone. Consumers asking what the
+ * shader renders read `contributingOutputs` / `costSeeds`.
+ * See docs/dev/outputs-and-materials.md (several output nodes).
  */
 export function activeSink(nodes: readonly AppNode[], edges: readonly AppEdge[]): AppNode | null {
   for (const n of nodes) {
@@ -527,22 +448,10 @@ export function activeSink(nodes: readonly AppNode[], edges: readonly AppEdge[])
 }
 
 /**
- * The LOWEST-RANKED untargeted plain Output — `defaultOutput`'s unflagged half,
- * restated here over the ONE `emitRank` accessor (utils/outputMaterials.ts
- * re-exports it from the same leaf, so there is no second copy to drift).
- *
- * It was `nodes.find(isUntargetedOutput)`, i.e. ARRAY order, while
- * `defaultOutput` had already moved to emit order — so on a split document
- * whose EMPTY section sits ahead of the real default in the array the two named
- * different nodes: `graphToCode` gave the module's top-level channels to one
- * while the preview socket, the preview window's owner and Preview mode's
- * target followed the other. `liftChildrenAfterParents` puts a node in that slot
- * on an ordinary drag-into-a-group, so it is reachable without touching a
- * single Output.
- *
- * Ties keep ARRAY order (strict `<`), exactly as `defaultOutput` does, so a
- * document that has never been split — every rank the absent-key 0 — elects the
- * node it always did.
+ * The LOWEST-RANKED untargeted plain Output — `defaultOutput`'s unflagged half
+ * over the same `emitRank`, so the two can never name different nodes. Emit
+ * order, never array order (see `outputsInEmitOrder`, utils/outputMaterials.ts);
+ * ties keep array order, so an unsplit document elects the node it always did.
  */
 function lowestRankedUntargeted(nodes: readonly AppNode[]): AppNode | null {
   let best: AppNode | null = null;
@@ -658,7 +567,19 @@ export interface MarchPartition {
   mainAlso: ReadonlySet<string>;
 }
 
-function closure(seed: Iterable<string>, next: (id: string) => readonly string[]): Set<string> {
+/** Incoming-edge adjacency (target → sources), for a reverse walk. */
+export function buildIncoming(edges: readonly AppEdge[]): Map<string, string[]> {
+  const incoming = new Map<string, string[]>();
+  for (const e of edges) {
+    const list = incoming.get(e.target);
+    if (list) list.push(e.source);
+    else incoming.set(e.target, [e.source]);
+  }
+  return incoming;
+}
+
+/** Every id reachable from `seed` through `next`, the seeds included. */
+export function closure(seed: Iterable<string>, next: (id: string) => readonly string[]): Set<string> {
   const out = new Set<string>();
   const queue = [...seed];
   while (queue.length) {

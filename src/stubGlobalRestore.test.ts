@@ -13,8 +13,9 @@ import { projectDocs } from './projectDocs';
 const SRC = new URL('.', import.meta.url).pathname;
 const STUB = 'vi.stub' + 'Global(';
 // A test-utils helper that stubs on the caller's behalf (installInProcessWorker
-// stubs `Worker`) puts its caller under the same rule.
-const STUBBERS = [STUB, 'installInProcess' + 'Worker('];
+// stubs `Worker`, stubLocalStorage stubs `localStorage`) puts its caller under
+// the same rule.
+const STUBBERS = [STUB, 'installInProcess' + 'Worker(', 'stubLocal' + 'Storage('];
 const RESTORE = 'vi.unstub' + 'AllGlobals(';
 
 function testFiles(dir: string): string[] {

@@ -23,6 +23,7 @@
 import { buildShaderModule, type MaterialPartsMirrorEntry } from './tslCodeProcessor';
 import { THREE_REVISION } from './threeRevision';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
+import { HEX6 } from '@/utils/colorUtils';
 import { soundUniformNamesIn } from '@/utils/soundAnalysis';
 import type { MaterialSettings } from '@/types';
 import { glbModuleHeaderLines } from './glbUsage';
@@ -52,22 +53,10 @@ export interface PropertyInfo {
 export const CDN_BASE = 'https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js';
 
 /**
- * The loader version a NEW export tells its embedding page to load.
- *
- * Every new export references 0.8 — deliberately unconditional. It is also the
- * loader every surface that runs a module loads (the preview and its XR popup
- * through `resolveAssetUrl`, the A-Frame tab through CDN_BASE, podest's stage
- * and VR popup by a literal pinned to this constant), so the editor never
- * previews on one loader while the file it hands the user runs another. Since
- * 0.8 the pin is correctness and not only parity: 0.8 carries what 0.6 lacks —
- * the plain-three.js FastShaders core, the GLTFLoader plugin and `materialParts`
- * dispatch. Shaders exported BEFORE this keep referencing 0.4/0.5/0.6 by URL and
- * are unaffected — which is exactly why those files are frozen, and why this
- * constant is a version string rather than an edit to one.
- *
- * NB the CDN serves @master, so a bumped version here is only real once the
- * submodule is pushed AND jsdelivr is purged for the new file — otherwise every
- * export 404s for its recipient while working perfectly for the author.
+ * The loader a NEW export tells its page to load: 0.8, unconditionally, and
+ * the one every surface that runs a module loads (docs/dev/codegen.md, A-Frame
+ * pipeline). A bump is real only once the submodule is pushed AND jsdelivr is
+ * purged (docs/dev/platform-and-release.md).
  */
 export const LOADER_FILE = 'a-frame-shaderloader-0.8.js';
 
@@ -136,7 +125,7 @@ function buildHeader(props: PropertyInfo[], tslCode = '', opts: ShaderModuleOpti
     // hexLiteral; a legit `#rrggbb` / finite number prints byte-identically.
     const safeDefault = (p: PropertyInfo): string =>
       typeof p.defaultValue === 'string'
-        ? (/^#[0-9a-fA-F]{6}$/.test(p.defaultValue) ? p.defaultValue : '#000000')
+        ? (HEX6.test(p.defaultValue) ? p.defaultValue : '#000000')
         : String(Number.isFinite(Number(p.defaultValue)) ? Number(p.defaultValue) : 0);
     const propExample = uniqueProps
       .map((p) => `${sanitizeIdentifier(p.name)}: ${safeDefault(p)}`)
@@ -195,11 +184,8 @@ function buildHeader(props: PropertyInfo[], tslCode = '', opts: ShaderModuleOpti
     header.push('// This shader embeds image texture(s) as data: URLs. If the host page sets a');
     header.push('// Content-Security-Policy, its img-src directive must allow data:.');
   }
-  // Live-audio properties (Mic node AND Audio Input node) are ordinary numbers
-  // here and nothing drives them, so an undriven download renders as permanent
-  // silence. Saying so — and saying exactly how to fix it — is the difference
-  // between a documented boundary and a recipient debugging a shader that looks
-  // broken with no error anywhere.
+  // The Sound node's properties are ordinary numbers here and nothing drives
+  // them, so an undriven download is permanent silence: say so, and how to fix it.
   const micNames = soundUniformNamesIn(tslCode);
   if (micNames.length > 0) {
     header.push('//');

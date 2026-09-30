@@ -45,10 +45,9 @@ describe('gltfCompression: the caps', () => {
 
 describe('gltfCompression: the too-large sentence names the cap it APPLIED', () => {
   it('the two keys are one sentence — only the limit differs', () => {
-    // Two keys rather than one `{limit}` sentence because previewMesh.ts's
-    // `fillMeshRefusal` fills {name}/{ext}/{size} only (see the key's comment).
-    // They are a drift pair: a reword of one must move the other, and lv.json
-    // carries both.
+    // Two keys rather than one `{limit}` sentence so the first keeps its "64"
+    // literal (previewMesh.test.ts pins it against MESH_MAX_BYTES). They are a
+    // drift pair: a reword of one must move the other, and lv.json carries both.
     expect(leaf.MESH_TOO_LARGE_LIMIT_KEY).toBe(leaf.MESH_TOO_LARGE_KEY.replace('max 64 MB', 'max {limit} MB'));
     expect(leaf.MESH_TOO_LARGE_KEY).not.toContain('{limit}');
   });

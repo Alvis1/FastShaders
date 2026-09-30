@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { loadSavedGroups } from './useAppStore';
+import { stubLocalStorage } from '@/test-utils';
 
 /**
  * fs:savedGroups is the THIRD untrusted restore path (same localStorage trust
@@ -16,12 +17,7 @@ describe('loadSavedGroups sanitizes fs:savedGroups as adversarial input', () => 
   });
 
   function stubStorage(value: string) {
-    const store: Record<string, string> = { 'fs:savedGroups': value };
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => store[k] ?? null,
-      setItem: (k: string, v: string) => { store[k] = v; },
-      removeItem: (k: string) => { delete store[k]; },
-    });
+    stubLocalStorage({ 'fs:savedGroups': value });
   }
 
   it('repairs poisoned exposedPorts and edge waypoints before they can reach render', () => {

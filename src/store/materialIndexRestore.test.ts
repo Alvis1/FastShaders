@@ -22,7 +22,7 @@ import {
   loadGraph,
   loadSavedGroupsReport,
 } from './useAppStore';
-import { HISTORY_IDLE, makeNode, makeEdge } from '@/test-utils';
+import { HISTORY_IDLE, makeNode, makeEdge, stubLocalStorage } from '@/test-utils';
 import {
   contributingOutputs,
   gltfIndexOf,
@@ -114,12 +114,7 @@ function reset() {
 }
 beforeEach(() => {
   reset();
-  ls = {};
-  vi.stubGlobal('localStorage', {
-    getItem: (k: string) => (Object.prototype.hasOwnProperty.call(ls, k) ? ls[k] : null),
-    setItem: (k: string, v: string) => { ls[k] = String(v); },
-    removeItem: (k: string) => { delete ls[k]; },
-  });
+  ls = stubLocalStorage();
 });
 afterEach(() => {
   reset();

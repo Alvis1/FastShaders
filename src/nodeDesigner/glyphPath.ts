@@ -23,15 +23,13 @@
  * tests.
  */
 
-import { splitCubic, splitQuad } from './glyphGeometry';
+import { lerp, splitCubic, splitQuad, type Pt } from './glyphGeometry';
 
 export interface PathSeg {
   /** the command letter, case preserved — lower case means relative */
   cmd: string;
   args: number[];
 }
-
-export interface Pt { x: number; y: number }
 
 /** argument count per command, keyed by the lower-case letter */
 export const PATH_ARGC: Record<string, number> = { m: 2, l: 2, h: 1, v: 1, c: 6, s: 4, q: 4, t: 2, a: 7, z: 0 };
@@ -121,8 +119,6 @@ export function degradeCurve(s: PathSeg): PathSeg {
 }
 
 /* ------------------------------------------------------- adding a point --- */
-
-function lerp(a: Pt, b: Pt, t: number): Pt { return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }; }
 
 /** Which segments can a point be inserted into? */
 export function canInsertInto(cmd: string): boolean {

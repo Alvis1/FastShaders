@@ -9,8 +9,8 @@ const shipped = Object.values(CUSTOM_GLYPHS).map((d) => (d as { svg?: string }).
 const attrValues = (attr: string) => shipped.flatMap((s) => Array.from(s.matchAll(new RegExp(attr + '="([^"]*)"', 'g'))).map((m) => m[1]));
 
 describe('GLYPH_PALETTE', () => {
-  it('matches the constants NodeGlyph.tsx draws with', () => {
-    // the eight design tokens, spelled exactly as the React module spells them
+  it('is the nine swatches, in bar order', () => {
+    // NodeGlyph.tsx's seven constants spelled as that module spells them, then Teal and white
     expect(GLYPH_PALETTE.map((p) => p.hex)).toEqual(
       ['#2B2B2B', '#8A8F9C', '#B4B7C0', '#F57C00', '#FF9800', '#2D6CDF', '#2E9E5B', '#1796A0', '#FFFFFF'],
     );

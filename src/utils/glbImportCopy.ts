@@ -372,11 +372,8 @@ export function glbDialogCopy(
         ? fillTemplate(T(GLB_IMPORT_KEYS.progress), { i: opts.progress.done, n: opts.progress.total })
         : null,
     restoreLabel: restore ? T(GLB_RESTORE_KEYS.restore) : null,
-    // The restore's summary sentence joins its own tooltip for the same
-    // reason the build's did.
-    // Its summary AND its replace warning: with each answer explaining itself,
-    // `replacesBoth` (the old combined sentence) has nothing left to combine —
-    // the build no longer replaces anything.
+    // Each answer explains itself: the restore's summary and its replace
+    // warning ride its own tooltip.
     restoreTitle: restore
       ? [
           T(GLB_RESTORE_KEYS.restoreTitle),
@@ -387,13 +384,8 @@ export function glbDialogCopy(
   };
 }
 
-/**
- * The build half of the dialog's WARNING lines (N11, N9).
- *
- * The counts and the memory estimate that used to lead this list are now the
- * header's two FACT rows (`GlbDialogCopy.facts`) — the redesign puts them
- * under the file name, above the Import heading, rather than in the prose.
- */
+/** The build half of the dialog's WARNING lines (N11, N9). The counts and the
+ *  memory estimate are the header's two FACT rows (`GlbDialogCopy.facts`). */
 function buildLines(plan: GlbDialogPlan, lines: GlbDialogLine[], lang: Language): void {
   const T = (key: string) => t(key, lang);
   const gate = plan.gate;

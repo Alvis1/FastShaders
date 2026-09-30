@@ -37,6 +37,7 @@ import {
   sanitizeJournal,
   type EvalEvent,
   type EvalEventType,
+  type EvalJournal,
 } from './telemetryModel';
 
 /** Graph facts the snapshot event records; supplied by EvalGate's bridge. */
@@ -211,7 +212,7 @@ function flushJournal(): void {
   }
 }
 
-function readJournal(): { sessionId: string; origin: number | null; events: EvalEvent[] } | null {
+function readJournal(): EvalJournal | null {
   let raw: string | null = null;
   try {
     raw = sessionStorage.getItem(EVAL_JOURNAL_KEY);
@@ -225,8 +226,7 @@ function readJournal(): { sessionId: string; origin: number | null; events: Eval
   } catch {
     return null;
   }
-  const journal = sanitizeJournal(parsed);
-  return journal ? { sessionId: journal.sessionId, origin: journal.origin, events: journal.events } : null;
+  return sanitizeJournal(parsed);
 }
 
 export function clearEvalJournal(): void {
@@ -245,8 +245,12 @@ export function clearEvalJournal(): void {
  * (a page that loads visible fires no visibilitychange, so without the
  * explicit re-open the flushed pre-reload `hidden` would leave the presence
  * model closed for the whole rest of the session).
+ *
+ * `context` rides on the `session-start` (or `recovered`) event — the state the
+ * session begins in that later events only record CHANGES of (the UI language:
+ * `lang-switch` logs each switch, so the start value is needed to read them).
  */
-export function startEvalSession(rec: EvalSessionRecord): void {
+export function startEvalSession(rec: EvalSessionRecord, context?: Record<string, unknown>): void {
   if (active) return;
   sessionId = rec.id;
   const pageOrigin = Math.round(performance.timeOrigin);
@@ -268,7 +272,7 @@ export function startEvalSession(rec: EvalSessionRecord): void {
     const lastT = events[events.length - 1].t;
     epochOffsetMs = Math.max(pageOrigin - clockOriginMs, lastT - Math.round(performance.now()) + 1);
     active = true;
-    evalLog('recovered');
+    evalLog('recovered', context);
     evalLog('visibility', {
       state: document.visibilityState === 'visible' ? 'visible' : 'hidden',
     });
@@ -281,7 +285,7 @@ export function startEvalSession(rec: EvalSessionRecord): void {
     epochOffsetMs = 0;
     clearEvalJournal();
     active = true;
-    evalLog('session-start');
+    evalLog('session-start', context);
   }
   attachListeners();
   flushJournal();

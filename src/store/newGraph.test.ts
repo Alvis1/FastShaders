@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { useAppStore, cancelPendingGraphSave, DEFAULT_SHADER_NAME } from '@/store/useAppStore';
-import { HISTORY_IDLE, makeNode, makeEdge } from '@/test-utils';
+import { HISTORY_IDLE, makeNode, makeEdge, stubLocalStorage } from '@/test-utils';
 import type { DrawStroke } from '@/utils/drawings';
 import type { PreviewMesh } from '@/utils/previewMesh';
 import type { MeshInventory } from '@/utils/meshInventory';
@@ -90,12 +90,7 @@ describe('newGraph', () => {
   it('persists the reset name, so a reload cannot restore the old target', () => {
     // The env is `node`, so localStorage must be stubbed — which also proves
     // the store's try/catch keeps NEW working with no storage at all.
-    const store: Record<string, string> = { 'fs:shaderName': 'waves' };
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => store[k] ?? null,
-      setItem: (k: string, v: string) => { store[k] = v; },
-      removeItem: (k: string) => { delete store[k]; },
-    });
+    const store = stubLocalStorage({ 'fs:shaderName': 'waves' });
     try {
       useAppStore.setState({ shaderName: 'waves' });
       useAppStore.getState().newGraph();

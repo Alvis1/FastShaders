@@ -17,7 +17,6 @@ import {
   GLB_MAX_CHUNKS,
   PLACEHOLDER_PNG_DATA_URI,
   buildGlbContainer,
-  decodeCanonicalBase64,
   decodeDataUri,
   encodeDataUri,
   parseGlbContainer,
@@ -313,7 +312,13 @@ describe('buildGlbContainer', () => {
 
 /* ── base64 ──────────────────────────────────────────────────────────────── */
 
-describe('decodeCanonicalBase64', () => {
+/** The strict decoder, reached the one way production reaches it. */
+function decodeCanonicalBase64(s: string, maxBytes: number): Uint8Array | null {
+  const r = decodeDataUri('data:;base64,' + s, 'buffer', maxBytes);
+  return r.ok ? r.bytes : null;
+}
+
+describe('canonical base64 (through decodeDataUri)', () => {
   it.each([
     ['QQ==', [0x41]],
     ['QUI=', [0x41, 0x42]],

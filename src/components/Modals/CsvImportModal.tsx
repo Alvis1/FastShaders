@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { MAX_COLUMNS } from '@/utils/csvParser';
+import { useModalKeys } from './useModalKeys';
 import './CsvImportModal.css';
 
 /**
@@ -16,14 +17,9 @@ export function CsvImportModal() {
   const language = useAppStore((s) => s.language);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!head) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') resolve('cancel');
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [head, resolve]);
+  useModalKeys(!!head, (e) => {
+    if (e.key === 'Escape') resolve('cancel');
+  });
 
   // Move focus into the dialog so keyboard users land on it and screen readers
   // announce it, rather than leaving focus behind on the canvas.

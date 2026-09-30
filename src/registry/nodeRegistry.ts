@@ -231,7 +231,7 @@ const definitions: NodeDefinition[] = [
     // The node is "Sound"; the TYPE stays `soundNode` because it is the key
     // inside every saved .fastshader and what codeToGraph/loadGraph match on —
     // renaming it would orphan existing graphs for a cosmetic gain. Same for
-    // the emitted `mic1_*` uniform base (see micAnalysis.SOUND_VAR_BASE).
+    // the emitted `sound<n>_*` uniform base (soundAnalysis.SOUND_VAR_BASE).
     label: 'Sound',
     category: 'input',
     // Emitted BY HAND (four `uniform(0)` lines, one per channel), so the
@@ -266,7 +266,7 @@ const definitions: NodeDefinition[] = [
     // stored number). They resolve very differently though: `gain` is applied
     // SHADER-side by codegen, while `smoothing` configures an AnalyserNode on
     // the CPU and so is resolved by evaluating its upstream chain on the CPU —
-    // see the mic convention in CLAUDE.md.
+    // see the Sound bullets in CLAUDE.md.
     defaultValues: SOUND_DEFAULT_VALUES,
     description:
       'Live sound loudness and three frequency bands, 0–1 each — from a microphone, another input device, or the audio already playing on this machine. Pick the source in the node settings. The values only move while capture is armed; a downloaded shader holds them at 0 unless the embedding page drives them. Also: audio, microphone, mic, system audio, music, speaker, tab, desktop, loopback, reactive, spectrum, fft',
@@ -299,10 +299,10 @@ const definitions: NodeDefinition[] = [
   },
   // The Image (Texture) node. Usually created by dropping an image file onto
   // the canvas (that path is not an add surface and is never gated); since GLB
-  // Phase 4 it is also an ordinary palette/Add-node entry that lands EMPTY —
-  // shipped HIDDEN through editorVisibility.json until it is finished. Category
-  // `input`, not `texture`: `texture` is an OPTIONAL category (off by default),
-  // and a def there would be unofferable until the user found that switch.
+  // Phase 4 it is also an ordinary palette/Add-node entry that lands EMPTY.
+  // Category `input`, not `texture`: `texture` is an OPTIONAL category (off by
+  // default), and a def there would be unofferable until the user found that
+  // switch.
   // It lives INSIDE this literal (not a separate const) because the Node
   // Designer's label/description splice locators scan only `definitions`.
   //
@@ -378,7 +378,6 @@ const definitions: NodeDefinition[] = [
       'Named float uniform — appears as an adjustable property slider in the preview and the exported shader. Also: uniform, parameter',
   },
   {
-    // The Colour node's uniform counterpart — what a Color converts INTO.
     // The Colour node's uniform counterpart — what a Color converts INTO.
     // Renders as a ColorNode too (rectangular variant), with its `name` drawn
     // inside the swatch; the type stays distinct because codegen emits
@@ -2052,7 +2051,6 @@ export function getFlowNodeType(def: NodeDefinition): FlowNodeType {
   // Places every socket itself (see SoundNode.tsx) — ShaderNode's row layout
   // cannot express its arrangement.
   if (def.type === 'soundNode') return 'sound';
-  // Same reason, plus a source <select> on the card that no row layout offers.
   // Both swatch nodes render as ColorNode: the constant is a circle, the named
   // uniform a rounded rectangle (ColorNode branches on registryType). The
   // uniform's `name` goes INSIDE the swatch, the way the constant already

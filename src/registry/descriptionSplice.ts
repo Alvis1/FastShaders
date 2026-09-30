@@ -32,9 +32,9 @@ export interface DescriptionSlot {
  * nodeRegistry.ts is a hand-maintained file: section banners (`// ===== MATH =====`),
  * deliberate blank lines, and per-entry formatting carry meaning for the humans who
  * edit it. Reprinting the AST through @babel/generator would round-trip the whole
- * file through Babel's printer, silently restyling every one of the ~1000 lines and
+ * file through Babel's printer, silently restyling every line of it and
  * dropping/reflowing comments — a one-word description tweak would land as a
- * thousand-line diff, and any generator-vs-source disagreement (quote style, trailing
+ * whole-file diff, and any generator-vs-source disagreement (quote style, trailing
  * commas, line width) would become a permanent phantom change.
  *
  * So Babel is used ONLY as a locator: it tells us the exact byte range of each
@@ -292,7 +292,7 @@ export function spliceDescriptions(
  * diff that also churns style, and re-serializing an UNCHANGED value produced
  * different bytes than it read. Preserving the delimiter makes the splice a true
  * identity for untouched slots, which is what lets the no-op test below assert
- * byte-equality over all 76 descriptions at once instead of having to special-case
+ * byte-equality over every description at once instead of having to special-case
  * unchanged ones out of the comparison.
  *
  * Hand-escaping is safe at exactly this call site: the only characters that can
@@ -408,7 +408,7 @@ const ALIAS_MARKER = ' Also: ';
  * Split a registry description into its human-facing head and its search-only
  * alias tail, mirroring displayDescription()'s `/\s*Also:/` split.
  *
- * The separator is uniformly `" Also: "` across all 27 tailed definitions (verified
+ * The separator is uniformly `" Also: "` across every tailed definition (verified
  * against the live registry), and no description contains a second "Also:". The
  * `\s*`/`\s*` in the pattern absorb the separator's surrounding spaces so that
  * joinAliases can put back exactly one — which is what makes the round-trip

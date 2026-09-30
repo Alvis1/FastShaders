@@ -20,7 +20,7 @@
  *
  * Not store state for a second reason: which wire the pointer is near is not a
  * fact about the graph. It must never push through history, the autosave or a
- * shared file (the `hoveredNodeId` / label-peek rule).
+ * shared file (the label-peek rule).
  *
  * PreviewLink's effect cleanup clears it, so an unmounted canvas cannot leave
  * stale wires for a later click to hit.
@@ -32,11 +32,6 @@ let live: readonly LinkWire[] = [];
 /** PreviewLink's per-frame publish. Pass an empty list to clear. */
 export function setLivePreviewWires(wires: readonly LinkWire[]): void {
   live = wires;
-}
-
-/** What is currently drawn — for tests and for anything that wants to look. */
-export function livePreviewWires(): readonly LinkWire[] {
-  return live;
 }
 
 /** The wire under a client-space point, or null. NodeEditor's pane click. */

@@ -1,35 +1,8 @@
 /**
- * Remembers WHERE THE USER WAS LOOKING on the node canvas across a reload.
- *
- * Everything else about the session already survives a refresh — the graph, the
- * split ratios, the asset bar's height, the tab you were on — so coming back to
- * a canvas re-framed by `fitView` reads as the app having lost your place. This
- * stores React Flow's viewport (pan + zoom) and restores it at boot.
- *
- * ## The format is two integers and a zoom, NOT JSON
- *
- * `"<x>,<y>,<zoom>"` — the same reasoning as `fs:nodeEditorScroll`: three
- * numbers need no `JSON.parse`, so this read needs neither a reviver nor the
- * shared `safeJson` deny-list. It is VALIDATED rather than coerced, because
- * localStorage is writable by anything at this origin: `Number('')` is 0 and
- * `Number('١٢')` is 12, and a viewport that is quietly wrong reads as the
- * feature not working rather than as a bug anyone reports.
- *
- * ## The viewport belongs to the REMEMBERED GRAPH
- *
- * {@link readStoredViewport} takes the presence of the graph autosave as its
- * gate. A stored viewport with no stored graph means the graph key was cleared
- * (or this is a first-ever visit) and the canvas is about to show the built-in
- * demo — restoring a pan measured against a document that no longer exists
- * would open the app on empty canvas, which is the exact "did my work vanish?"
- * impression this feature exists to prevent. Falling back to `fitView` there is
- * both correct and what every previous version did.
- *
- * There is deliberately no attempt to go finer than that (per-shader viewports,
- * a graph digest): every path that REPLACES the graph — import, NEW, the
- * desktop Work folder — already runs `fitView`, and React Flow reports that
- * programmatic move through the same `onMoveEnd` this module records, so the
- * stored value re-aims itself without anyone having to remember to clear it.
+ * Remembers the canvas pan and zoom across a reload, as `"<x>,<y>,<zoom>"`.
+ * Validated, never coerced: localStorage is writable by anything at this origin.
+ * Meaningful only beside a stored graph (`fs:graph`, or the desktop marker).
+ * Reasoning: docs/dev/storage-and-limits.md → fs:viewport.
  */
 
 export const VIEWPORT_KEY = 'fs:viewport';

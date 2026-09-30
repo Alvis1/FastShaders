@@ -3,7 +3,8 @@ import vm from 'node:vm';
 import { crc32, deflateSync, gzipSync } from 'node:zlib';
 import { vi } from 'vitest';
 import type { AppNode, AppEdge } from '@/types';
-import { encodeDataUri } from '@/utils/glbContainer';
+import { encodeDataUri, pad4, parseGlbContainer } from '@/utils/glbContainer';
+import { safeJsonReviver } from '@/utils/safeJson';
 import { fnv1a32Hex } from '@/utils/payloadDigest';
 import { FS_EXTRAS_KEY, FS_EXTRAS_VERSION, FS_MODULE_MIME, FS_SCENE_MARKER } from '@/engine/glbShaderContract';
 import {
@@ -71,6 +72,35 @@ export function makeEdge(
   } as unknown as AppEdge;
 }
 
+/**
+ * An in-memory `localStorage` for the `node` env (which has none): stubs
+ * getItem / setItem / removeItem / clear over `initial` and returns that SAME
+ * object, so a test seeds it (`stubLocalStorage({ 'fs:graph': text })`) and
+ * reads what the code under test wrote (`ls['fs:graph']`). As the real Storage
+ * does, `setItem` stores `String(v)` and `getItem` answers null for a key that
+ * was never set — an own-property test, so `getItem('constructor')` is null.
+ *
+ * It is a `vi.stubGlobal`, so the caller MUST `vi.unstubAllGlobals()` in an
+ * afterEach/afterAll (`isolate: false` shares a worker's globals between
+ * files); `stubGlobalRestore.test.ts` holds callers to that. A suite that
+ * needs storage to THROW or to fail per key keeps its own fake.
+ */
+export function stubLocalStorage(initial: Record<string, string> = {}): Record<string, string> {
+  vi.stubGlobal('localStorage', {
+    getItem: (k: string) => (Object.prototype.hasOwnProperty.call(initial, k) ? initial[k] : null),
+    setItem: (k: string, v: string) => {
+      initial[k] = String(v);
+    },
+    removeItem: (k: string) => {
+      delete initial[k];
+    },
+    clear: () => {
+      for (const k of Object.keys(initial)) delete initial[k];
+    },
+  });
+  return initial;
+}
+
 /* ── glTF / GLB fixtures (the ONE set) ───────────────────────────────────── */
 
 /*
@@ -81,11 +111,6 @@ export function makeEdge(
  * whose container half is this `makeGlb`. Every builder returns fresh bytes, so
  * a test may corrupt its copy freely.
  */
-
-// Arithmetic, never `(n + 3) & ~3`: a bitwise operator coerces through ToInt32,
-// so that spelling returns a NEGATIVE length from 2**31 up. Harmless at fixture
-// sizes, but it is the shape that made the repacker u32 overflow guard dead code.
-const pad4 = (n: number) => Math.ceil(n / 4) * 4;
 
 /**
  * A hand-built GLB (the research doc's §11 recipe): the 12-byte header (magic
@@ -343,6 +368,45 @@ export function packBinViews(parts: readonly Uint8Array[]): {
   const bin = new Uint8Array(pad4(length));
   parts.forEach((p, i) => bin.set(p, views[i].byteOffset));
   return { bin, views };
+}
+
+/**
+ * The glTF document + BIN around TRIANGLE_POSITIONS with extra bytes behind it:
+ * bufferView 0 is the triangle, 1, 2, … the `blobs` (4-aligned). `extra` keys
+ * REPLACE the base document's, as in `gltfPrimitiveDoc`.
+ */
+export function triangleWithBlobs(
+  extra: Record<string, unknown> = {},
+  blobs: readonly Uint8Array[] = [],
+): { doc: Record<string, unknown>; bin: Uint8Array<ArrayBuffer> } {
+  const { bin, views } = packBinViews([TRIANGLE_POSITIONS, ...blobs]);
+  const bufferViews = views.map((v) => ({ buffer: 0, ...v }));
+  return { doc: gltfPrimitiveDoc({ buffers: [{ byteLength: bin.length }], bufferViews, ...extra }), bin };
+}
+
+/** The JSON document of a model file (a GLB's JSON chunk, or `.gltf` text),
+ *  parsed through the shared reviver. Throws on a container the parser refuses. */
+export function glbDocOf(bytes: Uint8Array, kind: 'glb' | 'gltf' = 'glb'): Record<string, unknown> {
+  if (kind === 'gltf') return JSON.parse(new TextDecoder().decode(bytes), safeJsonReviver) as Record<string, unknown>;
+  const c = parseGlbContainer(bytes);
+  if (!c.ok) throw new Error('container: ' + c.error);
+  return JSON.parse(c.chunks.json, safeJsonReviver) as Record<string, unknown>;
+}
+
+/** A GLB's BIN chunk (a view, as the parser hands it out). Throws when there is none. */
+export function glbBinOf(bytes: Uint8Array): Uint8Array {
+  const c = parseGlbContainer(bytes);
+  if (!c.ok || !c.chunks.bin) throw new Error('no BIN chunk');
+  return c.chunks.bin;
+}
+
+/** The first offset of `needle` in `hay`, or -1. */
+export function indexOfBytes(hay: Uint8Array, needle: Uint8Array): number {
+  outer: for (let i = 0; i + needle.length <= hay.length; i++) {
+    for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer;
+    return i;
+  }
+  return -1;
 }
 
 /** `data:<mime>;base64,<canonical>` — the one spelling of a canonical src (glbContainer's encodeDataUri). */
@@ -821,21 +885,14 @@ export function makeKtx2Glb(opts: { ktx2: Uint8Array; fallbackPng?: Uint8Array; 
     ktx2,
     ...(fallbackPng ? [fallbackPng] : []),
   ];
-  const views: Array<{ offset: number; length: number }> = [];
-  let at = 0;
-  for (const p of parts) {
-    at = pad4(at);
-    views.push({ offset: at, length: p.length });
-    at += p.length;
-  }
-  const binLength = at;
-  const bin = new Uint8Array(pad4(binLength));
-  parts.forEach((p, i) => bin.set(p, views[i].offset));
+  const { bin, views } = packBinViews(parts);
+  // The buffer declares its UNPADDED length, as the generator script writes it.
+  const last = views[views.length - 1];
+  const binLength = last.byteOffset + last.byteLength;
 
   const bufferViews = views.map((v, i) => ({
     buffer: 0,
-    byteOffset: v.offset,
-    byteLength: v.length,
+    ...v,
     ...(i === 0 || i === 1 ? { target: 34962 } : i === 2 ? { target: 34963 } : {}),
   }));
   const json = {

@@ -5,14 +5,15 @@ one to three lines each, enough to stop someone re-introducing a bug. The paragr
 that explain *why* — the measurements, the browser-by-browser results, the approaches
 that were tried and reverted — live here and are read on demand.
 
-Nothing was rewritten in the move: **every paragraph in these files is the original
-CLAUDE.md text, verbatim.** If a rule in CLAUDE.md looks arbitrary, the answer is in
-the matching file below.
+Nothing was rewritten in the move: **the paragraphs in these files began as the original
+CLAUDE.md text, verbatim.** Since 2026-09-29 they also hold the reasoning that long
+source comments carried: a comment in `src/` states the invariant and points here. If a
+rule in CLAUDE.md looks arbitrary, the answer is in the matching file below.
 
 | File | Covers |
 |---|---|
-| [platform-and-release.md](platform-and-release.md) | Browser floor, offline/desktop builds, vendoring, the submodule + jsdelivr release order, the feedback button |
-| [eval-mode.md](eval-mode.md) | The user-study switch: arms, consent, telemetry vocabulary, the package, the upload |
+| [platform-and-release.md](platform-and-release.md) | Browser floor, offline/desktop builds, bundle chunks, vendoring, the submodule + jsdelivr release order, the feedback button |
+| [eval-mode.md](eval-mode.md) | The user-study switch: arms, consent and its text versions, telemetry vocabulary, the package, the upload |
 | [graph-and-store.md](graph-and-store.md) | Sync engine, store, history bracketing, ids, rAF loops, import auto-fit |
 | [storage-and-limits.md](storage-and-limits.md) | Every `fs:*` localStorage key, ASCII storage, image payload refs, viewport/scroll memory, cost profiles |
 | [codegen.md](codegen.md) | `graphToCode` / `codeToGraph` contracts, emission rules, alpha, discard, module helpers |

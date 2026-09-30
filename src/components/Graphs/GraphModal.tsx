@@ -4,21 +4,20 @@
  * Populates the zustand store with the subject's nodes/edges on open and clears
  * it on close — ShaderNode reads `s.nodes`/`s.edges`/`s.nodeVarNames` to derive
  * the edge values it renders, so a detached <ReactFlow> alone wouldn't paint
- * correctly. This is safe ONLY because src/nodeEditor.tsx calls
- * `setGraphPersistence(false)` before this component can ever mount — see the
- * banner in that file.
+ * correctly. Safe ONLY because the entry's first import, `nodeEditorBootstrap`,
+ * disables graph autosave — see that file.
  */
 import { useEffect, useMemo } from 'react';
 import { ReactFlow, ReactFlowProvider, Background, BackgroundVariant } from '@xyflow/react';
 import { useAppStore } from '@/store/useAppStore';
 // The shared registry — see flowTypes.ts for why this is imported rather than
-// mirrored here. Registering the REAL SoundNode is safe for the mic convention's
+// mirrored here. Registering the REAL SoundNode is safe for the
 // "armSound has exactly two click paths" rule: the node's arm light is one of
 // those two paths, and it gates itself on the node being wired — every graph
 // this modal shows is either a single edge-less node or a built-in
-// texture/preset (none contain a mic), so the light renders disabled. The same
-// reasoning covers the Audio Input node, whose arm light gates identically.
+// texture/preset (none contain a Sound node), so the light renders disabled.
 import { nodeTypes, edgeTypes } from '@/components/NodeEditor/flowTypes';
+import { useModalKeys } from '@/components/Modals/useModalKeys';
 import type { AppNode, AppEdge } from '@/types';
 import './GraphModal.css';
 
@@ -47,13 +46,9 @@ export function GraphModal({ title, subtitle, nodes, edges, code, onClose }: Gra
     };
   }, [nodes, edges, setNodes, setEdges]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  useModalKeys(true, (e) => {
+    if (e.key === 'Escape') onClose();
+  });
 
   const nodeCount = useMemo(() => nodes.filter((n) => n.type !== 'group').length, [nodes]);
   const groupCount = useMemo(() => nodes.filter((n) => n.type === 'group').length, [nodes]);

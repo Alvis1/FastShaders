@@ -13,34 +13,19 @@
  *
  * What it answers is what the user can act on BEFORE the sandbox spends time:
  *   - `.splat`  length % 32 and the row count (the format has no header);
- *   - `.ply`    a `ply` header ending at an exact `end_header` line within
- *               64 KiB, with one `format` line, not SuperSplat's chunked form
- *               ('ply-compressed'), exactly ONE element — `vertex`, carrying
- *               the 3DGS property set in known scalar types (else
- *               'ply-not-splat') — with no `f_rest_N` spherical-harmonic bands
- *               ('ply-sh' — the PLY loader would materialise 180 B/splat of
- *               them), stored BINARY (an ASCII body is refused as bad-splat with
- *               its own sentence, as the runtime refuses it), a vertex count
- *               under the cap ('splat-count') and a body LONG enough to hold
- *               those rows (its length is compared; its bytes are never read).
- *               The rules, in order, are listed above `sniffPly`;
- *   - `.spz`    gzip (count unknown until the sandbox inflates it; the ISIZE
- *               trailer is pre-checked against SPZ_MAX_DECODED_BYTES, and the
- *               sandbox's streamed counter is the real guard, since ISIZE is a
- *               claim), or a raw `NGSP` header — version 4 (zstd) is
- *               'spz-version', anything else 'bad-splat';
- *   - `.ksplat` the 4096-byte header and the section headers after it, at the
- *               offsets three r186's KSPLATLoader reads, refusing exactly what
- *               that loader would throw on, plus the count cap.
+ *   - `.ply`    the rules listed, in order, above `sniffPly`;
+ *   - `.spz`    gzip (count unknown until the sandbox inflates it; ISIZE is a
+ *               claim, so the sandbox's streamed counter is the real guard),
+ *               or a raw `NGSP` header, which is refused;
+ *   - `.ksplat` the header and section headers three r186's KSPLATLoader
+ *               reads, refusing what that loader would throw on.
  * A pass returns the file's DERIVED facts (`SplatFacts`), which `createPreviewMesh`
  * keeps on the mesh for the session and never persists.
  *
  * Every refusal is a structured `MeshRefusal` whose key is the English sentence
- * AND its lv.json key. podest.html carries a hand-written twin of these rules
- * (same literals, same sentences), drift-guarded by src/podestSplat.test.ts,
- * which runs it over the shared SPLAT_SNIFF_CASES corpus in src/test-utils.ts;
- * the runtime's own `.ply` gate is held to the same corpus by
- * src/fsSplatBundle.test.ts. A new rule needs a case in that corpus.
+ * AND its lv.json key. podest.html and the runtime carry twins of these rules,
+ * held to ONE corpus (SPLAT_SNIFF_CASES, src/test-utils.ts): a new rule needs
+ * a case there. See docs/dev/splats.md.
  */
 
 import {

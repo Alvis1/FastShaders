@@ -384,7 +384,10 @@ describe('the other surfaces', () => {
     // and ONE `MAX_INDEX_MATERIALS` counter for the whole `materialParts` map.
     expect(src).toContain('planIndexPartsAcross(outputs, signature).entries');
     expect(src).not.toContain('planIndexParts(materials, signature)');
-    expect(src).toContain('const partKeyLiteral = moduleStringLiteral;');
+    // Every key and signature name goes through THE encoder (rule R5).
+    expect(src).toContain('${moduleStringLiteral(part.name)}: {');
+    expect(src).toContain('${moduleStringLiteral(String(part.index))}: {');
+    expect(src).toContain('signature.map(moduleStringLiteral)');
   });
 
   it('an index-section materials list round-trips through the store shape unchanged', () => {

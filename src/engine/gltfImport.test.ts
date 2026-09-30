@@ -10,7 +10,7 @@
  * test, the stubbed localStorage is undone, the pending autosave cancelled.
  */
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
-import { HISTORY_IDLE } from '@/test-utils';
+import { HISTORY_IDLE, stubLocalStorage } from '@/test-utils';
 import { buildGlbImport, glbImportShaderName, type BuildGlbImportOptions } from './gltfImport';
 import { graphToCode } from './graphToCode';
 import { codeToGraph } from './codeToGraph';
@@ -311,12 +311,7 @@ function reset() {
 }
 beforeEach(() => {
   reset();
-  ls = {};
-  vi.stubGlobal('localStorage', {
-    getItem: (k: string) => (Object.prototype.hasOwnProperty.call(ls, k) ? ls[k] : null),
-    setItem: (k: string, v: string) => { ls[k] = String(v); },
-    removeItem: (k: string) => { delete ls[k]; },
-  });
+  ls = stubLocalStorage();
 });
 afterEach(() => {
   reset();

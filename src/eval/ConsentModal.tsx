@@ -4,6 +4,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { EVAL_DPO_CONTACT, EVAL_RETENTION_PERIOD, warnIfConsentIncomplete } from './evalMode';
 import { DataDisclosureModal } from './DataDisclosureModal';
+import { LangSwitch } from './LangSwitch';
 import '@/components/Modals/CsvImportModal.css';
 import './eval.css';
 
@@ -45,7 +46,6 @@ interface Props {
 
 export function ConsentModal({ onAgree, onDecline }: Props) {
   const language = useAppStore((s) => s.language);
-  const setLanguage = useAppStore((s) => s.setLanguage);
   const [participant, setParticipant] = useState('');
   const [showDisclosure, setShowDisclosure] = useState(false);
 
@@ -66,19 +66,7 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
           <div className="csv-import-modal__title" id="eval-consent-title">
             {t('FastShaders user study', language)}
           </div>
-          <button
-            type="button"
-            className="csv-import-modal__button eval-consent__lang"
-            onClick={() => setLanguage(language === 'lv' ? 'en' : 'lv')}
-            title={
-              language === 'lv'
-                ? 'Pārslēgt uz angļu valodu (Switch to English)'
-                : 'Pārslēgt uz latviešu valodu (Switch to Latvian)'
-            }
-            aria-label={language === 'lv' ? 'Switch to English' : 'Pārslēgt uz latviešu valodu'}
-          >
-            {language === 'lv' ? 'EN' : 'LV'}
-          </button>
+          <LangSwitch />
         </div>
 
         <div className="eval-consent__section">

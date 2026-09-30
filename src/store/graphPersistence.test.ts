@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { useAppStore, setGraphPersistence, cancelPendingGraphSave } from './useAppStore';
-import { makeNode } from '@/test-utils';
+import { makeNode, stubLocalStorage } from '@/test-utils';
 
 // Proves the guard node-editor.html relies on: with persistence off, NO store
 // mutation may ever reach localStorage['fs:graph'].
@@ -11,13 +11,7 @@ describe('setGraphPersistence', () => {
     // fresh stub mid-test.
     cancelPendingGraphSave();
     vi.useFakeTimers();
-    const store: Record<string, string> = {};
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => store[k] ?? null,
-      setItem: (k: string, v: string) => { store[k] = v; },
-      removeItem: (k: string) => { delete store[k]; },
-      __store: store,
-    });
+    stubLocalStorage();
   });
 
   // isolate: false shares this worker's globals with later files — leave no

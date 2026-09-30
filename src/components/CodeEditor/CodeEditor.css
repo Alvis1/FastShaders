@@ -16,7 +16,7 @@
   align-items: center;
   justify-content: center;
   background: rgba(33, 150, 243, 0.12);
-  border: 2px dashed var(--text-accent, #2196F3);
+  border: 2px dashed var(--text-accent);
   border-radius: var(--border-radius-sm);
   pointer-events: auto;
 }
@@ -90,7 +90,6 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-sizing: border-box;
   height: var(--ctl-size);
   padding: 0 16px;
   font-size: var(--font-size-sm);
@@ -145,7 +144,8 @@
   gap: var(--space-2);
 }
 
-.code-editor__errors {
+/* Error count chip; `--warn` recolours it for warnings. */
+.code-editor__badge {
   font-size: var(--font-size-xs);
   color: #e74c3c;
   background: rgba(231, 76, 60, 0.15);
@@ -153,84 +153,62 @@
   border-radius: var(--border-radius-sm);
 }
 
-.code-editor__warnings {
-  font-size: var(--font-size-xs);
+.code-editor__badge--warn {
   color: #e67e22;
   background: rgba(230, 126, 34, 0.15);
-  padding: 2px 8px;
-  border-radius: var(--border-radius-sm);
 }
 
-.code-editor__save {
+/* Filled tab-bar button: `--apply` is the neutral fill, `--accent` the blue one. */
+.code-editor__btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-sizing: border-box;
   height: var(--ctl-size);
   padding: 0 14px;
   font-size: var(--font-size-sm);
   font-weight: 600;
   line-height: 1;
   color: white;
+  border: none;
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.code-editor__btn--apply {
   background: var(--text-secondary);
-  border: none;
-  border-radius: var(--border-radius-sm);
-  cursor: pointer;
-  transition: background 0.15s;
 }
 
-.code-editor__save:hover {
-  background: var(--text-primary);
-}
-
-.code-editor__action-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  height: var(--ctl-size);
-  padding: 0 14px;
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  line-height: 1;
-  color: white;
+.code-editor__btn--accent {
   background: var(--text-accent);
-  border: none;
-  border-radius: var(--border-radius-sm);
-  cursor: pointer;
-  transition: background 0.15s;
 }
 
-.code-editor__action-btn:hover {
+.code-editor__btn:hover {
   background: var(--text-primary);
 }
 
-.code-editor__error-details {
+/* Error banner under the tab bar; `--warn` recolours it when only warnings remain. */
+.code-editor__banner {
   padding: var(--space-2) var(--space-3);
   background: rgba(231, 76, 60, 0.08);
   border-bottom: 1px solid rgba(231, 76, 60, 0.2);
   flex-shrink: 0;
 }
 
-.code-editor__error-line {
+.code-editor__banner--warn {
+  background: rgba(230, 126, 34, 0.08);
+  border-bottom-color: rgba(230, 126, 34, 0.2);
+}
+
+.code-editor__banner-line {
   font-size: var(--font-size-xs);
   font-family: var(--font-mono);
   color: #c0392b;
   line-height: 1.5;
 }
 
-.code-editor__warning-details {
-  padding: var(--space-2) var(--space-3);
-  background: rgba(230, 126, 34, 0.08);
-  border-bottom: 1px solid rgba(230, 126, 34, 0.2);
-  flex-shrink: 0;
-}
-
-.code-editor__warning-line {
-  font-size: var(--font-size-xs);
-  font-family: var(--font-mono);
+.code-editor__banner-line--warn {
   color: #e67e22;
-  line-height: 1.5;
 }
 
 /* ===== Dark theme touch-ups =====
@@ -241,22 +219,23 @@
   background: rgba(255, 255, 255, 0.05);
 }
 
-/* Save = neutral filled button; keep it a dark-stable surface (its --text-secondary
+/* Apply = neutral filled button; keep it a dark-stable surface (its --text-secondary
    fill would otherwise flip to a light gray under white text). */
-:root[data-theme="dark"] .code-editor__save {
+:root[data-theme="dark"] .code-editor__btn--apply {
   background: #676c75;
 }
 
-:root[data-theme="dark"] .code-editor__save:hover {
+:root[data-theme="dark"] .code-editor__btn--apply:hover {
   background: #797f89;
 }
 
-/* Action buttons stay accent-blue at rest; only the --text-primary hover breaks. */
-:root[data-theme="dark"] .code-editor__action-btn:hover {
+/* Accent buttons stay blue at rest; only the --text-primary hover breaks. */
+:root[data-theme="dark"] .code-editor__btn--accent:hover {
   background: #3f6fd0;
 }
 
-:root[data-theme="dark"] .code-editor__error-line {
+/* Error lines only — a warning line keeps its orange in both themes. */
+:root[data-theme="dark"] .code-editor__banner-line:not(.code-editor__banner-line--warn) {
   color: #ff6b6b;
 }
 

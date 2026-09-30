@@ -141,7 +141,7 @@ export function EvalGate() {
     const rec = readEvalSession();
     if (!rec) return;
     initEvalBridge(makeBridge());
-    startEvalSession(rec);
+    startEvalSession(rec, { language: useAppStore.getState().language });
   }, []);
 
   // Budget crossings, as EVENTS rather than something to reconstruct from
@@ -188,7 +188,7 @@ export function EvalGate() {
     };
     writeEvalSession(rec);
     initEvalBridge(makeBridge());
-    startEvalSession(rec);
+    startEvalSession(rec, { language: useAppStore.getState().language });
     // Clean slate: the session starts from an empty document, not whatever
     // the machine's autosave, mesh cache, or uniform tunings held — see
     // cleanSlateForStudy for why newGraph() alone would leak the previous

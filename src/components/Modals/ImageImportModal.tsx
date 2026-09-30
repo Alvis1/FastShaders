@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
+import { useModalKeys } from './useModalKeys';
 import './CsvImportModal.css';
 
 export type ImageImportChoice = 'convert' | 'keep';
@@ -36,21 +37,16 @@ export function ImageImportModal({ request, onResolve }: Props) {
     if (request) setRemember(false);
   }, [request]);
 
-  useEffect(() => {
-    if (!request) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onResolve('keep', false);
-        return;
-      }
-      // Swallow the rest: the canvas binds its shortcuts on window and only
-      // skips INPUT/TEXTAREA targets, so a keypress meant for this dialog
-      // would otherwise edit the graph behind it. Capture phase runs first.
-      if (e.key !== 'Tab') e.stopPropagation();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [request, onResolve]);
+  useModalKeys(!!request, (e) => {
+    if (e.key === 'Escape') {
+      onResolve('keep', false);
+      return;
+    }
+    // Swallow the rest: the canvas binds its shortcuts on window and only
+    // skips INPUT/TEXTAREA targets, so a keypress meant for this dialog
+    // would otherwise edit the graph behind it. Capture phase runs first.
+    if (e.key !== 'Tab') e.stopPropagation();
+  }, true);
 
   // Focus Yes so Enter takes the common answer.
   useEffect(() => {
@@ -74,7 +70,7 @@ export function ImageImportModal({ request, onResolve }: Props) {
                 .replace('{count}', () => String(request.count))
             : t('Convert image to optimized format?', language)}
         </div>
-        <label className="limit-modal__ignore">
+        <label className="csv-import-modal__check">
           <input
             type="checkbox"
             checked={remember}

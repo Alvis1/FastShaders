@@ -11,10 +11,11 @@
  * BUILD has its own refusals (a module error, a model mismatch, a repack cap);
  * those surface in the export dialog's failed view, not here.
  *
- * `effectiveExportFormat` is the one answer every surface uses (the
- * `effectiveTab` precedent): the flag is DERIVED at render and never written
- * back, so unloading the model leaves it set and reloading one brings the
- * `.glb` straight back.
+ * `effectiveExportFormat` is the PACKABILITY half of the format answer:
+ * surfaces never call it — they ask engine/exportModel.ts `exportFormatFor`,
+ * which picks the model each surface would pack (`glbCandidate`) and hands it
+ * here. DERIVED at render (the `effectiveTab` precedent), nothing stored, so
+ * loading a packable model brings the `.glb` straight back.
  */
 import type { PreviewMesh } from './previewMesh';
 import type { SplatKind } from './splatSniff';
@@ -60,14 +61,14 @@ export function glbExportAvailability(mesh: GlbExportMesh): GlbExportAvailabilit
 }
 
 /**
- * THE effective export format. `exportAsGlb` is compared EXACTLY against true:
- * it is store state a future import path could hand junk, and a coercing read
- * would turn `'false'` into a `.glb` export.
+ * THE effective export format: ONE `.glb` exactly when the surface has a model
+ * to pack (`mesh` — engine/exportModel.ts `glbCandidate` decides which, per
+ * surface) and that model can be packed; the bundle otherwise, and always in a
+ * study session. There is no stored choice: EXPORT is CONTEXTUAL (owner,
+ * 2026-09-28) — a custom model on screen exports as the `.glb`, a built-in
+ * shape as the shader file — and the popover's smaller button is the one-shot
+ * other way.
  */
-export function effectiveExportFormat(
-  exportAsGlb: boolean,
-  mesh: GlbExportMesh,
-  evalMode: boolean,
-): ExportFormat {
-  return !evalMode && exportAsGlb === true && glbExportAvailability(mesh).ok ? 'glb' : 'bundle';
+export function effectiveExportFormat(mesh: GlbExportMesh, evalMode: boolean): ExportFormat {
+  return !evalMode && glbExportAvailability(mesh).ok ? 'glb' : 'bundle';
 }

@@ -24,7 +24,7 @@ import { rowStyle, labelStyle } from './menuShared';
 
 /** Compact fixed/exponential formatting — data columns range over many decades
  *  and a plain toFixed turns 1.2e-7 into "0.00". */
-export function formatStat(v: number): string {
+function formatStat(v: number): string {
   if (!Number.isFinite(v)) return '—';
   if (v === 0) return '0';
   const mag = Math.abs(v);
@@ -69,18 +69,18 @@ export function ColumnStatsRows({ stats, name }: { stats: ColumnStats | null; na
  * which range so they can pick the right socket to wire.
  */
 export function DataNodeStats({ nodeId }: { nodeId: string }) {
-  const nodes = useAppStore((s) => s.nodes);
+  // THIS node, not `s.nodes`: the per-id idiom of every menu here (menuShared).
+  const node = useAppStore((s) => s.nodes.find((n) => n.id === nodeId)) as AppNode | undefined;
   const language = useAppStore((s) => s.language);
 
   const rows = useMemo(() => {
-    const node = nodes.find((n) => n.id === nodeId) as AppNode | undefined;
     const data = node?.data as ShaderNodeData | undefined;
     if (!data || data.registryType !== 'dataNode') return [];
     return (data.dynamicOutputs ?? []).map((port) => {
       const column = columnForHandle(data, port.id);
       return { id: port.id, label: port.label ?? port.id, stats: column ? columnStats(column) : null };
     });
-  }, [nodeId, nodes]);
+  }, [node]);
 
   if (rows.length === 0) return null;
 
@@ -118,24 +118,21 @@ export function useUpstreamColumnStats(
   nodeId: string,
   inputHandle: string,
 ): { stats: ColumnStats | null; name: string | undefined } {
-  const nodes = useAppStore((s) => s.nodes);
-  const edges = useAppStore((s) => s.edges);
+  // getTargetEdges, NOT a raw scan: codegen traces the column off the
+  // UNWRAPPED edge, and a collapsed group's boundary edge names the GROUP
+  // (no Data payload), so the menu would disagree with what is baked in.
+  // Both selectors return ctx/store objects, so unrelated notifies bail.
+  const edge = useAppStore((s) =>
+    getTargetEdges(s.nodes, s.edges, nodeId).find((e) => e.targetHandle === inputHandle));
+  const sourceId = edge?.source;
+  const src = useAppStore((s) =>
+    (sourceId === undefined ? undefined : s.nodes.find((n) => n.id === sourceId))) as AppNode | undefined;
 
   return useMemo(() => {
-    // getTargetEdges, NOT a raw scan: graphToCode unwraps at its own entry and
-    // then traces the column off the UNWRAPPED edge, so a raw scan would see a
-    // collapsed group's boundary edge (source = the GROUP id, which carries no
-    // Data payload), report "no statistics" and fall back to the manual domain
-    // while codegen still bakes the real min/max — the exact disagreement the
-    // dataRange rule exists to prevent ("the numbers on screen are the numbers
-    // baked in").
-    const edge = getTargetEdges(nodes, edges, nodeId).find((e) => e.targetHandle === inputHandle);
-    if (!edge) return { stats: null, name: undefined };
-    const src = nodes.find((n) => n.id === edge.source) as AppNode | undefined;
     const data = src?.data as ShaderNodeData | undefined;
-    const column = columnForHandle(data, edge.sourceHandle);
-    if (!column) return { stats: null, name: undefined };
+    const column = edge ? columnForHandle(data, edge.sourceHandle) : null;
+    if (!edge || !column) return { stats: null, name: undefined };
     const port = data?.dynamicOutputs?.find((o) => o.id === edge.sourceHandle);
     return { stats: columnStats(column), name: port?.label };
-  }, [nodeId, inputHandle, nodes, edges]);
+  }, [edge, src]);
 }

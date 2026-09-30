@@ -4,7 +4,8 @@ import { Position, useStore, useUpdateNodeInternals, type NodeProps } from '@xyf
 import type { ShaderFlowNode, NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
-import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
+import { CAT_HEX } from '@/utils/colorUtils';
+import { useCostChrome } from './useCostChrome';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { makeConnectionRevealSelector, REVEAL_TEMP_OPACITY } from './connectionReveal';
@@ -19,7 +20,7 @@ import { useHeaderTip } from './headerTip';
 import { useWiredLabels } from './ShaderNode';
 import { LiveEdgeValue } from './LiveEdgeValue';
 import { SOUND_DEFAULT_VALUES } from '@/utils/soundSettings';
-import { readSoundLevels, soundArmIntent, subscribeSound, getSoundStatus } from '@/utils/soundSession';
+import { readSoundLevels, subscribeSound, getSoundStatus } from '@/utils/soundSession';
 import { portLabel } from '@/i18n';
 import {
   SOUND_BODY_W,
@@ -40,17 +41,10 @@ import { NODE_BORDER_WIDTH } from './nodeFrame';
  *
  * It hears a microphone, any other audio INPUT device (which is how a loopback
  * driver like BlackHole / VB-Cable is reached), or the machine's own output via
- * a tab/window/screen share. Those used to be two separate nodes; the Audio
- * Input node was folded into this one on 2026-09-08, and what came across is
- * the SOURCE picker below. There is exactly one analyser behind it, which is
- * why this node is a singleton on the canvas — see
- * `components/NodeEditor/singletonNodes.ts`.
- *
- * NAMING: the label is "Sound", but the file, the registry type (`soundNode`),
- * the React Flow type (`mic`) and the emitted uniform base (`mic1_level`) all
- * still say `mic`. Those last three are persisted contracts — the key inside
- * every saved `.fastshader` and the name inside every exported module — so the
- * module names follow them rather than drifting from them.
+ * a tab/window/screen share (the source is picked in the settings menu). There
+ * is exactly one analyser behind it, which is why this node is a singleton on
+ * the canvas — see `components/NodeEditor/singletonNodes.ts` and
+ * docs/dev/node-types.md.
  *
  * WHY its own component: ShaderNode derives socket positions from in-flow ROWS,
  * so the layout is whatever the row helper produces — which is why this node
@@ -58,40 +52,24 @@ import { NODE_BORDER_WIDTH } from './nodeFrame';
  * to the exposed ones re-flowed the whole card). Every node that looks
  * deliberate — Time, the noise family — is a component like this one: header
  * plus fixed content, with every handle ABSOLUTELY POSITIONED at a chosen
- * offset. Nothing a socket does can then move anything else. A `<select>` on
- * the card could not be expressed there at all.
+ * offset. Nothing a socket does can then move anything else.
  *
- * Geometry lives in micGeometry.ts — shared with the asset-browser tile and
+ * Geometry lives in soundGeometry.ts — shared with the asset-browser tile and
  * the auto-layout footprint, so a redesign here can't strand a stale replica.
  */
 
 export const SoundNode = memo(function SoundNode({ id, data, selected }: NodeProps<ShaderFlowNode>) {
   const def = NODE_REGISTRY.get(data.registryType);
-  // Rules-of-Hooks note: this return sits ABOVE the hooks below. Safe because
-  // `def` cannot flip defined<->undefined on a MOUNTED instance: React Flow keys
-  // node components by node.id, every registryType the app writes is in
-  // NODE_REGISTRY (`unknown` included), and nothing mutates registryType in place
-  // to or from an unregistered value. A tampered .fastshader with an unknown
-  // registryType renders null for the whole life of that node. Moving the return
-  // below the hooks is NOT a mechanical edit here (ShaderNode/PreviewNode hooks
-  // dereference `def`) — see CLEAN-3.
+  // Early return above the hooks is safe: React Flow keys node components by id
+  // and registryType never changes on a mounted node.
   if (!def) return null;
   const headerTip = useHeaderTip(def);
 
   const varName = useAppStore((s) => s.nodeVarNames[id]);
   const language = useAppStore((s) => s.language);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
-  const costColorLow = useAppStore((s) => s.costColorLow);
-  const costColorHigh = useAppStore((s) => s.costColorHigh);
-  // The header mixes into the card, and the card follows the theme
-  // (getCostColor). `codeEditorTheme` is the app-wide dark switch; the store
-  // field keeps its historical name.
-  const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
   const catHex = CAT_HEX[def.category as NodeCategory] ?? CAT_HEX.unknown;
-  const costColor = getCostColor(data.cost, costColorLow, costColorHigh, darkTheme);
-  const headerTextColor = getContrastColor(costColor);
-  const costTextColor = getCostTextColor(data.cost, costColorLow, costColorHigh);
-  const costScale = getCostScale(data.cost);
+  const { costColor, headerTextColor, costTextColor, costScale } = useCostChrome(data.cost);
 
   // Opt-in parameter sockets, same rules as the noise nodes' pos/scale: hidden
   // until ticked in Node Settings, revealed dimmed while a wire is dragged
@@ -121,37 +99,38 @@ export const SoundNode = memo(function SoundNode({ id, data, selected }: NodePro
   // the shader is mid-rebuild — and the node can answer "is it hearing
   // anything?" without the preview panel being open at all.
   const status = useSyncExternalStore(subscribeSound, getSoundStatus, getSoundStatus);
+  // The loop exists only while a capture is live or starting: an idle Sound
+  // node runs no rAF callback at all.
+  const live = status === 'on' || status === 'starting';
   const meterRef = useRef<HTMLSpanElement>(null);
   useEffect(() => {
+    const el = meterRef.current;
+    if (!live || !el) return;
     let raf = 0;
     // Last transform actually written, so a meter parked at one value costs
-    // nothing. DISARMED is the resting state of every Sound node nobody has
-    // clicked, and there v is a constant 0 — the identical string was being
-    // assigned 60x/s forever.
+    // nothing.
     let drawn: string | null = null;
     const tick = () => {
       raf = requestAnimationFrame(tick);
-      const el = meterRef.current;
-      if (!el) return;
       // Hidden — a member of a COLLAPSED group is only `display: none`'d (the
       // store keeps it MOUNTED on purpose) and rAF is per-document, so nothing
       // else throttles this loop. `offsetParent` is null exactly under
-      // `display: none`, and skipping also skips the analyser read below,
-      // which is the part that actually costs something on an ARMED node.
+      // `display: none`, and skipping also skips the analyser read below.
       if (el.offsetParent === null) return;
-      // Idle costs one branch per frame — cheaper and far less error-prone than
-      // tearing an rAF loop up and down around a permission prompt.
-      const v = soundArmIntent() ? readSoundLevels().level : 0;
       // scaleX rather than width: transform-only, so the compositor handles it
       // and a 60 Hz meter never triggers layout inside the viewport.
-      const next = `scaleX(${v.toFixed(3)})`;
+      const next = `scaleX(${readSoundLevels().level.toFixed(3)})`;
       if (next === drawn) return;
       drawn = next;
       el.style.transform = next;
     };
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, []);
+    return () => {
+      cancelAnimationFrame(raf);
+      // Back to rest, so a stopped meter never freezes at its last reading.
+      el.style.transform = 'scaleX(0)';
+    };
+  }, [live]);
 
   return (
     <div

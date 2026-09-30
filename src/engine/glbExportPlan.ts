@@ -41,7 +41,7 @@ import {
 import { modelSignatureMatches, type ModelSignature } from './materialPartsContract';
 import { gltfUvMatrix, readImageUvMapping } from '@/utils/imageUvMapping';
 import { readImageTextureSpec } from '@/utils/imageTextureSpec';
-import { decodeDataUri, sniffImageFormat } from '@/utils/glbContainer';
+import { IMAGE_MIME_FORMAT, decodeDataUri, sniffImageFormat } from '@/utils/glbContainer';
 import { isLosslessWebpBytes } from '@/utils/imageCodec';
 import { HARD_MAX_IMAGE_ENCODED_CHARS } from '@/utils/imageNode';
 import { IMAGE_ASSET_KEY_RE } from './glbShaderContract';
@@ -104,12 +104,6 @@ const FACTOR_LEAF_TYPES: ReadonlySet<string> = new Set([
   'vertexColor',
   'property_color',
   'property_float',
-]);
-
-const MIME_FORMAT: ReadonlyMap<string, string> = new Map([
-  ['image/png', 'png'],
-  ['image/jpeg', 'jpeg'],
-  ['image/webp', 'webp'],
 ]);
 
 /* ── the texture transform ───────────────────────────────────────────────── */
@@ -206,7 +200,7 @@ interface Asset {
 function payloadOf(src: string): RepackPayload | null {
   const d = decodeDataUri(src, 'image', HARD_MAX_IMAGE_ENCODED_CHARS);
   if (!d.ok) return null;
-  const format = MIME_FORMAT.get(d.mime);
+  const format = IMAGE_MIME_FORMAT.get(d.mime);
   if (format === undefined || sniffImageFormat(d.bytes) !== format) return null;
   const mime = d.mime as RepackPayload['mime'];
   return {
@@ -254,35 +248,12 @@ export function planGlbExport(
     return a;
   };
 
-  // A custom sink drives (a Raymarch or Splat Output): the module is that
-  // sink's own program, so no material slot maps.
-  //
-  // The CROSS-NODE plan over `contributingOutputs`, so this reads exactly the
-  // `materialParts` table graphToCode emits — same claim set, same cap counter,
-  // same order. Each entry names the NODE its section lives on, which is what
-  // `edgeInto` below needs now that the materials no longer share one node. The
-  // custom-sink check stays here (see `contributingOutputs`: `activeSink`'s
-  // fallbacks are array-order dependent, so it must be asked over the caller's
-  // own list).
+  // A custom sink (Raymarch/Splat Output) drives: the module is its program, no slot maps.
+  // Signature and sections come from the SAME cross-node plan graphToCode emits
+  // (`moduleSignatureOf` + `planIndexPartsAcross`), never `findDefaultOutput`
+  // (array order, and the default carries no signature); see outputs-and-materials.md.
   const customDrives = drivingCustomSink(nodes, E) !== null;
   const outputs = customDrives ? [] : contributingOutputs(nodes);
-  // The signature comes off the LOWEST-RANKED contributing Output carrying an
-  // index section — graphToCode's own read, so the plan and the module can
-  // never describe two different models.
-  //
-  // NOT `findDefaultOutput(nodes)`. That is `outputs[0]` in ARRAY order, and
-  // since the split the untargeted DEFAULT carries no signature at all (the
-  // sanitizer keeps one only beside a surviving index section, and the unfold
-  // replicates it onto the index nodes) — so it read null and the export wrote
-  // a model with NO texture slot maps at all, silently, for every import-built
-  // shader that had been through a restore path.
-  // Through `moduleSignatureOf` — the ONE accessor graphToCode and the Output
-  // node also ask. This was that function's body re-spelled inline, i.e. a
-  // second copy of "which signature governs", which is exactly the drift the
-  // cross-node plans were extracted to stop: a change to how the module picks
-  // its signature would have moved emission and this plan apart with
-  // `errors: []`, the export writing texture slots for a different model than
-  // the module describes.
   const signature = moduleSignatureOf(outputs);
   const sections = planIndexPartsAcross(outputs, signature).entries;
   if (sections.length > 0 && !modelSignatureMatches({ materials: signature as string[] }, baseSignature)) {

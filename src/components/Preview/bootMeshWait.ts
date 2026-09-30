@@ -3,7 +3,7 @@
  * preview must not attach a document inside it.
  *
  * A LEAF (no imports at all), so the rule is node-testable, for the reason
- * `previewGeometryPref.ts` states: ShaderPreview is a ~3000-line .tsx with an
+ * `previewGeometryPref.ts` states: ShaderPreview is a large .tsx with an
  * iframe, postMessage and localStorage in it and has never been rendered in a
  * test, so the rule has to live somewhere a test can reach it.
  *

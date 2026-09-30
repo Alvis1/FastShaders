@@ -31,7 +31,7 @@ describe('autoLayout — top-edge alignment', () => {
       makeEdge('b', 'out', 'c', 'a'),
       makeEdge('c', 'out', 'd', 'a'),
     ];
-    const laid = autoLayout(nodes, edges, 'LR');
+    const laid = autoLayout(nodes, edges);
     const tops = ['a', 'b', 'c', 'd'].map((id) => topOf(laid, id));
     // Every node on the single path shares one top baseline.
     for (const t of tops) expect(t).toBeCloseTo(tops[0], 5);
@@ -52,7 +52,7 @@ describe('autoLayout — top-edge alignment', () => {
       makeEdge('c', 'out', 'd', 'a'),
       makeEdge('branch', 'out', 'c', 'b'), // side branch feeding the spine
     ];
-    const laid = autoLayout(nodes, edges, 'LR');
+    const laid = autoLayout(nodes, edges);
     const spineTops = ['a', 'b', 'c', 'd'].map((id) => topOf(laid, id));
     for (const t of spineTops) expect(t).toBeCloseTo(spineTops[0], 5);
     // The branch is not on the spine, so it stacks below the top baseline.
@@ -72,7 +72,7 @@ describe('autoLayout — top-edge alignment', () => {
       makeEdge('src', 'out', 'y', 'a'),
       makeEdge('src', 'out', 'z', 'a'),
     ];
-    const laid = autoLayout(nodes, edges, 'LR');
+    const laid = autoLayout(nodes, edges);
     for (const rank of ranks(laid)) {
       const sorted = [...rank].sort((p, q) => p.position.y - q.position.y);
       for (let i = 1; i < sorted.length; i++) {
@@ -92,7 +92,7 @@ describe('autoLayout — top-edge alignment', () => {
         makeEdge('c', 'out', 'd', 'a'),
         makeEdge('c', 'out', 'e', 'a'),
       ];
-      return autoLayout(nodes, edges, 'LR');
+      return autoLayout(nodes, edges);
     };
     const first = build();
     const second = build();
@@ -102,7 +102,7 @@ describe('autoLayout — top-edge alignment', () => {
   it('flows left-to-right: a feeds b so a sits left of b', () => {
     const nodes = [makeNode('a', 'mul'), makeNode('b', 'mul')];
     const edges = [makeEdge('a', 'out', 'b', 'a')];
-    const laid = autoLayout(nodes, edges, 'LR');
+    const laid = autoLayout(nodes, edges);
     expect(topOf(laid, 'a')).toBeCloseTo(topOf(laid, 'b'), 5); // one baseline
     expect(laid.find((n) => n.id === 'a')!.position.x).toBeLessThan(
       laid.find((n) => n.id === 'b')!.position.x,
@@ -110,7 +110,7 @@ describe('autoLayout — top-edge alignment', () => {
   });
 
   it('returns the input unchanged for an empty graph', () => {
-    expect(autoLayout([], [], 'LR')).toEqual([]);
+    expect(autoLayout([], [])).toEqual([]);
   });
 });
 

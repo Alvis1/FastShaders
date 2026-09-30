@@ -110,7 +110,6 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-sizing: border-box;
   height: var(--ctl-size);
   padding: 0 var(--space-3);
   font-family: var(--font-sans);
@@ -207,24 +206,9 @@
    refuses to shrink below its content, so without it this grows to fit all 76
    rows and pushes the overflow back out to the clipped root — no scrollbar.
 
-   `overflow-anchor: none` is load-bearing too, and for a reason that is easy to
-   undo by accident: scrollMemory.ts OWNS this scrollport's offset across the
-   whole growth window after mount, and the browser must not also adjust it.
-   Chrome's scroll anchoring exists to keep the visible row still while content
-   ABOVE it changes size — which is precisely what happens here, since every
-   Graph cell is zero-height until FitNodeHeading measures its replica and the
-   table grows by ~600px a frame or two AFTER the restore has landed. MEASURED
-   (headless Chrome 1500x900, park at 6000 mid-table, reload 8x with no input at
-   all): the restore lands at top=6000 with scrollHeight=11349, then at t=190ms
-   one scroll event takes top to 6376 as scrollHeight reaches 11954 — anchoring
-   compensating for the rows above the viewport getting taller. The restore is
-   over by then, so the save gate reads that nudge as the user scrolling and
-   persists 6376; the next reload aims there and anchoring adds another ~400:
-   6000 → 6376 → 6772 → 7201 → 7657 → 8153 → 8663 → 9173 → 9683, i.e. the top row
-   walks 2-3 rows per refresh until it hits the bottom. With this one
-   declaration all 8 reloads land on top=6000 and the stored value stays
-   "6000,0". (The bottom-parked case never showed it: at maxTop the port is
-   clamped, so anchoring has nowhere to push.) */
+   `overflow-anchor: none` is load-bearing too: scrollMemory.ts owns this
+   scrollport's offset, and scroll anchoring re-nudges it after every reload
+   (docs/dev/storage-and-limits.md, fs:nodeEditorScroll; pinned by scrollMemory.test.ts). */
 .gp__tablewrap {
   flex: 1 1 auto;
   min-height: 0;

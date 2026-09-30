@@ -1,28 +1,9 @@
 /**
- * WHICH sound the Sound node listens to — the pure half, so it is node-testable
- * (the vitest env has no jsdom, and everything that touches a MediaStream is
- * untestable by construction).
- *
- * Two kinds, because no single browser API covers what users mean by "the audio
- * playing on this machine":
- *
- *   - `system` — `getDisplayMedia`. The user picks a tab, window or screen in
- *     the browser's own share sheet and ticks its audio box. This is the one
- *     that hears a YouTube tab or a media player with nothing installed, and it
- *     is Chromium-only (Safari and Firefox implement the API and ignore audio).
- *   - `device` — `getUserMedia` with an exact `deviceId`. Normally a microphone,
- *     but a LOOPBACK driver (BlackHole, VB-Cable, VoiceMeeter) appears in the
- *     very same list, which is how this path hears system sound on the browsers
- *     and on the macOS desktop shell where `getDisplayMedia` carries none.
- *
- * The choice is SESSION-only and never reaches `node.data.values`. A `deviceId`
- * is origin-scoped and rotates when site data is cleared, so it is meaningless
- * in a shared `.fastshader`; storing one would ride the autosave, undo history
- * and project embed while adding a fingerprinting surface for nothing. That is
- * the rule `soundSession.setSoundSource` already states, and splitting it — keeping
- * `system` because it happens to be portable while dropping device ids — would
- * leave the node half-remembered, which is harder to explain than either
- * consistent answer.
+ * WHICH sound the Sound node listens to — the pure, node-testable half.
+ * `system` = `getDisplayMedia` (a shared tab, window or screen); `device` =
+ * `getUserMedia` with an exact id (a microphone, or a loopback driver).
+ * The choice is SESSION-only and never reaches `node.data.values`.
+ * Reasoning: docs/dev/node-types.md → Sound.
  */
 
 /** The sound source the Sound node is pointed at. */
@@ -34,35 +15,16 @@ export type SoundSourceRef =
 export const SYSTEM_SOUND_SOURCE: SoundSourceRef = { kind: 'system' };
 
 /**
- * The system's DEFAULT audio input, expressed as a device with an empty id.
- *
- * An empty `deviceId` is not a hole in the model, it is the useful spelling of
- * "whatever the OS considers the default": `startDeviceCapture` already treats a
- * falsy id as "add no `deviceId` constraint", which is exactly that request.
- *
- * It also has to exist for a reason the spec forces on us. Before the page holds
- * ANY media permission, `enumerateDevices()` does not merely blank the labels —
- * Chrome returns a single placeholder entry per kind whose `deviceId` is the
- * empty string too. So on first run there is no real id to select, and without
- * this entry the device half of the picker is unusable until the user has
- * granted a permission they can only reach by... using the picker.
+ * The system's DEFAULT audio input: a device with an EMPTY id, which is valid
+ * (`startDeviceCapture` adds no `deviceId` constraint for it). Before the page
+ * holds a media permission it is the only device a browser offers.
  */
 export const DEFAULT_DEVICE_SOURCE: SoundSourceRef = { kind: 'device', deviceId: '' };
 
 /**
- * The default for a freshly placed node: the DEFAULT INPUT DEVICE, i.e. the
- * microphone.
- *
- * This node was called Microphone until 2026-09-08, when the separate Audio
- * Input node was folded into it and `system` became one of its sources. Every
- * `.fastshader` saved before that holds a `soundNode` whose author meant "the
- * microphone", and arming one must still open the microphone — so the default
- * stays where it was rather than following the absorbed node's `system`.
- *
- * It is also the better first run for a node named "Sound": `system` cannot be
- * armed without the browser's share sheet, and on Safari and Firefox it comes
- * back with no audio track at all, so defaulting to it would make the common
- * first click fail on two of three browsers.
+ * A freshly placed node listens to the default input, i.e. the microphone:
+ * files saved before the Audio Input fold meant that, and `system` needs a
+ * share sheet and carries no audio on two of three browsers.
  */
 export const DEFAULT_SOUND_SOURCE: SoundSourceRef = DEFAULT_DEVICE_SOURCE;
 

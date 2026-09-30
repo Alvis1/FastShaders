@@ -34,8 +34,8 @@
  *       keys from its name table in every status, so on a mismatched model a
  *       mirror cannot paint unrelated meshes that share a name.
  *   R5  Every string key and signature name goes through `moduleStringLiteral`
- *       (engine/partKeyLiteral.ts, which graphToCode aliases as
- *       `partKeyLiteral`: JSON.stringify + the star-slash and `<` escapes).
+ *       (engine/partKeyLiteral.ts: JSON.stringify + the star-slash and `<`
+ *       escapes).
  *   R6  codeToGraph and scriptToTSL DROP mirror keys before the byte-identical
  *       body merge and never turn them into name sections; emission and parse
  *       land in ONE commit.
@@ -47,14 +47,14 @@
  * SIGNATURE_TOTAL_CHARS_MAX) live here and nowhere else: the reader, the
  * builder, the Output node's sanitizer, emission and the parse all import them.
  *
- * A leaf: no imports.
+ * A leaf: no imports. `GLTF_MATERIAL_INDEX_MAX` and `emitRank` sit here, not
+ * in utils/outputMaterials.ts (which re-exports them), because the leaf
+ * utils/sdfPartition.ts needs both and may not import outputMaterials (the
+ * costTable TDZ rule); a second copy is what that rule forbids.
  */
 
-export const MATERIAL_PARTS_KEY = 'materialParts';
-export const MATERIAL_PARTS_MIRROR_KEY = 'materialPartsMirror';
-export const MODEL_SIGNATURE_KEY = 'modelSignature';
-
-/** The loader's resource bound on applied index entries. The editor's section cap must stay at or below it. */
+/** The loader's resource bound on applied index entries; the editor's section cap must stay at or below it.
+ *  Test-only: pins the loader's bound (shaderloaderMaterialParts.test.ts). */
 export const LOADER_MATERIAL_PARTS_MAX = 256;
 export const SIGNATURE_MATERIALS_MAX = 1024;
 export const SIGNATURE_NAME_MAX = 1024;
@@ -69,18 +69,9 @@ export const SIGNATURE_NAME_MAX = 1024;
 export const SIGNATURE_TOTAL_CHARS_MAX = 65536;
 export const MATERIAL_PART_KEY_RE = /^(0|[1-9][0-9]{0,3})$/;
 
-/**
- * The highest glTF material index a section may be bound to — the range of
- * `MATERIAL_PART_KEY_RE` above, stated as a number so the two can be pinned
- * against each other.
- *
- * Held HERE, beside the key regex it must agree with, rather than in
- * utils/outputMaterials.ts (which re-exports it): `isUntargetedOutput` in
- * utils/sdfPartition.ts asks the same question when it decides whether an
- * Output may be ELECTED, and sdfPartition is a LEAF that nothing in the store
- * cycle may drag `outputMaterials` into (the costTable TDZ rule) — so the one
- * definition has to sit in a leaf both can import.
- */
+/** The highest glTF material index a section may be bound to: the range of
+ *  `MATERIAL_PART_KEY_RE`, as a number so the two can be pinned against each
+ *  other. Lives in this leaf: sdfPartition imports it (see header). */
 export const GLTF_MATERIAL_INDEX_MAX = 9999;
 
 /** A real, in-range glTF material index — never coerced (`'1'` from a
@@ -106,31 +97,10 @@ export interface EmitOrdered {
 }
 
 /**
- * THE strict accessor for an Output node's emitted position — the order its
- * `parts` / `materialParts` entry takes in the module, and nothing else.
- *
- * It exists because the nodes ARRAY is not a usable order and never can be:
- * `liftChildrenAfterParents` splices a node into a new slot on an ordinary
- * drag-into-a-group, and `useSyncEngine` reorders on every Apply. Deriving
- * emitted order from it would rewrite the module on a layout gesture —
- * `previewCode` advances, the 3D preview recompiles, the autosave dirties,
- * `__partPixel<n>` renumbers, and first-claim-wins flips on a duplicate mesh
- * name — all with `errors: []` and nothing on screen to explain it.
- *
- * Non-integer is 0, so a `.fastshader` claiming `"3"`, `3.5`, `NaN` or an
- * object cannot reorder anything; ties are broken by node id AT THE SORT, so
- * two nodes seeded 0 (two folded Outputs unfolded in one document) still have
- * one stable total order.
- *
- * Held HERE rather than in utils/outputMaterials.ts (which re-exports it), for
- * exactly the reason `GLTF_MATERIAL_INDEX_MAX` above is: `activeSink` in
- * utils/sdfPartition.ts must elect the LOWEST-RANKED untargeted Output — the
- * same node `defaultOutput` picks, or the two name different nodes on a split
- * document whose empty section was reordered ahead of node 0 — and
- * sdfPartition is a LEAF that nothing in the store cycle may drag
- * `outputMaterials` into (the costTable TDZ rule). A SECOND copy of the
- * accessor is what the rule forbids, so the one definition sits in the leaf
- * both can import.
+ * THE strict accessor for an Output's emitted position: the integer, else 0,
+ * so a tampered `"3"`/`3.5`/`NaN` reorders nothing; ties break by node id at
+ * the SORT. See docs/dev/codegen.md "Emitted order is `emitOrder`".
+ * Lives in this leaf: sdfPartition imports it (see header).
  */
 export function emitRank(node: EmitOrdered): number {
   const v: unknown = (node.data as { emitOrder?: unknown }).emitOrder;
@@ -138,14 +108,10 @@ export function emitRank(node: EmitOrdered): number {
 }
 
 /**
- * The EDITOR's ceiling on import-built INDEX sections (owner default 16, until a
- * browser recompile measurement exists: each section is a whole generated
- * material, measured ~55-62 ms apiece per 200 ms-debounced edit). N11's `{max}`.
- * Held HERE, beside the loader's bound it must never exceed, rather than in
- * utils/outputMaterials.ts (which re-exports it): buildShaderModule caps a
- * module's table with it too, and the engine may not import the store-coupled
- * utils graph. Emission, the parse, the sanitizer and the module layer all
- * read this one number.
+ * The EDITOR's ceiling on import-built INDEX sections (owner default 16: each
+ * section is a whole generated material, measured ~55-62 ms apiece per edit).
+ * Here, not in utils/outputMaterials.ts (which re-exports it): buildShaderModule
+ * caps with it too, and the engine may not import the store-coupled utils graph.
  */
 export const MAX_INDEX_MATERIALS = 16;
 

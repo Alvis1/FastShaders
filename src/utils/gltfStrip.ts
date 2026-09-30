@@ -63,7 +63,8 @@
  * stripped copy that still does not fit leaves the project untouched.
  */
 
-import { buildGlbContainer, encodeDataUri, PLACEHOLDER_PNG_DATA_URI } from './glbContainer';
+import { buildGlbContainer, encodeDataUri, isIndex, isObj, own, pad4, PLACEHOLDER_PNG_DATA_URI } from './glbContainer';
+import { MESHOPT_EXTENSIONS } from './gltfCompression';
 import { readGltfModel, type GltfModelReport } from './gltfReader';
 import { modelSignatureMatches } from '@/engine/materialPartsContract';
 import { fsPayloadViews, hasFsExtras } from '@/engine/glbShaderContract';
@@ -79,7 +80,7 @@ export const TEXTURE_ONLY_EXTENSIONS = [
 
 /** The buffer / bufferView extensions whose raw offsets this writer understands
  *  (and shifts). Any other one switches compaction off. */
-export const MESHOPT_EXTENSIONS = ['EXT_meshopt_compression', 'KHR_meshopt_compression'] as const;
+export { MESHOPT_EXTENSIONS };
 
 /** How many values the planning walks may visit in total; over it, the plan is
  *  null (no strip) rather than slow. */
@@ -107,15 +108,6 @@ export interface StripPlan {
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
 type Obj = Record<string, unknown>;
-
-const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
-
-const isIndex = (v: unknown, length: number): v is number =>
-  typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v < length;
-
-function own(o: Obj, key: string): unknown {
-  return Object.prototype.hasOwnProperty.call(o, key) ? o[key] : undefined;
-}
 
 function hasOwn(o: Obj, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(o, key);
@@ -150,7 +142,62 @@ function spend(b: Budget): void {
   if (--b.left < 0) throw new OverBudget();
 }
 
-const ceil4 = (n: number) => Math.ceil(n / 4) * 4;
+/**
+ * THE reference walk (the liveness pass here, the repacker's `truncateDeadTail`):
+ * every `texture` / `*Texture` object and `bufferView` value outside `skipTop`.
+ * The caller owns the budget (`tick` throws) and filters the indices itself.
+ */
+export function walkTextureAndViewRefs(
+  doc: unknown,
+  skipTop: ReadonlySet<string>,
+  tick: () => void,
+  onTexture: (info: Obj) => void,
+  onView: (v: unknown) => void,
+): void {
+  const stack: unknown[] = [];
+  if (isObj(doc)) {
+    for (const key of Object.keys(doc)) {
+      tick();
+      if (!skipTop.has(key)) stack.push(doc[key]);
+    }
+  }
+  while (stack.length > 0) {
+    const o = stack.pop();
+    if (Array.isArray(o)) {
+      for (const v of o) {
+        tick();
+        if (typeof v === 'object' && v !== null) stack.push(v);
+      }
+      continue;
+    }
+    if (!isObj(o)) continue;
+    for (const key of Object.keys(o)) {
+      tick();
+      const v = o[key];
+      if ((key === 'texture' || key.endsWith('Texture')) && isObj(v)) onTexture(v);
+      else if (key === 'bufferView') onView(v);
+      if (typeof v === 'object' && v !== null) stack.push(v);
+    }
+  }
+}
+
+/** Every accessor's `bufferView`, its sparse indices and values included (one tick each). */
+export function accessorViewRefs(doc: Obj, tick: () => void, onView: (v: unknown) => void): void {
+  const accessors = own(doc, 'accessors');
+  if (!Array.isArray(accessors)) return;
+  for (const a of accessors) {
+    tick();
+    if (!isObj(a)) continue;
+    onView(a.bufferView);
+    const sparse = own(a, 'sparse');
+    if (!isObj(sparse)) continue;
+    for (const part of ['indices', 'values']) {
+      const p = own(sparse, part);
+      if (isObj(p)) onView(p.bufferView);
+    }
+  }
+}
+
 const floor4 = (n: number) => Math.floor(n / 4) * 4;
 
 interface Range {
@@ -344,34 +391,16 @@ function analyse(m: GltfModelReport, requested: Iterable<number>): Analysis | nu
   const liveTex = new Uint8Array(texturesDef.length);
   const liveView = new Uint8Array(views.length);
   const stillUsed = new Set<string>();
-  const stack: unknown[] = [];
-  for (const key of Object.keys(doc)) {
-    spend(budget);
-    if (!WALK_SKIP.has(key)) stack.push(doc[key]);
-  }
-  while (stack.length > 0) {
-    const o = stack.pop();
-    if (Array.isArray(o)) {
-      for (const v of o) {
-        spend(budget);
-        if (typeof v === 'object' && v !== null) stack.push(v);
-      }
-      continue;
-    }
-    if (!isObj(o)) continue;
-    for (const key of Object.keys(o)) {
-      spend(budget);
-      const v = o[key];
-      if ((key === 'texture' || key.endsWith('Texture')) && isObj(v) && isIndex(v.index, texturesDef.length)) {
-        liveTex[v.index] = 1;
-        const exts = own(v, 'extensions');
-        if (isObj(exts)) for (const name of Object.keys(exts)) if (TEXTURE_ONLY.includes(name)) stillUsed.add(name);
-      } else if (key === 'bufferView' && isIndex(v, views.length)) {
-        liveView[v] = 1;
-      }
-      if (typeof v === 'object' && v !== null) stack.push(v);
-    }
-  }
+  const tick = () => spend(budget);
+  const markView = (v: unknown) => {
+    if (isIndex(v, views.length)) liveView[v] = 1;
+  };
+  walkTextureAndViewRefs(doc, WALK_SKIP, tick, (info) => {
+    if (!isIndex(info.index, texturesDef.length)) return;
+    liveTex[info.index] = 1;
+    const exts = own(info, 'extensions');
+    if (isObj(exts)) for (const name of Object.keys(exts)) if (TEXTURE_ONLY.includes(name)) stillUsed.add(name);
+  }, markView);
 
   // 4. Live images: every source of a live texture, core and extension.
   const liveImg = new Uint8Array(imagesDef.length);
@@ -400,17 +429,7 @@ function analyse(m: GltfModelReport, requested: Iterable<number>): Analysis | nu
   //    PLAIN view on a buffer that has bytes can die (a meshopt-compressed view
   //    or one on a fallback buffer is left alone), so a dead view can always
   //    be rewritten as a one-byte view on its own buffer.
-  for (const a of list(doc, 'accessors')) {
-    spend(budget);
-    if (isIndex(a.bufferView, views.length)) liveView[a.bufferView] = 1;
-    const sparse = own(a, 'sparse');
-    if (isObj(sparse)) {
-      for (const part of ['indices', 'values']) {
-        const p = own(sparse, part);
-        if (isObj(p) && isIndex(p.bufferView, views.length)) liveView[p.bufferView] = 1;
-      }
-    }
-  }
+  accessorViewRefs(doc, tick, markView);
   for (let i = 0; i < imagesDef.length; i++) {
     if (liveImg[i] && isIndex(imagesDef[i].bufferView, views.length)) liveView[imagesDef[i].bufferView as number] = 1;
   }
@@ -454,11 +473,11 @@ function analyse(m: GltfModelReport, requested: Iterable<number>): Analysis | nu
       const liveMerged = mergeRanges(live);
       const pieces: Range[] = [];
       for (const r of deadRanges) {
-        const start = ceil4(r.start);
+        const start = pad4(r.start);
         const end = floor4(r.end);
         if (start >= end) continue;
         for (const p of subtract(start, end, liveMerged)) {
-          const ps = ceil4(p.start);
+          const ps = pad4(p.start);
           const pe = floor4(p.end);
           if (ps < pe) pieces.push({ start: ps, end: pe });
         }

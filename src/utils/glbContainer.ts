@@ -1,7 +1,8 @@
 /**
  * The GLB CONTAINER layer, shared by the trusted-side glTF reader, the
  * texture-stripping writer and (Phase 7) the repacker. A LEAF: it imports only
- * `bytesToBase64`.
+ * `bytesToBase64`, which is why the one-liners every glTF module needs
+ * (`isObj`, `own`, `isIndex`, `isSafeNonNeg`, `pad4`) live here, once.
  *
  * This file only CLASSIFIES and SLICES bytes. It never decodes a picture,
  * builds geometry, resolves a URI or asks the network for anything, and it
@@ -14,7 +15,7 @@
  * What it offers:
  *   - `parseGlbContainer` / `buildGlbContainer`: the binary glTF 2.0 container
  *     (12-byte header, then a JSON chunk and at most one BIN chunk).
- *   - `decodeCanonicalBase64` / `decodeDataUri` / `encodeDataUri`: `data:` URIs
+ *   - `decodeDataUri` / `encodeDataUri`: `data:` URIs
  *     for `.gltf` buffers and images, CANONICAL base64 only (no whitespace, no
  *     URL-safe alphabet, no percent-decoding, no stray bits in the last
  *     character), with the decoded size checked before anything is decoded.
@@ -72,8 +73,23 @@ export interface GlbChunks {
 /** 4-alignment, by arithmetic and NOT `(n + 3) & ~3`: a bitwise operator
  *  coerces through ToInt32, so the old spelling returned 0 at 2^32 and
  *  -2147483648 at 3·2^31 — exactly where `buildGlbContainer`'s u32 guard below
- *  exists to fire, which left it dead at the one size it is for. */
-const pad4 = (n: number) => Math.ceil(n / 4) * 4;
+ *  exists to fire, which left it dead at the one size it is for. The ONE copy:
+ *  the repacker, the strip and every fixture builder import it. */
+export const pad4 = (n: number) => Math.ceil(n / 4) * 4;
+
+/** A non-null, non-array object — what a JSON `{…}` parses to. */
+export const isObj = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** An OWN property, or undefined — for keys that come from the file (an
+ *  extension name, a camera type), where a plain lookup could reach
+ *  Object.prototype. */
+export function own(o: Record<string, unknown>, key: string): unknown {
+  return Object.prototype.hasOwnProperty.call(o, key) ? o[key] : undefined;
+}
+
+export const isSafeNonNeg = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+export const isIndex = (v: unknown, length: number): v is number => isSafeNonNeg(v) && v < length;
 
 function dataView(b: Uint8Array): DataView {
   return new DataView(b.buffer, b.byteOffset, b.byteLength);
@@ -184,8 +200,15 @@ export function buildGlbContainer(json: string, bin: Uint8Array | null): Uint8Ar
 const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
 
-/** The strict decoder, telling the two failures apart (a `data:` URI error
- *  needs to: too large is not the same finding as damaged). */
+/**
+ * Decode CANONICAL base64, telling the two failures apart (too large is not
+ * the same finding as damaged). Refused: a length that is not a multiple of
+ * 4, any character outside `A–Z a–z 0–9 + /` (so no whitespace, no URL-safe
+ * `-_`, no percent escapes), more than two `=`, `=` anywhere but the end, and
+ * non-zero discarded bits in the last character before the padding (`QR==` is
+ * refused where `QQ==` is not). The decoded size is computed from the length
+ * and compared with `maxBytes` before anything is decoded.
+ */
 function decodeBase64Strict(s: string, maxBytes: number): Uint8Array | 'base64' | 'too-large' {
   if (s.length % 4 !== 0 || !BASE64_RE.test(s)) return 'base64';
   const pad = s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0;
@@ -206,19 +229,6 @@ function decodeBase64Strict(s: string, maxBytes: number): Uint8Array | 'base64' 
   return out;
 }
 
-/**
- * Decode CANONICAL base64, or null. Refused: a length that is not a multiple of
- * 4, any character outside `A–Z a–z 0–9 + /` (so no whitespace, no URL-safe
- * `-_`, no percent escapes), more than two `=`, `=` anywhere but the end, and
- * non-zero discarded bits in the last character before the padding (`QR==` is
- * refused where `QQ==` is not). The decoded size is computed from the length
- * and compared with `maxBytes` before anything is decoded.
- */
-export function decodeCanonicalBase64(s: string, maxBytes: number): Uint8Array | null {
-  const r = decodeBase64Strict(s, maxBytes);
-  return typeof r === 'string' ? null : r;
-}
-
 export type DataUriError = 'not-data' | 'mime' | 'not-base64' | 'base64' | 'too-large';
 
 /** The header (everything before the first ',', `data:` included) is at most
@@ -236,7 +246,7 @@ const IMAGE_MEDIA_TYPE_RE = /^image\/[a-z0-9.+-]{1,32}$/;
  * an `image`: an image's FORMAT is decided later by `sniffImageFormat`, never
  * by this string. A URI with no ',' is `not-data`; a header over 128 characters
  * is `mime` (no media type this accepts comes close). The payload goes through
- * `decodeCanonicalBase64`, with `too-large` told apart from `base64`.
+ * `decodeBase64Strict`, with `too-large` told apart from `base64`.
  */
 export function decodeDataUri(
   uri: string,
@@ -267,6 +277,13 @@ export function encodeDataUri(mime: string, bytes: Uint8Array): string {
 /* ── image sniffing ──────────────────────────────────────────────────────── */
 
 export type SniffedImageFormat = 'png' | 'jpeg' | 'webp' | 'ktx2' | 'avif' | 'unknown';
+
+/** A payload's MIME → the format its bytes must sniff as. */
+export const IMAGE_MIME_FORMAT: ReadonlyMap<string, SniffedImageFormat> = new Map([
+  ['image/png', 'png'],
+  ['image/jpeg', 'jpeg'],
+  ['image/webp', 'webp'],
+]);
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const KTX2_IDENTIFIER = [0xab, 0x4b, 0x54, 0x58, 0x20, 0x32, 0x30, 0xbb, 0x0d, 0x0a, 0x1a, 0x0a];

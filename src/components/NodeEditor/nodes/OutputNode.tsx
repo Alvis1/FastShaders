@@ -37,7 +37,7 @@ import { outputNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
 import { isActiveSinkSelector } from './activeSinkSelector';
-import { getCostColor, getCostTextColor, getContrastColor } from '@/utils/colorUtils';
+import { useCostChrome } from './useCostChrome';
 import { TypedHandle } from '../handles/TypedHandle';
 // Also pulls in ShaderNode.css transitively — the shared .shader-node__edge-val
 // class (one font size for every number on a node) lives there.
@@ -57,9 +57,6 @@ import { NODE_BORDER_WIDTH } from './nodeFrame';
 export const PIXEL_PORTS = ['color', 'emissive', 'roughness', 'metalness', 'opacity', 'discard', 'normal', 'env'];
 /** Ports that belong to the vertex shader section (see PIXEL_PORTS). */
 export const VERTEX_PORTS = ['position'];
-// Single source of truth lives with the shared exposedPorts rules; re-exported
-// here for the existing importers (ShaderSettingsMenu, NodeEditor).
-export { OUTPUT_DEFAULT_EXPOSED };
 
 /** Channels that take a stored NUMBER when unwired, with the shown default
  *  (three's material defaults: roughness 1, metalness 0, opacity 1; discard
@@ -103,10 +100,6 @@ export const OUTPUT_COLOR_VALUE_PORTS: Record<string, string> = {
  * the mesh is white, not red — so both colours are right, in different states.
  */
 export const OUTPUT_EMPTY_COLOR = '#ff0000';
-
-// storedValueEmits moved to utils/outputMaterials — the red-fallback swatch
-// below and outputDefaultContributes (the 0.6 single-mesh-fallback mirror)
-// must share ONE notion of "this value emits".
 
 /** What a TARGETED node's INERT preview socket says (owner decision D2). */
 export const FIXED_SOCKET_KEY =
@@ -189,16 +182,8 @@ export const OutputNode = memo(function OutputNode({
   const shownMesh = useAppStore(shownPreviewMesh);
   const loaded = useMemo(() => loadedModelOf(shownMesh), [shownMesh]);
   const gltfNotShown = useAppStore((s) => s.previewShowsModel === false && !!s.previewMesh && loadedModelOf(s.previewMesh).kind !== 'not-gltf');
-  const costColorLow = useAppStore((s) => s.costColorLow);
-  const costColorHigh = useAppStore((s) => s.costColorHigh);
-  // The header mixes into the card, and the card follows the theme
-  // (getCostColor). `codeEditorTheme` is the app-wide dark switch; the store
-  // field keeps its historical name.
-  const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
   const cost = data.cost ?? 0;
-  const costColor = getCostColor(cost, costColorLow, costColorHigh, darkTheme);
-  const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
-  const headerTextColor = getContrastColor(costColor);
+  const { costColor, headerTextColor, costTextColor } = useCostChrome(cost);
 
   const exposedPorts = data.exposedPorts ?? OUTPUT_DEFAULT_EXPOSED;
   const exposedSet = new Set(exposedPorts);

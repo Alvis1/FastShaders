@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
+import { useModalKeys } from './useModalKeys';
 import './CsvImportModal.css';
 import './LimitModal.css';
 
@@ -31,15 +32,10 @@ export function ImageConvertInfoModal({ open, onClose }: Props) {
     if (open) setChecked(useAppStore.getState().hideImageConvertNotice);
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-      else if (e.key !== 'Tab') e.stopPropagation();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [open, onClose]);
+  useModalKeys(open, (e) => {
+    if (e.key === 'Escape') onClose();
+    else if (e.key !== 'Tab') e.stopPropagation();
+  }, true);
 
   if (!open) return null;
 
@@ -87,7 +83,7 @@ export function ImageConvertInfoModal({ open, onClose }: Props) {
             <option value="never">{t('Never', language)}</option>
           </select>
         </div>
-        <label className="limit-modal__ignore">
+        <label className="csv-import-modal__check">
           <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
           {t('Don’t show this message again', language)}
         </label>

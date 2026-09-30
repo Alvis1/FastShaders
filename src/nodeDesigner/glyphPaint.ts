@@ -25,12 +25,13 @@
 export interface PaletteEntry { name: string; hex: string; note: string }
 
 /**
- * The eight constants from `components/NodeEditor/nodes/glyphs/NodeGlyph.tsx`
- * plus white, in the order the bar shows them: ink and greys first (structure),
- * then the warm accent pair (the subject), then the cool trio (operands and
- * results). Keep the hexes in sync with that file — they are the same palette,
- * written twice because `designerApp.ts` is vanilla and cannot import a React
- * module's private constants.
+ * The seven constants from `components/NodeEditor/nodes/glyphs/NodeGlyph.tsx`
+ * plus Teal (no built-in art draws with it) and white, in the order the bar
+ * shows them: ink and greys first (structure), then the warm accent pair (the
+ * subject), then the cool trio (operands and results). Keep the hexes in sync
+ * with that file — they are the same palette, written twice because
+ * `designerApp.ts` is vanilla and cannot import a React module's private
+ * constants.
  */
 export const GLYPH_PALETTE: PaletteEntry[] = [
   { name: 'Ink', hex: '#2B2B2B', note: 'strong strokes / glyph text' },

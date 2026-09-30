@@ -1,12 +1,11 @@
 /**
- * The preview RAIL — the sockets either side of the column seam.
+ * The preview RAIL — the sockets down the canvas's right edge.
  *
  * The vitest env is `node`, so the component itself cannot be rendered; what is
- * executable is the shared DERIVATION the three surfaces agree through, and the
- * rest is pinned at source. That split is the point: the wire, the canvas
- * socket it ends on and the preview socket mirroring it are ONE connection seen
- * three times, and the only thing keeping them from disagreeing is that they
- * ask the same function.
+ * executable is the shared DERIVATION the wire and the rail agree through, and
+ * the rest is pinned at source. That split is the point: the wire and the rail
+ * socket it ends on are ONE connection seen twice, and the only thing keeping
+ * them from disagreeing is that they ask the same function.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -27,7 +26,7 @@ const state = (nodes: AppNode[], edges: ReturnType<typeof makeEdge>[] = []) => (
   nodes, edges, previewMesh: null, previewMeshInventory: null, previewShowsModel: false,
 });
 
-describe('one derivation, three surfaces', () => {
+describe('one derivation, two surfaces', () => {
   it('gives a wire per contributing Output, in emit order', () => {
     const s = state([out('def', 0), out('a', 1, { meshTargets: ['Body'] })]);
     expect(resolveWireTargets(s).map((w) => w.id)).toEqual(['def', 'a']);
@@ -87,9 +86,8 @@ describe('the rail itself (source pins)', () => {
     expect(RAIL).toContain('title={w.label}');
   });
 
-  it('clicks through the event, from BOTH sides', () => {
-    // The preview pane is a sibling React tree with no `fitView`; the canvas
-    // rail goes the same way so there is one path rather than two.
+  it('clicks through the event', () => {
+    // The rail is chrome outside <ReactFlow>; NodeEditor holds `fitView`.
     expect(RAIL).toContain('requestFocusNode(w.id)');
     expect(NODE_EDITOR).toContain('window.addEventListener(RAIL_FOCUS_EVENT, onFocus)');
     expect(NODE_EDITOR).toContain('focusNode(fitView, useAppStore.getState().nodes, id)');
@@ -110,9 +108,9 @@ describe('the rail itself (source pins)', () => {
   });
 
   it('the container passes the pointer through; only the discs take it', () => {
-    // The preview body is the orbit-drag surface — a full-height box down its
-    // left edge would eat the start of any drag beginning under one.
-    const container = CSS.slice(CSS.indexOf('.preview-rail {'), CSS.indexOf('.preview-rail--canvas'));
+    // A full-height box down the canvas edge would eat presses aimed at the
+    // graph.
+    const container = CSS.slice(CSS.indexOf('.preview-rail {'), CSS.indexOf('.preview-rail__socket {'));
     expect(container).toContain('pointer-events: none;');
     const socket = CSS.slice(CSS.indexOf('.preview-rail__socket {'), CSS.indexOf('.preview-rail__socket:hover'));
     expect(socket).toContain('pointer-events: auto;');

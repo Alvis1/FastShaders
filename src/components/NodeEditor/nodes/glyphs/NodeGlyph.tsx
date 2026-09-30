@@ -33,7 +33,6 @@ const INK = '#2B2B2B';       // strong dark strokes / glyph text
 const CONSTRUCT = '#8A8F9C'; // construction / reference lines
 const BLUE = '#2D6CDF';      // secondary operand vector
 const GREEN = '#2E9E5B';     // cross-product result vector
-const INT = '#1796A0';       // int knob accent (teal)
 
 /** Filled-area math plots: `fill` = area path, `line` = curve. */
 const MATH_PLOTS: Record<string, { fill?: string; line: string; poly?: boolean }> = {
@@ -220,33 +219,10 @@ function MathPlot({ spec }: { spec: { fill?: string; line: string; poly?: boolea
   );
 }
 
-function Knob({ value, accent, ticks }: { value: number; accent: string; ticks?: boolean }) {
-  const txt = ticks ? String(Math.round(value)) : (Number.isFinite(value) ? value.toFixed(2) : '0.00');
-  return (
-    <g transform="translate(28 28)">
-      <circle r={16} fill="#F1F1F1" stroke="#D5D5D5" />
-      <path d="M-11 9 A 14 14 0 1 1 11 9" stroke="#B4B7C0" strokeWidth={1.6} fill="none" strokeLinecap="round" />
-      {ticks && (
-        <g stroke="#C2C2C2" strokeWidth={0.8}>
-          <line x1={0} y1={-15} x2={0} y2={-13} />
-          <line x1={13} y1={-7} x2={11} y2={-6} />
-          <line x1={15} y1={0} x2={13} y2={0} />
-          <line x1={13} y1={7} x2={11} y2={6} />
-          <line x1={-13} y1={7} x2={-11} y2={6} />
-          <line x1={-15} y1={0} x2={-13} y2={0} />
-          <line x1={-13} y1={-7} x2={-11} y2={-6} />
-        </g>
-      )}
-      <path d="M-11 9 A 14 14 0 1 1 9 -11" stroke={accent} strokeWidth={1.6} fill="none" strokeLinecap="round" />
-      <text y={3} textAnchor="middle" fill={INK} style={{ font: '600 8.5px "JetBrains Mono", monospace' }}>{txt}</text>
-    </g>
-  );
-}
-
 /** Built-in art for a node type, or null. Exported so the Node Designer can
  *  serialize the REAL art (via renderToStaticMarkup) instead of keeping the
  *  hand-copied string table that used to drift from this file. */
-export function renderArt(type: string, value: number): ReactNode {
+export function renderArt(type: string): ReactNode {
   if (MATH_PLOTS[type]) return <MathPlot spec={MATH_PLOTS[type]} />;
 
   if (OPERATORS[type]) {
@@ -359,11 +335,6 @@ export function renderArt(type: string, value: number): ReactNode {
         </g>
       );
 
-    case 'float':
-      return <Knob value={value} accent={PLOT} />;
-    case 'int':
-      return <Knob value={value} accent={INT} ticks />;
-
     case 'positionWorld':
       return (
         <g transform="translate(28 28)">
@@ -416,12 +387,10 @@ export function renderArt(type: string, value: number): ReactNode {
 
 export const NodeGlyph = memo(function NodeGlyph({
   type,
-  value = 0,
   size = 50,
   design: designProp,
 }: {
   type: string;
-  value?: number;
   size?: number;
   /** Draft design override (Node Designer). Replaces the saved entry outright:
    *  its `svg` is the ONLY art considered (a cleared draft renders nothing). */
@@ -437,7 +406,7 @@ export const NodeGlyph = memo(function NodeGlyph({
     ? <g dangerouslySetInnerHTML={{ __html: design.svg }} />
     : designProp
       ? null
-      : renderArt(type, value);
+      : renderArt(type);
   if (!art) return null;
   // Scale grows the rendered size (so the glyph gets bigger and the node grows),
   // rather than transforming art inside a fixed box (which would just clip).

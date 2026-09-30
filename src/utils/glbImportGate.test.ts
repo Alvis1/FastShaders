@@ -34,7 +34,6 @@ function facts(over: Partial<GlbImportFacts> = {}): GlbImportFacts {
     fileBytes: 1000,
     materialIndices: [0],
     textures: [tex()],
-    embeddedShader: null,
     ...over,
   };
 }
@@ -42,7 +41,7 @@ function facts(over: Partial<GlbImportFacts> = {}): GlbImportFacts {
 describe('glbImportFactsOf: the facts are what the builder would build', () => {
   it('BLENDER: three buildable materials, three Texture nodes, the ORM shared by two', () => {
     const f = glbImportFactsOf(readOk(blenderGlb()), 'My Model.glb', 4321);
-    expect(f).toMatchObject({ kind: 'glb', fileName: 'My-Model.glb', fileBytes: 4321, materialIndices: [0, 1, 2], embeddedShader: null });
+    expect(f).toMatchObject({ kind: 'glb', fileName: 'My-Model.glb', fileBytes: 4321, materialIndices: [0, 1, 2] });
     expect(f.textures).toHaveLength(3);
     const orm = f.textures.find((t) => t.slot === 'metallicRoughness')!;
     expect(orm.materials).toEqual([0, 1]);

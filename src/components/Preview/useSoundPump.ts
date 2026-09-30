@@ -16,7 +16,6 @@ export type { SoundStatus };
 
 export interface MicPump {
   status: SoundStatus;
-  armed: boolean;
   arm: () => void;
   disarm: () => void;
   /**
@@ -39,9 +38,8 @@ export interface MicPump {
  * hook carried two of each until the Audio Input node was folded into the Sound
  * node on 2026-09-08: a microphone is now just a `device` source, so a uniform
  * no longer has to be ROUTED to a capture by its variable prefix — every
- * `mic<n>_<channel>` the shader declares is fed by the one analyser. (`mic` is
- * a retained persisted contract, not a claim about what is being heard; see
- * micAnalysis.SOUND_VAR_BASE.)
+ * `sound<n>_<channel>` the shader declares is fed by the one analyser. (The
+ * base is a persisted contract; see soundAnalysis.SOUND_VAR_BASE.)
  *
  * Three rules make this safe to run at 60 Hz, and all three are load-bearing:
  *
@@ -49,7 +47,7 @@ export interface MicPump {
  *    or `handleReset`.** Those call `setUniformValues`, which is a
  *    `usePersistedState` — i.e. a React commit PLUS a synchronous
  *    `localStorage.setItem(JSON.stringify(...))`. Routed through them this
- *    would do 60 JSON serializations and 60 re-renders of a ~1000-line panel
+ *    would do 60 JSON serializations and 60 re-renders of the whole panel
  *    every second, and it would persist capture-derived values to disk,
  *    contradicting the "nothing is recorded" guarantee outright.
  * 2. **The meter is written imperatively from the loop**, not via state, for
@@ -67,7 +65,7 @@ export interface MicPump {
 export function useSoundPump(opts: {
   iframeRef: React.RefObject<HTMLIFrameElement | null>;
   /**
-   * Emitted Sound uniform names present in the current shader (`mic1_bass`, …).
+   * Emitted Sound uniform names present in the current shader (`sound1_bass`, …).
    * The CALLER filters them, because it is the only place that can tell an
    * emitted uniform from a user property that happens to carry the same name.
    */
@@ -79,8 +77,8 @@ export function useSoundPump(opts: {
   const status = useSyncExternalStore(subscribeSound, getSoundStatus, getSoundStatus);
   const meterRef = useRef<HTMLSpanElement>(null);
 
-  // rAF-loop inputs live in refs so the loop can be started once with `[]`
-  // deps and never restarted — the codebase's standard rAF ref pattern.
+  // rAF-loop inputs live in refs so the loop restarts only with `live`, never
+  // for a new name list or setting — the codebase's standard rAF ref pattern.
   const namesRef = useRef(soundUniformNames);
   const settingsRef = useRef(settings);
   const iframeRefRef = useRef(iframeRef);
@@ -97,14 +95,15 @@ export function useSoundPump(opts: {
   const arm = useCallback(() => armSound(settingsRef.current), []);
   const disarm = useCallback(() => disarmSound(), []);
 
-  // The pump. Runs for the component's whole life and simply idles when nothing
-  // is armed — cheaper and far less error-prone than tearing an rAF loop up and
-  // down around a permission prompt or a share picker.
+  // The pump. Runs only while a capture is live or STARTING — 'starting' spans
+  // the permission prompt and the share picker, so the loop is never torn down
+  // around one — and an idle session costs no per-frame callback at all.
+  const live = status === 'on' || status === 'starting';
   useEffect(() => {
+    if (!live) return;
     let raf = 0;
     const tick = () => {
       raf = requestAnimationFrame(tick);
-      if (!soundArmIntent()) return;
 
       // Read the session at most ONCE per frame: readLevels() runs a full
       // getByteFrequencyData plus the band reduction, so asking it per uniform
@@ -116,7 +115,7 @@ export function useSoundPump(opts: {
         for (const name of namesRef.current) {
           // The channel is read from the NAME rather than tracked alongside it,
           // for the same reason the names themselves come from the code: after
-          // an Apply nothing else about the node survives, but `mic1_bass`
+          // an Apply nothing else about the node survives, but `sound1_bass`
           // still says which of the four values it wants.
           const ch = soundChannelOf(name);
           if (!ch) continue;
@@ -133,7 +132,7 @@ export function useSoundPump(opts: {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, []);
+  }, [live]);
 
   // Leaving a capturing state must ZERO the uniforms. Without this the shader
   // holds whatever the last captured frame happened to be — a room-noise level
@@ -141,7 +140,6 @@ export function useSoundPump(opts: {
   // connected" and is exactly the wrong signal after turning it off.
   const wasLiveRef = useRef(false);
   useEffect(() => {
-    const live = status === 'on' || status === 'starting';
     if (wasLiveRef.current && !live) {
       const win = iframeRefRef.current.current?.contentWindow;
       if (win) {
@@ -153,7 +151,7 @@ export function useSoundPump(opts: {
       if (el) el.style.transform = 'scaleX(0)';
     }
     wasLiveRef.current = live;
-  }, [status]);
+  }, [live]);
 
   // An armed capture with nothing left to drive is pure downside: the OS
   // recording indicator — or the browser's "you are sharing your screen" bar,
@@ -170,5 +168,5 @@ export function useSoundPump(opts: {
     if (soundUniformNames.length === 0 && soundArmIntent()) disarmSound();
   }, [soundUniformNames]);
 
-  return { status, armed: status === 'on' || status === 'starting', arm, disarm, meterRef };
+  return { status, arm, disarm, meterRef };
 }

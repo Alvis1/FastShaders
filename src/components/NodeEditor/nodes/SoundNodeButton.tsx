@@ -23,19 +23,15 @@ import { soundStatusMessage } from '@/utils/soundStatusMessage';
  * It is one of exactly TWO click paths into `armSound` (the other is the
  * preview's SoundControl). It must stay a real click: in this app a node's
  * presence in a graph IS its execution, so the gesture is the whole consent
- * model. See the header of `utils/soundSession.ts`. The SOURCE picker beside it
- * is deliberately not such a path — choosing a source only redirects a capture
- * that is already running.
+ * model. See the header of `utils/soundSession.ts`. The SOURCE picker (in the
+ * settings menu) is deliberately not such a path — choosing a source only
+ * redirects a capture that is already running.
  *
  * The idle wording is this surface's own (soundStatusMessage returns null for
  * `off`), and it branches on the source: with `system` selected the click opens
  * the browser's share sheet rather than a microphone prompt, so promising a
  * microphone would describe the wrong dialog. Every FAILURE line comes from the
  * shared table, so the node and the preview cannot word one differently.
- *
- * Node visuals are theme-invariant by convention, so every colour here is a
- * literal rather than a token — this button must look identical in light and
- * dark, like the rest of the node body.
  */
 export function SoundNodeButton({ nodeId, values }: {
   nodeId: string;

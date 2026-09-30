@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { getRecentNodeTypes, noteNodeUsed, RECENT_MAX } from './recentNodes';
+import { stubLocalStorage } from '@/test-utils';
 
 // isolate: false shares this worker's globals with later files — don't leave
 // the stubbed (or deliberately undefined) localStorage behind.
@@ -14,13 +15,7 @@ afterAll(() => {
  */
 describe('recentNodes MRU', () => {
   beforeEach(() => {
-    const store: Record<string, string> = {};
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => store[k] ?? null,
-      setItem: (k: string, v: string) => { store[k] = v; },
-      removeItem: (k: string) => { delete store[k]; },
-      __store: store,
-    });
+    stubLocalStorage();
   });
 
   it('starts empty and records newest-first', () => {

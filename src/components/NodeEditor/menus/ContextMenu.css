@@ -88,8 +88,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Submenus set checkbox width/height inline (12px) — override so the boxes
-   keep up with the enlarged labels. */
+/* ONE checkbox size for every settings menu, whatever a row sets inline. */
 .context-menu input[type='checkbox'] {
   width: 14px !important;
   height: 14px !important;
@@ -143,8 +142,8 @@
 }
 
 /* Rows hold their natural width so the list genuinely overflows (and can be
-   scrolled) instead of compressing. Scoped OFF the add-node menu, whose fixed
-   400px width exists precisely so long descriptions wrap rather than run.
+   scrolled) instead of compressing. Scoped OFF the add-node menu, whose
+   explicit 280px width (above) must not be pushed wider by a row.
    Note a row narrower than the widest one paints its hover background only to
    the visible width — visible only while scrolled, and far better than the
    squeeze it replaces. */

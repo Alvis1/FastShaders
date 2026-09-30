@@ -1,7 +1,6 @@
 .note-node {
   display: flex;
   flex-direction: column;
-  box-sizing: border-box;
   border: calc(1px * var(--fs-node-border-scale, 1)) solid rgba(var(--node-ink-rgb), 0.18);
   border-radius: var(--border-radius-sm);
   box-shadow: var(--fs-node-lift, var(--shadow-node));

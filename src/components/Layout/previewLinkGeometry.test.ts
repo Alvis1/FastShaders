@@ -231,10 +231,8 @@ describe('previewLinkGeometry', () => {
       expect(hit!.distance).toBeLessThan(1);
     });
 
-    it('reports the index and the wire together, so a caller can paint one path', () => {
-      const hit = pickLinkAt([a, b, c], 0, 600);
-      expect(hit?.index).toBe(2);
-      expect(hit?.wire).toBe(c);
+    it('reports the wire itself, so a caller paints and focuses by its id', () => {
+      expect(pickLinkAt([a, b, c], 0, 600)?.wire).toBe(c);
     });
   });
 });

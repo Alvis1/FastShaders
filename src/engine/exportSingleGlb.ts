@@ -1,9 +1,9 @@
 /**
- * THE single-GLB EXPORT COMPOSER (Phase 7 Step 4; no UI yet — Step 7 wires it
- * through `buildShaderExportChecked`). One `.glb`: the loaded preview model,
- * the textures the shader uses written into the glTF material slots the
- * import mapped, the shader module and the project block
- * (engine/glbShaderContract.ts).
+ * THE single-GLB EXPORT COMPOSER, reached only through
+ * `buildShaderExportChecked` (engine/exportShader.ts, lazy import). One `.glb`:
+ * the loaded preview model, the textures the shader uses written into the
+ * glTF material slots the import mapped, the shader module and the project
+ * block (engine/glbShaderContract.ts).
  *
  * THE FLOW CONTRACT for the UI:
  *   1. `prepareSingleGlb({ signal })` reads the store ONCE, synchronously,
@@ -66,8 +66,8 @@ import { referenceImagesInSet } from './projectImageRefs';
 
 /**
  * Why a single `.glb` could not be prepared. `study` and `aborted` are never shown.
- * `splat-model`: the loaded model is a Gaussian splat scene (EXPORT's format
- * choice already falls back to the bundle for it — `glbExportAvailability` —
+ * `splat-model`: the loaded model is a Gaussian splat scene (EXPORT already
+ * writes the bundle for it — `glbExportAvailability` via `exportFormatFor` —
  * so this is the build's own guard). `splat-driven`: a Splat Output drives the
  * graph, so the module is a splat program a `.glb` has nothing to run on.
  */

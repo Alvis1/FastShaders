@@ -34,6 +34,11 @@ export function normalizeHex(v: unknown): string | null {
  */
 export const HEX6 = /^#[0-9a-fA-F]{6}$/;
 
+/** A stored colour exactly as written — a `#rrggbb` string, else null. */
+export function storedHex6(v: unknown): string | null {
+  return typeof v === 'string' && HEX6.test(v) ? v : null;
+}
+
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
@@ -273,22 +278,10 @@ export const CAT_HEX: Record<NodeCategory | 'saved', string> = {
   saved: '#6366f1',
 };
 
-export const CATEGORY_COLORS: Record<NodeCategory, string> = {
-  input: 'var(--cat-input)',
-  type: 'var(--cat-type)',
-  arithmetic: 'var(--cat-arithmetic)',
-  math: 'var(--cat-math)',
-  interpolation: 'var(--cat-interpolation)',
-  logic: 'var(--cat-logic)',
-  vector: 'var(--cat-vector)',
-  sdf: 'var(--cat-sdf)',
-  noise: 'var(--cat-noise)',
-  dataviz: 'var(--cat-dataviz)',
-  texture: 'var(--cat-texture)',
-  presets: 'var(--cat-presets)',
-  unknown: 'var(--cat-unknown)',
-  output: 'var(--cat-output)',
-};
+/** `var(--cat-<category>)` per CAT_HEX key. */
+export const CATEGORY_COLORS = Object.fromEntries(
+  Object.keys(CAT_HEX).map((cat) => [cat, `var(--cat-${cat})`]),
+) as Record<NodeCategory | 'saved', string>;
 
 // Publish CAT_HEX as CSS variables on :root so CSS files and CATEGORY_COLORS
 // (var() lookups) resolve to the same hex values. Runs once at module load,

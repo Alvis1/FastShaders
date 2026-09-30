@@ -22,7 +22,7 @@ import { readGltfModel } from '@/utils/gltfReader';
 import { imageRefFor } from '@/utils/imagePayloadRefs';
 import { contributingOutputs, indexSectionsAwake, isIndexSection, loadedModelOf, outputMaterials, readModelSignature } from '@/utils/outputMaterials';
 import { encodeDataUri } from '@/utils/glbContainer';
-import { HISTORY_IDLE, FS_FIXTURE_MODULE_MARKER, makeFastShadersGlb, makeNode, makeRealPng, type FsGlbFixture } from '@/test-utils';
+import { HISTORY_IDLE, FS_FIXTURE_MODULE_MARKER, indexOfBytes, makeFastShadersGlb, makeNode, makeRealPng, stubLocalStorage, type FsGlbFixture } from '@/test-utils';
 import type { AppNode } from '@/types';
 
 let ls: Record<string, string>;
@@ -51,17 +51,8 @@ beforeAll(() => {
 });
 beforeEach(() => {
   reset();
-  ls = {};
+  ls = stubLocalStorage();
   events = [];
-  vi.stubGlobal('localStorage', {
-    getItem: (k: string) => (Object.prototype.hasOwnProperty.call(ls, k) ? ls[k] : null),
-    setItem: (k: string, v: string) => {
-      ls[k] = String(v);
-    },
-    removeItem: (k: string) => {
-      delete ls[k];
-    },
-  });
   const target = new EventTarget();
   vi.stubGlobal('window', target);
   target.addEventListener('fs:project-imported', () => events.push('project'));
@@ -114,14 +105,6 @@ const noPayload = (bytes: Uint8Array) => {
   expect(new TextDecoder().decode(bytes)).not.toContain(FS_FIXTURE_MODULE_MARKER);
   expect(new TextDecoder().decode(bytes)).not.toContain('FASTSHADERS_PROJECT_V1');
 };
-
-function indexOfBytes(hay: Uint8Array, needle: Uint8Array): number {
-  outer: for (let i = 0; i + needle.length <= hay.length; i++) {
-    for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer;
-    return i;
-  }
-  return -1;
-}
 
 function snapshot() {
   const s = useAppStore.getState();

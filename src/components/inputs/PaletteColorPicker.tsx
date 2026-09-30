@@ -10,16 +10,13 @@ import {
   buildPickerSections,
   COMMIT_IDLE_MS,
   createColorCommitStager,
+  fullscreenElement,
   pickPortalHost,
   placePopover,
   swatchTitle,
   type ColorCommitStager,
 } from './colorPickerModel';
 import './PaletteColorPicker.css';
-
-/** Safari still exposes fullscreen only under the webkit-prefixed name (the
- *  same shim ShaderPreview carries). */
-type FsDocument = Document & { webkitFullscreenElement?: Element | null };
 
 /**
  * Whether a pick is an UNDOABLE EDIT or a PREFERENCE.
@@ -226,11 +223,7 @@ export function ColorPickerPopover({
       setHost(null);
       return;
     }
-    const doc = document as FsDocument;
-    const fsEl = (document.fullscreenElement ?? doc.webkitFullscreenElement ?? null) as
-      | HTMLElement
-      | null;
-    setHost(pickPortalHost(fsEl, anchor, document.body));
+    setHost(pickPortalHost(fullscreenElement(), anchor, document.body));
     setRecents(getRecentColors());
   }, [open, anchor]);
 
@@ -482,18 +475,21 @@ export function PaletteColorPicker({
         onClick={() => setOpen((o) => !o)}
         title={title ?? value ?? t('Pick a color', language)}
       />
-      {/* btnRef is populated by the time `open` can flip (the flip is a click on
-          that very button), so the popover always sees a real anchor. */}
-      <ColorPickerPopover
-        anchor={btnRef.current}
-        open={open}
-        onClose={close}
-        value={value}
-        onPick={onPick}
-        onClear={onClear}
-        clearColor={clearColor}
-        history={history}
-      />
+      {/* Mounted only while open, so a closed swatch carries none of the
+          popover's hooks; unmounting is its commit point. btnRef is populated
+          by then (the flip is a click on that very button). */}
+      {open && (
+        <ColorPickerPopover
+          anchor={btnRef.current}
+          open={open}
+          onClose={close}
+          value={value}
+          onPick={onPick}
+          onClear={onClear}
+          clearColor={clearColor}
+          history={history}
+        />
+      )}
     </>
   );
 }

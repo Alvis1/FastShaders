@@ -208,7 +208,7 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
           hooks — see ImageNodeSettings. */}
       {node.data.registryType === 'imageNode' && <ImageNodeSettings nodeId={nodeId} />}
 
-      {/* Mic node: which input device to capture from. Session-only — it never
+      {/* Sound node: which source to capture from. Session-only — it never
           reaches node.data.values, so it has no undo entry and never ships in a
           shared project. See SoundNodeSettings. */}
       {node.data.registryType === 'soundNode' && <SoundNodeSettings />}

@@ -32,26 +32,11 @@ export const EVAL_STUDY_EMAIL = FEEDBACK_EMAIL;
 export const EVAL_SCHEMA = 'fs-eval-1';
 
 /**
- * Version tag of the consent text shown; recorded with the consent act, so a
- * package always says which wording its participant agreed to. BUMP IT
- * whenever the text changes materially — consent-2 added the automatic
- * transfer to the study server (delivery option B going live); consent-3
- * corrected the collection description, which had drifted badly behind the
- * code: the dialog promised "browser and platform version, screen size, and
- * time zone" and closed with "Nothing else is recorded", while the package had
- * grown a 14-field device block (unmasked GPU renderer, core count, deviceMemory
- * — a recognised fingerprinting triple), a preview.png of the participant's
- * work, a free-text comment box, and a shader bundle carrying note text, typed
- * property names and any dropped image or 3D model INCLUDING its file name.
- * consent-3 also stopped calling the researcher's own host "the university's
- * server" and made the outgoing email opt-in instead of automatic. consent-7
- * (2026-09-10) tightened every sentence, aligned the Latvian on the app's own
- * term (ēnotājs, not šeideris) and dropped two things from the consent SUMMARY
- * by owner decision: the "not by the university" contrast and the sentence
- * about the optional email revealing the sender address (the disclosure and
- * the thank-you screen still state the latter, once each, beside the button).
+ * Version tag of the consent text shown, recorded with the consent act so a
+ * package says which wording its participant agreed to. BUMP IT whenever the
+ * text changes materially; the per-version history is in docs/dev/eval-mode.md.
  */
-export const CONSENT_TEXT_VERSION = 'consent-7';
+export const CONSENT_TEXT_VERSION = 'consent-8';
 
 /**
  * The two addresses the study app is served from. NB the upload target is a
@@ -184,8 +169,8 @@ export function writeEvalSession(rec: EvalSessionRecord): void {
  * of the study and were still in its experimental condition, with no way back
  * short of clearing site data. Same for a reload after submitting.
  *
- * `EVAL_TASK_KEY` is imported from evalTask rather than re-spelled, so the
- * writer (the redirector), the reader and this eraser cannot drift apart.
+ * `EVAL_TASK_KEY` is defined beside the other two keys above, so the redirector,
+ * evalTask's reader and this eraser cannot drift apart.
  */
 export function clearEvalMode(): void {
   try {

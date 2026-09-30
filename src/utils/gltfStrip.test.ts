@@ -26,22 +26,27 @@ import {
   type StripPlan,
 } from './gltfStrip';
 import { readGltfModel, type GltfModelReport } from './gltfReader';
-import { PLACEHOLDER_PNG_DATA_URI, decodeDataUri, encodeDataUri, parseGlbContainer } from './glbContainer';
+import { PLACEHOLDER_PNG_DATA_URI, decodeDataUri, encodeDataUri, pad4 } from './glbContainer';
 import { GLB_READ_MAX_BYTES, MESH_MAX_BYTES, createPreviewMesh } from './previewMesh';
 import { modelSignatureMatches } from '@/engine/materialPartsContract';
 import { safeJsonReviver } from './safeJson';
 import { GLTF_NODE_GLOBALS } from '../gltfTestFixtures';
-import { TRIANGLE_POSITIONS, makeGlb, makeRealPng, webpHeaderBytes } from '../test-utils';
+import {
+  TRIANGLE_POSITIONS,
+  glbBinOf as binOf,
+  glbDocOf as docOf,
+  indexOfBytes,
+  makeGlb,
+  makeRealPng,
+  triangleWithBlobs as withBlobs,
+  webpHeaderBytes,
+} from '../test-utils';
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
 type Doc = Record<string, unknown>;
 type Kind = 'glb' | 'gltf';
 
-// Arithmetic, never `(n + 3) & ~3`: a bitwise operator coerces through ToInt32,
-// so that spelling returns a NEGATIVE length from 2**31 up. Harmless at fixture
-// sizes, but it is the shape that made the repacker u32 overflow guard dead code.
-const pad4 = (n: number) => Math.ceil(n / 4) * 4;
 const PNG_A = makeRealPng(2, 2, [250, 10, 10, 255]);
 const PNG_B = makeRealPng(2, 2, [10, 10, 250, 255]);
 const PNG_C = makeRealPng(3, 1, [10, 250, 10, 255]);
@@ -67,28 +72,6 @@ function stripped(bytes: Uint8Array, materials: Iterable<number>, kind: Kind = '
   return { m, plan, out, again: read(out.bytes, out.kind) };
 }
 
-/** The JSON document of a model file, parsed through the shared reviver. */
-function docOf(bytes: Uint8Array, kind: Kind = 'glb'): Doc {
-  if (kind === 'gltf') return JSON.parse(new TextDecoder().decode(bytes), safeJsonReviver) as Doc;
-  const c = parseGlbContainer(bytes);
-  if (!c.ok) throw new Error('container: ' + c.error);
-  return JSON.parse(c.chunks.json, safeJsonReviver) as Doc;
-}
-
-function binOf(bytes: Uint8Array): Uint8Array {
-  const c = parseGlbContainer(bytes);
-  if (!c.ok || !c.chunks.bin) throw new Error('no BIN chunk');
-  return c.chunks.bin;
-}
-
-function indexOfBytes(hay: Uint8Array, needle: Uint8Array): number {
-  outer: for (let i = 0; i + needle.length <= hay.length; i++) {
-    for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer;
-    return i;
-  }
-  return -1;
-}
-
 /** Every accessor's view bytes, through the report's own buffers. */
 function accessorBytes(m: GltfModelReport): Uint8Array[] {
   const doc = m.source.doc;
@@ -105,29 +88,6 @@ function accessorBytes(m: GltfModelReport): Uint8Array[] {
 const certainNames = (m: GltfModelReport) =>
   m.sceneMeshes.filter((s) => s.certain).map((s) => `${s.name}/${s.material}`);
 
-/** bufferView 0 is the triangle, 1, 2, … the blobs (4-aligned). */
-function withBlobs(extra: Doc, blobs: Uint8Array[]): { doc: Doc; bin: Uint8Array } {
-  const views: Doc[] = [{ buffer: 0, byteOffset: 0, byteLength: 36 }];
-  let len = 36;
-  for (const b of blobs) {
-    const off = pad4(len);
-    views.push({ buffer: 0, byteOffset: off, byteLength: b.length });
-    len = off + b.length;
-  }
-  const bin = new Uint8Array(pad4(len));
-  bin.set(TRIANGLE_POSITIONS);
-  blobs.forEach((b, i) => bin.set(b, views[i + 1].byteOffset as number));
-  return {
-    doc: {
-      asset: { version: '2.0' },
-      buffers: [{ byteLength: bin.length }],
-      bufferViews: views,
-      accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] }],
-      ...extra,
-    },
-    bin,
-  };
-}
 
 /** `n` single-primitive meshes, material i on mesh i, one node each. */
 function sceneOf(n: number): Doc {

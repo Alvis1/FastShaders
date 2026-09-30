@@ -150,9 +150,13 @@ describe('the code panel tabs say an import-built graph is shown on a primitive 
     expect(codeEditor).not.toContain('findDefaultOutput');
     // The GLB export (Phase 7) made the label a fillTemplate branch per tab and
     // format; the note is appended to whichever branch ran.
-    // Phase 7: the note is appended only for a page that shows a PRIMITIVE — in
-    // .glb mode the A-Frame page loads the model, where the sections DO apply.
-    expect(codeEditor).toContain("hasIndexSections && (activeTab === 'three' || exportFormat !== 'glb')");
+    // Phase 7: the note is appended only for a page that really shows a
+    // PRIMITIVE — the .glb and a bundled glTF/GLB load the model, where the
+    // sections DO apply, and an OBJ page is no primitive.
+    expect(codeEditor).toContain("hasIndexSections && (activeTab === 'three' || aframeOnModel === null)");
+    expect(codeEditor).toContain(
+      "const aframeOnModel = exportFormat === 'glb' ? 'glb' : bundledModel ? bundledModel.kind : null;",
+    );
     const key = codeEditor.match(/const INDEX_SECTIONS_TAB_NOTE =\s*"([^"]+)";/)?.[1];
     expect(key).toContain('primitive');
     const ui = (lv as { ui: Record<string, string> }).ui;

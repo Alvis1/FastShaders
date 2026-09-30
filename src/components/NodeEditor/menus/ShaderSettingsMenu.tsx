@@ -1,11 +1,10 @@
 import { useAppStore } from '@/store/useAppStore';
 import { t, portLabel } from '@/i18n';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import { OUTPUT_DEFAULT_EXPOSED } from '../nodes/OutputNode';
 import type { MaterialSettings, OutputNodeData, AppNode, AppEdge } from '@/types';
 import { outputNodeValues } from '@/types';
 import { removeEdgesForPort, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
-import { toggleExposedPort } from '@/utils/exposedPorts';
+import { OUTPUT_DEFAULT_EXPOSED, toggleExposedPort } from '@/utils/exposedPorts';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 import {
@@ -41,6 +40,27 @@ function textureMemoryKey(nodes: AppNode[], edges: AppEdge[]): string {
   return key;
 }
 
+// Checkbox size comes from ContextMenu.css (one size for every menu).
+const checkboxStyle = { cursor: 'pointer', accentColor: 'var(--border-focus)' } as const;
+const labelStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-2)',
+  padding: '4px var(--space-3)',
+  fontSize: 'var(--font-size-sm)',
+  color: 'var(--text-primary)',
+  cursor: 'pointer',
+} as const;
+const selectStyle = {
+  padding: '2px 4px',
+  fontSize: 'var(--font-size-sm)',
+  border: '1px solid var(--border-default)',
+  borderRadius: 'var(--border-radius-sm)',
+  background: 'var(--bg-input)',
+  color: 'var(--text-primary)',
+  cursor: 'pointer',
+} as const;
+
 export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
   const language = useAppStore((s) => s.language);
@@ -48,7 +68,7 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
   // The Alpha Clip threshold is a range input: React's onChange on a range is
   // the native `input` event, so it fires per pointermove FRAME and each frame
   // reaches updateNodeData -> an unconditional pushHistory. Bracket the drag
-  // so it lands as one undo entry (ColorNode.tsx:135-154 pattern).
+  // so it lands as one undo entry (useHistoryBracket; see hooks).
   const { bracket, closeBracket } = useHistoryBracket();
   // The texture-memory line is hidden in every study arm (a new
   // participant-visible element; if it is ever shown there it must also honour
@@ -205,33 +225,6 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
       }
       patchMaterial(patch);
     });
-  };
-
-  const checkboxStyle: React.CSSProperties = {
-    width: 14,
-    height: 14,
-    cursor: 'pointer',
-    accentColor: 'var(--border-focus)',
-  };
-
-  const labelStyle: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 'var(--space-2)',
-    padding: '4px var(--space-3)',
-    fontSize: 'var(--font-size-sm)',
-    color: 'var(--text-primary)',
-    cursor: 'pointer',
-  };
-
-  const selectStyle: React.CSSProperties = {
-    padding: '2px 4px',
-    fontSize: 'var(--font-size-sm)',
-    border: '1px solid var(--border-default)',
-    borderRadius: 'var(--border-radius-sm)',
-    background: 'var(--bg-input)',
-    color: 'var(--text-primary)',
-    cursor: 'pointer',
   };
 
   return (

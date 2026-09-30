@@ -45,9 +45,8 @@
  * and a floating `@latest` would let a future rename break a page the user has
  * already saved.
  */
-import type { GeometryType } from './tslToPreviewHTML.ts';
-import { isModelGeometry } from './tslToPreviewHTML.ts';
-import { parseShaderModuleSchema, readPreviewGeometry, type EmbedUniform } from './tslToAFrameHTML.ts';
+import { escapeHtml, isModelGeometry, type GeometryType } from './tslToPreviewHTML.ts';
+import { hasDisplacement, parseShaderModuleSchema, safeShaderFile, type EmbedUniform } from './tslToAFrameHTML.ts';
 import { THREE_REVISION } from './threeRevision.ts';
 import { CDN_BASE, LOADER_FILE } from './tslToShaderModule.ts';
 
@@ -72,27 +71,6 @@ export interface ThreeEmbedOptions {
   geometry?: GeometryType;
   /** Radius of the Raymarch Output's window sphere, when one drives. */
   marchWindow?: number;
-}
-
-/** Same guard the A-Frame page applies: a bare, relative, single-segment name. */
-function safeShaderFile(name: string): string {
-  const base = String(name).split(/[\\/]/).pop() ?? '';
-  const cleaned = base.replace(/[^A-Za-z0-9._-]/g, '');
-  return cleaned && cleaned !== '.' && cleaned !== '..' ? cleaned : 'shader.js';
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-/**
- * A displacing module needs vertices to displace. The predicate is this file's
- * own — the same one the A-Frame page uses and for the same reason: only the
- * loader can answer it structurally off the built material, so a page built
- * from source text has to read the source text.
- */
-function hasDisplacement(moduleSource: string): boolean {
-  return /positionNode\s*:/.test(moduleSource);
 }
 
 /**
@@ -247,5 +225,3 @@ export function buildThreeEmbedHTML(moduleSource: string, options: ThreeEmbedOpt
   L.push('</html>');
   return L.join('\n') + '\n';
 }
-
-export { readPreviewGeometry };

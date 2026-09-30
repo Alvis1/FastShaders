@@ -1,6 +1,6 @@
 /**
  * The BUILT-IN preview shapes as `.obj` files, for the EXPORT popover's
- * "Export model" row: the sphere, cube, plane, the Raymarch window, the Utah
+ * "Export with model" button: the sphere, cube, plane, the Raymarch window, the Utah
  * teapot and the Stanford bunny, each written as the preview DRAWS it, so the
  * shader looks the same on the exported file in any A-Frame page.
  *

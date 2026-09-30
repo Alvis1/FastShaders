@@ -1,18 +1,7 @@
 /**
  * The preview geometry PREFERENCE survives a boot, and the picker agrees with
- * the viewport.
- *
- * The defect this pins (owner, 2026-09-18: "when refreshed the model
- * disappears and there is a sphere, although the top selection shows that it
- * is the mesh"): `validateGeometry` downgraded a stored 'custom' to 'sphere'
- * whenever no mesh was loaded, and `usePersistedState` writes its seeded value
- * straight back — so EVERY boot overwrote the stored preference for the length
- * of the asynchronous IndexedDB mesh restore (MEASURED in Chrome at ~250 ms:
- * 'sphere' at t=188 ms, 'custom' again at t=442 ms). A reload, a vite dev
- * full-reload or a crash inside that window lost the preference for good: the
- * mesh still came back from the cache — so the Model entry sat in the dropdown
- * named after the user's file — while the viewport rendered a sphere, on that
- * boot and on every boot after it.
+ * the viewport. The defect this pins (owner, 2026-09-18: a stored 'custom'
+ * written back as 'sphere' on every boot) is told in previewGeometryPref.ts.
  *
  * The behavioural half runs against the pure module; the rest are SOURCE pins,
  * because the vitest env is `node` and ShaderPreview has never had a rendering

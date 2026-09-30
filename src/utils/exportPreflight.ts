@@ -1,34 +1,14 @@
 /**
- * The export pre-flight (N1): the PURE decision behind "This export is too
- * large to open again".
+ * The export pre-flight (N1): the PURE decisions behind "This export is too
+ * large to open again" — the reader must open what the writer emits.
  *
- * The invariant is that the reader must open what the writer emits, and
- * nothing checked it: an export whose entries summed past zipReader's
- * `MAX_TOTAL_UNCOMPRESSED`, or that held more than its `MAX_ENTRIES`, downloaded
- * fine and then failed on every import surface and in Podest. The limits are
- * the web reader's caps for EVERY surface in Phase 1 — the editor's import
- * paths, Podest's hand-written twin (drift-guarded by zipReader.test.ts) and the
- * desktop Work folder's zip path all go through readZip. The desktop room
- * (Phase 6) reads up to `DESKTOP_MAX_TOTAL_UNCOMPRESSED` (256 MiB), so there
- * the blocking dialog applies above THAT cap (`READ_MAX_TOTAL_UNCOMPRESSED`,
- * the default below), and an export between the web cap and the desktop cap
- * is delivered and then announced by the non-blocking `planDesktopOnlyExport`
- * line ("only the desktop editor can open it again" — Podest and the web
- * editor stay on 96 MiB).
- *
- * The ENTRY cap is reachable at any byte size: collectImageFiles writes one
- * `images/` entry per DISTINCT image (MIME + decoded bytes), so more than 510
- * small distinct images (509 with a model riding along) — well inside the
- * 3M-char image budget — make a zip readZip refuses. Ctrl+D and paste copies
- * carry the same bytes and add no entry. The reader's third cap,
- * the 512-byte entry name, is NOT checked here (see CLAUDE.md's N1 bullet).
- *
- * The size and the count compared are `ExportBundleSize.unpackedBytes` and
- * `.entryCount`, which buildExportBundle counts from the same entry list it
- * writes (see exportBundle.ts), so the prediction cannot drift from the file.
- * The dialog and its three surfaces live in
- * components/Modals/ExportPreflightModal.tsx and engine/exportShader.ts's
- * buildShaderBundleChecked.
+ * Three planners: the bundle against zipReader's size and entry caps, the
+ * non-blocking desktop-only line, and a single `.glb` against the model
+ * reader's pre-read cap. `<=` fits, mirroring the readers' strict `>`. The
+ * numbers are counted from the same entry list the zip is written from
+ * (exportBundle.ts), so the prediction cannot drift.
+ * The reasoning, the 510-image entry case, the unchecked 512-byte name cap and
+ * the desktop room: docs/dev/models-and-gltf.md (N1).
  */
 import { MAX_ENTRIES, MAX_TOTAL_UNCOMPRESSED, READ_MAX_TOTAL_UNCOMPRESSED } from './zipReader';
 import { GLB_READ_MAX_BYTES } from './gltfCompression';
@@ -136,15 +116,8 @@ export interface SingleGlbTooLarge {
  * null = the default (fallback-mode) file reopens. `<=` fits: the reader's
  * pre-read check is a strict `>`.
  *
- * Non-finite or negative sizes count as 0 — a DEFENSIVE clamp now, not a load-
- * bearing one, and it used to be the opposite. The repacker's 4-alignment was
- * `(n + 3) & ~3`, which coerces through ToInt32 and returns a negative total
- * from 2**31 up; `n()` then mapped that to 0, `0 <= limitBytes` returned null,
- * and the one size this dialog exists for was the one size at which it could
- * not open — the build then threw `Invalid typed array length` instead. The
- * repacker guards the overflow itself now (glbRepack.ts), so nothing upstream
- * produces a negative; treating one as 0 stays wrong-direction for a SIZE, so
- * do not lean on it.
+ * Non-finite or negative sizes count as 0 — defensive only: the repacker
+ * guards its own u32 total (glbContainer.ts `pad4`), so do not lean on it.
  */
 export function planSingleGlbPreflight(
   sizes: { fallback: GlbRepackSize; required: GlbRepackSize; noKtx2?: GlbRepackSize },

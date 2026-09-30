@@ -92,7 +92,6 @@ beforeAll(async () => {
     shaderPalettes: [],
     shaderName: 'Golden',
     previewMesh: mesh(),
-    exportAsGlb: true,
     exportIncludeMesh: true,
   });
   const out = await buildShaderExportChecked({
@@ -111,7 +110,6 @@ beforeAll(async () => {
     shaderPalettes: [],
     previewMesh: null,
     code: '',
-    exportAsGlb: false,
   });
   vi.unstubAllGlobals();
 });

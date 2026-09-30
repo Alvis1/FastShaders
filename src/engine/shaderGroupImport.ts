@@ -42,20 +42,20 @@ import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { isSinkNode } from '@/utils/sdfPartition';
 import { isSingletonNodeType } from '@/components/NodeEditor/singletonNodes';
 import { randomGroupColor } from '@/utils/newNodeValues';
-import { groupFrameSize } from '@/utils/groupFrame';
+import {
+  EST_NODE_H,
+  EST_NODE_W,
+  GROUP_BADGE_CLEARANCE,
+  GROUP_HEADER_H,
+  GROUP_PADDING,
+  groupFrameSize,
+  measuredNodeSize,
+} from '@/utils/groupFrame';
 import type { AppEdge, AppNode, GroupNodeData } from '@/types';
 
-/** The frame's inner padding, matching `groupSelection`'s own. */
-const PADDING = 24;
-/** Room for a member's cost badge (`top: -14px`), as `groupSelection` buys it. */
-const BADGE_CLEARANCE = 14;
-const TOP_PADDING = PADDING + BADGE_CLEARANCE;
-const HEADER_H = 22;
+const TOP_PADDING = GROUP_PADDING + GROUP_BADGE_CLEARANCE;
 /** Clear canvas between the live graph's box and the arriving frame. */
 export const ADD_GAP = 120;
-/** Fallbacks for a node the DOM has never measured — `groupSelection`'s. */
-const EST_W = 160;
-const EST_H = 60;
 
 export interface ShaderGroupPlan {
   /** The frame. FIRST in the committed array — React Flow requires it. */
@@ -71,16 +71,7 @@ export interface ShaderGroupPlan {
 }
 
 function sizeOf(n: AppNode): { w: number; h: number } {
-  if (n.type === 'group') return groupFrameSize(n);
-  const m = n as AppNode & {
-    measured?: { width?: number; height?: number };
-    width?: number;
-    height?: number;
-  };
-  return {
-    w: m.measured?.width ?? m.width ?? EST_W,
-    h: m.measured?.height ?? m.height ?? EST_H,
-  };
+  return n.type === 'group' ? groupFrameSize(n) : measuredNodeSize(n);
 }
 
 /**
@@ -199,14 +190,14 @@ export function planShaderGroup(
   if (!Number.isFinite(minX)) {
     minX = 0;
     minY = 0;
-    maxX = EST_W;
-    maxY = EST_H;
+    maxX = EST_NODE_W;
+    maxY = EST_NODE_H;
   }
-  const groupW = maxX - minX + PADDING * 2;
-  const groupH = maxY - minY + TOP_PADDING + PADDING + HEADER_H;
+  const groupW = maxX - minX + GROUP_PADDING * 2;
+  const groupH = maxY - minY + TOP_PADDING + GROUP_PADDING + GROUP_HEADER_H;
   // A root member's position is relative to the frame origin.
-  const dx = PADDING - minX;
-  const dy = TOP_PADDING + HEADER_H - minY;
+  const dx = GROUP_PADDING - minX;
+  const dy = TOP_PADDING + GROUP_HEADER_H - minY;
 
   const groupId = generateId();
   const members = parentsFirst(

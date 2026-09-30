@@ -11,6 +11,7 @@ import {
   type PaneDef,
 } from './keyboardNav';
 import { isTypingTarget } from '@/utils/isTypingTarget';
+import { nodeEl } from './nodeElement';
 
 /**
  * App-wide keyboard navigation.
@@ -72,9 +73,7 @@ function focusedNodeId(): string | null {
 }
 
 function focusNodeById(id: string): boolean {
-  const el = document.querySelector(
-    `.react-flow__node[data-id="${CSS.escape(id)}"]`,
-  ) as HTMLElement | null;
+  const el = nodeEl(id);
   if (!el) return false;
   // preventScroll: React Flow's own `autoPanOnNodeFocus` already centres an
   // off-screen node, and letting the browser ALSO scroll the pane fights it.

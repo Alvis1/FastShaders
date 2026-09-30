@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import {
   evaluateNodeOutput,
-  evaluateNodeScalar,
   getNodeOutputShape,
   evaluateNodeRange,
   getTargetEdges,
@@ -352,18 +351,6 @@ describe('evaluateNodeOutput — null propagation and cycles', () => {
     const b = makeNode('b', 'add');
     const edges = [makeEdge('a', 'out', 'b', 'a'), makeEdge('b', 'out', 'a', 'a')];
     expect(evaluateNodeOutput('a', [a, b], edges, 0)).toBeNull();
-  });
-});
-
-describe('evaluateNodeScalar', () => {
-  it('returns the first channel of a vec3', () => {
-    const v = makeNode('v', 'vec3', { x: 7, y: 8, z: 9 });
-    expect(evaluateNodeScalar('v', [v], [], 0)).toBe(7);
-  });
-
-  it('returns null when the evaluator returns null', () => {
-    const n = makeNode('n', 'positionGeometry');
-    expect(evaluateNodeScalar('n', [n], [], 0)).toBeNull();
   });
 });
 

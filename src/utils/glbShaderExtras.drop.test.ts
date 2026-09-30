@@ -10,16 +10,17 @@ import type { Material, Mesh } from 'three';
 import { GLTF_NODE_GLOBALS, parseWith } from '../gltfTestFixtures';
 import { embedProjectState, type FastShadersProject } from '@/engine/fastShadersProject';
 import { FS_PROJECT_BEGIN, hasFsExtras } from '@/engine/glbShaderContract';
-import { decodeDataUri, encodeDataUri, parseGlbContainer } from './glbContainer';
+import { decodeDataUri, encodeDataUri } from './glbContainer';
 import { readGltfModel } from './gltfReader';
 import { planTextureStrip, stripGltfTextures } from './gltfStrip';
 import { modelSignatureMatches } from '@/engine/materialPartsContract';
-import { safeJsonReviver } from './safeJson';
 import { FS_JSON_SNIFF, dropFastShadersPayload, readGlbFsExtras } from './glbShaderExtras';
 import {
   FS_FIXTURE_MODULE,
   FS_FIXTURE_MODULE_MARKER,
   TRIANGLE_POSITIONS,
+  glbBinOf as binOf,
+  glbDocOf as docOf,
   makeFastShadersGlb,
   makeFastShadersGlbEscapedKey,
   makeFastShadersGltfJson,
@@ -40,16 +41,6 @@ const PAYLOAD_FIXTURE: FsGlbFixture = {
 };
 const payloadGlb = (o: FsGlbFixture = {}) => makeFastShadersGlb({ ...PAYLOAD_FIXTURE, ...o });
 
-function docOf(bytes: Uint8Array): Record<string, unknown> {
-  const c = parseGlbContainer(bytes);
-  if (!c.ok) throw new Error('container: ' + c.error);
-  return JSON.parse(c.chunks.json, safeJsonReviver) as Record<string, unknown>;
-}
-function binOf(bytes: Uint8Array): Uint8Array {
-  const c = parseGlbContainer(bytes);
-  if (!c.ok || !c.chunks.bin) throw new Error('no BIN');
-  return c.chunks.bin;
-}
 /** The DECODED bytes of a `data:` buffer — the module in one is base64, so the
  *  raw-text assertions the BIN cases use would pass vacuously over it. */
 function dataBufferOf(bytes: Uint8Array, index: number): Uint8Array {

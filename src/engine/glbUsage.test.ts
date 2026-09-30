@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { MODEL_SRC } from './glbShaderContract';
-import { GLB_SRC_MODEL, glbAFrameSnippet, glbModuleHeaderLines, safeGlbFileName } from './glbUsage';
+import { glbAFrameSnippet, glbModuleHeaderLines, safeGlbFileName } from './glbUsage';
 
 const REPO = path.resolve(__dirname, '../..');
 
@@ -33,7 +33,7 @@ describe('glbModuleHeaderLines', () => {
     expect(text).toContain('src: model');
     expect(text).toContain('0.8');
     expect(lines[2]).toBe(`//   ${glbAFrameSnippet('x.glb')}`);
-    expect(GLB_SRC_MODEL).toBe(MODEL_SRC);
+    expect(glbAFrameSnippet('x.glb')).toContain(`shader="src: ${MODEL_SRC}"`);
     expect(glbAFrameSnippet('my-shader.glb')).toBe(
       '<a-entity gltf-model="url(my-shader.glb)" shader="src: model" position="0 1.6 -3"></a-entity>',
     );

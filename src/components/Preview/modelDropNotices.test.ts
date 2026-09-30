@@ -2,7 +2,7 @@
  * The preview's model notices and the canvas model drop, pinned from SOURCE.
  *
  * The vitest env is `node` — ShaderPreview (an iframe, postMessage and
- * localStorage in a ~2600-line component) and NodeEditor's onDrop have never
+ * localStorage in a large component) and NodeEditor's onDrop have never
  * had a rendering test — so what can be checked is that the code still says
  * what the design says (the previewRebuild.test.ts pattern). The logic behind
  * each pin is tested for real in utils/ (previewMesh, previewMeshMessage,

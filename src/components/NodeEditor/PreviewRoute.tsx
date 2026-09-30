@@ -2,6 +2,7 @@ import { memo, useEffect, useRef } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { PREVIEW_CHANNEL } from '@/utils/nodePreview';
 import { previewRouteTargetId } from './nodes/activeSinkSelector';
+import { nodeEl, handleEl } from './nodeElement';
 import './PreviewRoute.css';
 
 /**
@@ -53,12 +54,6 @@ export const PreviewRoute = memo(function PreviewRoute() {
     let srcSock: HTMLElement | null = null;
     let dstSock: HTMLElement | null = null;
 
-    const escape = (id: string) =>
-      (window.CSS && typeof window.CSS.escape === 'function') ? window.CSS.escape(id) : id;
-    const nodeEl = (id: string) =>
-      document.querySelector<HTMLElement>(`.react-flow__node[data-id="${escape(id)}"]`);
-    const sockEl = (node: HTMLElement, kind: 'source' | 'target', handle: string) =>
-      node.querySelector<HTMLElement>(`.react-flow__handle.${kind}[data-handleid="${escape(handle)}"]`);
     // A socket's centre, or the card's edge midpoint when the socket is not
     // laid out (mid-mount, or hidden). Null when the node itself is not laid
     // out — display:none inside a collapsed group reads 0×0 at (0,0).
@@ -105,8 +100,8 @@ export const PreviewRoute = memo(function PreviewRoute() {
       if (!srcNode || !srcNode.isConnected) { srcNode = nodeEl(srcId); srcSock = null; }
       if (!dstNode || !dstNode.isConnected) { dstNode = nodeEl(dstId); dstSock = null; }
       if (!srcNode || !dstNode) { paint(svg, 'none', null, null); return; }
-      if (!srcSock || !srcSock.isConnected) srcSock = sockEl(srcNode, 'source', srcHandle);
-      if (!dstSock || !dstSock.isConnected) dstSock = sockEl(dstNode, 'target', PREVIEW_CHANNEL);
+      if (!srcSock || !srcSock.isConnected) srcSock = handleEl(srcNode, 'source', srcHandle);
+      if (!dstSock || !dstSock.isConnected) dstSock = handleEl(dstNode, 'target', PREVIEW_CHANNEL);
       const box = svg.getBoundingClientRect();
       if (box.width < 1) { paint(svg, 'none', null, null); return; }
       const a = anchor(srcSock, srcNode, 'right');

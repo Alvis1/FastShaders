@@ -32,6 +32,13 @@ import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 const OUTPUT_FLOAT_VALUE_CHANNELS = new Set(['roughness', 'metalness', 'opacity', 'position', 'discard']);
 const OUTPUT_COLOR_VALUE_CHANNELS = new Set(['color', 'emissive', 'normal', 'env']);
 
+/** TSL statement-level constructs that build a control-flow block from a callback. */
+const IMPERATIVE_BLOCKS = new Set(['Loop', 'If', 'Switch']);
+/** The `.assign` family: a write to a `.toVar()` variable, meaningless in a DAG. */
+const ASSIGN_METHODS = new Set([
+  'assign', 'addAssign', 'subAssign', 'mulAssign', 'divAssign', 'modAssign',
+]);
+
 // Handle babel traverse CJS/ESM interop
 const traverse = (
   typeof (_traverse as unknown as { default: typeof _traverse }).default === 'function'
@@ -126,20 +133,15 @@ export function codeToGraph(code: string): CodeToGraphResult {
   // visitors with `p`/`dir` bound to the root node and their `return` routed
   // to the socket; everything else about the node is skipped whole (which is
   // also what keeps its Loop/If from raising the imperative-block warning).
-  // NB `sdfOutputId` holds the RAYMARCH Output's id. The name predates the
-  // 2026-09-03 fold of the one-day SDF Output / Volume Output into that one
-  // node; there is no `sdfOutput` node type any more (`MARCH_OUTPUT_TYPE` is
-  // `raymarchOutput`). Left alone because renaming it is churn across ~9 call
-  // sites in the middle of a parser, not because it is still accurate.
-  let sdfOutputId: string | null = null;
+  let marchOutputId: string | null = null;
   const helperReturnTargets = new Map<t.Node, { nodeId: string; handle: string }>();
   const ensureMarchOutput = (): string => {
-    if (sdfOutputId) return sdfOutputId;
+    if (marchOutputId) return marchOutputId;
     const def = NODE_REGISTRY.get(MARCH_OUTPUT_TYPE)!;
-    sdfOutputId = generateId();
-    rawNodes.push(createNode(sdfOutputId, def, 'SDF Output'));
+    marchOutputId = generateId();
+    rawNodes.push(createNode(marchOutputId, def, 'SDF Output'));
     hasOutput = true;
-    return sdfOutputId;
+    return marchOutputId;
   };
   // ===== Splat Output =====
   // graphToCode emits up to four `const sp1<Shade|Shape|Size|Feather> =
@@ -406,7 +408,9 @@ export function codeToGraph(code: string): CodeToGraphResult {
    *  by autoExposeConnectedParamPorts.)
    *
    *  ONE material per NODE since the Output split, so every material writes
-   *  the node's own fields — where material 0's have always lived. */
+   *  the node's own fields — where material 0's have always lived.
+   *
+   *  MERGES, so the deferred Discard can add its value after the return's. */
   const applyStoredOutputValues = (
     outputId: string,
     values: Record<string, string | number>,
@@ -415,8 +419,10 @@ export function codeToGraph(code: string): CodeToGraphResult {
     if (keys.length === 0) return;
     const sink = nodeById(rawNodes, outputId)?.data as Record<string, unknown> | undefined;
     if (!sink) return;
-    sink.values = values;
-    sink.exposedPorts = Array.from(new Set([...OUTPUT_DEFAULT_EXPOSED, ...keys]));
+    sink.values = { ...((sink.values as Record<string, string | number>) ?? {}), ...values };
+    sink.exposedPorts = Array.from(
+      new Set([...((sink.exposedPorts as string[]) ?? OUTPUT_DEFAULT_EXPOSED), ...keys]),
+    );
   };
 
   /**
@@ -495,33 +501,33 @@ export function codeToGraph(code: string): CodeToGraphResult {
     tempPrefix: string,
   ): void => {
     const storedValues: Record<string, string | number> = {};
-  for (const rawProp of obj.properties) {
-    if (!t.isObjectProperty(rawProp)) continue;
-    const channel = propKeyName(rawProp);
-    // `parts` is the per-mesh map, handled by buildPartOutputs — never a
-    // channel of the output it appears on. Nor is a material's settings key
-    // (engine/materialSettingsCode): a value that resolves to a graph node
-    // would otherwise be wired as one — `side: color2.x` takes the
-    // member-expression branch below and mints a Split node plus a dead
-    // `side` edge, and `side: color2` wires one straight in. (An
-    // UNRESOLVABLE value — `THREE.DoubleSide`, an undeclared name — wires
-    // nothing either way, which is why the tests use resolvable ones.) Skipped
-    // at the top level too, where the default's settings never appear in
-    // editor code; buildPartOutputs reads a part's.
-    //
-    // The glTF-index table and its companions are not channels either:
-    // `materialParts` is read by buildIndexOutputs, `modelSignature` rides
-    // beside it, and `materialPartsMirror` (module-only, R7) is honoured by
-    // buildPartOutputs — wired as channels they would mint dead edges on a
-    // handle no port has.
-    if (
-      channel === null
-      || channel === 'parts'
-      || channel === 'materialParts'
-      || channel === 'modelSignature'
-      || channel === 'materialPartsMirror'
-      || PART_SETTING_KEYS.has(channel)
-    ) continue;
+    for (const rawProp of obj.properties) {
+      if (!t.isObjectProperty(rawProp)) continue;
+      const channel = propKeyName(rawProp);
+      // `parts` is the per-mesh map, handled by buildPartOutputs — never a
+      // channel of the output it appears on. Nor is a material's settings key
+      // (engine/materialSettingsCode): a value that resolves to a graph node
+      // would otherwise be wired as one — `side: color2.x` takes the
+      // member-expression branch below and mints a Split node plus a dead
+      // `side` edge, and `side: color2` wires one straight in. (An
+      // UNRESOLVABLE value — `THREE.DoubleSide`, an undeclared name — wires
+      // nothing either way, which is why the tests use resolvable ones.) Skipped
+      // at the top level too, where the default's settings never appear in
+      // editor code; buildPartOutputs reads a part's.
+      //
+      // The glTF-index table and its companions are not channels either:
+      // `materialParts` is read by buildIndexOutputs, `modelSignature` rides
+      // beside it, and `materialPartsMirror` (module-only, R7) is honoured by
+      // buildPartOutputs — wired as channels they would mint dead edges on a
+      // handle no port has.
+      if (
+        channel === null
+        || channel === 'parts'
+        || channel === 'materialParts'
+        || channel === 'modelSignature'
+        || channel === 'materialPartsMirror'
+        || PART_SETTING_KEYS.has(channel)
+      ) continue;
       // Same widening undo as the single-value form above — a multi-channel
       // return carries `{ color: vec3(noise1), opacity: … }`.
       const prop = { ...rawProp, value: unwrapScalarWiden(rawProp.value) } as t.ObjectProperty;
@@ -1054,7 +1060,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
     // read off its own `const rm1<Channel> = …` declarator, so the return's
     // keys carry nothing this parse has not already wired and no plain Output
     // is minted for them.
-    if (sdfOutputId) return;
+    if (marchOutputId) return;
     // So is a Splat Output's `{ splat: { … } }` — read BEFORE the `hasOutput`
     // guard, which its own scope Fns have already set.
     if (t.isObjectExpression(rawArg)) {
@@ -1215,7 +1221,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
           path.skip();
           return;
         }
-        if (sdfOutputId && /^rm\d+(Col|N)$/.test(varName) && (t.isMemberExpression(init) || t.isCallExpression(init))) {
+        if (marchOutputId && /^rm\d+(Col|N)$/.test(varName) && (t.isMemberExpression(init) || t.isCallExpression(init))) {
           path.skip();
           return;
         }
@@ -1394,7 +1400,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
         // aliased to its initial value, so the re-emitted shader was a
         // constant. Skip the whole block, and say so. A body statement like
         // `acc.assign(x)` / `.addAssign` is the same silence one level down.
-        const root = rootCallee(expr);
+        const root = rootIdentifierOf(expr);
         if (root && IMPERATIVE_BLOCKS.has(root)) {
           warnings.push({
             message: `${root}(…) has no graph equivalent — the block and everything inside it were dropped. Loops, branches and .assign() live only in a hand-written module (see the shaderloader notes).`,
@@ -1420,7 +1426,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
         if (!t.isIdentifier(expr.callee) || expr.callee.name !== 'Discard') return;
         // `Discard(rm1.w.lessThan(0.5))` is the Raymarch Output's own cutout —
         // the node itself, not a user discard.
-        if (sdfOutputId && expr.arguments[0] && /^rm\d+/.test(rootIdentifierOf(expr.arguments[0]) ?? '')) return;
+        if (marchOutputId && expr.arguments[0] && /^rm\d+/.test(rootIdentifierOf(expr.arguments[0]) ?? '')) return;
         // The graph has ONE discard socket, so an unconditional `Discard()` and
         // a second condition cannot be represented. Both used to disappear in
         // silence — with the graph→code sync then writing the loss back into the
@@ -1452,7 +1458,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
   // this parser consumed may still have produced no node — and a graph with no
   // Output is one the user cannot wire. (An existence check, not a "which one
   // is THE output" question, so `outputNodes` rather than a `find`.)
-  if (outputNodes(rawNodes).length === 0 && !sdfOutputId && !splatOutputId) {
+  if (outputNodes(rawNodes).length === 0 && !marchOutputId && !splatOutputId) {
     const outputDef = NODE_REGISTRY.get('output');
     if (outputDef) mintOutputNode(outputDef);
   }
@@ -1473,21 +1479,10 @@ export function codeToGraph(code: string): CodeToGraphResult {
     if (outputNode) {
       // `Discard(float(<lit>))` is the discard widget's stored value (the
       // emitted form of a non-zero dial) — collapse it back into data.values
-      // instead of materializing a Float node. Runs AFTER the return parse,
-      // so merge with any values applyStoredOutputValues already attached.
+      // instead of materializing a Float node.
       const storedDiscard = matchStoredChannelValue('discard', pendingDiscardArg);
       if (storedDiscard !== null) {
-        const data = outputNode.data as Record<string, unknown>;
-        data.values = {
-          ...((data.values as Record<string, string | number>) ?? {}),
-          discard: storedDiscard,
-        };
-        data.exposedPorts = Array.from(
-          new Set([
-            ...((data.exposedPorts as string[]) ?? OUTPUT_DEFAULT_EXPOSED),
-            'discard',
-          ]),
-        );
+        applyStoredOutputValues(outputNode.id, { discard: storedDiscard });
       } else {
         const ref = resolveReturnSource(
           pendingDiscardArg, rawNodes, rawEdges, varToNodeId, varToHandle, splitNodes, code, warnings,
@@ -1520,37 +1515,11 @@ export function codeToGraph(code: string): CodeToGraphResult {
   return { nodes: rawNodes, edges: rawEdges, errors: warnings };
 }
 
-/** Push a typed animated edge, deriving its ID from the endpoints. */
 /**
- * A `color(0xNNN)` literal → its `#rrggbb` string. Colour literals arrive from
- * `.fastshader` files and pasted source, i.e. ADVERSARIAL input: a raw
- * `Math.round(lit).toString(16)` of an out-of-range or negative value produces
- * a malformed hex (`#1000000`, `#0000-1`) that then reaches the swatch and the
- * `<input type=color>`. Anything outside a 24-bit colour degrades to black —
- * mirroring graphToCode's `hexLiteral` on the emit side.
+ * The identifier a call/member chain hangs off: `rm1.w.lessThan(0.5)` → `rm1`.
+ * `If(c, f).Else(g)` is a call on the member `Else` of a call on `If`, so the
+ * plain callee check sees `Else`; this one answers `If`.
  */
-/** TSL statement-level constructs that build a control-flow block from a callback. */
-const IMPERATIVE_BLOCKS = new Set(['Loop', 'If', 'Switch']);
-/** The `.assign` family: a write to a `.toVar()` variable, meaningless in a DAG. */
-const ASSIGN_METHODS = new Set([
-  'assign', 'addAssign', 'subAssign', 'mulAssign', 'divAssign', 'modAssign',
-]);
-
-/**
- * The identifier at the ROOT of a call chain: `If(c, f).Else(g)` is a call on
- * the member `Else` of a call on `If`, so the plain callee check sees `Else`.
- */
-function rootCallee(expr: t.CallExpression): string | null {
-  let cur: t.Node = expr;
-  for (let guard = 0; guard < 32; guard++) {
-    if (t.isCallExpression(cur)) { cur = cur.callee; continue; }
-    if (t.isMemberExpression(cur)) { cur = cur.object; continue; }
-    return t.isIdentifier(cur) ? cur.name : null;
-  }
-  return null;
-}
-
-/** The identifier a call/member chain hangs off: `rm1.w.lessThan(0.5)` → `rm1`. */
 function rootIdentifierOf(node: t.Node): string | null {
   let cur: t.Node = node;
   for (let guard = 0; guard < 32; guard++) {
@@ -1561,6 +1530,14 @@ function rootIdentifierOf(node: t.Node): string | null {
   return null;
 }
 
+/**
+ * A `color(0xNNN)` literal → its `#rrggbb` string. Colour literals arrive from
+ * `.fastshader` files and pasted source, i.e. ADVERSARIAL input: a raw
+ * `Math.round(lit).toString(16)` of an out-of-range or negative value produces
+ * a malformed hex (`#1000000`, `#0000-1`) that then reaches the swatch and the
+ * `<input type=color>`. Anything outside a 24-bit colour degrades to black —
+ * mirroring graphToCode's `hexLiteral` on the emit side.
+ */
 function toHex6(lit: number): string {
   const n = Math.round(lit);
   return Number.isFinite(n) && n >= 0 && n <= 0xffffff
@@ -1568,6 +1545,7 @@ function toHex6(lit: number): string {
     : '#000000';
 }
 
+/** Push a typed animated edge, deriving its ID from the endpoints. */
 function addEdge(
   edges: AppEdge[],
   source: string,
@@ -1654,9 +1632,9 @@ function processCall(
   edges: AppEdge[],
   varToNodeId: Map<string, string>,
   varToHandle: Map<string, string>,
-  splitNodesMap: Map<string, string> = new Map(),
-  code: string = '',
-  errors: ParseError[] = [],
+  splitNodesMap: Map<string, string>,
+  code: string,
+  errors: ParseError[],
 ): void {
   let funcName: string | undefined;
   let objectVarName: string | undefined;
@@ -1769,8 +1747,7 @@ function processCall(
 
   // Detect UV-tiling pattern: mul(uv(), vec2(x, y)) → create UV node with tiling values
   if (funcName === 'mul' && callExpr.arguments.length === 2) {
-    const uvNode = tryParseUVTiling(callExpr, varName, nodes, edges, varToNodeId);
-    if (uvNode) return;
+    if (tryParseUVTiling(callExpr, varName, nodes, varToNodeId)) return;
   }
 
   // Detect the Time-speed pattern `time.mul(<numeric literal>)` — the exact
@@ -2094,7 +2071,6 @@ function tryParseUVTiling(
   callExpr: t.CallExpression,
   varName: string,
   nodes: AppNode[],
-  _edges: AppEdge[],
   varToNodeId: Map<string, string>
 ): boolean {
   const [arg0, arg1] = callExpr.arguments;

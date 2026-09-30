@@ -7,7 +7,9 @@ import {
   adoptShaderName,
   fitsWorkFolderName,
   isShaderRenamed,
+  keepsBundleFormat,
   sameShaderFile,
+  untrackedKeepsBundle,
   stripShaderExt,
   workFolderSaveName,
 } from './workFolderFile';
@@ -134,6 +136,36 @@ describe('isShaderRenamed', () => {
     // Two different words, one file name — the caller prompts before replacing.
     expect(toKebabCase('Zīle')).toBe(toKebabCase('Zāle'));
     expect(isShaderRenamed('Zīle', 'Zāle')).toBe(false);
+  });
+});
+
+describe('keepsBundleFormat', () => {
+  it('a tracked .js/.zip stays the bundle; a tracked .glb or a new file may be the .glb', () => {
+    expect(keepsBundleFormat('waves.zip')).toBe(true);
+    expect(keepsBundleFormat('waves.js')).toBe(true);
+    expect(keepsBundleFormat('Waves.ZIP')).toBe(true);
+    expect(keepsBundleFormat('waves.glb')).toBe(false);
+    expect(keepsBundleFormat('Waves.GLB')).toBe(false);
+    expect(keepsBundleFormat(null)).toBe(false);
+  });
+
+  it('so a tracked waves.zip is written back to itself, not forked into waves.glb', () => {
+    const kind = keepsBundleFormat('waves.zip') ? 'zip' : 'glb';
+    expect(workFolderSaveName('waves.zip', 'waves.zip', kind)).toBe('waves.zip');
+  });
+});
+
+describe('untrackedKeepsBundle (nothing tracked — every first Save after a relaunch)', () => {
+  it('a stem the folder holds as a .js/.zip, and not as a .glb, stays the bundle', () => {
+    expect(untrackedKeepsBundle('waves', ['waves.zip', 'other.glb'])).toBe(true);
+    expect(untrackedKeepsBundle('waves', ['Waves.JS'])).toBe(true);
+  });
+
+  it('a stem the folder holds as a .glb — or not at all — follows the document rule', () => {
+    expect(untrackedKeepsBundle('waves', ['waves.glb'])).toBe(false);
+    expect(untrackedKeepsBundle('waves', ['waves.zip', 'waves.glb'])).toBe(false);
+    expect(untrackedKeepsBundle('waves', ['waves-2.zip', 'wave.zip'])).toBe(false);
+    expect(untrackedKeepsBundle('waves', [])).toBe(false);
   });
 });
 

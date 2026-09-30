@@ -1,8 +1,16 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { SplitPane, clampPreviewSplit } from './SplitPane';
 import { Toolbar } from './Toolbar';
 import { NodeEditor } from '@/components/NodeEditor/NodeEditor';
 import { ShaderPreview } from '@/components/Preview/ShaderPreview';
+import { CsvImportModal } from '@/components/Modals/CsvImportModal';
+import { LimitModal } from '@/components/Modals/LimitModal';
+import { ShaderImportModal } from '@/components/Modals/ShaderImportModal';
+import { TooltipLayer } from '@/components/Tooltip/TooltipLayer';
+import { useAppStore } from '@/store/useAppStore';
+import { t } from '@/i18n';
+import { lazyOr } from '@/utils/lazyOr';
+import './AppLayout.css';
 
 // Monaco (a ~3.7MB chunk + its CSS) rides CodeEditor's import graph; loading
 // it lazily moves all of it off the first-paint critical path — the canvas
@@ -11,10 +19,8 @@ import { ShaderPreview } from '@/components/Preview/ShaderPreview';
 // lazy() is only half of it: see useIdleMount below for why the ELEMENT is
 // withheld too — a lazy component that is rendered immediately still starts
 // its fetch immediately, which is what raced the preview's own assets.
-// The catch matters: a failed lazy fetch (connection drop, or a redeploy
-// swapping the hashed assets mid-session) would otherwise reject through
-// React.lazy with no boundary and unmount the whole live app — degrade to a
-// broken code pane instead.
+// A failed fetch degrades to a broken code pane (lazyOr) rather than
+// unmounting the whole live app.
 function CodeEditorLoadError() {
   const language = useAppStore((s) => s.language);
   return (
@@ -23,10 +29,9 @@ function CodeEditorLoadError() {
     </div>
   );
 }
-const CodeEditor = lazy(() =>
-  import('@/components/CodeEditor/CodeEditor')
-    .then((m) => ({ default: m.CodeEditor }))
-    .catch(() => ({ default: CodeEditorLoadError })),
+const CodeEditor = lazyOr(
+  () => import('@/components/CodeEditor/CodeEditor').then((m) => m.CodeEditor),
+  CodeEditorLoadError,
 );
 
 /**
@@ -70,16 +75,46 @@ function useIdleMount(timeoutMs: number): boolean {
   }, [timeoutMs]);
   return mount;
 }
-import { CsvImportModal } from '@/components/Modals/CsvImportModal';
-import { LimitModal } from '@/components/Modals/LimitModal';
-import { ShaderImportModal } from '@/components/Modals/ShaderImportModal';
-import { TooltipLayer } from '@/components/Tooltip/TooltipLayer';
-import { useAppStore } from '@/store/useAppStore';
-import { t } from '@/i18n';
-import './AppLayout.css';
+
+function CodePane() {
+  const mounted = useIdleMount(CODE_PANE_MOUNT_TIMEOUT_MS);
+  return (
+    <div className="app-layout__code-panel">
+      <div className="app-layout__code">
+        {/* Empty until the mount gate opens — the same empty the
+            Suspense fallback shows while the chunk is in flight. */}
+        <Suspense fallback={null}>{mounted && <CodeEditor />}</Suspense>
+      </div>
+    </div>
+  );
+}
+
+// Module-scope elements: a seam drag re-renders AppLayout per pointermove, and
+// an element of the same identity lets React skip the whole subtree under it.
+const TOOLBAR = <Toolbar />;
+const CANVAS_PANE = (
+  <div className="app-layout__left">
+    <div className="app-layout__node-editor">
+      <NodeEditor />
+    </div>
+  </div>
+);
+const PREVIEW_PANE = (
+  <div className="app-layout__preview">
+    <ShaderPreview />
+  </div>
+);
+const CODE_PANE = <CodePane />;
+const OVERLAYS = (
+  <>
+    <CsvImportModal />
+    <ShaderImportModal />
+    <LimitModal />
+    <TooltipLayer />
+  </>
+);
 
 export function AppLayout() {
-  const codePaneMounted = useIdleMount(CODE_PANE_MOUNT_TIMEOUT_MS);
   const splitRatio = useAppStore((s) => s.splitRatio);
   const setSplitRatio = useAppStore((s) => s.setSplitRatio);
   const rightSplitRatio = useAppStore((s) => s.rightSplitRatio);
@@ -87,7 +122,7 @@ export function AppLayout() {
 
   return (
     <div className="app-layout">
-      <Toolbar />
+      {TOOLBAR}
       <SplitPane
         ratio={splitRatio}
         onRatioChange={setSplitRatio}
@@ -96,13 +131,7 @@ export function AppLayout() {
         // Everywhere else on the line it moves this seam alone.
         crossRatio={rightSplitRatio}
         onCrossRatioChange={setRightSplitRatio}
-        left={
-          <div className="app-layout__left">
-            <div className="app-layout__node-editor">
-              <NodeEditor />
-            </div>
-          </div>
-        }
+        left={CANVAS_PANE}
         right={
           <div className="app-layout__right">
             <SplitPane
@@ -115,28 +144,13 @@ export function AppLayout() {
               // The same bounds the corner zone applies to this ratio, so the
               // seam stops in the same place whichever hand moves it.
               clamp={clampPreviewSplit}
-              left={
-                <div className="app-layout__preview">
-                  <ShaderPreview />
-                </div>
-              }
-              right={
-                <div className="app-layout__code-panel">
-                  <div className="app-layout__code">
-                    {/* Empty until the mount gate opens — the same empty the
-                        Suspense fallback shows while the chunk is in flight. */}
-                    <Suspense fallback={null}>{codePaneMounted && <CodeEditor />}</Suspense>
-                  </div>
-                </div>
-              }
+              left={PREVIEW_PANE}
+              right={CODE_PANE}
             />
           </div>
         }
       />
-      <CsvImportModal />
-      <ShaderImportModal />
-      <LimitModal />
-      <TooltipLayer />
+      {OVERLAYS}
     </div>
   );
 }

@@ -3,7 +3,6 @@ import {
   isUsableMeshName,
   sanitizeMeshInventory,
   sanitizeSplatReport,
-  meshNameCounts,
   MESH_NAME_MAX,
   MAX_INVENTORY_MESHES,
   MATERIAL_NAME_MAX,
@@ -156,27 +155,6 @@ describe('sanitizeMeshInventory', () => {
       ['index', 'materialName', 'name', 'vertexCount'].sort(),
     );
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
-  });
-});
-
-describe('meshNameCounts', () => {
-  it('counts duplicates — the ordinary case, not an error', () => {
-    const counts = meshNameCounts([
-      { index: 0, name: 'Dup', materialName: '', vertexCount: 1 },
-      { index: 1, name: 'Dup', materialName: '', vertexCount: 1 },
-      { index: 2, name: 'Solo', materialName: '', vertexCount: 1 },
-    ]);
-    expect(counts.get('Dup')).toBe(2);
-    expect(counts.get('Solo')).toBe(1);
-  });
-
-  it('is a Map, so a mesh named like an Object member cannot fake a count', () => {
-    const counts = meshNameCounts([
-      { index: 0, name: 'toString', materialName: '', vertexCount: 1 },
-    ]);
-    expect(counts.get('toString')).toBe(1);
-    expect(counts.get('constructor')).toBeUndefined();
-    expect(counts.get('hasOwnProperty')).toBeUndefined();
   });
 });
 

@@ -48,7 +48,15 @@ import { readGlbFsExtras } from './glbShaderExtras';
 import { decodeDataUri } from './glbContainer';
 import { meshToRecord, recordToMesh } from './previewMeshCache';
 import { SPLAT_MAX_COUNT, SPZ_MAGIC } from './splatLimits';
-import { FS_FIXTURE_MODULE_MARKER, makeFastShadersGlb, makeFastShadersGltfJson, type FsGlbFixture } from '@/test-utils';
+import {
+  FS_FIXTURE_MODULE_MARKER,
+  TRIANGLE_POSITIONS,
+  gltfPrimitiveDoc,
+  makeFastShadersGlb,
+  makeFastShadersGltfJson,
+  makeGlb,
+  type FsGlbFixture,
+} from '@/test-utils';
 
 const GLB_HEADER = new Uint8Array([0x67, 0x6c, 0x54, 0x46, 2, 0, 0, 0, 12, 0, 0, 0]);
 
@@ -498,6 +506,28 @@ describe('previewMesh: createPreviewMesh runs the compression pre-check', () => 
     // Absent, not { draco: false, meshopt: false, ktx2: false }: an uncompressed mesh looks
     // exactly as it did before decoders existed.
     expect('mesh' in r && 'decoders' in r.mesh).toBe(false);
+  });
+
+  it('parses a readable model ONCE: the reader\'s own report answers the pre-check', () => {
+    const doc = gltfPrimitiveDoc({
+      extensionsUsed: ['KHR_draco_mesh_compression'],
+      materials: [{ name: 'A' }],
+      meshes: [{ primitives: [{ attributes: { POSITION: 0 }, material: 0 }] }],
+      nodes: [{ mesh: 0 }],
+      scenes: [{ nodes: [0] }],
+      scene: 0,
+    });
+    const bytes = makeGlb(doc, TRIANGLE_POSITIONS);
+    const parse = vi.spyOn(JSON, 'parse');
+    try {
+      const r = createPreviewMesh('m.glb', bytes);
+      if (!('mesh' in r)) throw new Error(r.error);
+      expect(r.mesh.gltf).not.toBeNull();
+      expect(r.mesh.decoders).toEqual({ draco: true, meshopt: false, ktx2: false });
+      expect(parse).toHaveBeenCalledTimes(1);
+    } finally {
+      parse.mockRestore();
+    }
   });
 
   it('fails open to no decoders for a GLB whose JSON cannot be read', () => {

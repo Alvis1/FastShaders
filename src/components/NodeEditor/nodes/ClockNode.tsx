@@ -4,7 +4,8 @@ import type { ShaderFlowNode, NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { valueNum } from '@/utils/valueCoerce';
 import { useAppStore } from '@/store/useAppStore';
-import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
+import { CAT_HEX } from '@/utils/colorUtils';
+import { useCostChrome } from './useCostChrome';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { makeConnectionRevealSelector, REVEAL_TEMP_OPACITY } from './connectionReveal';
@@ -23,24 +24,14 @@ import { getTargetEdges } from '@/engine/cpuEvaluator';
 import './ClockNode.css';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
 
-// (`formatSpeed` lived here to render the read-only `×N` chip without printing
-// "×0" for a slow-motion 0.001. The speed is an editable DragNumberInput now,
-// which shows the stored number itself, so there is nothing left to round.)
-
 export const ClockNode = memo(function ClockNode({
   id,
   data,
   selected,
 }: NodeProps<ShaderFlowNode>) {
   const def = NODE_REGISTRY.get(data.registryType);
-  // Rules-of-Hooks note: this return sits ABOVE the hooks below. Safe because
-  // `def` cannot flip defined<->undefined on a MOUNTED instance: React Flow keys
-  // node components by node.id, every registryType the app writes is in
-  // NODE_REGISTRY (`unknown` included), and nothing mutates registryType in place
-  // to or from an unregistered value. A tampered .fastshader with an unknown
-  // registryType renders null for the whole life of that node. Moving the return
-  // below the hooks is NOT a mechanical edit here (ShaderNode/PreviewNode hooks
-  // dereference `def`) — see CLEAN-3.
+  // Early return above the hooks is safe: React Flow keys node components by id
+  // and registryType never changes on a mounted node.
   if (!def) return null;
   const headerTip = useHeaderTip(def);
 
@@ -53,17 +44,8 @@ export const ClockNode = memo(function ClockNode({
   const varName = useAppStore((s) => s.nodeVarNames[id]);
   const language = useAppStore((s) => s.language);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
-  const costColorLow = useAppStore((s) => s.costColorLow);
-  const costColorHigh = useAppStore((s) => s.costColorHigh);
-  // The header mixes into the card, and the card follows the theme
-  // (getCostColor). `codeEditorTheme` is the app-wide dark switch; the store
-  // field keeps its historical name.
-  const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
   const catHex = CAT_HEX[def.category as NodeCategory] ?? CAT_HEX.unknown;
-  const costColor = getCostColor(data.cost, costColorLow, costColorHigh, darkTheme);
-  const headerTextColor = getContrastColor(costColor);
-  const costTextColor = getCostTextColor(data.cost, costColorLow, costColorHigh);
-  const costScale = getCostScale(data.cost);
+  const { costColor, headerTextColor, costTextColor, costScale } = useCostChrome(data.cost);
 
   // Speed multiplier (Node Settings → speed). Adversarial input: a missing key,
   // a string, NaN or ±Infinity must all read as 1x — and with a phase

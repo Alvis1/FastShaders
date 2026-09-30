@@ -2,7 +2,6 @@
   position: relative;
   border: calc(2px * var(--fs-node-border-scale, 1)) solid;
   border-radius: 0;
-  box-sizing: border-box;
   /* The frame body deliberately does NOT capture pointer events — see the
      pass-through block at the bottom of this file. */
   overflow: visible;
@@ -72,8 +71,9 @@
 }
 
 /* Collapsed pill: header sits at the top, sockets render in the body region
-   below. Members + their internal edges are hidden via React Flow's `hidden`
-   flag, but boundary edges stay live and connect to synthetic handles
+   below. Members + their internal edges are hidden with `display: none`
+   (`fs-collapsed-member` / `fs-collapsed-edge`, NodeEditor.css) so they stay
+   mounted, but boundary edges stay live and connect to synthetic handles
    positioned over the body area. */
 .group-node--collapsed {
   border-radius: 0;
@@ -97,11 +97,8 @@
   flex-shrink: 0;
 }
 
-/* Cost badge above the collapsed pill — uses the shared .node-base__cost-badge
-   sizing/positioning from NodeBase.css for visual consistency with normal nodes. */
-.group-node__cost-badge {
-  /* Color is overridden by the .react-flow scope rule in NodeBase.css. */
-}
+/* The collapsed pill's cost badge is the shared .node-base__cost-badge
+   (NodeBase.css); `.group-node__cost-badge` is a hook with no rule of its own. */
 
 /* Socket row: a thin absolutely-positioned strip across the pill body that
    carries the handle dot on one side and the source-node label on the other. */

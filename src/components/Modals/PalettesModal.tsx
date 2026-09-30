@@ -37,6 +37,7 @@ import {
   type PaletteExportKind,
 } from '@/utils/paletteUi';
 import { isTypingTarget } from '@/utils/isTypingTarget';
+import { downloadBlob } from '@/utils/downloadBlob';
 import './CsvImportModal.css';
 import './PalettesModal.css';
 
@@ -61,21 +62,8 @@ interface ImportReport {
   notes: string[];
 }
 
-/**
- * Browser download of a text file. Deliberately the SAME blob → anchor → revoke
- * shape as `engine/exportShader.ts`'s `downloadShader`, rather than a second
- * mechanism (no `showSaveFilePicker`, no data: URL): one download path in the
- * app means one set of behaviours to reason about across Safari, the Tauri
- * WKWebView and the desktop build.
- */
 function downloadText(text: string, fileName: string, mime: string): void {
-  const blob = new Blob([text], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fileName;
-  a.click();
-  URL.revokeObjectURL(url);
+  downloadBlob(new Blob([text], { type: mime }), fileName);
 }
 
 /** Up/down chevrons as inline SVG, not "↑"/"↓": the app self-hosts a woff2

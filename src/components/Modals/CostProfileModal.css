@@ -15,7 +15,7 @@
   font-family: var(--font-sans);
   font-size: var(--font-size-sm);
   color: var(--text-primary);
-  background: var(--bg-input, var(--bg-panel));
+  background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
 }

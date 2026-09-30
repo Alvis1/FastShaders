@@ -76,36 +76,14 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
       return { width: 87 * scale, height: 121 * scale };
     case 'clock': // time: 56×56 canvas + header + the speed row (ClockNode)
       return { width: 71 * scale, height: 112 * scale };
-    // Sound: fixed footprint from micGeometry (SoundNode). The `audio` case
-    // beside it is gone — the Audio Input node was folded into this one on
-    // 2026-09-08, and the numbers below grew to its (larger) arrangement,
-    // which is what the source picker on the card needs.
-    case 'sound':
+    case 'sound': // fixed footprint from soundGeometry.ts (SoundNode)
       return { width: SOUND_W * scale, height: (SOUND_HEADER_H + SOUND_BODY_H) * scale };
     case 'color': // borderless square swatch, no header, never cost-scaled
       return { width: COLOR_NODE_SIZE, height: COLOR_NODE_SIZE };
     case 'output': {
-      // min-width 140 + header + one row per visible channel (colour + exposed),
-      // plus ONE row for the mesh picker.
-      //
-      // ONE NODE IS ONE MATERIAL since the per-material split, so this reads
-      // the node's own `exposedPorts` and nothing else. The stacking term this
-      // replaces (a section per mesh, its divider, and the "+ Add output" row)
-      // had already collapsed to zero by construction — `outputMaterials` of a
-      // split node is one entry — so deleting it moves no number; it is gone
-      // because dead arithmetic describing a layout that no longer exists is
-      // what a future reader would try to keep working.
-      //
-      // The picker row is UNCONDITIONAL. It renders whenever a model is loaded
-      // (or the node names a mesh, is index-bound, or is parked), and a pure
-      // estimate cannot see the session's model — so the choice is between
-      // over-measuring a model-less document by 18px and under-measuring every
-      // model document by the same, and dagre overlaps on the short side while
-      // it only spaces a little wide on the long one.
-      //
-      // It is added ON TOP of the `inDegree` floor rather than inside it: that
-      // floor stands in for CHANNEL rows (one wire, one row), and the picker is
-      // not a channel.
+      // One node = one material: rows = exposed channels (floored by inDegree,
+      // one wire one row) + the UNCONDITIONAL mesh-picker row. An estimate
+      // cannot see the session's model, and 18px over beats dagre overlapping.
       const exposed = (node.data as { exposedPorts?: string[] }).exposedPorts?.length
         ?? OUTPUT_DEFAULT_EXPOSED.length;
       const rows = Math.max(exposed, inDegree, 1) + 1;
@@ -175,21 +153,9 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
     }
   }
 
-  // The Image node draws NO port rows: its sockets ride the card's border
-  // (`usesEdgePorts`, nodes/edgePorts.ts), so the body is the filename plus the
-  // thumbnail — or the empty "No image" slot — floored by the rail the sockets
-  // need. That floor is `edgePortRailHeight` itself, read from the renderer's
-  // own module rather than restated, the COLOR_NODE_SIZE precedent: an
-  // estimate that restates a constant is an estimate that goes stale silently.
-  //
-  // It used to add one ROW_H per output on top, from the labelled-rows era
-  // (retired 2026-09-19). That never overlapped anything — the estimate is only
-  // ever consumed when `measured` is absent — but it over-stated an empty node
-  // by ~56% and a pictured one by ~64%, and a PBR GLB import mints one Image
-  // node per texture, so dagre spread a four-texture import hundreds of px
-  // wider than the nodes need and over-sized the group frame around them.
-  // In memory `imageB64` is always the resolved payload (storage refs never
-  // reach it).
+  // Image node: no port rows (edge ports, nodes/edgePorts.ts). Body = filename
+  // + thumbnail or empty slot, floored by `edgePortRailHeight`, which is read
+  // from the renderer's own module so the estimate cannot go stale.
   if (type === 'imageNode' && def) {
     const d = node.data as { values?: Record<string, unknown> };
     const hasImage = typeof d.values?.imageB64 === 'string' && d.values.imageB64 !== '';
@@ -232,9 +198,7 @@ function median(values: number[]): number {
 }
 
 /**
- * Auto-layout a graph left-to-right (or top-to-bottom).
- *
- * For the default LR flow this keeps the graph's TOP EDGE horizontal: it finds
+ * Auto-layout a graph left-to-right, keeping its TOP EDGE horizontal: it finds
  * the longest path through the graph (the visual "spine") and lays every node on
  * that path along one shared top baseline, so following the flow left-to-right
  * your eye tracks a straight horizontal line instead of zig-zagging. Branches
@@ -260,7 +224,6 @@ function median(values: number[]): number {
 export function autoLayout(
   nodes: AppNode[],
   edges: AppEdge[],
-  direction: 'LR' | 'TB' = 'LR',
   spacing?: { nodesep?: number; ranksep?: number },
   rankOrder?: ReadonlyMap<string, number>,
 ): AppNode[] {
@@ -283,22 +246,13 @@ export function autoLayout(
 
   // 1. dagre: ranks + within-rank ordering + horizontal (rank) coordinate.
   const g = new dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: direction, nodesep, ranksep });
+  g.setGraph({ rankdir: 'LR', nodesep, ranksep });
   for (const n of nodes) {
     const s = size.get(n.id)!;
     g.setNode(n.id, { width: s.width, height: s.height });
   }
   for (const e of validEdges) g.setEdge(e.source, e.target);
   dagre.layout(g);
-
-  // Non-LR (unused today) keeps dagre's centre placement unchanged.
-  if (direction !== 'LR') {
-    return nodes.map((node) => {
-      const pos = g.node(node.id);
-      if (!pos) return node;
-      return { ...node, position: { x: pos.x - pos.width / 2, y: pos.y - pos.height / 2 } };
-    });
-  }
 
   // 2. Group into ranks by dagre's x (in LR every node in a rank shares one x),
   //    ordering each rank top→bottom by dagre's y (its crossing-minimised order).

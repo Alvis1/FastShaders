@@ -70,37 +70,26 @@
 
 /* A mesh the loaded model does not contain — MARKED, not an error colour: it is
    the ordinary state after reopening a graph without its model. */
-.mesh-picker--missing {
-  border-color: var(--cost-high, #c26a2a);
-  color: var(--cost-high, #c26a2a);
-}
-
+.mesh-picker--missing,
 /* Nothing ticked on an ADDED material: it shades nothing and emits nothing.
    Marked the same way a missing mesh is — this is a state to resolve, not an
    error, and the two are equally "this material is not doing anything yet". */
-.mesh-picker--unassigned {
-  border-color: var(--cost-high, #c26a2a);
-  color: var(--cost-high, #c26a2a);
-}
-
+.mesh-picker--unassigned,
 /* An ADDED material that names a mesh but sets NO channel: emission drops its
    part, so the meshes it names keep exactly what they had. The same mark as an
    unassigned one, because it is the same fact — "this material is not doing
-   anything yet" — with a different cause (its own sentence says which). Every
-   "+ Add output" starts here and the mark clears itself the moment a channel
-   is set or wired, so it is never a refusal and never disables anything. */
+   anything yet" — with a different cause (its own sentence says which). The
+   mark clears itself the moment a channel is set or wired, so it is never a
+   refusal and never disables anything. */
 .mesh-picker--silent {
-  border-color: var(--cost-high, #c26a2a);
-  color: var(--cost-high, #c26a2a);
+  border-color: var(--cost-high);
+  color: var(--cost-high);
 }
 
 /* An earlier material already shades this mesh, so emission's first-claim rule
    leaves this section inert. Dimmed rather than coloured like an error: picking
    a duplicate is a legal step on the way to swapping two materials. */
-.mesh-picker--shadowed {
-  opacity: 0.55;
-}
-
+.mesh-picker--shadowed,
 /* The DEFAULT section with nothing left to shade (`defaultSectionUnused`):
    every mesh of the model on screen belongs to a section below. Dimmed like a
    shadowed one, and for the same reason — legal, inert right now, and back at
@@ -187,7 +176,7 @@
 }
 
 .mesh-picker__row--missing .mesh-picker__name {
-  color: var(--cost-high, #c26a2a);
+  color: var(--cost-high);
 }
 
 /* An unticked row past the per-section cap (MAX_PARTS names): the one row the

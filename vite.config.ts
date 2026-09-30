@@ -78,7 +78,7 @@ const versionHtmlPlugin = (): Plugin => ({
  *   - `blob:` — preview HTML, shader modules, and Monaco workers are loaded
  *     from blob URLs created at runtime.
  *   - Monaco and the Inter/JetBrains Mono fonts are BUNDLED (monacoSetup.ts,
- *     @fontsource imports in main.tsx) — no CDN origins in the policy. The
+ *     @fontsource imports in styles/fonts.ts) — no CDN origins in the policy. The
  *     app must work fully offline (and in the desktop build), so never
  *     reintroduce cdn.jsdelivr.net / fonts.googleapis.com here.
  *   - `https://alvis1.github.io` — the sandboxed preview iframe has an
@@ -317,7 +317,6 @@ const shaderCarouselDesktopStagePlugin = (): Plugin => ({
  * http://localhost:5173/FastShaders/node-designer.html.
  *
  *   GET  /__nd/glyphs → { content } — current customGlyphs.ts text ('' if absent)
- *   GET  /__nd/costs  → { content } — complexity.json text (cost parity refresh)
  *   POST /__nd/glyphs { content }   — rewrite customGlyphs.ts
  *
  * `node-editor.html` shares the endpoint for its own writes:
@@ -350,7 +349,6 @@ const shaderCarouselDesktopStagePlugin = (): Plugin => ({
  * would make the browser the author of a module the dev server imports.
  */
 const ND_GLYPHS = path.resolve(__dirname, 'src/components/NodeEditor/nodes/glyphs/customGlyphs.ts');
-const ND_COSTS = path.resolve(__dirname, 'src/registry/complexity.json');
 const ND_REGISTRY = path.resolve(__dirname, 'src/registry/nodeRegistry.ts');
 const ND_TEXTURES = path.resolve(__dirname, 'src/registry/builtinTextures.ts');
 const ND_CITATIONS = path.resolve(__dirname, 'src/registry/citations.json');
@@ -717,8 +715,6 @@ const nodeDesignerEndpointPlugin = (): Plugin => ({
       try {
         if (req.method === 'GET' && req.url === '/glyphs') {
           send(200, { content: existsSync(ND_GLYPHS) ? readFileSync(ND_GLYPHS, 'utf-8') : '' });
-        } else if (req.method === 'GET' && req.url === '/costs') {
-          send(200, { content: readFileSync(ND_COSTS, 'utf-8') });
         } else if (req.method === 'GET' && req.url === '/descriptions') {
           // Doubles as node-editor.html's availability probe: it disables Save
           // when this 404s. In practice that only happens when the page is opened
@@ -936,6 +932,8 @@ export default defineConfig({
     },
   },
   define: {
+    // @babel/* read `process.env.BABEL_8_BREAKING` & co and NodeEditor.tsx reads
+    // `process.env.NODE_ENV`; a browser has no `process`, so the object is folded here.
     'process.env': { NODE_ENV: JSON.stringify('production') },
     __APP_VERSION__: JSON.stringify(pkg.version),
     __FS_DESKTOP__: JSON.stringify(FS_DESKTOP),
@@ -958,9 +956,9 @@ export default defineConfig({
     rollupOptions: {
       // Naming inputs REPLACES Vite's implicit index.html default, so `main`
       // MUST stay listed — forgetting it would drop the whole app from dist
-      // with a green build (see node-editor.html's head comment; that page
+      // with a green build (pinned by designerEntry.test.ts). node-editor.html
       // stays a deliberate NON-entry: it is a localhost tool whose saves need
-      // the dev-only /__nd endpoints). The Node Designer, by contrast, ships:
+      // the dev-only /__nd endpoints. The Node Designer, by contrast, ships:
       // its deployed copy is read-only-with-download, same as before, but now
       // renders the REAL NodeVisual replica.
       input: {
@@ -1019,43 +1017,10 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],
-    // Per-file worker isolation would re-import the heavy engine graph
-    // (store → builtin textures/presets → codeToGraph → Babel) once per file,
-    // across ~194 files; disabling it lets a worker import that graph once and
-    // share it, which is where the suite's wall clock goes.
-    //
-    // What that costs, stated honestly — this is NOT a suite of hermetic
-    // pure-logic files, and pretending it is, is how the last regression got
-    // in. Everything a worker owns is SHARED by every suite it runs, in the
-    // order the runner happened to assign them:
-    //   · GLOBALS. 17 files stub one (localStorage mostly, plus fetch,
-    //     requestAnimationFrame and window). Each restores with
-    //     `vi.unstubAllGlobals()` in afterEach/afterAll — vitest is not
-    //     configured to unstub for us (`unstubGlobals` is unset), so a file
-    //     that forgets hands its stub to whichever suite runs next.
-    //   · THE MODULE REGISTRY. `editorVisibility.test.ts` needs a known
-    //     non-empty visibility file to prove hiding filters at all (the shipped
-    //     one was empty until GLB Phase 4 hid imageNode, so every direct
-    //     assertion would have been vacuous), so it `vi.doMock`s the
-    //     JSON and `vi.resetModules()` around it — and undoes both in
-    //     afterEach, because a live mock or a reset registry is visible to
-    //     every later file in that worker.
-    //   · TIMERS and MODULE-SCOPE STATE. 3 files run fake clocks (each
-    //     restoring real ones), and the store's 300ms autosave timer outlives
-    //     the file that armed it — `graphPersistence.test.ts` cancels it on the
-    //     way in AND out for exactly that reason.
-    //   · MODULE INITIALISATION ORDER. Shared instances mean whichever file a
-    //     worker reaches first decides who initialises the store's import
-    //     cycle; when that cycle was live, the file→worker assignment alone
-    //     decided which suites threw a TDZ error, and 5–11 of them failed
-    //     DIFFERENTLY every run (see utils/costTable.ts's head comment).
-    //
-    // THE RULE for a new test: leave the worker exactly as you found it. Any
-    // global you stub, clock you fake, module you mock, registry you reset,
-    // store field or timer you touch — restore it in afterEach/afterAll, and
-    // never rely on module-scope state a previous file might have set. If a
-    // suite genuinely cannot be written that way, isolate it rather than
-    // flipping this flag back on for all ~194.
+    // Every file in a worker SHARES its module registry and globals, so the heavy
+    // engine graph is imported once per worker instead of once per file. A test must
+    // leave the worker as it found it: docs/dev/testing.md; enforced by
+    // stubGlobalRestore.test.ts and historyIdleReset.test.ts.
     isolate: false,
   },
 });

@@ -29,9 +29,7 @@ import {
   GLB_JSON_MAX_BYTES,
   PLACEHOLDER_PNG_DATA_URI,
   encodeDataUri,
-  parseGlbContainer,
 } from './glbContainer';
-import { safeJsonReviver } from './safeJson';
 import { readGlbFsExtras, inlineFsAssets } from './glbShaderExtras';
 import {
   FS_EMBED_ASSET_BYTES_MAX,
@@ -49,6 +47,8 @@ import {
   TRIANGLE_POSITIONS,
   canonicalSrc,
   fakeWebp,
+  glbBinOf as binOf,
+  glbDocOf as docOf,
   gltfPrimitiveDoc,
   jpegHeaderBytes,
   makeGlb,
@@ -73,18 +73,6 @@ function prepared(bytes: Uint8Array, index: readonly number[], kind: 'glb' | 'gl
   const r = prepareRepackBase(read(bytes, kind), index);
   if (!r.ok) throw new Error('prepare refused: ' + JSON.stringify(r.refusal));
   return r.model;
-}
-
-function docOf(bytes: Uint8Array): Doc {
-  const c = parseGlbContainer(bytes);
-  if (!c.ok) throw new Error('not a glb');
-  return JSON.parse(c.chunks.json, safeJsonReviver) as Doc;
-}
-
-function binOf(bytes: Uint8Array): Uint8Array {
-  const c = parseGlbContainer(bytes);
-  if (!c.ok || !c.chunks.bin) throw new Error('no bin');
-  return c.chunks.bin;
 }
 
 function viewBytes(bytes: Uint8Array, view: number): Uint8Array {
@@ -660,8 +648,8 @@ describe('caps', () => {
   /*
    * The u32 total guard, which COULD NOT FIRE at the one size it is for: the
    * padding was `(n + 3) & ~3` and a bitwise operator coerces through ToInt32,
-   * so it returned 0 at 2^32 and -2147483648 at 3·2^31 — `ceil4`, two lines
-   * above it in the source, had been doing the same job correctly all along.
+   * so it returned 0 at 2^32 and -2147483648 at 3·2^31 — the arithmetic
+   * spelling (glbContainer's `pad4` today) sat two lines above it all along.
    * `end` cannot reach 4 GiB today (the base is capped at 96/256 MiB and the
    * module's assets at 64 MiB), so this drives the layout with a base BIN that
    * only DECLARES its length: nothing reads its bytes before the guard, and

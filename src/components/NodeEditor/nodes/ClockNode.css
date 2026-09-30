@@ -1,6 +1,5 @@
 /* The shared node shell (NodeBase.css) is imported ONCE, by ShaderNode.css —
-   see the note at the top of that file. It used to be `@import`ed here too,
-   which put a second inlined copy of it in the main entry's CSS chunk. */
+   see the note at the top of that file. */
 
 .clock-node {
   position: relative;
@@ -93,7 +92,7 @@
 
 /* A wired speed is driven by its edge, so the stored number is dead — show the
    value ARRIVING, plain text with no plate (the same read-only-vs-editable
-   grammar as the Mic node and .shader-node__op-val). */
+   grammar as the Sound node and .shader-node__op-val). */
 .clock-node__speed-wired {
   display: flex;
   align-items: center;

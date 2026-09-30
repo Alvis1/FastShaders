@@ -210,7 +210,7 @@ describe('glbExportReportLines', () => {
 
 describe('glbUnavailableText', () => {
   // A `satisfies` table, so a new reason fails `tsc` here rather than
-  // rendering as nothing under the disabled radio.
+  // rendering as nothing in EXPORT's tooltip.
   const REASONS = {
     'no-model': false,
     obj: true,

@@ -48,9 +48,6 @@ export interface ModelTextures {
   readonly thumbs: ReadonlyMap<number, string>;
   /** A thumbnail pass is still running. */
   readonly loading: boolean;
-  /** The loaded model's display name — the encoder derives file names from it
-   *  and the pick path needs the same one. */
-  readonly modelName: string;
 }
 
 const NO_SOURCES: readonly ModelTextureSource[] = [];
@@ -58,8 +55,8 @@ const NO_THUMBS: ReadonlyMap<number, string> = new Map();
 
 /**
  * Read the loaded model once (`open` gates everything) and return what it
- * offers. `report` is returned too — the pick path re-reads the LIVE bytes
- * rather than reusing it, so this copy never escapes the picker.
+ * offers. The pick path re-reads the LIVE bytes, so the parse never escapes
+ * the picker.
  */
 export function useModelTextures(open: boolean): ModelTextures {
   // The cheap key IS the subscription: `previewMesh` itself is replaced on
@@ -172,5 +169,5 @@ export function useModelTextures(open: boolean): ModelTextures {
 
   // `key` is '' while the grid is closed, which makes `parsed` null — but the
   // thumbnails it produced are kept, so reopening is instant.
-  return { sources, thumbs, loading, modelName: parsed?.name ?? '' };
+  return { sources, thumbs, loading };
 }

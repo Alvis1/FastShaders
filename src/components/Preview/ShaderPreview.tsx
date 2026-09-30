@@ -18,7 +18,7 @@ import {
   buildPreviewShaderModule,
   buildTeapotAttr,
   decoderAssetUrl,
-  getModelUrl,
+  getBunnyModelUrl,
   isModelGeometry,
   isTeapotGeometry,
   tslToPreviewHTML,
@@ -87,6 +87,7 @@ import { displayImageFileName } from '@/utils/imageNode';
 import { isImageChannelHandle } from '@/utils/imageChannels';
 import { platformWebGL2Reason } from '@/utils/feedbackReport';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
+import { fullscreenElement } from '@/components/inputs/colorPickerModel';
 import { AnimClipMenu } from './AnimClipMenu';
 import { useLongPress } from '@/hooks/useLongPress';
 import {
@@ -103,10 +104,7 @@ import './ShaderPreview.css';
 // exactly the kind of thing that must not be decided in an untested .tsx.
 /** Safari still exposes fullscreen only under the webkit-prefixed names. */
 type FsElement = HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void };
-type FsDocument = Document & {
-  webkitFullscreenElement?: Element | null;
-  webkitExitFullscreen?: () => Promise<void> | void;
-};
+type FsDocument = Document & { webkitExitFullscreen?: () => Promise<void> | void };
 
 /**
  * Number input that buffers in-progress text as a string so the user can type
@@ -302,6 +300,33 @@ function useDebounced<T>(value: T, delayMs: number): T {
   return settled;
 }
 
+/**
+ * The store's `previewCode`, trailing-debounced like `useDebounced` but fed by
+ * a store SUBSCRIPTION rather than a selector: `previewCode` moves per
+ * pointermove during a value scrub, and a selector re-rendered this whole panel
+ * at that rate only for the debounce to discard it.
+ */
+function useSettledPreviewCode(delayMs: number): string {
+  const [settled, setSettled] = useState(() => useAppStore.getState().previewCode);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Nothing seen yet, so the first call always arms: it covers a change that
+    // landed between the first render and this subscription.
+    let seen: string | undefined;
+    const arm = () => {
+      const code = useAppStore.getState().previewCode;
+      if (code === seen) return;
+      seen = code;
+      clearTimeout(timer);
+      timer = setTimeout(() => setSettled(code), delayMs);
+    };
+    arm();
+    const unsubscribe = useAppStore.subscribe(arm);
+    return () => { unsubscribe(); clearTimeout(timer); };
+  }, [delayMs]);
+  return settled;
+}
+
 function loadVec3(key: string, reject?: (p: CameraPosition) => boolean): CameraPosition | null {
   try {
     const raw = localStorage.getItem(key);
@@ -330,14 +355,11 @@ function loadRotation(): CameraPosition | null {
   return loadVec3('fs:previewRotation');
 }
 
-function validatePlaying(v: string | null): boolean {
-  return v === 'true';
-}
+/** A stored on/off flag that defaults to OFF (turntable, FPS readout, in-place). */
+const isTrueFlag = (v: string | null): boolean => v === 'true';
 
-/** FPS/frame-time readout — off by default, like podest's own. */
-function validateStats(v: string | null): boolean {
-  return v === 'true';
-}
+/** Placeholder until the first stats report (~250 ms) so the chip is never blank. */
+const STATS_PLACEHOLDER = '— FPS · — ms';
 
 /**
  * What the iframe's `gltf-anim` component reports about the loaded model. Null
@@ -368,9 +390,6 @@ interface AnimInfo {
 function validateAnimPlaying(v: string | null): boolean {
   return v !== 'false';
 }
-function validateAnimInPlace(v: string | null): boolean {
-  return v === 'true';
-}
 
 // Both maps are adversarial: projectImport writes them straight out of an
 // imported project block. The bounds map was a bare CAST while its sibling had
@@ -397,10 +416,10 @@ const objTextCache = new Map<'bunny', Promise<string>>();
 function fetchObjText(geometry: 'bunny'): Promise<string> {
   let p = objTextCache.get(geometry);
   if (!p) {
-    p = fetch(getModelUrl(geometry)).then(async (r) => {
+    p = fetch(getBunnyModelUrl()).then(async (r) => {
       if (!r.ok) throw new Error(`HTTP ${r.status} fetching model`);
       const text = await r.text();
-      // The EXPORT popover's "Export model" row writes the bunny from this
+      // EXPORT's "Export with model" button writes the bunny from this
       // text, synchronously (engine/builtinModelObj.ts).
       rememberBunnyText(text);
       return text;
@@ -458,23 +477,14 @@ function liveAudioSettingsKey(s: { nodes: AppNode[]; edges: AppEdge[] }): string
 }
 
 export function ShaderPreview() {
-  const previewCode = useAppStore((s) => s.previewCode);
   /**
-   * The settled form of the generated TSL — declared up here because the
-   * uniform extraction below needs it, not just the iframe memo far down the
-   * file (see the rebuild-policy comment there for WHY the rebuild is
-   * debounced at all).
-   *
-   * Everything derived from the module text hangs off THIS rather than off the
-   * raw value, for two reasons. It is the module the iframe is actually
-   * running, so the Uniforms overlay describes the shader on screen instead of
-   * one 200 ms ahead of it; and `previewCode` advances on every graph→code
-   * pass, i.e. per pointermove during a value scrub, so extracting uniforms
-   * from it re-ran two regex sweeps of the whole module at pointer rate for a
-   * list that cannot change mid-scrub — editing a number never adds or removes
-   * a `uniform(…)` declaration.
+   * The settled form of the generated TSL, and the ONLY form this panel
+   * renders from: it is the module the iframe is actually running, so the
+   * Uniforms overlay describes the shader on screen, and the raw `previewCode`
+   * advances per pointermove during a value scrub (see the hook). The one
+   * reader of the raw value, `handleOpenVR`, takes it at the gesture.
    */
-  const debouncedPreviewCode = useDebounced(previewCode, PREVIEW_REBUILD_DEBOUNCE_MS);
+  const debouncedPreviewCode = useSettledPreviewCode(PREVIEW_REBUILD_DEBOUNCE_MS);
   const shaderName = useAppStore((s) => s.shaderName);
   const language = useAppStore((s) => s.language);
   const previewMesh = useAppStore((s) => s.previewMesh);
@@ -506,9 +516,9 @@ export function ShaderPreview() {
 
   // Material settings from the output node. Narrow selector: a position/
   // selection-only store notify replaces the node OBJECT but keeps its .data
-  // (and thus materialSettings) reference — Object.is bails, so the whole
-  // ~1000-line panel no longer re-renders on every drag pointermove the way
-  // the old whole-array nodes/edges subscriptions made it.
+  // (and thus materialSettings) reference — Object.is bails, so this panel
+  // no longer re-renders on every drag pointermove the way the old
+  // whole-array nodes/edges subscriptions made it.
   //
   // `moduleSettingsOutput`, not `findDefaultOutput`: these four keys are
   // written at MODULE level, so they belong to the untargeted Output when one
@@ -559,11 +569,9 @@ export function ShaderPreview() {
   // carries them, and the overlay + iframe srcDoc inputs must pick up the
   // imported values without a page reload.
   const [geometry, setGeometry] = usePersistedState('fs:previewGeometry', validateGeometry, { reloadOnProjectImport: true });
-  // The stored preference is kept verbatim — a 'custom' whose mesh has not
-  // arrived yet (the IndexedDB restore is async) must not be written back as
-  // 'sphere', or the preference is lost for good. What the pane SHOWS is
-  // derived, and ONE derivation feeds the document, the `<select>` and the
-  // Subd gate, so the picker and the viewport cannot disagree.
+  // The stored preference is kept verbatim; what the pane SHOWS is derived
+  // ONCE, for the document, the `<select>` and the Subd gate alike, so picker
+  // and viewport cannot disagree — see previewGeometryPref.ts.
   const geometryShown = shownGeometry(geometry, previewMesh !== null);
   // While a Raymarch Output drives: the model picked to march through instead
   // of its window sphere, null = the window. SESSION-ONLY — every session (and
@@ -590,7 +598,7 @@ export function ShaderPreview() {
   // never reads it — see shownPreviewMesh).
   const setPreviewShowsModel = useAppStore((s) => s.setPreviewShowsModel);
   useEffect(() => setPreviewShowsModel(previewGeometry === 'custom'), [previewGeometry, setPreviewShowsModel]);
-  const [playing, setPlaying] = usePersistedState('fs:previewPlaying', validatePlaying, { reloadOnProjectImport: true });
+  const [playing, setPlaying] = usePersistedState('fs:previewPlaying', isTrueFlag, { reloadOnProjectImport: true });
   const [lighting, setLighting] = usePersistedState('fs:previewLighting', validateLighting, { reloadOnProjectImport: true });
 
   // The env-lighting entry in the Light dropdown exists only while an
@@ -636,20 +644,14 @@ export function ShaderPreview() {
   const [bgColor, setBgColor] = usePersistedState('fs:previewBgColor', validateBgColor, { reloadOnProjectImport: true });
 
   // Restore the previous session's dropped mesh from the IndexedDB cache. The
-  // read is async, and the stored 'custom' now SURVIVES that window — the
-  // preference is kept verbatim and `shownGeometry` derives the sphere until
-  // the mesh lands (see previewGeometryPref.ts), so this restore normally has
-  // nothing left to re-select and `setGeometry('custom')` is a no-op write.
-  // It is kept as the belt-and-braces half of the same rule, and it is what
-  // re-selects the model for any path that legitimately moved the preference
-  // off 'custom' while the bytes were still cached.
+  // stored 'custom' survives the async read (previewGeometryPref.ts), so the
+  // `setGeometry('custom')` below is normally a no-op: it re-selects the model
+  // only for a path that moved the preference while the bytes stayed cached.
+  // A zip import or a drop can land first (both are synchronous); either wins.
   //
-  // A zip import or a drop can land first (both are synchronous); either wins,
-  // and the cache read is discarded rather than overwriting live state.
-  //
-  // It also SETTLES the boot hold below (bootMeshWait.ts) — on every exit
-  // path, including a read that finds nothing or fails, or the document would
-  // be held back for a mesh that is never coming.
+  // It also SETTLES the boot hold (bootMeshWait.ts) on EVERY exit path — a
+  // read that finds nothing or fails included — or the document would be held
+  // back for a mesh that is never coming.
   const [bootMeshSettled, setBootMeshSettled] = useState(false);
   useEffect(() => {
     if (useAppStore.getState().previewMesh) { setBootMeshSettled(true); return; }
@@ -735,11 +737,7 @@ export function ShaderPreview() {
   // request/exit/element APIs, hence the fallbacks below.
   const [isFullscreen, setIsFullscreen] = useState(false);
   useEffect(() => {
-    const doc = document as FsDocument;
-    const onChange = () => {
-      const fsEl = document.fullscreenElement ?? doc.webkitFullscreenElement ?? null;
-      setIsFullscreen(fsEl === rootRef.current);
-    };
+    const onChange = () => setIsFullscreen(fullscreenElement() === rootRef.current);
     document.addEventListener('fullscreenchange', onChange);
     document.addEventListener('webkitfullscreenchange', onChange);
     return () => {
@@ -749,10 +747,8 @@ export function ShaderPreview() {
   }, []);
   const handleToggleFullscreen = useCallback(() => {
     const el = rootRef.current as FsElement | null;
-    const doc = document as FsDocument;
-    const fsEl = document.fullscreenElement ?? doc.webkitFullscreenElement ?? null;
-    if (fsEl) {
-      (document.exitFullscreen ?? doc.webkitExitFullscreen)?.call(document);
+    if (fullscreenElement()) {
+      (document.exitFullscreen ?? (document as FsDocument).webkitExitFullscreen)?.call(document);
     } else if (el) {
       (el.requestFullscreen ?? el.webkitRequestFullscreen)?.call(el);
     }
@@ -765,7 +761,7 @@ export function ShaderPreview() {
   // scrubber between the two existing clusters.
   const [animInfo, setAnimInfo] = useState<AnimInfo | null>(null);
   const [animPlaying, setAnimPlaying] = usePersistedState('fs:previewAnimPlaying', validateAnimPlaying);
-  const [animInPlace, setAnimInPlace] = usePersistedState('fs:previewAnimInPlace', validateAnimInPlace);
+  const [animInPlace, setAnimInPlace] = usePersistedState('fs:previewAnimInPlace', isTrueFlag);
 
   /**
    * FPS / frame-time readout over the viewport's top-right corner. The iframe
@@ -777,11 +773,9 @@ export function ShaderPreview() {
    * this whole panel at that rate, the same reason the scrubber thumb and the
    * mic meter are hand-written.
    */
-  const [showStats, setShowStats] = usePersistedState('fs:previewStats', validateStats);
+  const [showStats, setShowStats] = usePersistedState('fs:previewStats', isTrueFlag);
   const statsRef = useRef<HTMLDivElement>(null);
   const showStatsRef = useRef(showStats);
-  /** Placeholder until the first report (~250 ms) so the chip is never blank. */
-  const STATS_PLACEHOLDER = '— FPS · — ms';
 
   const timelineRef = useRef<HTMLDivElement>(null);
   const thumbRef = useRef<HTMLDivElement>(null);
@@ -840,8 +834,8 @@ export function ShaderPreview() {
   /**
    * Move the scrubber. IMPERATIVE on purpose: the iframe reports ~30×/s while
    * playing, and routing that through React state would re-render this
-   * ~1700-line panel at frame rate — the same reason the mic meter and the
-   * on-node live edge values are written by hand.
+   * panel at frame rate — the same reason the mic meter and the on-node live
+   * edge values are written by hand.
    *
    * The thumb's width is read from the element rather than duplicated here, so
    * the CSS stays the single source of truth for it: the travel is inset by
@@ -907,7 +901,7 @@ export function ShaderPreview() {
   const [containerReady, setContainerReady] = useState(false);
 
   // A-Frame's own loading screen is disabled, so between a fresh srcDoc and the
-  // first painted frame — a WebGPU pre-flight, a ~1MB bundle fetch/parse and a
+  // first painted frame — a WebGPU pre-flight, a ~1.65 MB bundle fetch/parse and a
   // shader compile, i.e. seconds — the pane was simply blank, which is
   // indistinguishable from a crash. Cleared by fs:preview-ready (success) or
   // fs:preview-error (failure), with a timeout below so it can never stick.
@@ -1271,7 +1265,7 @@ export function ShaderPreview() {
       const readName = shaderFile.name;
       shaderP = shaderFile.text().then(
         (text) => { importShaderText(text); },
-        () => showDropNotice(t('Could not read {name}.', language).replace('{name}', () => `“${readName}”`)),
+        () => showDropNotice(fillTemplate(t('Could not read {name}.', language), { name: `“${readName}”` })),
       );
     }
     if (model) {
@@ -1317,28 +1311,16 @@ export function ShaderPreview() {
     return () => window.removeEventListener(MESH_CACHE_FULL_EVENT, onFull);
   }, [showDropNotice, language]);
 
-  // NO "mesh cleared → setGeometry('sphere')" effect here. It existed so the
-  // select could never point at an unmounted option (the custom entry renders
-  // only while a mesh is loaded), and `geometryShown` now does that by
-  // DERIVATION — while the effect ALSO fired on every boot, inside the window
-  // where the IndexedDB restore has not delivered the mesh yet, and wrote
-  // 'sphere' over the stored preference through usePersistedState (MEASURED:
-  // a 'sphere' write at 219 ms between the seed's 'custom' and the restore's).
-  // A reload or a dev full-reload landing in that window lost the model for
-  // good — see previewGeometryPref.ts.
+  // NO "mesh cleared → setGeometry('sphere')" effect: the fallback is DERIVED
+  // (`geometryShown`) — see previewGeometryPref.ts, pinned by its test.
 
-  // Property uniforms detected from the generated code, filtered to only those
-  // whose property node has at least one outgoing edge (i.e. is connected).
-  // BOTH property kinds must be scanned: with only property_float here, the
-  // presence of one float property made the connected-names set float-only and
-  // silently filtered every colour picker out of the overlay.
   /**
    * The Sound node's analyser settings, selected as a VALUE-stable string, plus
    * (via the empty string) whether the graph contains a Sound node at all.
    *
    * Not the values object: `getNodeValues` falls back to a fresh `{}` when a
    * node has no stored values, so an object-returning selector would mint a new
-   * identity on every `s.nodes` change — i.e. re-render this ~1000-line panel
+   * identity on every `s.nodes` change — i.e. re-render this whole panel
    * on every drag pointermove, the exact trap connectedPropNamesKey documents.
    * A joined string compares by value, so Object.is bails until a setting
    * really changes.
@@ -1376,8 +1358,8 @@ export function ShaderPreview() {
    * Sound node absorbed the second one on 2026-09-08.
    *
    * Gated on the graph really containing a Sound node, because an emitted
-   * `const mic1_bass = uniform(0);` and a user property that happens to be
-   * NAMED `mic1_bass` are textually identical — nothing in the code can tell
+   * `const sound1_bass = uniform(0);` and a user property that happens to be
+   * NAMED `sound1_bass` are textually identical — nothing in the code can tell
    * them apart. Without the gate, such a property would vanish from the
    * Uniforms overlay in a graph with no Sound node in it at all. (With one
    * present the collision cannot arise: graphToCode claims each
@@ -1890,7 +1872,7 @@ export function ShaderPreview() {
    *
    * Bounded by uniformInfoRef: it can only ever touch a name the CURRENT
    * shader has, which excludes the Sound node's uniforms structurally while
-   * still working for a user property that happens to be called `mic1_bass` in
+   * still working for a user property that happens to be called `sound1_bass` in
    * a graph with no Sound node in it. The hot fs:uniform post is what makes a
    * node scrub drive the preview at pointer rate instead of waiting out the
    * 200ms rebuild debounce.
@@ -2009,60 +1991,24 @@ export function ShaderPreview() {
     store.showImportNote([{ kind: 'sink-model', issue: sinkIssue, name: store.previewMesh?.name ?? '' }]);
   }, [sinkIssue, shownModelKey, litSplats]);
 
-  // What the pane renders, for EXPORT's "Export model" row (engine/exportModel.ts):
+  // What the pane renders, for contextual EXPORT (engine/exportModel.ts) and the embed tabs:
   // the raw slider value, since the teapot's resolution IS the subdivision.
   const setPreviewShape = useAppStore((s) => s.setPreviewShape);
   useEffect(() => {
     setPreviewShape({ geometry: previewGeometry, subdivision, marchWindow: marchWindow ?? 1 });
   }, [previewGeometry, subdivision, marchWindow, setPreviewShape]);
 
-  // Generate the iframe's HTML payload. We pass it via `srcDoc` rather than
-  // building a blob URL because the iframe is sandboxed without
-  // `allow-same-origin` — a parent-created blob URL belongs to the parent
-  // origin and the browser refuses to load it into a foreign-origin frame
-  // ("Not allowed to load local resource: blob:..."). srcdoc carries no
-  // origin, so the iframe's content runs in its sandbox-issued opaque
-  // origin, and the shader blob URL it creates internally is same-origin
-  // to itself — which is what the shaderloader's fetch+import needs.
-  //
-  // Rebuilds are expensive under sandbox: each reload gets a new opaque
-  // origin, Chrome's network cache partitioning treats that as a fresh
-  // site, and the ~1MB A-Frame bundle re-fetches + re-parses every time.
-  // So rebuilds are limited to props that need a fresh document: previewCode +
-  // materialSettings (a new shader module) and `geometryRebuildKey`.
-  //
-  // The rebuild key collapses ALL primitives to one bucket so sphere↔cube↔plane
-  // swaps DON'T rebuild — they hot-swap via cheap postMessage (the effect
-  // below). A rebuild is forced only when an OBJ model is involved: any OBJ
-  // target (the key carries the model name, so teapot↔bunny rebuilds too) and
-  // crossing the OBJ↔primitive boundary. That boundary swap via setAttribute on
-  // a live scene is exactly what crashes the r184 WebGPU renderer ("Cannot read
-  // properties of undefined (reading 'id')" in getAttributes), so it must bake
-  // into a fresh document. The closure still captures the current bgColor /
-  // lighting / playing / subdivision, so any rebuild emits HTML with up-to-date
-  // values; the useEffects below push those — and primitive geometry/subdivision
-  // — live via postMessage without rebuilding.
-  //
-  // Only PROPERTY uniforms have a hot-update path; every other value (a Math
-  // operand, a Mix factor, a noise scale, a vec component) is baked into the
-  // generated TSL, so editing one lands here as a fresh document. DragNumberInput
-  // fires a change per pointermove, so scrubbing one of those undebounced
-  // restarts the rebuild faster than it can ever finish and the pane just
-  // flickers until the drag stops. Debouncing collapses a whole scrub into a
-  // single rebuild on release. Trailing-only, so first paint isn't delayed.
-  // (`debouncedPreviewCode` itself is declared at the top of the component —
-  // the uniform extraction needs it too.)
+  // The iframe's document. It travels as `srcDoc` (the `sandbox` attribute's
+  // comment says why not a blob URL); what rebuilds it and what is hot-swapped
+  // is classified above `coldDocKey` — see docs/dev/preview-and-runtime.md.
 
   /**
-   * The same debounce for the material settings, and it is needed for exactly
-   * the same reason: `updateSettings` mints a BRAND-NEW settings object per
-   * call (`{ ...settings, ...patch }` in ShaderSettingsMenu), and the Alpha
-   * Clip threshold is an `<input type="range">` whose onChange fires per
-   * pointermove — so scrubbing it was one full document reload per frame, the
-   * precise failure the paragraph above says the debounce exists to prevent.
-   * Material settings reach the module only through `buildShaderModule`'s
-   * option, never through `previewCode`, so `debouncedPreviewCode` could not
-   * cover them.
+   * The code's debounce, for the material settings: `updateSettings` mints a
+   * BRAND-NEW settings object per call (`{ ...settings, ...patch }` in
+   * ShaderSettingsMenu), and the Alpha Clip threshold is an
+   * `<input type="range">` whose onChange fires per pointermove. Material
+   * settings reach the module only through `buildShaderModule`'s option, never
+   * through `previewCode`, so `debouncedPreviewCode` could not cover them.
    *
    * Debounced as a KEY, not as the object: the memo below reads the LIVE
    * `materialSettings` at memo time (the `cameraPosRef`/`rotationRef` idiom
@@ -2310,12 +2256,9 @@ export function ShaderPreview() {
    * one, which is what lets the camera, the spin phase, the animation
    * playhead, the tuned uniforms and `time` survive it.
    *
-   * The bail is a VALUE compare against the module the live document is
-   * RUNNING (`runningModuleRef`), and that one line covers the no-op cases:
-   * first mount and a cold rebuild (the rebuild effect above has just seeded
-   * the ref with the module the fresh document boots with), and React
-   * StrictMode's double fire (the first fire advanced the ref). Comparing
-   * against `bakedModule` instead was the NEW bug — see the ref.
+   * The bail compares against the module the live document is RUNNING
+   * (`runningModuleRef`), never `bakedModule`; that one line also covers first
+   * mount, a cold rebuild and StrictMode's double fire — previewRebuild.test.ts.
    */
   useEffect(() => {
     if (!HOT_SWAP_ENABLED) return;
@@ -2328,12 +2271,6 @@ export function ShaderPreview() {
     postShaderSwap(previewModule);
     return clearHotSwapWait;
   }, [previewModule, bakedModule, containerReady, waitingForBootMesh, postShaderSwap, clearHotSwapWait]);
-
-  // A rebuild throws the old document away, so the animation controls must go
-  // with it: the new one re-announces via fs:anim (or doesn't, if it has no
-  // clips). Without this a model→sphere switch would leave a timeline
-  // scrubbing a document that no longer has a mixer.
-  useEffect(() => { setAnimInfo(null); }, [previewHtml]);
 
   /**
    * Ask the stage to start or stop measuring, and mirror the flag into the ref
@@ -2352,22 +2289,21 @@ export function ShaderPreview() {
     iframeRef.current?.contentWindow?.postMessage({ type: 'fs:stats-on', on: showStats }, '*');
   }, [showStats]);
 
-  // A rebuild resets the chip to its placeholder for the same reason the anim
-  // controls reset: the numbers on screen describe a document that no longer
-  // exists. The re-arm itself rides fs:preview-ready, since the fresh
-  // component isn't listening yet at this point.
+  // A rebuild throws the old document away, and what describes it goes too:
+  // the animation controls (the new document re-announces via fs:anim, or has
+  // no clips — a model→sphere switch must not leave a timeline scrubbing a
+  // document with no mixer), the clip menu (its list may differ) and the stats
+  // numbers (the re-arm rides fs:preview-ready).
   useEffect(() => {
-    if (showStats && statsRef.current) statsRef.current.textContent = STATS_PLACEHOLDER;
-  }, [previewHtml, showStats]);
+    setAnimInfo(null);
+    setClipMenuOpen(false);
+    if (showStatsRef.current && statsRef.current) statsRef.current.textContent = STATS_PLACEHOLDER;
+  }, [previewHtml]);
 
   // The remembered playhead is only meaningful for the model it was measured
   // on, so it resets when the MODEL changes — not when the shader does, which
   // is the whole point of remembering it.
   useEffect(() => { animTimeRef.current = 0; animClipRef.current = 0; }, [geometryRebuildKey]);
-
-  // A rebuild replaces the document the menu's anchor lives over; more to the
-  // point, the new model may have a different clip list.
-  useEffect(() => { setClipMenuOpen(false); }, [previewHtml]);
 
   // Hot-update channels: push appearance changes to the running iframe
   // instead of triggering an iframe rebuild. Idempotency is enforced on
@@ -2614,6 +2550,8 @@ export function ShaderPreview() {
       vrModelUrlRef.current = URL.createObjectURL(blob);
       customModel = { kind: previewMesh.kind, id: previewMesh.id, url: vrModelUrlRef.current };
     }
+    // The code is read at the gesture, like the nodes its images come from.
+    const previewCode = useAppStore.getState().previewCode;
     const html = tslToPreviewHTML(inlineImageAssetsFromNodes(previewCode, useAppStore.getState().nodes), {
       geometry: previewGeometry,
       marchWindow: marchWindow ?? 1,
@@ -2647,7 +2585,7 @@ export function ShaderPreview() {
         if (vrModelUrlRef.current === mintedUrl) vrModelUrlRef.current = null;
       }, { once: true });
     }
-  }, [previewCode, previewGeometry, marchWindow, previewMesh, playing, materialSettings, bgColor, effLighting, effectiveSubdivision, shaderName]);
+  }, [previewGeometry, marchWindow, previewMesh, playing, materialSettings, bgColor, effLighting, effectiveSubdivision, shaderName]);
 
   // The pane's standing notice while the driving output does not fit the
   // model on screen — it would otherwise look like the shader does nothing.
@@ -2924,26 +2862,9 @@ export function ShaderPreview() {
           </div>
         )}
         <iframe
-          // A cold rebuild REPLACES this element instead of rewriting
-          // `srcdoc` on it. That is the difference between a guaranteed fresh
-          // navigation and one that has to supersede whatever the element was
-          // already loading — and a ~1.65 MB bundle plus a WebGPU pre-flight
-          // means "already loading" lasts SECONDS, so the overlap is the
-          // normal case, not a corner. A rewrite that does not take leaves a
-          // document nothing can correct: `coldDocKey` has already moved to
-          // its new value, every later edit rides the HOT channel into
-          // whatever is live, and the ack watchdog is disarmed by the rebuild
-          // effect — the owner's dropped GLB reappearing as a sphere while the
-          // Model dropdown named the file (2026-09-19). The boot hold
-          // (bootMeshWait.ts) stops the overlap from arising at boot; this
-          // makes the case it cannot prevent — a mesh that lands after the
-          // hold's cap, i.e. the LARGEST models — degrade to a second
-          // navigation rather than to that bug.
-          //
-          // Cheap: the element being keyed is the one already being thrown
-          // away, the compiling overlay already covers the gap, and the
-          // destroyed window drops its own late postMessages (the handler
-          // identifies the sender by `contentWindow`).
+          // A cold rebuild REPLACES this element: a fresh navigation, never a
+          // `srcdoc` rewrite on a still-loading iframe (a mesh that lands after
+          // the boot hold's cap) — bootMeshWait.ts, pinned by its test.
           key={coldDocKey}
           ref={iframeRef}
           className="shader-preview__iframe"
@@ -2962,13 +2883,15 @@ export function ShaderPreview() {
           // omitting allow-same-origin puts the iframe in a unique opaque
           // origin so user code can't reach parent storage. We use srcDoc
           // (not src=blobUrl) because a parent-origin blob URL can't be
-          // navigated into a foreign-origin sandboxed frame — srcdoc has no
-          // origin of its own, so the content runs in the iframe's
-          // sandbox-issued opaque origin from the start. Static parent
-          // assets (OBJ models, A-Frame bundle) load via cross-origin
-          // requests that depend on the server returning CORS headers — see
-          // server.headers in vite.config.ts for the dev side; GitHub Pages
-          // sets Access-Control-Allow-Origin: * on all served files.
+          // navigated into a foreign-origin sandboxed frame ("Not allowed to
+          // load local resource: blob:...") — srcdoc has no origin of its
+          // own, so the content runs in the iframe's sandbox-issued opaque
+          // origin from the start, and the shader blob URL it mints there is
+          // same-origin to itself, which the loader's fetch+import needs.
+          // Static parent assets (OBJ models, A-Frame bundle) load via
+          // cross-origin requests that depend on the server returning CORS
+          // headers — see server.headers in vite.config.ts for the dev side;
+          // GitHub Pages sets Access-Control-Allow-Origin: * on all files.
           sandbox="allow-scripts"
           // Permissions Policy — both default to "denied" on sandboxed
           // frames; without these the browser's fullscreen overlay and any
@@ -3231,16 +3154,11 @@ export function ShaderPreview() {
             )}
             {uniforms.map((u) => {
               const raw = uniformValues[u.name] ?? u.defaultValue;
-              // The chip carries the GRAPH's number while the row's own value
-              // carries the PREVIEW's, so each shows the one the other hides.
-              // Without it a tuned value simply won, silently, and the number
-              // on the property node looked broken.
               const over = isOverridden(u, uniformValues[u.name]);
               // The GRAPH's number rides the revert button's tooltip while the
-              // row's own value carries the PREVIEW's, so each still surfaces
-              // the one the other hides — the reason the old inline chip
-              // printed it. It moved into the title when the affordance became
-              // an icon button parked at the end of the controls row.
+              // row's own value carries the PREVIEW's, so each surfaces the one
+              // the other hides — without it a tuned value simply won, silently,
+              // and the number on the property node looked broken.
               const graphText =
                 u.kind === 'color' ? String(u.defaultValue) : Number(u.defaultValue).toFixed(3);
               // Rendered on EVERY row, not just overridden ones: a control that

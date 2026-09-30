@@ -33,22 +33,9 @@ import { PLATFORM_CAPS } from './platformCaps';
 
 /** Soft per-image cap on the encoded data-URL length. 600K chars ≈ 450 KB
  *  binary; a 1024px WebP q0.85 is typically 50-300 KB, so real images fit with
- *  headroom. Bypassable via `ignoreImageLimits`.
- *
- *  This used to read "every payload char is multiplied by ~51 history clones",
- *  and that is no longer what the cap is holding back: the store's
- *  `cloneNodesSharingPayloads` carries `values.imageB64` BY REFERENCE into
- *  every undo entry (JS strings are immutable and every edit path REPLACES
- *  `values` wholesale, so one string reachable from the live graph and all 50
- *  entries cannot be mutated by any of them). What the cap still bounds is
- *  every place the payload is genuinely re-materialized: the 300 ms
- *  localStorage autosave `JSON.stringify`s it against a ~5-10 MB origin budget
- *  the graph already shares (a duplicated payload is written ONCE per
- *  document, `imagePayloadRefs.ts`), the project block re-embeds it in every
- *  export (once per node), and `decodeImageNode` runs an
- *  `atob` over it. Everything on the node OTHER than this key is still deep
- *  copied per history entry, so keeping the bulk in the one shared string is
- *  also what makes that clone cheap.
+ *  headroom. Bypassable via `ignoreImageLimits`. It bounds what re-materializes
+ *  the payload — the autosave, every export, the decode — not history, which
+ *  shares the string by reference (`cloneNodesSharingPayloads`).
  *
  *  Web 600K; the desktop room raises it to 6M, where the autosave is a Rust-side
  *  file rather than localStorage (utils/platformCaps.ts). */
@@ -130,16 +117,18 @@ export interface ImageOriginInfo {
  *  project JSON — keep it to the hex digest shape it is generated in. */
 export const ORIGIN_ID_RE = /^[0-9a-f]{8,64}$/;
 
-/** Construct the `ShaderNodeData` for an Image node. `fileName` is
- *  display-only (shown under the node header) and never reaches generated
- *  code. `colorSpace` 'color' = sRGB texture; 'data' = linear non-mipmapped
- *  (normal/height maps), toggled in the node settings menu. */
-export function makeImageNodeData(
-  dataUrl: string,
-  width: number,
-  height: number,
+/**
+ * Build the Image node for a finished encode — the ONE construction path,
+ * shared by the canvas drop, the store's "Add anyway" overrides and the GLB
+ * import. `fileName` is display-only and never reaches generated code;
+ * `origin` carries the stash id + pre-snap dimensions, so "was snapped" and
+ * "can be reverted" cannot drift apart. `colorSpace` 'color' = sRGB texture;
+ * 'data' = linear non-mipmapped, toggled in the node settings menu.
+ */
+export function makeImageNodeFromEncode(
+  encoded: { dataUrl: string; width: number; height: number },
   cost: number,
-  fileName = '',
+  fileName: string,
   origin?: ImageOriginInfo,
 ): ShaderNodeData {
   return {
@@ -147,9 +136,9 @@ export function makeImageNodeData(
     label: 'Image',
     cost,
     values: {
-      imageB64: dataUrl,
-      width,
-      height,
+      imageB64: encoded.dataUrl,
+      width: encoded.width,
+      height: encoded.height,
       fileName,
       colorSpace: 'color',
       ...(origin?.originId ? { originId: origin.originId } : {}),
@@ -287,26 +276,8 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   return true;
 }
 
-/**
- * Build the Image node for a finished encode — the ONE construction path,
- * shared by the canvas drop and the store's "Add anyway" overrides, so an
- * override can't produce a node the drop path wouldn't have.
- *
- * `origin` carries the stash id + pre-snap dimensions; passing them together
- * with the payload is what keeps "the node was snapped" and "the node can be
- * reverted" from ever drifting apart.
- */
-export function makeImageNodeFromEncode(
-  encoded: { dataUrl: string; width: number; height: number },
-  cost: number,
-  fileName: string,
-  origin?: ImageOriginInfo,
-): ShaderNodeData {
-  return makeImageNodeData(encoded.dataUrl, encoded.width, encoded.height, cost, fileName, origin);
-}
-
-/** What `encodeImageFile` hands back, structurally — declared here so this
- *  module stays free of the DOM-only import. */
+/** Structural twin of `encodeImageFile`'s ok-result, so tests can build one
+ *  without the encoder. */
 export interface EncodedImagePair {
   dataUrl: string;
   width: number;
@@ -342,13 +313,8 @@ export function resolveImageDrop(
   fileName: string,
   stash: (payload: { dataUrl: string; width: number; height: number; fileName: string }) => string | null,
 ): ResolvedImageDrop {
-  // Only a SNAPPED drop stashes. An unsnapped payload IS the original, so the
-  // settings menu's Resolution ladder reads it straight off the node and
-  // stashes it lazily at the first resize (ImageNodeSettings) — stashing it
-  // here as well was tried on 2026-09-09 and reverted the same day: every
-  // drop then competed for the origin cache's slots, so an ordinary drop
-  // could evict the ONE record that undoes a destructive snap, and the study
-  // clean slate learned about bytes it never had to.
+  // Only a SNAPPED drop stashes: an unsnapped payload IS the original, and the
+  // Resolution ladder stashes it lazily at the first resize (ImageNodeSettings).
   if (!res.potApplied || !res.original) return { payload: res };
 
   const originId = stash({ ...res.original, fileName });
@@ -361,20 +327,6 @@ export function resolveImageDrop(
     payload: res,
     origin: { originId, srcWidth: res.original.width, srcHeight: res.original.height },
   };
-}
-
-/** Sum of stored image-payload chars across every Image node INSTANCE
- *  (duplicates each carry their own copy). That is what an export and
- *  0.3.33's import pay; localStorage no longer does — it stores a duplicated
- *  payload once per document (`imagePayloadRefs.ts`, `uniqueImageChars`). */
-export function totalImageChars(nodes: AppNode[]): number {
-  let total = 0;
-  for (const n of nodes) {
-    if (n.data?.registryType !== 'imageNode') continue;
-    const url = getNodeValues(n).imageB64;
-    if (typeof url === 'string') total += url.length;
-  }
-  return total;
 }
 
 /**
@@ -448,6 +400,12 @@ function sumLengths(payloads: Iterable<string>): number {
   let total = 0;
   for (const p of payloads) total += p.length;
   return total;
+}
+
+/** Sum of payload chars over every Image node INSTANCE (a duplicate counts
+ *  again) — what an export and 0.3.33's import pay. */
+export function totalImageChars(nodes: AppNode[]): number {
+  return sumLengths(imagePayloadsOf(nodes));
 }
 
 /** Sum of payload chars over DISTINCT payloads — what `fs:graph` and
@@ -567,21 +525,10 @@ export interface ImageSanitizeResult {
  * checkbox). Stripping empties `imageB64` but keeps the node, so the graph
  * shape survives and the shader degrades to the inert fallback.
  *
- * The running total is 0.3.33's per-instance total, plus one rule on top: a
- * repeat of a payload that is already kept is free. `runningTotal` therefore
- * evolves exactly as it did in 0.3.33, so every instance 0.3.33 keeps is kept
- * here too, and the extra keeps are only repeats (the distinct kept total stays
- * within the cap). Counting DISTINCT payloads instead is NOT a superset: kept
- * duplicates leave room for later distinct payloads 0.3.33 strips, which can
- * then fill the total and strip a small late image 0.3.33 keeps. A stray
- * `imageRef` (IMAGE_REF_KEY) is removed: the restore
- * paths resolve refs before this runs, so one still standing is junk, and a
- * ref never survives into the store. Removing it is not counted as a strip.
- *
- * `caps` defaults to THIS build's soft budgets (web 600K/3M, desktop 6M/32M —
- * utils/platformCaps.ts), so every two-argument caller follows the platform;
- * a test passes the other table's numbers explicitly. The hard ceiling is the
- * same on both builds and is not a parameter.
+ * The running total is 0.3.33's per-instance total, plus one rule: a repeat of
+ * a payload already kept is free (why not DISTINCT: docs/dev/storage-and-limits.md
+ * § STORED once). A stray `imageRef` is removed and not counted as a strip.
+ * `caps` defaults to THIS build's soft budgets (utils/platformCaps.ts).
  */
 export function sanitizeImageNodes(
   nodes: AppNode[],
@@ -648,12 +595,8 @@ function sanitizeOriginKeys(
   values: Record<string, string | number>,
 ): Record<string, string | number> | null {
   const drop: string[] = [];
-  // Plain property access, never `'originId' in values` — the `in` operator
-  // THROWS on a primitive, and these values come straight out of an untrusted
-  // `fs:graph` / `.fastshader` / `fs:savedGroups` payload. `getNodeValues` now
-  // coerces a non-object to `{}` so this is belt-and-braces, but the rule is
-  // the one `sanitizeDataRangeNodes` states and this function is where it was
-  // still being broken.
+  // Plain property access, never `in` — it throws on a primitive, and these
+  // values are untrusted.
   const has = (k: string): boolean => (values as Record<string, unknown>)[k] !== undefined;
   if (has('originId')) {
     const id = values.originId;

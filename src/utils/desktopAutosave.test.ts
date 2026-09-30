@@ -34,7 +34,7 @@ import {
   bootDesktopAutosave,
   registerDesktopCloseFlush,
 } from '@/store/desktopAutosaveBoot';
-import { HISTORY_IDLE, makeNode } from '@/test-utils';
+import { HISTORY_IDLE, makeNode, stubLocalStorage } from '@/test-utils';
 import { getNodeValues, type AppNode } from '@/types';
 import { safeJsonReviver } from './safeJson';
 import {
@@ -65,16 +65,7 @@ beforeEach(() => {
   cancelPendingGraphSave();
   installDesktopAutosave(null);
   vi.useFakeTimers();
-  ls = {};
-  vi.stubGlobal('localStorage', {
-    getItem: (k: string) => (Object.prototype.hasOwnProperty.call(ls, k) ? ls[k] : null),
-    setItem: (k: string, v: string) => {
-      ls[k] = String(v);
-    },
-    removeItem: (k: string) => {
-      delete ls[k];
-    },
-  });
+  ls = stubLocalStorage();
   setGraphPersistence(true);
   useAppStore.setState({ nodes: [], edges: [], pendingLimitNotices: [], ...HISTORY_IDLE });
   cancelPendingGraphSave();

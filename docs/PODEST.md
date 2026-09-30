@@ -244,8 +244,8 @@ format it transcoded for.
 
 ## Microphone
 
-Shaders built with FastShaders' **Mic** node react to sound. Podest can drive
-them: when the loaded shader declares microphone uniforms, a round arm light
+Shaders built with FastShaders' **Sound** node react to sound. Podest can drive
+them: when the loaded shader declares sound uniforms, a round arm light
 appears bottom-left. Click it to start, click it again to stop. It blinks red
 while listening, and stays visible in presentation mode as the privacy
 indicator.
@@ -259,8 +259,9 @@ drop at every boot — so an auto-arm would let a shared file open the microphon
 silently at every boot, for weeks, on a machine nobody is watching. A drop never
 arms; a drop always disarms.
 
-Two gaps worth knowing: the **Audio Input** node (tab/system audio) is *not*
-driven here — its uniforms stay at zero — and the VR popup is silent.
+Two gaps worth knowing: Podest listens to a **microphone only** — a shader
+authored against tab/system audio is driven by the microphone here — and the
+VR popup is silent.
 
 ## Self-hosting
 
@@ -352,7 +353,10 @@ Several parts of it are hand-maintained twins of editor modules. `fit-bounds`,
 (`previewFitBounds`, `previewGltfAnim`, `podestVrNav`) rather than by any sync
 step. The microphone band analysis and the zip reader are hand-kept copies too,
 each pinned by a test (`soundAnalysis`, and `zipReader` plus `podestLimits`) —
-change them together with their originals. On desktop it is opened by a small Rust command
+change them together with their originals. The microphone's values reach the
+stage as ONE `fs:uniform-set {values}` message per animation frame (and one for
+the zeroing on stop); sliders send `fs:uniform`, and the stage applies both
+through the same `setUniform`. On desktop it is opened by a small Rust command
 that must keep `disable_drag_drop_handler()` — without it the OS swallows every
 HTML5 drop and a drag-drop-first page cannot be given a file at all.
 

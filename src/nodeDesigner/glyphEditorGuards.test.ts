@@ -74,7 +74,8 @@ describe('the render hook reaches past the early returns', () => {
 });
 
 describe('every mutating gesture is gated on the parse', () => {
-  const ARMING = ['function onDrawDown', 'function doInsertPoint', 'function onRotDown', 'function applyPaint'];
+  const ARMING = ['function onScaleDown', 'function deleteGlyphSelection', 'function beginPtDrag',
+    'function onDrawDown', 'function doInsertPoint', 'function onRotDown', 'function applyPaint'];
   it.each(ARMING)('%s refuses to run on art that does not parse', (fn) => {
     /* refreshMPreview injects the raw text whether or not it parses, so a gesture
        on the HTML parser's RECONSTRUCTION of half-typed markup writes that

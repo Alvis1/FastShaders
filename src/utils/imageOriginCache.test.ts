@@ -99,6 +99,8 @@ describe('recordToPayload', () => {
     expect(recordToPayload(rec({ width: 0 }), id)).toBeNull();
     expect(recordToPayload(rec({ height: 99999 }), id)).toBeNull();
     expect(recordToPayload(rec({ width: 'big' }), id)).toBeNull();
+    // ToPrimitive cannot convert this one: a miss, never a throw.
+    expect(recordToPayload(rec({ height: { toString: 1 } }), id)).toBeNull();
   });
 
   it('misses on junk instead of throwing', () => {

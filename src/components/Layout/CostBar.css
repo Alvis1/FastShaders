@@ -62,8 +62,10 @@
   margin-bottom: var(--space-2);
 }
 
+/* Flexes in the device row; the ✕ sits beside it. */
 .cost-bar__headset-select {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   font-family: var(--font-sans);
   font-size: var(--font-size-xs);
   font-weight: 500;
@@ -74,13 +76,6 @@
   padding: var(--space-1) var(--space-2);
   cursor: pointer;
   transition: border-color var(--transition-fast);
-}
-
-/* In the device row the select flexes and the ✕ sits beside it. */
-.cost-bar__device-row .cost-bar__headset-select {
-  flex: 1;
-  width: auto;
-  min-width: 0;
 }
 
 .cost-bar__device-remove {

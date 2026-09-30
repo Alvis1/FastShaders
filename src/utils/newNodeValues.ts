@@ -83,15 +83,6 @@ export function pickSpreadColor(
 }
 
 /**
- * A colour for a freshly added colour node, drawn from NEW_COLOR_PALETTE.
- *
- * `rand` is injectable so tests can pin the output.
- */
-export function randomColorHex(rand: () => number = Math.random): string {
-  return pickFrom(NEW_COLOR_PALETTE, rand);
-}
-
-/**
  * A colour for a group the user is creating right now, from the dimmed
  * palette — preferring one no group on the canvas is wearing, so a graph of
  * frames does not read as one repeated colour (the colour-node rule).

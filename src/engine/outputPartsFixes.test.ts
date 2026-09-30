@@ -115,7 +115,7 @@ describe('a hostile mesh name cannot break out of the HTML script context', () =
   });
 
   it('the sink protects strings the source-side escape never sees', () => {
-    // `partKeyLiteral` is one call site; the embed covers every OTHER string
+    // `moduleStringLiteral` is one call site; the embed covers every OTHER string
     // that can reach the document (an `unknown` node's raw expression, an
     // image asset's file name…). Asserted independently so removing either
     // half of the defence fails a test.

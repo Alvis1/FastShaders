@@ -1,9 +1,9 @@
 import type { AppNode, AppEdge } from '@/types';
-import { activeSink, isCustomSink } from '@/utils/sdfPartition';
+import { activeSink, isCustomSink, buildIncoming, closure } from '@/utils/sdfPartition';
 import { contributingOutputs } from '@/utils/outputMaterials';
 import { getNodeValues } from '@/types';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
-import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { getUnwrappedEdges } from '@/engine/cpuEvaluator';
 
 /**
  * Which property uniforms the preview's Uniforms overlay should show.
@@ -56,7 +56,7 @@ export function connectedUniformNamesKey(
   // Collapse state must not change the answer: a collapsed group rewrites its
   // boundary edges to synthetic sockets, so a raw walk would find every
   // property inside it unreachable and blank the overlay on collapse.
-  const real = unwrapCollapsedGroupEdges(nodes, edges);
+  const real = getUnwrappedEdges(nodes, edges);
 
   // EVERY Output that reaches the module, walked as one set — so a slider
   // driving the default AND one driving a per-mesh material are both listed.
@@ -74,32 +74,17 @@ export function connectedUniformNamesKey(
   // `contributingOutputs` documents.
   const sink = activeSink(nodes, real);
   const emitting = sink && isCustomSink(sink) ? [sink] : contributingOutputs(nodes);
-  /** Nodes that feed an emitting Output, walking edges BACKWARDS from each. */
-  const live = new Set<string>();
+  // Nodes that feed an emitting Output, walking edges BACKWARDS from each. With
+  // no emitting Output at all there is nothing to be reachable FROM, so fall
+  // back to the weaker "is wired to something" rule rather than blanking the
+  // overlay.
+  let live: Set<string>;
   if (emitting.length > 0) {
-    const incoming = new Map<string, string[]>();
-    for (const e of real) {
-      const list = incoming.get(e.target);
-      if (list) list.push(e.source);
-      else incoming.set(e.target, [e.source]);
-    }
-    const queue = emitting.map((n) => n.id);
-    for (const n of emitting) live.add(n.id);
-    while (queue.length) {
-      for (const src of incoming.get(queue.pop()!) ?? []) {
-        if (live.has(src)) continue; // also the cycle guard
-        live.add(src);
-        queue.push(src);
-      }
-    }
+    const incoming = buildIncoming(real);
+    live = closure(emitting.map((n) => n.id), (id) => incoming.get(id) ?? []);
+  } else {
+    live = new Set(real.map((e) => e.source));
   }
-
-  // With no emitting Output at all there is nothing to be reachable FROM, so
-  // fall back to the weaker "is wired to something" rule rather than blanking
-  // the overlay.
-  const wired = new Set<string>();
-  if (emitting.length === 0) for (const e of real) wired.add(e.source);
-  const isLive = (id: string) => (emitting.length > 0 ? live.has(id) : wired.has(id));
 
   let hasProp = false;
   const names: string[] = [];
@@ -107,7 +92,7 @@ export function connectedUniformNamesKey(
     const t = n.data.registryType;
     if (t !== 'property_float' && t !== 'property_color') continue;
     hasProp = true;
-    if (!isLive(n.id)) continue;
+    if (!live.has(n.id)) continue;
     const emitted = varNames[n.id];
     const raw = getNodeValues(n).name;
     const name = emitted ?? (raw != null && raw !== '' ? sanitizeIdentifier(String(raw)) : '');

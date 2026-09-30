@@ -8,16 +8,12 @@
  * precedent). The containers come from the ONE fixture set in test-utils.
  */
 import { TRIANGLE_POSITIONS, jpegHeaderBytes, makeGlb, makeRealPng, pngHeaderBytes } from '@/test-utils';
+import { pad4 } from '@/utils/glbContainer';
 import { readGltfModel, type GltfModelReport } from '@/utils/gltfReader';
 import type { EncodeImageFn } from '@/utils/gltfTextureEncode';
 import { MAX_IMAGE_ENCODED_CHARS, MAX_SOURCE_PIXELS } from '@/utils/imageNode';
 
 type Doc = Record<string, unknown>;
-
-// Arithmetic, never `(n + 3) & ~3`: a bitwise operator coerces through ToInt32,
-// so that spelling returns a NEGATIVE length from 2**31 up. Harmless at fixture
-// sizes, but it is the shape that made the repacker u32 overflow guard dead code.
-const pad4 = (n: number) => Math.ceil(n / 4) * 4;
 
 /** bufferView 0 is the triangle, 1, 2, … the blobs (4-aligned). */
 export function withBlobs(extra: Doc, blobs: Uint8Array[]): { doc: Doc; bin: Uint8Array } {

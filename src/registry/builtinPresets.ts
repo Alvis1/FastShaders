@@ -2,10 +2,14 @@
  * Built-in preset definitions for the Presets category in the content browser.
  *
  * Presets are openable teaching material, not black boxes: each is TSL code
- * parsed into a real node graph at startup (same machinery as the built-in
+ * parsed into a real node graph on first use (same machinery as the built-in
  * textures, via buildCodeGroup), wrapped in a group the user can drop, open,
  * rewire and scrub. Tunable parameters are named uniforms, so they surface in
  * the preview's Uniforms overlay and in the exported shader schema.
+ *
+ * Loaded ON DEMAND by every app surface (`import()` in the content browser and
+ * the store): a static import from the boot path puts `codeGroupBuilder` →
+ * `codeToGraph` → @babel/* on the entry wave.
  *
  * Three tiers, ordered easy→advanced in PRESET_ENTRIES:
  *   1 — primitives: one concept, instant feedback (gradient, stripes, fresnel…)
@@ -991,7 +995,8 @@ const PRESET_ENTRIES: PresetEntry[] = [
 ];
 
 /**
- * Parse each preset's TSL code into a group, cached. Called once at startup.
+ * Parse each preset's TSL code into a group. Built by the FIRST call and
+ * cached; this module is loaded on demand, never at boot.
  */
 let _cachedPresets: BuiltinPreset[] | null = null;
 

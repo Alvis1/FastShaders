@@ -73,7 +73,7 @@ describe('exportKtx2 is session-only', () => {
     expect(STORE).not.toMatch(/fs:exportKtx2/);
   });
 
-  it('sits beside exportIncludeMesh and exportAsGlb, the other two session-only export flags', () => {
+  it('sits beside exportIncludeMesh, the other session-only export flag', () => {
     expect(STORE).toContain('  exportKtx2: boolean;');
     expect(STORE).toContain('  exportKtx2: false,');
     expect(STORE).toContain('setExportKtx2: (on) => set({ exportKtx2: on === true }),');

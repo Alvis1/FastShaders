@@ -115,9 +115,9 @@ Tessellation stays your job: a shader with `positionNode` needs vertices to move
 
 ## Single-GLB export
 
-One `.glb` can carry the whole thing: the 3D model you dropped on the preview, the textures the shader uses, the shader module and the editor project. Right-click **EXPORT** → **Format** → *One .glb*. It is offered for a loaded `.glb`, or a `.gltf` whose data is embedded — not for a built-in shape, an `.obj`, or a `.gltf` that keeps its buffers and images in separate files — and never in a study session.
+One `.glb` can carry the whole thing: the 3D model you dropped on the preview, the textures the shader uses, the shader module and the editor project. **EXPORT follows the preview**: while a dropped `.glb` (or a `.gltf` whose data is embedded) is SHOWN, EXPORT writes that one `.glb`; right-click **EXPORT** → *Export .zip* gives the shader file with the model under `models/` instead. With a built-in shape shown, EXPORT writes the shader file alone (`.js`, or `.zip` when the graph holds images), and right-click → *Export with model* adds the shape as an `.obj`. An `.obj`, a Gaussian splat, or a `.gltf` that keeps its buffers and images in separate files exports as the `.zip` with the model. Never a `.glb` in a study session. What neither file keeps: a material that *Mesh with Materials* turned into a shader keeps only the four slots its Texture nodes fill (base colour, metal/rough, normal, emissive) — its occlusion and extension textures (clearcoat and the like) are dropped at import, so they are gone from the loaded model itself.
 
-The page that runs it is the code panel's **A-Frame** tab, which switches to the model while that format is picked:
+The page that runs it is the code panel's **A-Frame** tab, which always shows the page for what EXPORT writes — for the `.glb`:
 
 ```html
 <script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/a-frame-180-a-01.min.js"></script>

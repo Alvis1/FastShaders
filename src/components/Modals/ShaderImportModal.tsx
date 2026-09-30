@@ -41,6 +41,7 @@ import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
+import { fullscreenElement } from '@/components/inputs/colorPickerModel';
 import {
   addDroppedShader,
   openDroppedShader,
@@ -50,13 +51,11 @@ import './CsvImportModal.css';
 import './ShaderImportModal.css';
 
 function fullscreenHost(): HTMLElement {
-  const d = document as Document & { webkitFullscreenElement?: Element | null };
-  const el = document.fullscreenElement ?? d.webkitFullscreenElement ?? null;
   // The fullscreen top layer renders only that element's subtree, so a body
   // portal would be invisible over a fullscreened preview — the colour
   // picker's rule. This dialog is app-wide and has no anchor to test against,
   // so whatever is fullscreen is where it belongs.
-  return el instanceof HTMLElement ? el : document.body;
+  return fullscreenElement() ?? document.body;
 }
 
 export function ShaderImportModal() {
@@ -219,7 +218,7 @@ export function ShaderImportModal() {
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="csv-import-modal__title shader-import-modal__name" id="shader-import-modal-title">
+        <div className="csv-import-modal__title csv-import-modal__file" id="shader-import-modal-title">
           {head.fileName}
         </div>
         {liveNodes > 1 && (
@@ -230,7 +229,7 @@ export function ShaderImportModal() {
             )}
           </div>
         )}
-        <div className="shader-import-modal__heading">{t('Import', language)}</div>
+        <div className="csv-import-modal__heading">{t('Import', language)}</div>
         {/* DOM order IS visual order, and Cancel — the one that changes
             nothing — is last rather than first. */}
         <div className="csv-import-modal__choices">

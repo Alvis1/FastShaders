@@ -15,7 +15,7 @@
  * plus `allow-scripts` is not a boundary at all. There is nothing to harden here —
  * the frame runs the same code the top-level page does.
  */
-import { useEffect } from 'react';
+import { useModalKeys } from '@/components/Modals/useModalKeys';
 // The Graphs-page modal chrome, shared with GraphModal — one class set for
 // both (`gm__`), so the two headers cannot drift apart again.
 import './GraphModal.css';
@@ -43,13 +43,9 @@ function designerUrl(type: string): string {
 
 export function DesignerModal({ type, label, onClose }: DesignerModalProps) {
   // Mirrors GraphModal's Escape handling so both modals close identically.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  useModalKeys(true, (e) => {
+    if (e.key === 'Escape') onClose();
+  });
 
   return (
     <div className="gm__backdrop gm__backdrop--full" onClick={onClose}>

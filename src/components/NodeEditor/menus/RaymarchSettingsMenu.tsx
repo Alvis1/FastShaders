@@ -7,7 +7,7 @@ import type { AppNode, ShaderNodeData } from '@/types';
 import { effectiveExposedPorts, toggleExposedPort } from '@/utils/exposedPorts';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
-import { NumberRow, NodeActions } from './menuShared';
+import { NumberRow, NodeActions, sinkRowStyle, sinkSocketLabelStyle, sinkCheckStyle } from './menuShared';
 import { MARCH_NODE_CONFIG, MARCH_COLOR_DEFAULTS } from '../nodes/RaymarchOutputNode';
 
 /**
@@ -52,11 +52,6 @@ export function RaymarchSettingsMenu({ nodeId }: { nodeId: string }) {
     });
   };
 
-  const checkboxStyle: React.CSSProperties = { width: 14, height: 14, cursor: 'pointer', accentColor: 'var(--border-focus)', margin: 0 };
-  const rowStyle: React.CSSProperties = {
-    display: 'flex', alignItems: 'center', gap: 'var(--space-2)', padding: '2px var(--space-3)',
-    fontSize: 'var(--font-size-sm)', color: 'var(--text-primary)',
-  };
 
   const valueEditor = (portId: string) => {
     if (config.colorPorts.includes(portId)) {
@@ -103,13 +98,13 @@ export function RaymarchSettingsMenu({ nodeId }: { nodeId: string }) {
             const port = def.inputs.find((p) => p.id === portId);
             if (!port) return null;
             return (
-              <div key={portId} style={rowStyle}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', cursor: 'pointer', minWidth: 120 }} title={t('Show socket', language)}>
+              <div key={portId} style={sinkRowStyle}>
+                <label style={sinkSocketLabelStyle} title={t('Show socket', language)}>
                   <input
                     type="checkbox"
                     checked={exposedSet.has(portId)}
                     onChange={() => handleTogglePort(portId)}
-                    style={checkboxStyle}
+                    style={sinkCheckStyle}
                   />
                   {portLabel(port.label, language)}
                 </label>

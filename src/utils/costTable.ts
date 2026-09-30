@@ -4,47 +4,10 @@ import complexityData from '@/registry/complexity.json';
  * The GPU cost TABLE — the authored prices, the measured override layered over
  * them, and the sanitizer that decides what an override is allowed to say.
  *
- * ============================================================================
- * WHY THIS IS ITS OWN MODULE, AND WHY IT MUST STAY A LEAF
- * ============================================================================
- * This file imports NOTHING but the JSON. That is the whole point, and it is
- * load-bearing rather than tidiness.
- *
- * `useAppStore` calls `sanitizeCostMap` and `setCostOverrides` at MODULE SCOPE
- * (see its `loadCostProfiles()` / `setCostOverrides(...)` boot lines) so the
- * first CostBar and the first node badge already reflect the selected device.
- * Those two functions used to live in `nodeCost.ts`, which sits in a genuine
- * import cycle:
- *
- *     nodeCost -> outputMaterials -> exposedPorts -> edgeUtils -> useAppStore
- *                                                                     |
- *                     (module-scope setCostOverrides / sanitizeCostMap)|
- *                     <---------------------------------------------- +
- *
- * A cycle is harmless until something EVALUATES across it during module
- * initialisation, and those two calls were exactly that. Whichever module the
- * entry point happened to reach first got re-entered while its own body was
- * still running, and read a `const`/`let` that had not been initialised yet:
- *
- *   - entered via nodeCost      -> `Cannot access 'overrides' before initialization`
- *   - entered via exposedPorts  -> `Cannot access 'OUTPUT_DEFAULT_EXPOSED' ...`
- *   - entered via useAppStore   -> `Cannot access 'saveTimer' ...`,
- *                                  `Cannot read properties of undefined (reading 'setState')`
- *
- * MEASURED: on a clean tree that failed 5-11 of 152 vitest files, DIFFERENTLY
- * on every run — `vite.config.ts` sets `isolate: false`, so module instances are
- * shared across every suite in a worker and vitest's file-to-worker assignment
- * decides which module wins the race. `release.yml` runs `npm test` before it
- * builds binaries, so this could fail a release for no reason.
- *
- * A leaf module can never be caught mid-initialisation: it has no imports to
- * suspend on, so by the time anything can call into it, its body has run. That
- * is the entire fix — the cycle above still exists, but nothing evaluates
- * across it any more, which is what makes a cycle benign.
- *
- * So: keep this file free of imports. Anything needing `AppNode`, the registry,
- * or graph traversal belongs in `nodeCost.ts`, which is free to sit in the
- * cycle because nothing calls it during module initialisation.
+ * A LEAF: it imports nothing but the JSON, because the store calls into it at
+ * MODULE SCOPE and `nodeCost` sits in an import cycle back through the store
+ * (random TDZ failures). Graph-aware readers go in `nodeCost.ts`.
+ * See docs/dev/project-structure.md (costTable.ts); pinned by costTable.test.ts.
  */
 
 /**

@@ -12,43 +12,33 @@
  * threshold from the events that ship in the package.
  */
 
-/** Closed event vocabulary — v1 of the `fs-eval-1` schema. */
-export type EvalEventType =
+/** Closed event vocabulary — v1 of the `fs-eval-1` schema. The ONE list: the
+ *  type and the journal sanitizer both derive from it. */
+const EVAL_EVENT_TYPES = [
   // session lifecycle
-  | 'session-start'
-  | 'session-end'
-  | 'recovered'
-  | 'truncated'
+  'session-start', 'session-end', 'recovered', 'truncated',
   // presence / activity raw signals
-  | 'visibility'
-  | 'focus'
-  | 'activity'
+  'visibility', 'focus', 'activity',
   // graph actions
-  | 'node-add'
-  | 'node-remove'
-  | 'edge-connect'
-  | 'edge-disconnect'
-  | 'undo'
-  | 'redo'
-  | 'gesture'
-  | 'new-graph'
+  'node-add', 'node-remove', 'edge-connect', 'edge-disconnect',
+  'undo', 'redo', 'gesture', 'new-graph',
   // the participant chose which output node drives (several may coexist)
-  | 'output-activate'
+  'output-activate',
   // code / preview / assets
-  | 'code-apply'
-  | 'preview-rebuild'
-  | 'asset-drop'
-  | 'import'
-  | 'export'
+  'code-apply', 'preview-rebuild', 'asset-drop', 'import', 'export',
   // periodic totals
-  | 'snapshot'
+  'snapshot',
   // task / condition identity
-  | 'task-start'
+  'task-start',
   // cost feedback: the graph crossed the device budget in either direction
-  | 'budget-crossed'
+  'budget-crossed',
+  // the participant switched the UI language (`from`/`to`: 'en' | 'lv')
+  'lang-switch',
   // questionnaire
-  | 'sus-open'
-  | 'sus-submit';
+  'sus-open', 'sus-submit',
+] as const;
+
+export type EvalEventType = (typeof EVAL_EVENT_TYPES)[number];
 
 export interface EvalEvent {
   /** 1-based, contiguous — a gap means events were lost. */
@@ -80,6 +70,7 @@ export const ACTIVITY_EVENT_TYPES: ReadonlySet<EvalEventType> = new Set([
   'asset-drop',
   'import',
   'export',
+  'lang-switch',
   'sus-open',
   'sus-submit',
 ]);
@@ -210,30 +201,9 @@ export function deriveSummary(
   let firstAdd: number | null = null;
   let firstConnect: number | null = null;
 
-  if (events.length === 0) {
-    return {
-      wallMs: 0,
-      activeMs: 0,
-      idleThresholdMs: T,
-      eventCount: 0,
-      counts,
-      nodeAddsByType,
-      distinctNodeTypesAdded: 0,
-      timeToFirstNodeAddMs: null,
-      timeToFirstConnectMs: null,
-      undoCount: 0,
-      redoCount: 0,
-      codeApplyCount: 0,
-      previewRebuildCount: 0,
-      exportCount: 0,
-      finalSnapshot: null,
-      budgetCrossings: 0,
-      overBudgetMs: 0,
-    };
-  }
-
-  const t0 = events[0].t;
-  const tEnd = events[events.length - 1].t;
+  // An empty log runs the same path and comes out all zeros / nulls.
+  const t0 = events[0]?.t ?? 0;
+  const tEnd = events[events.length - 1]?.t ?? 0;
 
   const markers: Interval[] = [];
   let overSince: number | null = null;
@@ -517,14 +487,7 @@ export interface EvalJournal {
 }
 
 const MAX_JOURNAL_EVENTS = 60_000;
-const EVENT_TYPES: ReadonlySet<string> = new Set<string>([
-  'session-start', 'session-end', 'recovered', 'truncated',
-  'visibility', 'focus', 'activity',
-  'node-add', 'node-remove', 'edge-connect', 'edge-disconnect',
-  'undo', 'redo', 'gesture', 'new-graph', 'output-activate',
-  'code-apply', 'preview-rebuild', 'asset-drop', 'import', 'export',
-  'snapshot', 'task-start', 'budget-crossed', 'sus-open', 'sus-submit',
-]);
+const EVENT_TYPES: ReadonlySet<string> = new Set<string>(EVAL_EVENT_TYPES);
 
 /**
  * Validate a parsed journal as adversarial input — localStorage is writable by

@@ -17,7 +17,7 @@ import { STATIC_TEAPOT_RESOLUTION } from './teapotGeometry';
 
 /**
  * The built-in preview shapes as exported `.obj` files (the EXPORT popover's
- * "Export model" row). The primitives are PORTS of three's generators — the
+ * "Export with model" button). The primitives are PORTS of three's generators — the
  * parent bundle carries no three — so they are held to three's own output
  * vertex for vertex; the teapot to the served file; the bunny to what the
  * preview's fit-bounds does with the served scan.

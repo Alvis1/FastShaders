@@ -1,42 +1,9 @@
 /**
- * "Hard reload" — the second item in the toolbar reload button's right-click
- * menu, and the app's own way to start a page from scratch.
- *
- * ── What a page can actually do ────────────────────────────────────────────
- *
- * Not what the name promises, and the honest version is worth writing down
- * because the obvious spellings are all wrong:
- *
- *  • `location.reload(true)` does NOTHING. The Location IDL takes no argument
- *    and WebIDL discards extras — this ships a control identical to the plain
- *    left-click while looking like it does more. (TypeScript declares
- *    `reload(): void`, so the compile error tends to get cast away rather than
- *    read as the correction it is.)
- *  • A page cannot bypass its own subresource cache, and there is no API for
- *    "reload as if the user pressed Cmd+Shift+R".
- *  • Equally, a page cannot DETECT that the user pressed Cmd+Shift+R:
- *    `PerformanceNavigationTiming.type` is `'reload'` for both gestures, and
- *    every transferSize heuristic fails in both directions (a `no-store`
- *    document 200s on a soft reload; a hard reload still permits a 304 on an
- *    unchanged ETag).
- *
- * What IS reliable is changing the URL: a different document URL is a
- * different HTTP cache entry, so `?fsreload=<stamp>` guarantees a fresh
- * index.html — and because Vite content-hashes the JS/CSS it references, a
- * fresh index.html is exactly how a newly deployed build gets picked up. The
- * unhashed `public/` assets (the A-Frame bundle, the shaderloader, the .obj
- * models) keep their cached copies; that is the honest limit of this control
- * and the tooltip does not claim otherwise.
- *
- * ── What it clears ─────────────────────────────────────────────────────────
- *
- * An explicit LIST, never `sessionStorage.clear()`. That temptation is a real
- * hazard here: `fs:evalJournal` is a study participant's telemetry and
- * `fs:evalSession` is what makes a mid-session reload resume instead of
- * re-asking consent, so a blanket clear would silently destroy a run mid-study
- * and hand the researcher a package whose integrity checks flag a session that
- * was actually intact. Nothing in localStorage is touched either — that is the
- * autosaved graph, the saved groups, the cost profiles and every preference.
+ * "Hard reload": navigate to `?fsreload=<stamp>`. A new URL is a new HTTP cache
+ * entry, so index.html and its hashed chunks refetch; `public/` assets do not.
+ * `location.reload(true)` is a no-op (the IDL takes no argument).
+ * Clear ONLY `HARD_RELOAD_CLEARED_KEYS`, never `sessionStorage.clear()`: the
+ * eval journal lives there. Reasoning: docs/dev/discovery-and-i18n.md → Hard reload.
  */
 
 /** Cache-busting marker. Stripped from the address bar once the page is up. */

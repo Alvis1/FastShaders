@@ -40,11 +40,6 @@ export function railFraction(index: number, count: number): number {
   return 0.5 - spread / 2 + (spread / Math.max(1, count - 1)) * index;
 }
 
-/** Every fraction for a rail of `count` sockets, in order. */
-export function railFractions(count: number): number[] {
-  return Array.from({ length: count }, (_, i) => railFraction(i, count));
-}
-
 /**
  * The client-space Y of socket `i` inside a pane whose box is `top`/`height` —
  * what PreviewLink aims each wire at, so it lands on the disc the rail drew.

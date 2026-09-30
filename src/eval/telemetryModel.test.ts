@@ -17,10 +17,14 @@ const T = 60_000;
 
 describe('deriveSummary — active time', () => {
   it('returns zeros for an empty log', () => {
-    const s = deriveSummary([], { idleThresholdMs: T });
-    expect(s.wallMs).toBe(0);
-    expect(s.activeMs).toBe(0);
-    expect(s.eventCount).toBe(0);
+    // The WHOLE shape: an empty log runs the general path, not a second literal.
+    expect(deriveSummary([], { idleThresholdMs: T })).toEqual({
+      wallMs: 0, activeMs: 0, idleThresholdMs: T, eventCount: 0,
+      counts: {}, nodeAddsByType: {}, distinctNodeTypesAdded: 0,
+      timeToFirstNodeAddMs: null, timeToFirstConnectMs: null,
+      undoCount: 0, redoCount: 0, codeApplyCount: 0, previewRebuildCount: 0, exportCount: 0,
+      finalSnapshot: null, budgetCrossings: 0, overBudgetMs: 0,
+    });
   });
 
   it('wall time spans first to last event', () => {
@@ -314,6 +318,15 @@ describe('sanitizeJournal — adversarial storage', () => {
     });
     expect(j).not.toBeNull();
     expect(j!.events.map((e) => e.type)).toEqual(['session-start', 'activity']);
+  });
+
+  it('keeps language switches across a reload (the sanitizer reads the one vocabulary list)', () => {
+    const events = stream([
+      ['session-start', 0, { language: 'lv' }],
+      ['lang-switch', 5_000, { from: 'lv', to: 'en' }],
+    ]);
+    const j = sanitizeJournal({ v: 1, sessionId: 'es-1', origin: 1_787_000_000_000, events });
+    expect(j!.events).toEqual(events);
   });
 });
 

@@ -82,6 +82,17 @@ describe('sanitizeDrawings', () => {
     expect(sanitizeDrawings([stroke({ width: undefined as unknown as number })])[0].width).toBe(3);
   });
 
+  it('never throws on a value ToPrimitive cannot convert', () => {
+    const bad = { toString: 1 } as unknown as number;
+    const out = sanitizeDrawings([
+      stroke({ width: bad, opacity: bad, points: [0, 0, bad, 5, 20, 20] }),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].width).toBe(3);
+    expect(out[0].opacity).toBe(1);
+    expect(out[0].points).toEqual([0, 0, 20, 20]);
+  });
+
   it('truncates an over-long stroke to the per-stroke point cap', () => {
     const pts = Array.from({ length: (MAX_POINTS_PER_STROKE + 50) * 2 }, (_, i) => i);
     const out = sanitizeDrawings([stroke({ points: pts })]);

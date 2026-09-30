@@ -86,17 +86,9 @@
      the offset grows with how high the surface floats — sm = chips/indicators
      sitting just off their surface (2px), md = cards/tooltips/dropdown panes
      (4px), lg = modals, menus and popovers over ORDINARY content (8px), float =
-     chrome over the NODE CANVAS (12px). Light source is fixed top-left, so x
-     always equals y. Never reintroduce a blur radius.
-
-     The COLOURS are their own tokens because two surfaces cannot use a
-     box-shadow at all: the toolbar's shadow is drawn as a plain strip by
-     `.app-layout__left::before` (see AppLayout.css for why it cannot be cast by
-     the toolbar itself), and it has to darken with the theme exactly as every
-     real shadow does. A literal there would be a fourth copy of this number
-     that nothing keeps in step. */
-  --shadow-sm-color: rgba(0, 0, 0, 0.28);
-  --shadow-sm: 2px 2px 0 var(--shadow-sm-color);
+     chrome over the NODE CANVAS (6px). Light source is fixed top-left, so x
+     always equals y. Never reintroduce a blur radius. */
+  --shadow-sm: 2px 2px 0 rgba(0, 0, 0, 0.28);
   --shadow-md: 4px 4px 0 rgba(0, 0, 0, 0.36);
   --shadow-lg: 8px 8px 0 rgba(0, 0, 0, 0.45);
 
@@ -128,7 +120,11 @@
      decision, and cssTokens.test.ts pins the parts of the ramp that are not.
 
      Not used for modals, toolbar popovers or asset tiles: those float over
-     ordinary content that tops out at 4px. */
+     ordinary content that tops out at 4px.
+
+     The COLOUR is its own token because the toolbar's shadow is a plain strip
+     (`.app-layout__left::before`, AppLayout.css), not a box-shadow, and must
+     darken with the theme like every real shadow. */
   --shadow-float-color: rgba(0, 0, 0, 0.45);
   --shadow-float: 6px 6px 0 var(--shadow-float-color);
   /* Graph nodes rest CLOSE to the canvas — a tight 2px contact shadow, so a
@@ -150,13 +146,6 @@
      2x"). The light sits on a card that is already raised off the canvas, so the
      full 8px read as it floating far above that card. */
   --shadow-node-control-hover: 4px 4px 0 rgba(0, 0, 0, 0.45);
-
-  /* RETIRED 2026-09-09: `--fs-node-rise`, the 3px a lifted node used to travel.
-     Its whole comment was a bound — how far a node may move before its sockets
-     slide out from under their wires — and the answer turned out to be "not at
-     all", because React Flow measures socket positions and a CSS translate is
-     invisible to that measurement until something re-measures at the wrong
-     moment. The lift is `--fs-node-grow` below, on every surface. */
 
   /* How much a LIFTED canvas node grows — the "coming forward" cue that
      replaced the 3px translate (see NodeBase.css for why the movement went).
@@ -339,8 +328,7 @@
      offset is the elevation system — it never changes per theme), only the
      alpha deepens so the lift still reads against the darker backdrop. Node
      shadows (--shadow-node*) are intentionally left untouched above. */
-  --shadow-sm-color: rgba(0, 0, 0, 0.42);
-  --shadow-sm: 2px 2px 0 var(--shadow-sm-color);
+  --shadow-sm: 2px 2px 0 rgba(0, 0, 0, 0.42);
   --shadow-md: 4px 4px 0 rgba(0, 0, 0, 0.48);
   --shadow-lg: 8px 8px 0 rgba(0, 0, 0, 0.55);
   --shadow-float-color: rgba(0, 0, 0, 0.55);

@@ -1,29 +1,8 @@
 /**
- * Edge `data` is the one graph payload nothing validated — and it is the one
- * the engine never reads, which is exactly why it was missed. It carries only
- * visual state (the `dataType` tint and the user's routing waypoints), but it
- * rides every surface a shared `.fastshader` reaches: `buildProjectState`
- * embeds `state.edges` verbatim into the FASTSHADERS_PROJECT_V1 block,
- * `applyProjectToStore` assigns `project.graph.edges` straight into the store
- * — the block's element gate stops at `source`/`target` — and `loadGraph`
- * restores `fs:graph` without touching `edge.data` at all.
- *
- * The readers are NOT defensive. TypedEdge maps `waypoints` and dereferences
- * `w.x` during RENDER, and the app has no React error boundary anywhere, so
- * `waypoints: [null]` — or `waypoints: "abc"`, whose `.length` passes the
- * `hasWaypoints` gate — throws out of render and takes the whole tree down to
- * a blank page. The 300 ms autosave then persists the poison, so every reload
- * blanks again.
- *
- * Unbounded lists are the softer half, but measured: `splinePath` is O(N) and
- * runs once per channel plus once for the hit path (20 000 points → ~11 ms and
- * a 1.7 MB path `d`, each), `EdgeWaypointHandles` renders one <circle> per
- * point, and `findNearestEdge` re-measures the whole spline on every drag
- * pointermove. Non-finite coords are milder still — an invalid path `d`
- * renders as nothing, so the edge (and its hit area) simply disappears.
- *
- * Mirrors `sanitizeDrawings` (utils/drawings.ts) — the same class of
- * visual-only, file-carried, capped-on-read payload, same ±1e6 coordinate clamp.
+ * `edge.data` is adversarial and visual-only (the `dataType` tint, routing
+ * waypoints): the engine never reads it, while TypedEdge dereferences it during
+ * RENDER with no error boundary. Sanitized on all three restore paths, like
+ * `sanitizeDrawings`. Reasoning: docs/dev/canvas-interaction.md → Edge interactions.
  */
 
 import type { AppEdge, TSLDataType } from '@/types';
@@ -89,20 +68,12 @@ function cleanWaypoints(raw: unknown): Array<{ x: number; y: number }> | undefin
 }
 
 /**
- * Bound the visual `data` payload of an imported / restored edge list. Returns
- * the SAME array when nothing needed changing, so a clean graph keeps its
- * identity — the autosave subscriber and `selectionOnlyGraphChange`
- * (graphSemantics.ts) compare edges by `data` reference.
- *
- * A non-object ELEMENT is DROPPED, not passed through. Reading `.data` off a
- * null would throw inside `loadGraph`'s try, which returns null, which boots
- * the DEMO graph, which the 300 ms autosave then writes over the user's real
- * `fs:graph` — the exact unrecoverable outcome this sanitizer exists to
- * prevent. `fs:graph` has no element-shape gate (the project path has one) and
- * `autoExposeConnectedParamPorts` only walks edges inside its
- * `usesExposedPorts` branch, so a graph with no output/noise/image/time/mic
- * node reaches here with the null intact. A null edge is unrenderable anyway —
- * React Flow dereferences `e.id`.
+ * Bound the visual `data` payload of a restored edge list. Returns the SAME
+ * array when clean: the autosave subscriber and `selectionOnlyGraphChange`
+ * compare edges by `data` reference.
+ * A non-object ELEMENT is DROPPED, never passed through: reading `.data` off a
+ * null throws inside `loadGraph`'s try, which boots the DEMO graph, which the
+ * autosave then writes over the user's `fs:graph`.
  */
 export function sanitizeEdgeExtras(edges: AppEdge[]): AppEdge[] {
   let changed = false;

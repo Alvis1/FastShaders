@@ -666,7 +666,7 @@
      Capture lives in THIS document, never in the stage: the stage iframe is
      sandbox="allow-scripts" with no allow-same-origin, so it runs in an opaque
      origin where getUserMedia is denied below the Permissions-Policy layer.
-     Values cross as ordinary fs:uniform messages — the same in-place
+     Values cross as ONE fs:uniform-set message per frame — the same in-place
      _propertyUniforms write the sliders use, which is per-frame safe — so a
      parent-held capture also survives every stage restart podest performs
      (device loss, stall watchdog, the ~4.4h time fold).
@@ -686,7 +686,7 @@
      no transient activation. So an auto-arm would open the mic silently at
      every boot, for weeks, on a machine nobody is watching. That is the line
      this must not cross. */
-  var SOUND_RE = /^mic\d*_(level|bass|mid|treble)$/;
+  var SOUND_RE = /^sound\d*_(level|bass|mid|treble)$/;
   var micNames = [];
   var micStream = null, micCtx = null, micAnalyser = null, micBins = null;
   var micStatus = "off";           // off | starting | live | failed
@@ -742,10 +742,16 @@
     // Skip while the stage is rebuilding: post() would only churn its 16-slot
     // queue with values that are stale by the time the stage boots.
     if (!stageReady) return;
+    micPost(function (name) { var ch = SOUND_RE.exec(name); return ch ? v[ch[1]] : undefined; });
+  }
+  /** Every mic channel in ONE message: four posts a frame was 240 a second. */
+  function micPost(valueOf) {
+    var values = {}, any = false;
     for (var i = 0; i < micNames.length; i++) {
-      var ch = SOUND_RE.exec(micNames[i]);
-      if (ch) post({ type: "fs:uniform", name: micNames[i], value: v[ch[1]] });
+      var val = valueOf(micNames[i]);
+      if (val !== undefined) { values[micNames[i]] = val; any = true; }
     }
+    if (any) post({ type: "fs:uniform-set", values: values });
   }
   function micStop(zero) {
     if (micRaf) { cancelAnimationFrame(micRaf); micRaf = 0; }
@@ -754,9 +760,7 @@
     micAnalyser = null;
     if (micStatus !== "failed") micStatus = "off";
     // Leave the shader at a defined rest state instead of frozen mid-sound.
-    if (zero !== false && stageReady) {
-      for (var i = 0; i < micNames.length; i++) post({ type: "fs:uniform", name: micNames[i], value: 0 });
-    }
+    if (zero !== false && stageReady) micPost(function () { return 0; });
     micPaint();
   }
   function micStart() {
@@ -3691,7 +3695,7 @@
     L.push('(function(){');
     L.push('  var SRC=' + (state.shaderSource && !state.showMaterials ? jsonForScript(state.shaderSource) : "null") + ';');
     L.push('  var VALUES=' + jsonForScript(state.values || {}) + ';');
-    L.push('  var SOUND_RE=/^mic\\d*_(level|bass|mid|treble)$/;');
+    L.push('  var SOUND_RE=/^sound\\d*_(level|bass|mid|treble)$/;');
     L.push('  var entity=null;');
     // Poll like the stage's reportUniforms does: _propertyUniforms appears
     // only after the loader finishes its dynamic import.
@@ -4241,7 +4245,7 @@
     // idle return in fullscreen restores the framing the exhibitor chose —
     // not the boot camera.
     L.push('  function saveView(){var oc=camEl&&camEl.components&&camEl.components["orbit-controls"];if(oc&&oc.controls&&typeof oc.controls.saveState==="function"){try{oc.controls.saveState();}catch(e){}}}');
-    L.push('  window.addEventListener("message",function(e){if(e.source!==window.parent)return;var m=e.data;if(!m)return;switch(m.type){case"fs:shader":applyShaderSource(m.source);break;case"fs:detach-shader":detachShader();break;case"fs:geometry":setPrimitive(m.geometryAttr,m.rotation);break;case"fs:model":setModel(m.modelType,m.bytes,m.regen,m.rotation,m.decoders);break;case"fs:uniform":setUniform(m.name,m.value);break;case"fs:assign-part":assignPart(m.mesh,m.part);break;case"fs:context-hook":ctxHook=!!m.on;break;case"fs:spin":setSpin(m.playing,m.dur);break;case"fs:stats-on":setStats(m.on);break;case"fs:background":setBackground(m.color);break;case"fs:reset-camera":resetCamera();break;case"fs:save-view":saveView();break;}});');
+    L.push('  window.addEventListener("message",function(e){if(e.source!==window.parent)return;var m=e.data;if(!m)return;switch(m.type){case"fs:shader":applyShaderSource(m.source);break;case"fs:detach-shader":detachShader();break;case"fs:geometry":setPrimitive(m.geometryAttr,m.rotation);break;case"fs:model":setModel(m.modelType,m.bytes,m.regen,m.rotation,m.decoders);break;case"fs:uniform":setUniform(m.name,m.value);break;case"fs:uniform-set":if(m.values&&typeof m.values==="object")for(var k in m.values)if(Object.prototype.hasOwnProperty.call(m.values,k))setUniform(k,m.values[k]);break;case"fs:assign-part":assignPart(m.mesh,m.part);break;case"fs:context-hook":ctxHook=!!m.on;break;case"fs:spin":setSpin(m.playing,m.dur);break;case"fs:stats-on":setStats(m.on);break;case"fs:background":setBackground(m.color);break;case"fs:reset-camera":resetCamera();break;case"fs:save-view":saveView();break;}});');
     // kickResize: a fresh WebGPU boot can record a stale/zero canvas size,
     // leaving the scene unpainted until renderer.setSize re-runs (the "blank
     // until the window is resized" bug) — re-run A-Frame's resize path a few

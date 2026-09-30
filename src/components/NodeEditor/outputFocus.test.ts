@@ -500,7 +500,7 @@ describe('the cost pill CYCLES through the Output nodes (owner request, D4)', ()
       // against the 26px this badge reaches upward. Measured, not assumed —
       // and this fails if either constant is ever lowered under it.
       const REACH = 26;
-      const store = readFileSync(path.resolve(__dirname, '../../store/useAppStore.ts'), 'utf8');
+      const frame = readFileSync(path.resolve(__dirname, '../../utils/groupFrame.ts'), 'utf8');
       const builder = readFileSync(path.resolve(__dirname, '../../registry/codeGroupBuilder.ts'), 'utf8');
       const num = (src: string, name: string, after: string) => {
         const at = src.indexOf(after);
@@ -508,8 +508,8 @@ describe('the cost pill CYCLES through the Output nodes (owner request, D4)', ()
         expect(m, `${name} after ${after}`).not.toBeNull();
         return Number(m![1]);
       };
-      const userBand = num(store, 'PADDING', 'const PADDING = 24;')
-        + num(store, 'BADGE_CLEARANCE', 'const PADDING = 24;');
+      const userBand = num(frame, 'GROUP_PADDING', 'const GROUP_PADDING = 24;')
+        + num(frame, 'GROUP_BADGE_CLEARANCE', 'const GROUP_PADDING = 24;');
       const builtinBand = num(builder, 'PAD', 'const PAD = 20;')
         + num(builder, 'BADGE_CLEARANCE', 'const PAD = 20;');
       expect(userBand).toBeGreaterThanOrEqual(REACH);

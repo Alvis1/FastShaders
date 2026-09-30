@@ -45,7 +45,6 @@ function buildable(over: Partial<GlbImportFacts> = {}): GlbImportFacts {
     fileBytes: 1000,
     materialIndices: [0],
     textures: [{ key: 'k', slot: 'baseColor', width: 256, height: 256, sourceLossless: false, materials: [0] }],
-    embeddedShader: null,
     ...over,
   };
 }

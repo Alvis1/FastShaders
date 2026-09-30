@@ -8,7 +8,7 @@
  * failure this feature can produce. So the classification is pinned here.
  *
  * These are SOURCE pins, deliberately. The vitest env is `node` — ShaderPreview
- * is a ~2600-line .tsx with an iframe, postMessage and localStorage in it and
+ * is a large .tsx with an iframe, postMessage and localStorage in it and
  * has never had a rendering test — so what can be checked is that the code
  * still says what the design says. In particular the last test is a real drift
  * guard rather than a restatement: a dep added to the document memo must also

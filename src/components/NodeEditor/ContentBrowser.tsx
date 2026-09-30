@@ -8,8 +8,7 @@ import {
 } from '@/registry/nodeRegistry';
 import { isTextureHiddenFromEditor } from '@/registry/editorVisibility';
 import { hiddenOptionalCategories, visibleTabs, effectiveTab } from '@/registry/optionalCategories';
-import { getBuiltinTextures, getBuiltinTextureIds } from '@/registry/builtinTextures';
-import { getBuiltinPresets } from '@/registry/builtinPresets';
+import { getBuiltinTextureIds } from '@/registry/builtinTextureIds';
 import { NodePreviewCard } from './NodePreviewCard';
 import { SavedGroupCard } from './SavedGroupCard';
 import { TextureCard } from './TextureCard';
@@ -25,7 +24,7 @@ import { assetText, formatCategoryLabel, t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
 import type { NodeCategory, NodeDefinition } from '@/types';
 import { CAT_HEX } from '@/utils/colorUtils';
-import complexityData from '@/registry/complexity.json';
+import { getBaseCosts } from '@/utils/costTable';
 import { ScrollArrow, useScrollArrows } from '@/components/Layout/ScrollArrows';
 import './ContentBrowser.css';
 
@@ -44,9 +43,10 @@ const ASSET_TABS_FIRST: NodeCategory[] = ['presets', 'texture', 'noise', 'datavi
 // …and a tab whose every entry has been switched off in node-editor.html goes
 // with them: hiding the last unfinished node of a category would otherwise leave
 // a tab that opens to "Nothing here yet.", which is exactly the unfinished look
-// the checkbox exists to remove. Textures are counted by ID (getBuiltinTextureIds
-// — the cheap accessor), never by building them: this runs at module scope and
-// the ~84 ms texture parse is deliberately deferred to first use.
+// the checkbox exists to remove. Textures are counted by ID (getBuiltinTextureIds,
+// from the Babel-free leaf registry/builtinTextureIds.ts), never by building
+// them and never by importing their library: this runs at module scope, which
+// is the boot wave, and the library is loaded on demand (BuiltinLibraries below).
 const allTexturesHidden = getBuiltinTextureIds().every(isTextureHiddenFromEditor);
 // Every tab the BUILD allows. The user's own switches (Textures and Distance
 // fields are OFF by default — registry/optionalCategories.ts, flipped from the
@@ -63,29 +63,41 @@ const displayCategories = [
 ].filter((c) =>
   c.id === 'texture' ? !allTexturesHidden : !categoryEmptiedByHiding(c.id),
 );
-const costs = complexityData.costs as Record<string, number>;
+const costs = getBaseCosts();
 
 /** Pseudo-category id for the user's saved-group library. */
 type BrowserCategory = NodeCategory | 'all' | 'saved';
 
 /**
- * Tab style for a colored category button. The active tab's bg + bottom
- * border match the items-area tint so it visually merges with the content
- * below (same trick the TSL/Script tabs use in the code editor).
+ * The two built-in libraries, once their chunk has landed. NEVER a static
+ * import: both build through codeGroupBuilder → codeToGraph → @babel/*, and the
+ * one static edge this file used to hold put vendor-babel, codeToGraph and both
+ * libraries on the boot wave (244 KB gzip, 204 of it Babel: fetched, parsed and
+ * evaluated before the canvas was interactive) for two tabs that may never
+ * open. `typeof import()` is a type and is erased.
  */
+interface BuiltinLibraries {
+  getBuiltinTextures: typeof import('@/registry/builtinTextures').getBuiltinTextures;
+  getBuiltinPresets: typeof import('@/registry/builtinPresets').getBuiltinPresets;
+}
+
 /**
- * A preset/texture also answers its LATVIAN name and description, whichever
- * language is on — the same rule node search follows (`nodeMatchRank` ranks the
- * Latvian label in both modes), so a query typed from a Latvian tile's name
- * finds that tile. `q` is already lower-cased.
+ * Does a preset/texture answer the (already lower-cased) query? By name, id or
+ * description, and by its LATVIAN name and description whichever language is
+ * on: the same rule node search follows (`nodeMatchRank`).
  */
-function assetMatchesLV(a: { name: string; description: string }, q: string): boolean {
+function assetMatches(a: { id: string; name: string; description: string }, q: string): boolean {
   return (
+    a.name.toLowerCase().includes(q) ||
+    a.id.toLowerCase().includes(q) ||
+    a.description.toLowerCase().includes(q) ||
     assetText(a.name, 'lv').toLowerCase().includes(q) ||
     assetText(a.description, 'lv').toLowerCase().includes(q)
   );
 }
 
+/** Tab style for a coloured category button: the active tab's bg + bottom
+ *  border match the items-area tint, so it merges with the content below. */
 function tabStyle(hex: string, active: boolean): React.CSSProperties {
   if (active) {
     const body = `${hex}1A`;
@@ -229,6 +241,34 @@ export const ContentBrowser = memo(function ContentBrowser() {
     const id = window.setTimeout(() => setSettledSearch(search), SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(id);
   }, [search, settledSearch]);
+  // The built-in libraries, fetched when the strip first has to DRAW them: the
+  // Presets tab, the Textures tab (only while that optional category is
+  // switched on), or a settled search, which surfaces matching assets on every
+  // tab. `null` until the chunk lands, and again after a load that failed: the
+  // memos below hand back nothing while it is null, so the strip stays empty
+  // and nothing throws (this app has no error boundary).
+  const [libraries, setLibraries] = useState<BuiltinLibraries | null>(null);
+  const wantsLibraries =
+    activeCategory === 'presets' ||
+    (activeCategory === 'texture' && optional.texture) ||
+    settledSearch.trim() !== '';
+  useEffect(() => {
+    if (!wantsLibraries || libraries) return;
+    let live = true;
+    Promise.all([import('@/registry/builtinTextures'), import('@/registry/builtinPresets')])
+      .then(([{ getBuiltinTextures }, { getBuiltinPresets }]) => {
+        if (live) setLibraries({ getBuiltinTextures, getBuiltinPresets });
+      })
+      .catch(() => console.warn('[fs] the built-in preset and texture libraries failed to load'));
+    return () => { live = false; };
+    // The tab and the query are deps ON TOP of the need they add up to: a
+    // failed load leaves `libraries` null, and the next tab opened or query
+    // typed has to ask again although `wantsLibraries` never went false.
+    // Asking again is all this can do. Whether the engine then REFETCHES is
+    // its own call: Chrome answers a module URL that failed once from its
+    // module map, with no request (measured 2026-09-29), so there the strip
+    // stays empty until a reload.
+  }, [wantsLibraries, activeCategory, settledSearch, libraries]);
   // Bar height, persisted — the single source of truth for how big the bar AND
   // its tiles are. Only the read seed goes through the shared helper; the write
   // side stays local because it is debounced (see the persist effect below),
@@ -278,20 +318,10 @@ export const ContentBrowser = memo(function ContentBrowser() {
 
   /**
    * Measure the tabs row and the tallest tile. getBoundingClientRect reports
-   * VISUAL px (the strip's `zoom` is already folded in), so dividing by the
-   * zoom in force recovers the tile's natural 1× height — which makes the
-   * measurement independent of the zoom it feeds, and the loop convergent.
-   * The 1px threshold stops sub-pixel layout noise from oscillating it.
-   *
-   * This sweep is also what blocks VIRTUALIZING the strip, which has been
-   * proposed and declined three times: the scale every tile renders at is the
-   * maximum over `strip.children`, so mounting a subset returns a smaller
-   * maximum, over-zooms, and clips the genuinely tallest tile against the
-   * strip's own `overflow-y: hidden` — and because the mark is monotonic
-   * below, it then WALKS as scrolling reveals taller tiles. Decoupling it is
-   * the prerequisite; contentBrowserVirtual.test.ts states the boot cost this
-   * buys, the three ways out, and pins the coupling so a future windowing
-   * attempt fails loudly instead of silently shaving a caption off one tile.
+   * VISUAL px, so dividing by the zoom in force recovers the natural 1× height
+   * and the loop converges; the 1px threshold absorbs sub-pixel noise.
+   * This tallest-tile maximum is what blocks VIRTUALIZING the strip: see
+   * contentBrowserVirtual.test.ts.
    */
   useEffect(() => {
     const strip = scrollRef.current;
@@ -352,8 +382,12 @@ export const ContentBrowser = memo(function ContentBrowser() {
     // tiles that had not changed. It is the state and not the derived `q`
     // because `q` is declared further down the component body — a dep array is
     // evaluated where the effect sits, so naming it here is a TDZ throw.
+    //
+    // `libraries`: the preset and texture tiles mount when their chunk LANDS,
+    // which is after the tab or query change that asked for it, so without
+    // this dep they would never get their silhouettes or be measured.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCategory, settledSearch, savedGroups, language, barHeight, tabsH, tileH, fontsReady, optional]);
+  }, [activeCategory, settledSearch, savedGroups, language, barHeight, tabsH, tileH, fontsReady, optional, libraries]);
 
   /**
    * Live gesture state: bounds measured once at pointerdown, plus the latest
@@ -701,16 +735,13 @@ export const ContentBrowser = memo(function ContentBrowser() {
     // library on never pays the ~84 ms texture parse at all.
     if (!optional.texture) return [];
     if (activeCategory !== 'texture' && !q) return [];
+    // The chunk has not landed (or its load failed): nothing to draw yet.
+    if (!libraries) return [];
+    const { getBuiltinTextures } = libraries;
     const all = getBuiltinTextures().filter((t) => !isTextureHiddenFromEditor(t.id)).sort(byCost);
     if (!q) return all;
-    return all.filter(
-      (t) =>
-        t.name.toLowerCase().includes(q) ||
-        t.id.toLowerCase().includes(q) ||
-        t.description.toLowerCase().includes(q) ||
-        assetMatchesLV(t, q),
-    );
-  }, [q, activeCategory, optional.texture]);
+    return all.filter((t) => assetMatches(t, q));
+  }, [q, activeCategory, optional.texture, libraries]);
 
   const filteredPresets = useMemo(() => {
     // Lazily built: the first getBuiltinPresets() call parses 24 TSL snippets
@@ -723,18 +754,17 @@ export const ContentBrowser = memo(function ContentBrowser() {
     // is why `q` is debounced (see `settledSearch`): the parse then lands in a
     // timer callback after the user pauses, instead of inside the keystroke's
     // own frame where it swallowed the characters typed on top of it.
+    // The build now runs when the library's chunk LANDS (`libraries` going
+    // non-null re-runs this memo), which is later still: a fetch after the
+    // debounce, in a render of its own.
     if (activeCategory !== 'presets' && !q) return [];
+    if (!libraries) return [];
+    const { getBuiltinPresets } = libraries;
     // Sorted by GPU cost, NOT by the registry's tier order — see byCost.
     const all = [...getBuiltinPresets()].sort(byCost);
     if (!q) return all;
-    return all.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        p.id.toLowerCase().includes(q) ||
-        p.description.toLowerCase().includes(q) ||
-        assetMatchesLV(p, q),
-    );
-  }, [q, activeCategory]);
+    return all.filter((p) => assetMatches(p, q));
+  }, [q, activeCategory, libraries]);
 
   const onDragStart = useCallback((event: React.DragEvent, def: NodeDefinition) => {
     event.dataTransfer.setData('application/reactflow-type', def.type);
@@ -788,12 +818,14 @@ export const ContentBrowser = memo(function ContentBrowser() {
         ? noMatch('No saved groups match “{query}”.')
         : filteredSavedGroups.map((g) => <SavedGroupCard key={g.id} group={g} />);
   } else if (activeCategory === 'texture') {
+    // `libraries` still null is NOT "no match": nothing has been searched yet
+    // (the chunk is in flight, or its load failed), so the strip says nothing.
     items = filteredTextures.length === 0
-      ? noMatch('No textures match “{query}”.')
+      ? (libraries ? noMatch('No textures match “{query}”.') : null)
       : filteredTextures.map((t) => <TextureCard key={t.id} texture={t} />);
   } else if (activeCategory === 'presets') {
     items = filteredPresets.length === 0
-      ? noMatch('No presets match “{query}”.')
+      ? (libraries ? noMatch('No presets match “{query}”.') : null)
       : filteredPresets.map((p) => <PresetCard key={p.id} preset={p} />);
   } else {
     const defCards = filteredDefs.map((item) => (
@@ -809,8 +841,12 @@ export const ContentBrowser = memo(function ContentBrowser() {
         ]
       : [];
     // Show a message rather than a blank strip that reads as a rendering bug.
+    // A query with the libraries still absent is the one exception: "no
+    // matches" would be said before the presets had been searched at all.
     items = defCards.length + assetCards.length === 0
-      ? (q ? noMatch('No matches for “{query}”.') : empty(t('Nothing here yet.', language)))
+      ? (q
+        ? (libraries ? noMatch('No matches for “{query}”.') : null)
+        : empty(t('Nothing here yet.', language)))
       : [...defCards, ...assetCards];
   }
 

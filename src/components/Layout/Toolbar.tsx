@@ -1,5 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { ComponentType } from 'react';
+import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { useDismiss } from '@/hooks/useDismiss';
 import { useLongPress } from '@/hooks/useLongPress';
@@ -7,10 +6,10 @@ import { hardReload } from '@/utils/hardReload';
 import { invokeDesktop, errorText } from '@/utils/tauriBridge';
 import { buildShaderExportChecked, downloadShader, shaderBaseName } from '@/engine/exportShader';
 import { unconnectedNodeCount } from '@/engine/exportGraph';
-import { activePreviewModel } from '@/engine/exportModel';
+import { activePreviewModel, exportAlternate, exportFormatFor } from '@/engine/exportModel';
 import type { BuiltinShape } from '@/engine/builtinModelObj';
-import { effectiveExportFormat, glbExportAvailability } from '@/utils/glbExportAvailability';
 import { GLB_EXPORT_KEYS, glbUnavailableText } from '@/utils/glbExportCopy';
+import { glbExportAvailability } from '@/utils/glbExportAvailability';
 import { hasKtx2Encoder } from '@/utils/ktx2Encoder';
 import { useExportPreflight } from '@/components/Modals/ExportPreflightModal';
 import { FeedbackModal } from '@/components/Modals/FeedbackModal';
@@ -24,6 +23,7 @@ import { CATEGORIES } from '@/registry/nodeCategories';
 import { OPTIONAL_CATEGORIES, type OptionalCategory } from '@/registry/optionalCategories';
 import { foldOverflow, OVERFLOW_INITIAL } from './toolbarOverflow';
 import { isTypingTarget } from '@/utils/isTypingTarget';
+import { lazyOr } from '@/utils/lazyOr';
 // The "Download app" dropdown's rows: the ONE list of release assets, pinned to
 // release.yml's upload names by desktopDownloads.test.ts.
 import { DESKTOP_DOWNLOADS, releaseDownloadUrl } from '@/utils/desktopDownloads';
@@ -98,32 +98,16 @@ function EvalModalUnavailable({
  * they are rendered from the first paint (closed), so the fetch starts at boot
  * and is long finished before anyone presses the button.
  *
- * Only the two modals Toolbar owns; the consent screen still rides App.tsx's
- * eager EvalGate import, and eval.css with it.
+ * Only the two modals Toolbar owns; the consent screen is App.tsx's own lazy
+ * EvalGate (eval.css stays eager there).
  */
-// The factories are annotated with the component TYPE rather than inferred:
-// without it TS pins the lazy type to the real module's exact return
-// (`ReactPortal | null`, since both modals are portals) and the fallback —
-// which is not a portal — stops being assignable.
-const SusModal = lazy(
-  async (): Promise<{ default: ComponentType<{ open: boolean; onClose: () => void }> }> => {
-    try {
-      return { default: (await import('@/eval/SusModal')).SusModal };
-    } catch {
-      return { default: EvalModalUnavailable };
-    }
-  },
+const SusModal = lazyOr<{ open: boolean; onClose: () => void }>(
+  () => import('@/eval/SusModal').then((m) => m.SusModal),
+  EvalModalUnavailable,
 );
-const EvalFinishModal = lazy(
-  async (): Promise<{
-    default: ComponentType<{ open: boolean; onContinue: () => void; onFinish: () => void }>;
-  }> => {
-    try {
-      return { default: (await import('@/eval/EvalFinishModal')).EvalFinishModal };
-    } catch {
-      return { default: EvalModalUnavailable };
-    }
-  },
+const EvalFinishModal = lazyOr<{ open: boolean; onContinue: () => void; onFinish: () => void }>(
+  () => import('@/eval/EvalFinishModal').then((m) => m.EvalFinishModal),
+  EvalModalUnavailable,
 );
 
 /** Width of the right-click preferences popover — kept in step with its CSS
@@ -184,6 +168,28 @@ function prefsClaimedElsewhere(el: HTMLElement | null): boolean {
   return !!el.closest('.toolbar__export-wrap, .toolbar__local, .toolbar__overflow, .toolbar__reload-wrap');
 }
 
+/**
+ * The long-press click latch: touch/pen long-presses a popover open, and the
+ * finger lift then still fires the button's click. Arming swallows that one.
+ */
+function armClickLatch(latch: { current: boolean }): void {
+  latch.current = true;
+  // If the finger lifts outside the button, no click ever consumes the latch —
+  // clear it at the next pointerdown (which precedes its own click).
+  document.addEventListener(
+    'pointerdown',
+    () => { latch.current = false; },
+    { once: true, capture: true },
+  );
+}
+
+/** True when this click is a long-press's own finger lift; consumes the latch. */
+function consumeClickLatch(latch: { current: boolean }): boolean {
+  const armed = latch.current;
+  latch.current = false;
+  return armed;
+}
+
 /** Result shape of the desktop bench-server commands (src-tauri/src/bench_server.rs). */
 type BenchServerInfo = { url: string; ip: string; port: number };
 
@@ -197,21 +203,30 @@ export function Toolbar() {
   const previewMesh = useAppStore((s) => s.previewMesh);
   const exportIncludeMesh = useAppStore((s) => s.exportIncludeMesh);
   const setExportIncludeMesh = useAppStore((s) => s.setExportIncludeMesh);
-  // The EXPORT popover's Format choice. Never read raw: `effectiveExportFormat`
-  // derives what THIS export will be (the bundle while the loaded model cannot
-  // be packed, and in a study session), and the flag is never written back —
-  // load a packable model again and the .glb comes straight back.
-  const exportAsGlb = useAppStore((s) => s.exportAsGlb);
-  const setExportAsGlb = useAppStore((s) => s.setExportAsGlb);
   const exportKtx2 = useAppStore((s) => s.exportKtx2);
   const setExportKtx2 = useAppStore((s) => s.setExportKtx2);
   const exportAllNodes = useAppStore((s) => s.exportAllNodes);
   const setExportAllNodes = useAppStore((s) => s.setExportAllNodes);
-  const exportBuiltinModel = useAppStore((s) => s.exportBuiltinModel);
-  const setExportBuiltinModel = useAppStore((s) => s.setExportBuiltinModel);
   const previewShape = useAppStore((s) => s.previewShape);
-  const glbAvail = glbExportAvailability(previewMesh);
-  const exportFormat = effectiveExportFormat(exportAsGlb, previewMesh, isEvalMode());
+  // EXPORT is CONTEXTUAL (engine/exportModel.ts): what the preview SHOWS
+  // decides what the button writes — a packable dropped model the `.glb`, a
+  // built-in shape the shader file — and the popover's smaller button is the
+  // other way for one export. Both are string selectors, so they are stable.
+  const exportFormat = useAppStore((s) => exportFormatFor(s, isEvalMode(), 'primary'));
+  const exportAlt = useAppStore((s) => exportAlternate(s, isEvalMode()));
+  // A custom model on screen that one .glb cannot hold (an OBJ, a splat, an
+  // external-data glTF): EXPORT writes the .zip with it, and its tooltip says
+  // why it is not the .glb — the one place that reason is written now.
+  const shownForExport = activePreviewModel(previewShape, previewMesh);
+  const exportWhyNotGlb =
+    !isEvalMode() && shownForExport?.kind === 'dropped'
+      ? glbUnavailableText(glbExportAvailability(shownForExport.mesh), language)
+      : null;
+  // The shown model's name, for the popover's smaller button.
+  const shownName =
+    shownForExport?.kind === 'builtin' ? t(BUILTIN_SHAPE_LABEL[shownForExport.shape], language)
+    : shownForExport?.kind === 'dropped' ? shownForExport.mesh.name
+    : '';
   const glbFile = `${shaderBaseName(shaderName)}.glb`;
   const isDark = codeEditorTheme === 'vs-dark';
 
@@ -230,9 +245,7 @@ export function Toolbar() {
   // while the popover is open: a number selector, so a drag re-renders nothing.
   const unconnectedCount = useAppStore((s) => (exportOpen ? unconnectedNodeCount(s.nodes, s.edges) : 0));
   const exportBtnRef = useRef<HTMLButtonElement>(null);
-  // Touch/pen can't right-click, so a long-press opens the same popover. The
-  // finger lift then still fires the button's click — which is the DOWNLOAD —
-  // so the long-press latches a flag that swallows exactly that one click.
+  // A long-press opens the same popover; its finger lift must not DOWNLOAD.
   const suppressExportClickRef = useRef(false);
   // The export pre-flight's dialog (N1), hosted per surface.
   const { ask: askExportPreflight, glb: glbExportUi, modal: exportPreflightModal } = useExportPreflight();
@@ -241,6 +254,31 @@ export function Toolbar() {
   // store snapshot.
   const exportBusyRef = useRef(false);
   const [exportBusy, setExportBusy] = useState(false);
+  // EXPORT's download, and the popover's smaller button ('alternate'): the
+  // same path, differing only in which way out it asks for.
+  const runExport = (variant?: 'alternate') => {
+    if (exportBusyRef.current) return;
+    exportBusyRef.current = true;
+    setExportBusy(true);
+    void buildShaderExportChecked({
+      preflight: askExportPreflight,
+      glb: glbExportUi,
+      delivery: 'download',
+      // The ONE surface that honours the popover's rows; NEW and the Work
+      // folder are saves of the document and pass 'whole' and no model mode
+      // (the dropped model, whatever is shown).
+      scope: exportAllNodes ? 'whole' : 'connected',
+      model: 'shown',
+      ...(variant ? { variant } : {}),
+    })
+      .then((bundle) => {
+        if (bundle) downloadShader(bundle);
+      })
+      .finally(() => {
+        exportBusyRef.current = false;
+        setExportBusy(false);
+      });
+  };
 
   // Feedback composer. Local state rather than a store field: it is transient
   // UI opened from exactly one place, and the modal portals itself to
@@ -283,15 +321,7 @@ export function Toolbar() {
   useDismiss(exportOpen, setExportOpen, [exportRef]);
 
   useLongPress(exportBtnRef, () => {
-    suppressExportClickRef.current = true;
-    // If the finger lifts outside the button, no click ever consumes the
-    // latch — clear it at the next pointerdown so a later real tap isn't
-    // swallowed (that pointerdown precedes its own click).
-    document.addEventListener(
-      'pointerdown',
-      () => { suppressExportClickRef.current = false; },
-      { once: true, capture: true },
-    );
+    armClickLatch(suppressExportClickRef);
     setExportOpen(true);
   });
 
@@ -405,14 +435,7 @@ export function Toolbar() {
   const [reloadBtn, setReloadBtn] = useState<HTMLButtonElement | null>(null);
   useDismiss(reloadOpen, setReloadOpen, [reloadRef]);
   useLongPress(reloadBtn, () => {
-    suppressReloadClickRef.current = true;
-    // Same latch the EXPORT long-press uses: if the finger lifts outside the
-    // button no click consumes it, so clear it at the next pointerdown.
-    document.addEventListener(
-      'pointerdown',
-      () => { suppressReloadClickRef.current = false; },
-      { once: true, capture: true },
-    );
+    armClickLatch(suppressReloadClickRef);
     setReloadOpen(true);
   });
   // A popover opened on the bar and then collapsed away (window resize, or a
@@ -463,6 +486,323 @@ export function Toolbar() {
       // Clipboard API can fail in insecure contexts; silent fallback is fine here
     }
   }, []);
+
+  // The right cluster's collapsible half: on the bar, or inside the ☰ menu.
+  const collapsible = (
+    <>
+      {/* Reload. Left-click reloads; right-click — or a sustained press on
+          touch, where there is no second button — opens the two-item menu,
+          which is the only place a HARD reload is offered.
+
+          Safe to offer without a confirm: the graph autosaves to fs:graph
+          (and every UI pref to its own key), and the dropped preview mesh is
+          mirrored to IndexedDB (previewMeshCache.ts), so a reload restores
+          the session rather than discarding it. The tooltip used to warn
+          that the model was lost; that stopped being true when the mesh
+          cache landed.
+
+          The wrapper carries `.toolbar__local` — the app's generic anchored-
+          popover class — which buys three things at once: `position:
+          relative` for the popover, the `.toolbar__overflow-menu
+          .toolbar__local-popover` re-anchoring that keeps it from opening on
+          top of its own trigger inside the ☰, and the dark-theme shadow rule
+          (an explicit selector list, so a bespoke class would render a flat
+          patch on dark chrome — invisible in the light theme it is built
+          in). It is also already in openPrefs' right-click guard. */}
+      <div className="toolbar__local toolbar__reload-wrap" ref={reloadRef}>
+        <button
+          type="button"
+          ref={setReloadBtn}
+          className="toolbar__sc-link toolbar__refresh"
+          onClick={() => {
+            if (consumeClickLatch(suppressReloadClickRef)) return;
+            window.location.reload();
+          }}
+          onContextMenu={(e) => {
+            // preventDefault only, like EXPORT's: the bar-root handler is
+            // kept off this subtree by the `.toolbar__local` guard, so there
+            // is nothing to stopPropagation for.
+            e.preventDefault();
+            setReloadOpen((o) => !o);
+          }}
+          title={`${t('Reload the page', language)}. ${t('Right-click for a hard reload.', language)}`}
+          aria-label={t('Reload the page', language)}
+          aria-haspopup="menu"
+          aria-expanded={reloadOpen}
+        >
+          {/* Inline SVG, not a glyph: the app self-hosts a woff2 SUBSET of
+              Inter, so ↻/⟳ are not guaranteed to be in the font offline. */}
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
+          </svg>
+        </button>
+        {reloadOpen && (
+          <div
+            className="toolbar__local-popover toolbar__reload-popover"
+            role="menu"
+            aria-label={t('Reload', language)}
+          >
+            <div className="toolbar__local-header">
+              <span className="toolbar__contact-label">{t('Reload', language)}</span>
+            </div>
+            {/* One line each, explanation on hover via the app-wide
+                TooltipLayer — the rule the Add-node menu and the input-
+                settings popup follow. */}
+            <button
+              type="button"
+              role="menuitem"
+              className="toolbar__local-row toolbar__reload-row"
+              onClick={() => {
+                setReloadOpen(false);
+                window.location.reload();
+              }}
+              title={t('The same as clicking the button.', language)}
+            >
+              <span>{t('Reload', language)}</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="toolbar__local-row toolbar__reload-row"
+              onClick={() => {
+                setReloadOpen(false);
+                hardReload();
+              }}
+              title={t('Fetch the page again instead of reusing the browser\u2019s cached copy — use this after an update if the app looks stale. Files loaded alongside the page may still come from the cache.', language)}
+            >
+              <span>{t('Hard reload', language)}</span>
+            </button>
+            <div className="toolbar__local-note">
+              {t('Your shader, its settings and a dropped model are all saved — either option restores them.', language)}
+            </div>
+          </div>
+        )}
+      </div>
+      {/* Desktop opens Podest as a REAL second app window (a Rust command —
+          see src-tauri/src/podest_window.rs); the web build keeps the plain
+          new-tab anchor. `target="_blank"` is meaningless inside a Tauri
+          webview — neither WKWebView nor WebView2 honours it without a host
+          handler — so the shared anchor was simply inert on desktop. Branch
+          on the whole ELEMENT rather than just the handler: an <a href> with
+          a click-preventing onClick still shows a bogus status-bar URL and
+          still offers "Open in new window" on right-click. */}
+      {__FS_DESKTOP__ ? (
+        <button
+          type="button"
+          className="toolbar__sc-link"
+          onClick={() => {
+            invokeDesktop<void>('podest_open').catch((e) =>
+              // No toast surface up here, and a silent no-op is exactly the
+              // failure this replaces — the console line is at least a thread
+              // to pull. A second click re-focuses rather than erroring.
+              console.error('Could not open the Podest window:', errorText(e)),
+            );
+          }}
+          title={t('Open Podest in a separate window — full-screen shader player (drop .js/.tsl shaders, .glb models, .zip)', language)}
+          aria-label={t('Open Podest', language)}
+        >
+          P
+        </button>
+      ) : (
+        <a
+          className="toolbar__sc-link"
+          href={`${import.meta.env.BASE_URL}podest.html`}
+          target="_blank"
+          rel="noreferrer noopener"
+          title={t('Open Podest — full-screen shader player (drop .js/.tsl shaders, .glb models, .zip)', language)}
+          aria-label={t('Open Podest', language)}
+        >
+          P
+        </a>
+      )}
+      {/* ShaderCarousel is WebGPU-only and excluded from the FS_DESKTOP
+          webview bundle — the link would 404 there. The desktop build
+          instead ships it as a Tauri resource and serves it over LAN for
+          headsets: the VR popover below. */}
+      {!__FS_DESKTOP__ && (
+        <a
+          className="toolbar__sc-link"
+          href={`${import.meta.env.BASE_URL}ShaderCarousel/`}
+          target="_blank"
+          rel="noreferrer noopener"
+          title={t('Open ShaderCarousel — viewer & benchmark suite', language)}
+          aria-label={t('Open ShaderCarousel', language)}
+        >
+          SC
+        </a>
+      )}
+      {/* Language switch (Latvian ⇄ English). Latvian is a display-only
+          overlay — see src/i18n — and the app's DEFAULT, so the button
+          labels the language it switches TO ("EN" while Latvian is on).
+          That makes it an action, not a state: no `aria-pressed`, which
+          beside a flipping label reads as a contradiction in a screen
+          reader (the WGSL/GLSL toggle documents the same trap). */}
+      <button
+        type="button"
+        className="toolbar__sc-link toolbar__lang"
+        onClick={() => setLanguage(language === 'lv' ? 'en' : 'lv')}
+        title={
+          language === 'lv'
+            ? 'Pārslēgt uz angļu valodu (Switch to English)'
+            : 'Pārslēgt uz latviešu valodu (Switch to Latvian)'
+        }
+        aria-label={language === 'lv' ? 'Switch to English' : 'Pārslēgt uz latviešu valodu'}
+      >
+        {language === 'lv' ? 'EN' : 'LV'}
+      </button>
+      {/* Inside the desktop app, offering a download of itself makes no
+          sense — __FS_DESKTOP__ builds hide the button. */}
+      {!__FS_DESKTOP__ && (
+        <div className="toolbar__local" ref={localRef}>
+          <button
+            type="button"
+            className="toolbar__sc-link"
+            onClick={() => setLocalOpen((o) => !o)}
+            aria-haspopup="menu"
+            aria-expanded={localOpen}
+            title={t('Download the offline desktop app (Windows / macOS)', language)}
+          >
+            {t('Download app', language)}
+          </button>
+          {localOpen && (
+            <div
+              className="toolbar__local-popover"
+              role="menu"
+              aria-label={t('Download desktop app', language)}
+            >
+              <div className="toolbar__local-header">
+                <span className="toolbar__contact-label">{t('Desktop app', language)}</span>
+                <span className="toolbar__version">v{__APP_VERSION__}</span>
+              </div>
+              {DESKTOP_DOWNLOADS.map((d) => (
+                <a
+                  key={d.key}
+                  className="toolbar__local-row"
+                  href={releaseDownloadUrl(d.file)}
+                  role="menuitem"
+                  onClick={() => setLocalOpen(false)}
+                >
+                  <span className="toolbar__local-os">{d.os}</span>
+                  <span className="toolbar__local-detail">{t(d.detail, language)}</span>
+                </a>
+              ))}
+              <div className="toolbar__local-note">
+                {t('Runs fully offline. Rebuilt automatically with every release.', language)}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      {__FS_DESKTOP__ && (
+        <div className="toolbar__local" ref={vrRef}>
+          <button
+            type="button"
+            className="toolbar__sc-link"
+            onClick={() => setVrOpen((o) => !o)}
+            aria-haspopup="dialog"
+            aria-expanded={vrOpen}
+            title={t('Benchmark on a VR headset — serve ShaderCarousel over your local network', language)}
+          >
+            VR
+          </button>
+          {vrOpen && (
+            <div
+              className="toolbar__local-popover toolbar__vr-popover"
+              role="dialog"
+              aria-label={t('Headset benchmark server', language)}
+            >
+              <div className="toolbar__local-header">
+                <span className="toolbar__contact-label">{t('Headset benchmark', language)}</span>
+                {vrInfo && <span className="toolbar__vr-live">{t('serving', language)}</span>}
+              </div>
+              {!vrInfo ? (
+                <>
+                  <div className="toolbar__local-note toolbar__vr-note">
+                    {t('Serves the bundled ShaderCarousel benchmark suite to devices on your Wi-Fi (e.g. a Quest headset). Read-only; nothing else on this machine is exposed.', language)}
+                  </div>
+                  <button
+                    type="button"
+                    className="toolbar__vr-action"
+                    onClick={startVrServer}
+                    disabled={vrBusy}
+                  >
+                    {t(vrBusy ? 'Starting…' : 'Start LAN server', language)}
+                  </button>
+                  <div className="toolbar__local-note toolbar__vr-note">
+                    {t('Your OS may ask to allow incoming network connections on the first start.', language)}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="toolbar__local-note toolbar__vr-note">
+                    {t('Open on the headset (same network):', language)}
+                  </div>
+                  <div className="toolbar__vr-url-row">
+                    <code className="toolbar__vr-url">{vrInfo.url}</code>
+                    <button
+                      type="button"
+                      className="toolbar__contact-copy"
+                      onClick={() => handleCopy('vr-url', vrInfo.url)}
+                    >
+                      {t(copiedKey === 'vr-url' ? 'Copied' : 'Copy', language)}
+                    </button>
+                  </div>
+                  <div className="toolbar__vr-hint">
+                    {/* Split around the <code> runs, one key per text run;
+                        each run is translated in place, which Latvian word
+                        order allows here. The flag's name stays English —
+                        it is what the headset browser's search box shows. */}
+                    <strong>{t('Benches won’t start / can’t enter VR?', language)}</strong>{' '}
+                    {t('Browsers enable WebXR and WebGPU only on secure origins, and a plain LAN address isn’t one. One-time fix per headset — either:', language)}
+                    <ol>
+                      <li>
+                        {t('In the headset browser open', language)} <code>chrome://flags</code>
+                        {t(', search “Insecure origins treated as secure”, add', language)}{' '}
+                        <code>
+                          http://{vrInfo.ip}:{vrInfo.port}
+                        </code>
+                        {t(', then relaunch the browser.', language)}
+                      </li>
+                      <li>
+                        {t('Or with USB developer mode:', language)}{' '}
+                        <code>
+                          adb reverse tcp:{vrInfo.port} tcp:{vrInfo.port}
+                        </code>{' '}
+                        {t('and open', language)}{' '}
+                        <code>http://localhost:{vrInfo.port}/</code>{' '}
+                        {t('on the headset instead.', language)}
+                      </li>
+                    </ol>
+                  </div>
+                  <button
+                    type="button"
+                    className="toolbar__vr-action"
+                    onClick={stopVrServer}
+                    disabled={vrBusy}
+                  >
+                    {t(vrBusy ? 'Stopping…' : 'Stop server', language)}
+                  </button>
+                </>
+              )}
+              {vrError && <div className="toolbar__vr-error">{vrError}</div>}
+            </div>
+          )}
+        </div>
+      )}
+      {/* App-wide dark/light toggle (moved here from the code panel's tab
+          bar) — still the ONE dark-mode control: themes Monaco AND stamps
+          data-theme on <html> via setCodeEditorTheme. */}
+      <button
+        type="button"
+        className="toolbar__sc-link toolbar__theme-toggle"
+        onClick={() => setCodeEditorTheme(isDark ? 'vs' : 'vs-dark')}
+        title={isDark ? t('Switch to light mode', language) : t('Switch to dark mode', language)}
+        aria-label={t('Toggle dark mode', language)}
+      >
+        {isDark ? '☼' : '☾'}
+      </button>
+    </>
+  );
 
   return (
     <div className="toolbar" ref={barRef} onContextMenu={openPrefs}>
@@ -577,10 +917,7 @@ export function Toolbar() {
             type="button"
             className="toolbar__export"
             onClick={() => {
-              if (suppressExportClickRef.current) {
-                suppressExportClickRef.current = false;
-                return;
-              }
+              if (consumeClickLatch(suppressExportClickRef)) return;
               // In a study session EXPORT is the natural "I'm done" button, so
               // it opens the finish dialog instead of quietly downloading a
               // bare shader — the participant's package is assembled at the
@@ -591,26 +928,7 @@ export function Toolbar() {
                 setEvalFinishOpen(true);
                 return;
               }
-              if (exportBusyRef.current) return;
-              exportBusyRef.current = true;
-              setExportBusy(true);
-              void buildShaderExportChecked({
-                preflight: askExportPreflight,
-                glb: glbExportUi,
-                delivery: 'download',
-                // The ONE surface that honours the popover's rows; NEW and the
-                // Work folder are saves of the document and pass 'whole' and
-                // no model mode (the dropped model, whatever is shown).
-                scope: exportAllNodes ? 'whole' : 'connected',
-                model: 'shown',
-              })
-                .then((bundle) => {
-                  if (bundle) downloadShader(bundle);
-                })
-                .finally(() => {
-                  exportBusyRef.current = false;
-                  setExportBusy(false);
-                });
+              runExport();
             }}
             onContextMenu={(e) => {
               e.preventDefault();
@@ -622,11 +940,7 @@ export function Toolbar() {
                 ? t('Finish the session: a short questionnaire, then your shader and session data are submitted', language)
                 : exportFormat === 'glb'
                   ? `${fillTemplate(t(GLB_EXPORT_KEYS.exportTitleGlb, language), { file: glbFile })}. ${t('Right-click for export settings.', language)}`
-                  : `${t('Download the shader — .js with the FastShaders project embedded (drag it back in to continue); becomes a .zip with the image and 3D-model files alongside when the graph embeds images or a custom preview mesh is loaded', language)}. ${
-                      previewMesh && !exportIncludeMesh
-                        ? t('The 3D model is currently excluded from the export — right-click to change.', language)
-                        : t('Right-click for export settings.', language)
-                    }`
+                  : `${t('Download the shader — .js with the FastShaders project embedded (drag it back in to continue); becomes a .zip with the image and 3D-model files alongside when the graph embeds images or a custom 3D model is shown in the preview', language)}. ${exportWhyNotGlb ? `${exportWhyNotGlb} ` : ''}${t('Right-click for export settings.', language)}`
             }
           >
             {t('Export', language)}
@@ -640,115 +954,65 @@ export function Toolbar() {
               <div className="toolbar__local-header">
                 <span className="toolbar__contact-label">{t('Export settings', language)}</span>
               </div>
-              {/* The Format choice. Not rendered in a study session — the
-                  popover itself IS reachable there by right-click, so the
-                  engine gate in buildShaderExportChecked is the second half of
-                  the same rule.
+              {/* The smaller button: the OTHER way out, for this one export
+                  (engine/exportModel.ts `exportAlternate`). EXPORT itself is
+                  contextual — a packable model on screen exports as the .glb,
+                  a built-in shape as the shader file — so this is "Export
+                  .zip" beside a model and "Export with model" beside a shape,
+                  and absent when there is no other way (an OBJ or a splat
+                  already exports as the .zip with it). Never in a study
+                  session: EXPORT opens the finish dialog there.
 
-                  No prose in the popover: each row's explanation — and, on an
-                  inactive row, the reason it is inactive — is the row's
-                  TOOLTIP (TooltipLayer reads the <label>'s title). An inactive
-                  input is therefore `aria-disabled` with a guarded onChange,
-                  never `disabled`: WebKit drops the tooltip of a disabled
-                  control, and here the tooltip is the only place the reason
-                  is written. */}
-              {!isEvalMode() && (
-                <div
-                  className="toolbar__export-format"
-                  role="radiogroup"
-                  aria-label={t('Format', language)}
+                  No prose in the popover: each row's explanation is its
+                  TOOLTIP (TooltipLayer reads the title). An inactive input is
+                  therefore `aria-disabled` with a guarded onChange, never
+                  `disabled`: WebKit drops the tooltip of a disabled control. */}
+              {exportAlt !== null && (
+                <button
+                  type="button"
+                  className="toolbar__export-alt"
+                  aria-busy={exportBusy || undefined}
+                  title={
+                    exportAlt === 'with-model'
+                      ? fillTemplate(t('Download a .zip: the shader with {name} as an .obj file under models/, tessellated exactly as the preview shows it. EXPORT itself downloads the shader alone.', language), { name: shownName })
+                      : fillTemplate(t('Download a .zip instead of the .glb: the shader file with {name} under models/ and its images as files — for pages that load the shader and the model separately.', language), { name: shownName })
+                  }
+                  onClick={() => {
+                    setExportOpen(false);
+                    runExport('alternate');
+                  }}
                 >
-                  <div className="toolbar__export-format-label">{t('Format', language)}</div>
-                  <label className="toolbar__export-check">
-                    <input
-                      type="radio"
-                      name="fs-export-format"
-                      checked={exportFormat === 'bundle'}
-                      onChange={() => setExportAsGlb(false)}
-                    />
-                    <span>{t(GLB_EXPORT_KEYS.formatBundle, language)}</span>
-                  </label>
-                  <label
-                    className={`toolbar__export-check${glbAvail.ok ? '' : ' toolbar__export-check--off'}`}
-                    title={
-                      glbAvail.ok
-                        ? fillTemplate(t(GLB_EXPORT_KEYS.popoverNoteGlb, language), { file: glbFile })
-                        : (glbUnavailableText(glbAvail, language) ?? undefined)
-                    }
-                  >
-                    <input
-                      type="radio"
-                      name="fs-export-format"
-                      checked={exportFormat === 'glb'}
-                      aria-disabled={!glbAvail.ok || undefined}
-                      onChange={() => {
-                        if (glbAvail.ok) setExportAsGlb(true);
-                      }}
-                    />
-                    <span>{t(GLB_EXPORT_KEYS.formatGlb, language)}</span>
-                  </label>
-                </div>
+                  {exportAlt === 'with-model'
+                    ? fillTemplate(t('Export with model ({name})', language), { name: shownName })
+                    : t('Export .zip', language)}
+                </button>
               )}
-              {/* "Export model": the model the preview SHOWS (engine/exportModel.ts)
-                  — a dropped one (on by default, `exportIncludeMesh`) or a
-                  built-in shape written as an .obj (off by default,
-                  `exportBuiltinModel`, so a plain shader stays a bare .js). A
-                  study session exports only a dropped model, shown or not, as
-                  the study package always has. Never LOCKED while there is a
-                  model: in .glb mode it names the loaded model and reads
-                  ticked — the .glb IS the model — and unticking it can only
-                  mean "the shader file without the model", so it says exactly
-                  that to both flags. */}
-              {(() => {
-                const active = isEvalMode()
-                  ? (previewMesh ? { kind: 'dropped' as const, mesh: previewMesh } : null)
-                  : activePreviewModel(previewShape, previewMesh);
-                const glb = exportFormat === 'glb' && previewMesh !== null;
-                const builtin = !glb && active?.kind === 'builtin' ? active.shape : null;
-                const name = glb
-                  ? previewMesh!.name
-                  : active?.kind === 'dropped'
-                    ? active.mesh.name
-                    : builtin
-                      ? t(BUILTIN_SHAPE_LABEL[builtin], language)
-                      : null;
-                return (
-                  <label
-                    className={`toolbar__export-check${name !== null ? '' : ' toolbar__export-check--off'}`}
-                    title={
-                      name === null
-                        ? t('No custom 3D model is loaded — drop a .obj/.glb/.gltf model or a .splat/.spz/.ply/.ksplat splat onto the 3D preview first.', language)
-                        : glb
-                          ? t(GLB_EXPORT_KEYS.meshNoteGlb, language)
-                          : builtin
-                            ? fillTemplate(t('Adds {name} to the export .zip as an .obj file under models/, tessellated exactly as the preview shows it. Unticked, the shader is exported alone.', language), { name })
-                            : t('The model ships inside the export .zip under models/ — untick to export the shader alone.', language)
-                    }
-                  >
-                    <input
-                      type="checkbox"
-                      checked={glb || (builtin ? exportBuiltinModel : exportIncludeMesh)}
-                      aria-disabled={name === null || undefined}
-                      onChange={(e) => {
-                        if (name === null) return;
-                        if (glb) {
-                          if (!e.target.checked) {
-                            setExportAsGlb(false);
-                            setExportIncludeMesh(false);
-                          }
-                          return;
-                        }
-                        if (builtin) setExportBuiltinModel(e.target.checked);
-                        else setExportIncludeMesh(e.target.checked);
-                      }}
-                    />
-                    <span>
-                      {t('Export model', language)}
-                      {name !== null ? ` (${name})` : ''}
-                    </span>
-                  </label>
-                );
-              })()}
+              {/* A study session keeps its "Export model" checkbox: the study
+                  package carries the dropped model, shown or not, unless it is
+                  unticked here (`exportIncludeMesh`, the document rule). */}
+              {isEvalMode() && (
+                <label
+                  className={`toolbar__export-check${previewMesh ? '' : ' toolbar__export-check--off'}`}
+                  title={
+                    previewMesh
+                      ? t('The model ships inside the export .zip under models/ — untick to export the shader alone.', language)
+                      : t('No custom 3D model is loaded — drop a .obj/.glb/.gltf model or a .splat/.spz/.ply/.ksplat splat onto the 3D preview first.', language)
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={exportIncludeMesh}
+                    aria-disabled={!previewMesh || undefined}
+                    onChange={(e) => {
+                      if (previewMesh) setExportIncludeMesh(e.target.checked);
+                    }}
+                  />
+                  <span>
+                    {t('Export model', language)}
+                    {previewMesh ? ` (${previewMesh.name})` : ''}
+                  </span>
+                </label>
+              )}
               {/* What the file carries (engine/exportGraph.ts). Not in a
                   study session: EXPORT opens the finish dialog there, and the
                   study package always carries the whole canvas. */}
@@ -854,356 +1118,35 @@ export function Toolbar() {
             control in the chrome, and in eval mode the FINISH button the
             consent screen told the participant to press). Hiding either behind
             a menu on a small window would defeat the reason each exists. */}
-        {(() => {
-          const collapsible = (
-            <>
-        {/* Reload. Left-click reloads; right-click — or a sustained press on
-            touch, where there is no second button — opens the two-item menu,
-            which is the only place a HARD reload is offered.
-
-            Safe to offer without a confirm: the graph autosaves to fs:graph
-            (and every UI pref to its own key), and the dropped preview mesh is
-            mirrored to IndexedDB (previewMeshCache.ts), so a reload restores
-            the session rather than discarding it. The tooltip used to warn
-            that the model was lost; that stopped being true when the mesh
-            cache landed.
-
-            The wrapper carries `.toolbar__local` — the app's generic anchored-
-            popover class — which buys three things at once: `position:
-            relative` for the popover, the `.toolbar__overflow-menu
-            .toolbar__local-popover` re-anchoring that keeps it from opening on
-            top of its own trigger inside the ☰, and the dark-theme shadow rule
-            (an explicit selector list, so a bespoke class would render a flat
-            patch on dark chrome — invisible in the light theme it is built
-            in). It is also already in openPrefs' right-click guard. */}
-        <div className="toolbar__local toolbar__reload-wrap" ref={reloadRef}>
-          <button
-            type="button"
-            ref={setReloadBtn}
-            className="toolbar__sc-link toolbar__refresh"
-            onClick={() => {
-              if (suppressReloadClickRef.current) {
-                suppressReloadClickRef.current = false;
-                return;
-              }
-              window.location.reload();
-            }}
-            onContextMenu={(e) => {
-              // preventDefault only, like EXPORT's: the bar-root handler is
-              // kept off this subtree by the `.toolbar__local` guard, so there
-              // is nothing to stopPropagation for.
-              e.preventDefault();
-              setReloadOpen((o) => !o);
-            }}
-            title={`${t('Reload the page', language)}. ${t('Right-click for a hard reload.', language)}`}
-            aria-label={t('Reload the page', language)}
-            aria-haspopup="menu"
-            aria-expanded={reloadOpen}
-          >
-            {/* Inline SVG, not a glyph: the app self-hosts a woff2 SUBSET of
-                Inter, so ↻/⟳ are not guaranteed to be in the font offline. */}
-            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
-            </svg>
-          </button>
-          {reloadOpen && (
-            <div
-              className="toolbar__local-popover toolbar__reload-popover"
-              role="menu"
-              aria-label={t('Reload', language)}
-            >
-              <div className="toolbar__local-header">
-                <span className="toolbar__contact-label">{t('Reload', language)}</span>
-              </div>
-              {/* One line each, explanation on hover via the app-wide
-                  TooltipLayer — the rule the Add-node menu and the input-
-                  settings popup follow. */}
-              <button
-                type="button"
-                role="menuitem"
-                className="toolbar__local-row toolbar__reload-row"
-                onClick={() => {
-                  setReloadOpen(false);
-                  window.location.reload();
-                }}
-                title={t('The same as clicking the button.', language)}
-              >
-                <span>{t('Reload', language)}</span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="toolbar__local-row toolbar__reload-row"
-                onClick={() => {
-                  setReloadOpen(false);
-                  hardReload();
-                }}
-                title={t('Fetch the page again instead of reusing the browser\u2019s cached copy — use this after an update if the app looks stale. Files loaded alongside the page may still come from the cache.', language)}
-              >
-                <span>{t('Hard reload', language)}</span>
-              </button>
-              <div className="toolbar__local-note">
-                {t('Your shader, its settings and a dropped model are all saved — either option restores them.', language)}
-              </div>
-            </div>
-          )}
-        </div>
-        {/* Desktop opens Podest as a REAL second app window (a Rust command —
-            see src-tauri/src/podest_window.rs); the web build keeps the plain
-            new-tab anchor. `target="_blank"` is meaningless inside a Tauri
-            webview — neither WKWebView nor WebView2 honours it without a host
-            handler — so the shared anchor was simply inert on desktop. Branch
-            on the whole ELEMENT rather than just the handler: an <a href> with
-            a click-preventing onClick still shows a bogus status-bar URL and
-            still offers "Open in new window" on right-click. */}
-        {__FS_DESKTOP__ ? (
-          <button
-            type="button"
-            className="toolbar__sc-link"
-            onClick={() => {
-              invokeDesktop<void>('podest_open').catch((e) =>
-                // No toast surface up here, and a silent no-op is exactly the
-                // failure this replaces — the console line is at least a thread
-                // to pull. A second click re-focuses rather than erroring.
-                console.error('Could not open the Podest window:', errorText(e)),
-              );
-            }}
-            title={t('Open Podest in a separate window — full-screen shader player (drop .js/.tsl shaders, .glb models, .zip)', language)}
-            aria-label={t('Open Podest', language)}
-          >
-            P
-          </button>
-        ) : (
-          <a
-            className="toolbar__sc-link"
-            href={`${import.meta.env.BASE_URL}podest.html`}
-            target="_blank"
-            rel="noreferrer noopener"
-            title={t('Open Podest — full-screen shader player (drop .js/.tsl shaders, .glb models, .zip)', language)}
-            aria-label={t('Open Podest', language)}
-          >
-            P
-          </a>
-        )}
-        {/* ShaderCarousel is WebGPU-only and excluded from the FS_DESKTOP
-            webview bundle — the link would 404 there. The desktop build
-            instead ships it as a Tauri resource and serves it over LAN for
-            headsets: the VR popover below. */}
-        {!__FS_DESKTOP__ && (
-          <a
-            className="toolbar__sc-link"
-            href={`${import.meta.env.BASE_URL}ShaderCarousel/`}
-            target="_blank"
-            rel="noreferrer noopener"
-            title={t('Open ShaderCarousel — viewer & benchmark suite', language)}
-            aria-label={t('Open ShaderCarousel', language)}
-          >
-            SC
-          </a>
-        )}
-        {/* Language switch (Latvian ⇄ English). Latvian is a display-only
-            overlay — see src/i18n — and the app's DEFAULT, so the button
-            labels the language it switches TO ("EN" while Latvian is on).
-            That makes it an action, not a state: no `aria-pressed`, which
-            beside a flipping label reads as a contradiction in a screen
-            reader (the WGSL/GLSL toggle documents the same trap). */}
-        <button
-          type="button"
-          className="toolbar__sc-link toolbar__lang"
-          onClick={() => setLanguage(language === 'lv' ? 'en' : 'lv')}
-          title={
-            language === 'lv'
-              ? 'Pārslēgt uz angļu valodu (Switch to English)'
-              : 'Pārslēgt uz latviešu valodu (Switch to Latvian)'
-          }
-          aria-label={language === 'lv' ? 'Switch to English' : 'Pārslēgt uz latviešu valodu'}
-        >
-          {language === 'lv' ? 'EN' : 'LV'}
-        </button>
-        {/* Inside the desktop app, offering a download of itself makes no
-            sense — __FS_DESKTOP__ builds hide the button. */}
-        {!__FS_DESKTOP__ && (
-          <div className="toolbar__local" ref={localRef}>
+        {overflow.collapsed ? (
+          <div className="toolbar__overflow" ref={menuRef}>
             <button
               type="button"
-              className="toolbar__sc-link"
-              onClick={() => setLocalOpen((o) => !o)}
+              className="toolbar__sc-link toolbar__overflow-btn"
+              onClick={() => setMenuOpen((o) => !o)}
               aria-haspopup="menu"
-              aria-expanded={localOpen}
-              title={t('Download the offline desktop app (Windows / macOS)', language)}
+              aria-expanded={menuOpen}
+              title={t('More tools', language)}
+              aria-label={t('More tools', language)}
             >
-              {t('Download app', language)}
+              {/* Inline SVG for the same reason the reload icon is one: the
+                  app self-hosts a woff2 SUBSET of Inter, so ☰ is not
+                  guaranteed to be in the font offline. */}
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M3 5h18v2.4H3zm0 5.8h18v2.4H3zm0 5.8h18V19H3z" />
+              </svg>
             </button>
-            {localOpen && (
+            {menuOpen && (
               <div
-                className="toolbar__local-popover"
+                className="toolbar__overflow-menu"
                 role="menu"
-                aria-label={t('Download desktop app', language)}
-              >
-                <div className="toolbar__local-header">
-                  <span className="toolbar__contact-label">{t('Desktop app', language)}</span>
-                  <span className="toolbar__version">v{__APP_VERSION__}</span>
-                </div>
-                {DESKTOP_DOWNLOADS.map((d) => (
-                  <a
-                    key={d.key}
-                    className="toolbar__local-row"
-                    href={releaseDownloadUrl(d.file)}
-                    role="menuitem"
-                    onClick={() => setLocalOpen(false)}
-                  >
-                    <span className="toolbar__local-os">{d.os}</span>
-                    <span className="toolbar__local-detail">{t(d.detail, language)}</span>
-                  </a>
-                ))}
-                <div className="toolbar__local-note">
-                  {t('Runs fully offline. Rebuilt automatically with every release.', language)}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-        {__FS_DESKTOP__ && (
-          <div className="toolbar__local" ref={vrRef}>
-            <button
-              type="button"
-              className="toolbar__sc-link"
-              onClick={() => setVrOpen((o) => !o)}
-              aria-haspopup="dialog"
-              aria-expanded={vrOpen}
-              title={t('Benchmark on a VR headset — serve ShaderCarousel over your local network', language)}
-            >
-              VR
-            </button>
-            {vrOpen && (
-              <div
-                className="toolbar__local-popover toolbar__vr-popover"
-                role="dialog"
-                aria-label={t('Headset benchmark server', language)}
-              >
-                <div className="toolbar__local-header">
-                  <span className="toolbar__contact-label">{t('Headset benchmark', language)}</span>
-                  {vrInfo && <span className="toolbar__vr-live">{t('serving', language)}</span>}
-                </div>
-                {!vrInfo ? (
-                  <>
-                    <div className="toolbar__local-note toolbar__vr-note">
-                      {t('Serves the bundled ShaderCarousel benchmark suite to devices on your Wi-Fi (e.g. a Quest headset). Read-only; nothing else on this machine is exposed.', language)}
-                    </div>
-                    <button
-                      type="button"
-                      className="toolbar__vr-action"
-                      onClick={startVrServer}
-                      disabled={vrBusy}
-                    >
-                      {t(vrBusy ? 'Starting…' : 'Start LAN server', language)}
-                    </button>
-                    <div className="toolbar__local-note toolbar__vr-note">
-                      {t('Your OS may ask to allow incoming network connections on the first start.', language)}
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="toolbar__local-note toolbar__vr-note">
-                      {t('Open on the headset (same network):', language)}
-                    </div>
-                    <div className="toolbar__vr-url-row">
-                      <code className="toolbar__vr-url">{vrInfo.url}</code>
-                      <button
-                        type="button"
-                        className="toolbar__contact-copy"
-                        onClick={() => handleCopy('vr-url', vrInfo.url)}
-                      >
-                        {t(copiedKey === 'vr-url' ? 'Copied' : 'Copy', language)}
-                      </button>
-                    </div>
-                    <div className="toolbar__vr-hint">
-                      {/* Split around the <code> runs, one key per text run;
-                          each run is translated in place, which Latvian word
-                          order allows here. The flag's name stays English —
-                          it is what the headset browser's search box shows. */}
-                      <strong>{t('Benches won’t start / can’t enter VR?', language)}</strong>{' '}
-                      {t('Browsers enable WebXR and WebGPU only on secure origins, and a plain LAN address isn’t one. One-time fix per headset — either:', language)}
-                      <ol>
-                        <li>
-                          {t('In the headset browser open', language)} <code>chrome://flags</code>
-                          {t(', search “Insecure origins treated as secure”, add', language)}{' '}
-                          <code>
-                            http://{vrInfo.ip}:{vrInfo.port}
-                          </code>
-                          {t(', then relaunch the browser.', language)}
-                        </li>
-                        <li>
-                          {t('Or with USB developer mode:', language)}{' '}
-                          <code>
-                            adb reverse tcp:{vrInfo.port} tcp:{vrInfo.port}
-                          </code>{' '}
-                          {t('and open', language)}{' '}
-                          <code>http://localhost:{vrInfo.port}/</code>{' '}
-                          {t('on the headset instead.', language)}
-                        </li>
-                      </ol>
-                    </div>
-                    <button
-                      type="button"
-                      className="toolbar__vr-action"
-                      onClick={stopVrServer}
-                      disabled={vrBusy}
-                    >
-                      {t(vrBusy ? 'Stopping…' : 'Stop server', language)}
-                    </button>
-                  </>
-                )}
-                {vrError && <div className="toolbar__vr-error">{vrError}</div>}
-              </div>
-            )}
-          </div>
-        )}
-        {/* App-wide dark/light toggle (moved here from the code panel's tab
-            bar) — still the ONE dark-mode control: themes Monaco AND stamps
-            data-theme on <html> via setCodeEditorTheme. */}
-        <button
-          type="button"
-          className="toolbar__sc-link toolbar__theme-toggle"
-          onClick={() => setCodeEditorTheme(isDark ? 'vs' : 'vs-dark')}
-          title={isDark ? t('Switch to light mode', language) : t('Switch to dark mode', language)}
-          aria-label={t('Toggle dark mode', language)}
-        >
-          {isDark ? '☼' : '☾'}
-        </button>
-            </>
-          );
-          if (!overflow.collapsed) return collapsible;
-          return (
-            <div className="toolbar__overflow" ref={menuRef}>
-              <button
-                type="button"
-                className="toolbar__sc-link toolbar__overflow-btn"
-                onClick={() => setMenuOpen((o) => !o)}
-                aria-haspopup="menu"
-                aria-expanded={menuOpen}
-                title={t('More tools', language)}
                 aria-label={t('More tools', language)}
               >
-                {/* Inline SVG for the same reason the reload icon is one: the
-                    app self-hosts a woff2 SUBSET of Inter, so ☰ is not
-                    guaranteed to be in the font offline. */}
-                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                  <path d="M3 5h18v2.4H3zm0 5.8h18v2.4H3zm0 5.8h18V19H3z" />
-                </svg>
-              </button>
-              {menuOpen && (
-                <div
-                  className="toolbar__overflow-menu"
-                  role="menu"
-                  aria-label={t('More tools', language)}
-                >
-                  {collapsible}
-                </div>
-              )}
-            </div>
-          );
-        })()}
+                {collapsible}
+              </div>
+            )}
+          </div>
+        ) : collapsible}
         {/* Eval mode is VISIBLE by design: covert recording is what the study's
             ethics posture forbids, so the badge stays for the whole session. */}
         {isEvalMode() && (

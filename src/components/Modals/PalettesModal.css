@@ -230,7 +230,6 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-sizing: border-box;
   height: var(--ctl-size);
   font-family: var(--font-sans);
   font-size: var(--font-size-sm);

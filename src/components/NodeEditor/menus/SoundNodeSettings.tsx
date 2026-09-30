@@ -15,14 +15,8 @@ import { rowStyle, labelStyle, hintStyle } from './menuShared';
  * carries no second copy, because two controls for one session is how the two
  * end up disagreeing.
  *
- * WHERE IT LIVES, and why it moved: this control sat on the node face when the
- * Audio Input node was folded into the Sound node (2026-09-08), inherited from
- * that node. It moved in here the same day, by owner decision. The trade it
- * makes: the face no longer answers "what is this listening to?" at a glance,
- * and in exchange the node is back to its compact size instead of spending
- * 22px of height and 20px of width on a control most graphs set once and never
- * touch. The question that DOES change minute to minute — is capture live? —
- * is still answered on the face, by the arm light.
+ * It lives HERE, not on the node face (owner decision, 2026-09-08): the node
+ * keeps its compact size, and the face's arm light still says if capture is live.
  *
  * The choice is SESSION-only (see `setSoundSource`): a `deviceId` is
  * origin-scoped, rotates when site data is cleared, and would be meaningless in

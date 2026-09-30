@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   MAX_DROPPED_NAME_LENGTH,
   droppedGroupLabel,
-  droppedShaderName,
   sanitizeDroppedName,
   shaderDropStem,
 } from './shaderDropName';
@@ -54,28 +53,6 @@ describe('sanitizeDroppedName', () => {
 
   it('keeps Latvian diacritics — the cap is characters, not an ASCII filter', () => {
     expect(sanitizeDroppedName('Ūdens virsma')).toBe('Ūdens virsma');
-  });
-});
-
-describe('droppedShaderName', () => {
-  it('the AUTHORED name wins — a file renamed in Finder does not rewrite it', () => {
-    expect(droppedShaderName('waves (1).js', 'Ocean Waves')).toBe('Ocean Waves');
-  });
-
-  it('falls back to the file stem when the file supplies no name', () => {
-    // The whole point: a bare shaderloader script, and a block shipping no
-    // name, used to leave the PREVIOUS shader's name on an unrelated graph.
-    expect(droppedShaderName('lo_udens.js', null)).toBe('lo_udens');
-    expect(droppedShaderName('lo_udens.js', '')).toBe('lo_udens');
-    expect(droppedShaderName('lo_udens.js', '   ')).toBe('lo_udens');
-  });
-
-  it('bounds the authored name too — it rides the same shared file', () => {
-    expect(droppedShaderName('waves.js', 'Ocean\nWaves')).toBe('Ocean Waves');
-  });
-
-  it("answers '' when neither candidate survives, so the caller leaves the name alone", () => {
-    expect(droppedShaderName('.js', null)).toBe('');
   });
 });
 

@@ -70,7 +70,7 @@ describe('a Gaussian splat scene', () => {
 
   it('EXPORT falls back to the bundle, whose zip carries the scene and the runtime snippet', () => {
     for (const kind of SPLAT_KINDS) {
-      expect(effectiveExportFormat(true, mesh({ kind, name: `g.${kind}`, gltf: undefined }), false), kind).toBe('bundle');
+      expect(effectiveExportFormat(mesh({ kind, name: `g.${kind}`, gltf: undefined }), false), kind).toBe('bundle');
     }
   });
 
@@ -78,23 +78,22 @@ describe('a Gaussian splat scene', () => {
     const r = createPreviewMesh('garden.splat', splatRows(3));
     if (!('mesh' in r)) throw new Error('splat refused');
     expect(glbExportAvailability(r.mesh)).toEqual({ ok: false, reason: 'splat', name: 'garden.splat' });
-    expect(effectiveExportFormat(true, r.mesh, false)).toBe('bundle');
+    expect(effectiveExportFormat(r.mesh, false)).toBe('bundle');
   });
 });
 
 describe('effectiveExportFormat', () => {
-  it('is .glb only for a packable model, outside a study session, with the flag exactly true', () => {
-    expect(effectiveExportFormat(true, mesh({}), false)).toBe('glb');
-    expect(effectiveExportFormat(true, mesh({}), true)).toBe('bundle');
-    expect(effectiveExportFormat(true, mesh({ kind: 'obj' }), false)).toBe('bundle');
-    expect(effectiveExportFormat(true, null, false)).toBe('bundle');
-    expect(effectiveExportFormat(false, mesh({}), false)).toBe('bundle');
+  it('is .glb only for a packable model, outside a study session', () => {
+    expect(effectiveExportFormat(mesh({}), false)).toBe('glb');
+    expect(effectiveExportFormat(mesh({}), true)).toBe('bundle');
+    expect(effectiveExportFormat(mesh({ kind: 'obj' }), false)).toBe('bundle');
+    expect(effectiveExportFormat(null, false)).toBe('bundle');
   });
 
-  it('never coerces the flag', () => {
-    for (const junk of [1, 'true', {}, null, undefined]) {
-      expect(effectiveExportFormat(junk as unknown as boolean, mesh({}), false), String(junk)).toBe('bundle');
-    }
+  it('stores no choice: the model the surface would pack is the whole input', () => {
+    // EXPORT is contextual (engine/exportModel.ts glbCandidate picks the mesh);
+    // there is no flag left to coerce.
+    expect(effectiveExportFormat.length).toBe(2);
   });
 });
 

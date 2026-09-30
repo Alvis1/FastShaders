@@ -122,8 +122,8 @@ export const LINK_HIT_RADIUS = 12;
 /**
  * The wire nearest (px, py) within `radius`, or null.
  *
- * NEAREST rather than first-within-radius: every wire converges on the same
- * point (the preview's centre), so crossings are the norm rather than the
+ * NEAREST rather than first-within-radius: the wires converge on the rail's
+ * short column of sockets, so crossings are the norm rather than the
  * exception, and picking by array order would light up whichever Output
  * happened to be earlier in emit order instead of the one under the pointer.
  */
@@ -132,12 +132,12 @@ export function pickLinkAt(
   px: number,
   py: number,
   radius: number = LINK_HIT_RADIUS,
-): { index: number; wire: LinkWire; distance: number } | null {
-  let best: { index: number; wire: LinkWire; distance: number } | null = null;
-  for (let i = 0; i < wires.length; i++) {
-    const d = distanceToLink(wires[i].start, wires[i].end, px, py);
-    if (d > radius) continue;
-    if (!best || d < best.distance) best = { index: i, wire: wires[i], distance: d };
+): { wire: LinkWire; distance: number } | null {
+  let best: { wire: LinkWire; distance: number } | null = null;
+  for (const wire of wires) {
+    const distance = distanceToLink(wire.start, wire.end, px, py);
+    if (distance > radius) continue;
+    if (!best || distance < best.distance) best = { wire, distance };
   }
   return best;
 }

@@ -4,6 +4,7 @@ import { t } from '@/i18n';
 import { limitNoticeCopy } from './limitNoticeCopy';
 import { desktopLiftsLimit } from '@/utils/desktopAppNoteRules';
 import { DesktopAppNote } from './DesktopAppNote';
+import { useModalKeys } from './useModalKeys';
 import './CsvImportModal.css';
 import './LimitModal.css';
 
@@ -53,16 +54,9 @@ export function LimitModal() {
     setCheckboxOn(isDownscale ? st.hideImageDownscaleWarning : st.ignoreImageLimits);
   }, [head?.id, isDownscale]);
 
-  useEffect(() => {
-    if (!head) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') commit('dismiss');
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-    // `commit` closes over the current head/checkboxOn — re-bind when they change.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [head, checkboxOn, isDownscale]);
+  useModalKeys(!!head, (e) => {
+    if (e.key === 'Escape') commit('dismiss');
+  });
 
   // Move focus into the dialog so keyboard users land on it and screen readers
   // announce it, rather than leaving focus behind on the canvas.
@@ -94,7 +88,7 @@ export function LimitModal() {
         )}
         {desktopLiftsLimit(head, ignoreLimits) && <DesktopAppNote language={language} />}
         {copy.toggle && (
-          <label className="limit-modal__ignore">
+          <label className="csv-import-modal__check">
             <input
               type="checkbox"
               checked={checkboxOn}

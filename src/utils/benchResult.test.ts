@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readPendingBenchResult, clearBenchResult, BENCH_RESULT_KEY } from './benchResult';
 import { parseCostFile, profileFromParsed } from './costOverride';
+import { stubLocalStorage } from '@/test-utils';
 
 /**
  * fs:benchResult is the same-browser handoff from a ShaderCarousel run to the
@@ -12,15 +13,7 @@ describe('readPendingBenchResult', () => {
   afterEach(() => vi.unstubAllGlobals());
 
   function stub(value: string | null) {
-    const store: Record<string, string> = {};
-    if (value !== null) store[BENCH_RESULT_KEY] = value;
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => store[k] ?? null,
-      setItem: (k: string, v: string) => { store[k] = v; },
-      removeItem: (k: string) => { delete store[k]; },
-      __store: store,
-    });
-    return store;
+    return stubLocalStorage(value !== null ? { [BENCH_RESULT_KEY]: value } : {});
   }
 
   const PROFILE = JSON.stringify({

@@ -9,7 +9,7 @@ import {
   importShaderZip,
   reportZipImportError,
 } from '@/engine/projectImport';
-import { effectiveExportFormat } from '@/utils/glbExportAvailability';
+import { exportFormatFor } from '@/engine/exportModel';
 import { GLB_EXPORT_KEYS } from '@/utils/glbExportCopy';
 import { fsRefusalNotice } from '@/utils/glbImportCopy';
 import { meshRefusalMessage } from '@/utils/previewMeshMessage';
@@ -18,6 +18,8 @@ import { isEvalMode } from '@/eval/evalMode';
 import {
   adoptShaderName,
   isShaderRenamed,
+  keepsBundleFormat,
+  untrackedKeepsBundle,
   sameShaderFile,
   workFolderSaveName,
 } from '@/utils/workFolderFile';
@@ -31,7 +33,7 @@ import {
   parseDesktopError,
 } from '@/utils/desktopIpc';
 import { fillTemplate } from '@/utils/fillTemplate';
-import { formatMiB } from '@/utils/formatSize';
+import { formatKbMb, formatMiB } from '@/utils/formatSize';
 import { generateId } from '@/utils/idGenerator';
 import { t } from '@/i18n';
 
@@ -74,6 +76,14 @@ type DocOrigin =
   | { kind: 'new' }
   | null;
 
+/** The file Save writes back to: the opened one while `shaderName` still
+ *  resolves to it, else null (a save-as). */
+function trackedFileFor(origin: DocOrigin, shaderName: string): string | null {
+  return origin?.kind === 'file' && !isShaderRenamed(origin.shaderName, shaderName)
+    ? origin.fileName
+    : null;
+}
+
 /** Result shapes of the work-folder commands (src-tauri/src/work_folder.rs). */
 interface WorkFolderInfo {
   path: string;
@@ -98,11 +108,6 @@ interface WorkFolderEntry {
   modifiedMs: number | null;
 }
 
-function formatSize(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-}
-
 export function WorkFolder() {
   const language = useAppStore((s) => s.language);
   const shaderName = useAppStore((s) => s.shaderName);
@@ -113,13 +118,12 @@ export function WorkFolder() {
   // whose payload fails to decode (collectImageFiles drops those); the write
   // itself always uses the real bundle's kind — and so can a pre-flight answer
   // ("Export without the 3D model" turns a .zip into a .js) at write time.
-  const bundleKind = useAppStore((s) =>
-    effectiveExportFormat(s.exportAsGlb, s.previewMesh, isEvalMode()) === 'glb'
-      ? 'glb'
-      : s.nodes.some((n) => n.data.registryType === 'imageNode') ||
-          (s.exportIncludeMesh && s.previewMesh !== null)
-        ? 'zip'
-        : 'js',
+  // The `.glb` half is the DOCUMENT rule (a loaded packable model), which a
+  // tracked `.js`/`.zip` overrides below (`keepsBundleFormat`).
+  const documentFormat = useAppStore((s) => exportFormatFor(s, isEvalMode(), 'document'));
+  const bundleIsZip = useAppStore(
+    (s) =>
+      s.nodes.some((n) => n.data.registryType === 'imageNode') || (s.exportIncludeMesh && s.previewMesh !== null),
   );
 
   // null = no folder linked; the Rust side re-validates the persisted path.
@@ -178,8 +182,19 @@ export function WorkFolder() {
   // The file Save would write right now: the tracked one while the name still
   // resolves to it, otherwise the ordinary export name (a save-as).
   const openedFile = origin?.kind === 'file' ? origin : null;
-  const trackedFile =
-    openedFile && !isShaderRenamed(openedFile.shaderName, shaderName) ? openedFile.fileName : null;
+  const trackedFile = trackedFileFor(origin, shaderName);
+  // With nothing tracked, the folder listing (when loaded) predicts what Save
+  // will ask it; before it has loaded the prediction is the document rule.
+  const untrackedBundle =
+    origin === null &&
+    entries !== null &&
+    untrackedKeepsBundle(shaderBaseName(shaderName), entries.map((e) => e.fileName));
+  const bundleKind =
+    documentFormat === 'glb' && !keepsBundleFormat(trackedFile) && !untrackedBundle
+      ? 'glb'
+      : bundleIsZip
+        ? 'zip'
+        : 'js';
   const saveTarget = workFolderSaveName(
     trackedFile,
     `${shaderBaseName(shaderName)}.${bundleKind}`,
@@ -275,6 +290,20 @@ export function WorkFolder() {
       // The pre-flight (N1) runs BEFORE the target is derived: answering
       // "Export without the 3D model" can turn a .zip into a .js, and so the
       // file name. Cancelling reports itself like a declined replace does.
+      // The FAMILY is decided first, though: a tracked .js/.zip is written
+      // back as the bundle even when its model could be packed into a .glb.
+      let bundleOnly = keepsBundleFormat(trackedFileFor(origin, useAppStore.getState().shaderName));
+      if (!bundleOnly && origin === null && exportFormatFor(useAppStore.getState(), isEvalMode(), 'document') === 'glb') {
+        // Nothing tracked (a relaunch forgets the origin): ask the folder, so a
+        // shader it already holds as waves.zip is not forked into waves.glb.
+        // A failed listing falls back to the document rule rather than
+        // blocking the save.
+        const listed = await invokeDesktop<WorkFolderEntry[]>('work_folder_list').catch(() => [] as WorkFolderEntry[]);
+        bundleOnly = untrackedKeepsBundle(
+          shaderBaseName(useAppStore.getState().shaderName),
+          listed.map((e) => e.fileName),
+        );
+      }
       const bundle = await buildShaderExportChecked({
         preflight: askExportPreflight,
         glb: glbExportUi,
@@ -283,6 +312,7 @@ export function WorkFolder() {
         // Save writes the DOCUMENT: every node, whatever the EXPORT popover's
         // unconnected-nodes row says.
         scope: 'whole',
+        ...(bundleOnly ? { bundleOnly: true as const } : {}),
       });
       if (!bundle) {
         setError(t('Save cancelled — nothing was written.', language));
@@ -293,8 +323,7 @@ export function WorkFolder() {
       // prediction, this is the one the bytes are actually written under.
       const liveName = useAppStore.getState().shaderName;
       const from = origin?.kind === 'file' ? origin : null;
-      const tracked =
-        from && !isShaderRenamed(from.shaderName, liveName) ? from.fileName : null;
+      const tracked = trackedFileFor(origin, liveName);
       const target = workFolderSaveName(tracked, bundle.fileName, bundle.kind);
 
       // Writing back to the file this document came from is the point, and stays
@@ -426,13 +455,11 @@ export function WorkFolder() {
               return;
             }
             useAppStore.getState().showImportNote(r.notes);
-            // The opened file's FORMAT is adopted with its name: Save writes
-            // back to the file it was opened from, and without this the
-            // session flag is still the bundle, so `waves.glb` would fork a
-            // `waves.js`/`.zip` sibling and keep the pre-edit shader.
-            // `effectiveExportFormat` still falls back to the bundle if the
-            // restored mesh cannot be packed.
-            useAppStore.getState().setExportAsGlb(true);
+            // The opened file's FORMAT comes back with its model: Save is a
+            // document save, which writes the loaded model as a `.glb`
+            // whenever it can be packed (engine/exportModel.ts), so
+            // `waves.glb` saves back to itself rather than forking a
+            // `waves.js`/`.zip` sibling.
             result = r.imported;
           } else if (/\.zip$/i.test(entry.fileName)) {
             result = await importShaderZip(new File([bytes], entry.fileName));
@@ -618,7 +645,7 @@ export function WorkFolder() {
                   {entry.fileName}
                 </span>
                 <span className="toolbar__local-detail">
-                  {formatSize(entry.sizeBytes)}
+                  {formatKbMb(entry.sizeBytes)}
                 </span>
               </button>
               );

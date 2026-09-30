@@ -216,10 +216,12 @@ describe('announceExportDelivered runs only after delivery', () => {
   it('downloadShader announces AFTER the anchor click, for whatever it delivered', () => {
     const src = read('engine/exportShader.ts');
     const body = slice(src, 'export function downloadShader(', '\n}\n');
-    const click = body.indexOf('a.click()');
+    // The anchor click itself lives in utils/downloadBlob.ts, the ONE download.
+    const click = body.indexOf('downloadBlob(');
     const announce = body.indexOf('announceExportDelivered(bundle)');
     expect(click).toBeGreaterThan(-1);
     expect(announce).toBeGreaterThan(click);
+    expect(read('utils/downloadBlob.ts')).toContain('a.click()');
   });
 
   it('the announcement is gated on the study before it plans or posts anything', () => {

@@ -1,14 +1,12 @@
-import { useCallback, useRef, useEffect, memo } from 'react';
+import { useCallback, memo } from 'react';
 import type { BuiltinPreset } from '@/registry/builtinPresets';
 import { useAppStore } from '@/store/useAppStore';
 import { assetText, t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { perlin2D } from '@/utils/noisePreview';
 import { hexToRgb01 } from '@/utils/colorUtils';
-import { startTileDrag, tileGhostZoom, tileActivationProps, setHtml5TileDrag } from './tileDrag';
-import { useAssetTooltip } from './AssetTooltip';
-import { AssetCostBadge } from './AssetCostBadge';
-import { PREVIEW_SIZE, clamp01, lerp3, smoothstep, renderPixels } from './tilePreview';
+import { AssetTile } from './AssetTile';
+import { clamp01, lerp3, smoothstep, renderPixels } from './tilePreview';
 
 export const BUILTIN_PRESET_DRAG_TYPE = 'application/fastshaders-builtin-preset';
 
@@ -442,39 +440,11 @@ function fallbackShade(hex: string): Shade {
 }
 
 export const PresetCard = memo(function PresetCard({ preset }: PresetCardProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const language = useAppStore((s) => s.language);
-
-  useEffect(() => {
-    const ctx = canvasRef.current?.getContext('2d');
-    if (!ctx) return;
-    renderPixels(ctx, PRESET_SHADES[preset.id] ?? fallbackShade(preset.color));
-  }, [preset.id, preset.color]);
-
-  const onDragStart = useCallback(
-    (event: React.DragEvent) => {
-      event.dataTransfer.setData(BUILTIN_PRESET_DRAG_TYPE, preset.id);
-      event.dataTransfer.effectAllowed = 'move';
-      // Record the payload for dragover (dataTransfer is unreadable there) so
-      // the canvas can withhold the drop-on-edge highlight — a preset drop
-      // never splices, and the preview must not promise one. Teardown rides
-      // ContentBrowser's root onDragEnd (endHtml5TileDrag).
-      setHtml5TileDrag({ kind: 'preset', id: preset.id });
-    },
-    [preset.id],
-  );
-
-  const onPointerDown = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
-      const tile = event.currentTarget as HTMLElement;
-      startTileDrag(
-        event.nativeEvent,
-        { kind: 'preset', id: preset.id },
-        `<div class="saved-group-card saved-group-card--preview" style="zoom: ${tileGhostZoom(tile)}">${tile.innerHTML}</div>`,
-      );
-    },
-    [preset.id],
+  const paint = useCallback(
+    (ctx: CanvasRenderingContext2D) =>
+      renderPixels(ctx, PRESET_SHADES[preset.id] ?? fallbackShade(preset.color)),
+    [preset.id, preset.color],
   );
 
   // Counts SHADER nodes: drop the group container and the explainer note, so
@@ -482,53 +452,24 @@ export const PresetCard = memo(function PresetCard({ preset }: PresetCardProps) 
   const memberCount = preset.nodes.filter(
     (n) => n.type !== 'group' && n.type !== 'note',
   ).length;
-  // The NUMBER stays outside the translation key: Latvian inflects the noun
-  // with it ("1 mezgls" / "5 mezgli"), so the singular and plural words are two
-  // separate lv.json entries rather than an "s" appended to one — the same
-  // reason CostBar keeps a whole sentence per plural branch.
+  // The NUMBER stays outside the key: Latvian inflects the noun with it
+  // ("1 mezgls" / "5 mezgli"), so singular and plural are two lv.json entries.
   const countLabel = `${memberCount} ${t(memberCount === 1 ? 'node' : 'nodes', language)}`;
   // Built-in text, shown in Latvian through `assetText` (keyed by the English).
   const name = assetText(preset.name, language);
-  const { tooltip, tooltipHandlers } = useAssetTooltip(
-    `${assetText(preset.description, language)} ${t('Click, or drag onto the canvas, to add it.', language)}`,
-  );
 
   return (
-    <div
-      className="saved-group-card saved-group-card--preview"
-      draggable
-      onDragStart={onDragStart}
-      onPointerDown={onPointerDown}
-      {...tileActivationProps({ kind: 'preset', id: preset.id }, fillTemplate(t('Add {name} preset', language), { name }))}
-      {...tooltipHandlers}
-    >
-      {tooltip}
-      <AssetCostBadge cost={preset.totalCost} />
-      <div
-        className="saved-group-card__frame"
-        style={{
-          background: `${preset.color}1A`,
-          borderColor: `${preset.color}66`,
-        }}
-      >
-        <div
-          className="saved-group-card__header"
-          style={{ background: preset.color }}
-        >
-          <span className="saved-group-card__title">{name}</span>
-        </div>
-        <div className="saved-group-card__body">
-          <canvas
-            ref={canvasRef}
-            width={PREVIEW_SIZE}
-            height={PREVIEW_SIZE}
-            // Fills the card's content width — the tile is meant to be the
-            // image, not a small swatch adrift in a large frame.
-            style={{ width: '100%', height: 'auto', aspectRatio: '1 / 1', display: 'block', borderRadius: 0, imageRendering: 'auto' }}
-          />
-          <span className="saved-group-card__count" style={{ marginTop: 2 }}>{countLabel}</span>
-        </div>
-      </div>
-    </div>
+    <AssetTile
+      kind="preset"
+      id={preset.id}
+      dragType={BUILTIN_PRESET_DRAG_TYPE}
+      name={name}
+      tooltipText={`${assetText(preset.description, language)} ${t('Click, or drag onto the canvas, to add it.', language)}`}
+      activationLabel={fillTemplate(t('Add {name} preset', language), { name })}
+      countLabel={countLabel}
+      color={preset.color}
+      totalCost={preset.totalCost}
+      paint={paint}
+    />
   );
 });

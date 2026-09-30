@@ -235,6 +235,22 @@ describe('sinkCosts builds the sink set ONCE, as it already does the adjacency',
     expect(wrong).not.toBe(right);
   });
 
+  it('the walk prices a variadic node exactly as the per-node scan does', () => {
+    // The walks index the wired handles ONCE per graph instead of rescanning
+    // the edge list per chainable node; no price may move with that.
+    const handles = ['a', 'b', 'c', 'd'];
+    const srcs = handles.map((h) => makeNode(`s_${h}`, 'float', { value: 1 }));
+    const nodes = [makeNode('o', 'output'), makeNode('op', 'mul'), ...srcs];
+    const edges = [
+      ...handles.map((h) => makeEdge(`s_${h}`, 'out', 'op', h)),
+      makeEdge('op', 'out', 'o', 'color'),
+    ];
+    expect(nodeCostPoints(nodes[1], edges)).toBe(3 * BASE.mul);
+    const scanned = nodes.slice(1).reduce((sum, n) => sum + nodeCostPoints(n, edges), 0);
+    expect(computeReachableCost(nodes, edges)).toBe(scanned);
+    expect(sinkCosts(nodes, edges).get('o')).toBe(scanned);
+  });
+
   it('the retired `known` shortcut has not come back in disguise', () => {
     // It handed in an ANSWER for one seed and stopped being true the moment the
     // total became a UNION of several; `sinks` is a function of `nodes` alone.

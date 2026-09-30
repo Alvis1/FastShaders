@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { pickPortalHost, placePopover } from '@/components/inputs/colorPickerModel';
+import { fullscreenElement, pickPortalHost, placePopover } from '@/components/inputs/colorPickerModel';
 import { t } from '@/i18n';
 import type { Language } from '@/i18n';
 
@@ -63,9 +63,7 @@ export function AnimClipMenu({
   // so one that isn't would attach to nothing.
   useEffect(() => {
     if (!open) { setHost(null); setPos(null); return; }
-    const doc = document as Document & { webkitFullscreenElement?: Element | null };
-    const fsEl = (document.fullscreenElement ?? doc.webkitFullscreenElement ?? null) as HTMLElement | null;
-    setHost(pickPortalHost(fsEl, anchor, document.body));
+    setHost(pickPortalHost(fullscreenElement(), anchor, document.body));
   }, [open, anchor]);
 
   // `host` is IN the dep list, and that is the whole reason this works: the

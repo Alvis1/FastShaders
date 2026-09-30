@@ -55,7 +55,7 @@
  * is duplicated in the TS. */
 .palette-pop {
   position: fixed;
-  z-index: var(--z-tooltip, 1000);
+  z-index: var(--z-overlay);
   width: 169px;
   max-height: min(60vh, 380px);
   overflow-y: auto;
@@ -64,10 +64,10 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  background: var(--bg-panel, #ffffff);
-  border: 1px solid var(--border-default, #cccccc);
-  border-radius: var(--border-radius-md, 6px);
-  box-shadow: var(--shadow-lg, 0 4px 12px rgba(0, 0, 0, 0.25));
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-md);
+  box-shadow: var(--shadow-lg);
 }
 
 /* Reset entry: clears the stored value back to the site's default (the small
@@ -79,14 +79,14 @@
   padding: 2px 2px 4px;
   border: none;
   background: none;
-  font-size: var(--font-size-xs, 10px);
-  color: var(--text-secondary, #555555);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
   cursor: pointer;
   text-align: left;
 }
 
 .palette-pop__clear:hover {
-  color: var(--text-primary, #1a1a1a);
+  color: var(--text-primary);
 }
 
 .palette-pop__clear-swatch {
@@ -117,9 +117,9 @@
  * 5-swatch rows are indistinguishable from each other. Clipped rather than
  * wrapped — the name is a label, not content (the full text is in `title`). */
 .palette-pop__label {
-  font-size: var(--font-size-xs, 10px);
+  font-size: var(--font-size-xs);
   line-height: 1.2;
-  color: var(--text-secondary, #555555);
+  color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -136,15 +136,15 @@
   padding: 0 2px;
   border: none;
   background: none;
-  font-size: var(--font-size-xs, 10px);
+  font-size: var(--font-size-xs);
   line-height: 1;
-  color: var(--text-secondary, #555555);
+  color: var(--text-secondary);
   cursor: pointer;
   flex-shrink: 0;
 }
 
 .palette-pop__forget:hover {
-  color: var(--text-primary, #1a1a1a);
+  color: var(--text-primary);
 }
 
 /* A GRID, not a wrapping flex row: the column count is then fixed at six
@@ -170,7 +170,7 @@
 }
 
 .palette-pop__swatch--current {
-  outline: 2px solid var(--border-focus, #2d6cdf);
+  outline: 2px solid var(--border-focus);
   outline-offset: 1px;
 }
 
@@ -180,8 +180,8 @@
   justify-content: space-between;
   gap: 6px;
   margin-top: 2px;
-  font-size: var(--font-size-xs, 10px);
-  color: var(--text-secondary, #555555);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
   cursor: pointer;
 }
 
@@ -189,7 +189,7 @@
   width: 44px;
   height: 18px;
   padding: 0;
-  border: 1px solid var(--border-default, #cccccc);
+  border: 1px solid var(--border-default);
   border-radius: 0;
   background: none;
   cursor: pointer;

@@ -15,7 +15,6 @@ import {
   buildableMaterialIndices,
   gltfImageFileName,
   gltfPreviewFacts,
-  meshNameMaterials,
   mirrorNamesByMaterial,
   readGltfModel,
   slotColorSpace,
@@ -23,7 +22,7 @@ import {
   type GltfReadRefusal,
 } from './gltfReader';
 import { GLB_READ_MAX_BYTES, MESH_MAX_BYTES } from './gltfCompression';
-import { encodeDataUri } from './glbContainer';
+import { encodeDataUri, pad4 } from './glbContainer';
 import { gltfTextureValues } from './imageUvMapping';
 import { MAX_INVENTORY_MESHES } from './meshInventory';
 import { modelSignatureMatches, sanitizeModelSignature } from '@/engine/materialPartsContract';
@@ -35,6 +34,7 @@ import {
   makeGlb,
   makeRealPng,
   pngHeaderBytes,
+  triangleWithBlobs,
   webpHeaderBytes,
 } from '../test-utils';
 
@@ -70,11 +70,6 @@ afterEach(() => {
 
 /* ── fixtures ────────────────────────────────────────────────────────────── */
 
-// Arithmetic, never `(n + 3) & ~3`: a bitwise operator coerces through ToInt32,
-// so that spelling returns a NEGATIVE length from 2**31 up. Harmless at fixture
-// sizes, but it is the shape that made the repacker u32 overflow guard dead code.
-const pad4 = (n: number) => Math.ceil(n / 4) * 4;
-
 const BASE = {
   meshes: [{ primitives: [{ attributes: { POSITION: 0 }, material: 0 }] }],
   nodes: [{ mesh: 0 }],
@@ -85,18 +80,7 @@ const BASE = {
 /** The glTF document + BIN around TRIANGLE_POSITIONS: bufferView 0 is the
  *  triangle, 1, 2, … the blobs (4-aligned). `extra` keys replace BASE's. */
 function parts(extra: Record<string, unknown> = {}, blobs: Uint8Array[] = []) {
-  const views: Record<string, number>[] = [{ buffer: 0, byteOffset: 0, byteLength: 36 }];
-  let len = 36;
-  for (const b of blobs) {
-    const off = pad4(len);
-    views.push({ buffer: 0, byteOffset: off, byteLength: b.length });
-    len = off + b.length;
-  }
-  const bin = new Uint8Array(pad4(len));
-  bin.set(TRIANGLE_POSITIONS);
-  blobs.forEach((b, i) => bin.set(b, views[i + 1].byteOffset));
-  const doc = gltfPrimitiveDoc({ buffers: [{ byteLength: bin.length }], bufferViews: views, ...BASE, ...extra });
-  return { doc, bin };
+  return triangleWithBlobs({ ...BASE, ...extra }, blobs);
 }
 
 function glb(extra: Record<string, unknown> = {}, blobs: Uint8Array[] = []): Uint8Array<ArrayBuffer> {
@@ -625,12 +609,13 @@ describe('mesh names, mirrors and the preview facts', () => {
 
   it('indexes every predicted name with its materials and certainty', () => {
     const m = okModel(MODEL());
-    expect(meshNameMaterials(m, 'Car')).toEqual({ materials: [0], certain: true });
-    expect(meshNameMaterials(m, 'Car_1')).toEqual({ materials: [2], certain: true });
-    expect(meshNameMaterials(m, 'X_1')).toEqual({ materials: [1, 2], certain: true });
-    expect(meshNameMaterials(m, 'Plain')).toEqual({ materials: [null], certain: true });
-    expect(meshNameMaterials(m, 'U')?.certain).toBe(false);
-    expect(meshNameMaterials(m, 'nope')).toBeNull();
+    const of = (name: string) => m.meshNameIndex.get(name) ?? null;
+    expect(of('Car')).toEqual({ materials: [0], certain: true });
+    expect(of('Car_1')).toEqual({ materials: [2], certain: true });
+    expect(of('X_1')).toEqual({ materials: [1, 2], certain: true });
+    expect(of('Plain')).toEqual({ materials: [null], certain: true });
+    expect(of('U')?.certain).toBe(false);
+    expect(of('nope')).toBeNull();
     expect(m.meshNameIndex).toBeInstanceOf(Map);
   });
 

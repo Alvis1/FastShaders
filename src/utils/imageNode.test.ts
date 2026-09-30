@@ -3,7 +3,7 @@ import {
   decodeImageNode,
   displayImageFileName,
   validImageDataUrl,
-  makeImageNodeData,
+  makeImageNodeFromEncode,
   resolveImageDrop,
   totalImageChars,
   sanitizeImageNodes,
@@ -98,9 +98,11 @@ describe('validImageDataUrl', () => {
   });
 });
 
-describe('makeImageNodeData', () => {
+describe('makeImageNodeFromEncode', () => {
+  const ENC = { dataUrl: URL_PNG, width: 64, height: 32 };
+
   it('builds the imageNode payload shape', () => {
-    const d = makeImageNodeData(URL_PNG, 64, 32, 2, 'cat.png');
+    const d = makeImageNodeFromEncode(ENC, 2, 'cat.png');
     expect(d.registryType).toBe('imageNode');
     expect(d.values.imageB64).toBe(URL_PNG);
     expect(d.values.width).toBe(64);
@@ -114,14 +116,14 @@ describe('makeImageNodeData', () => {
   // (`resized`, `restorable`, the card's thumbnail aspect, sanitizeOriginKeys'
   // pair rule) keys off which of these three keys are OWN keys.
   it('writes no provenance key at all for a plain 1:1 drop', () => {
-    const v = makeImageNodeData(URL_PNG, 64, 32, 2, 'cat.png').values;
+    const v = makeImageNodeFromEncode(ENC, 2, 'cat.png').values;
     expect('originId' in v).toBe(false);
     expect('srcWidth' in v).toBe(false);
     expect('srcHeight' in v).toBe(false);
   });
 
   it('writes the whole trio for a snapped drop', () => {
-    const v = makeImageNodeData(URL_PNG, 64, 32, 2, 'cat.png', {
+    const v = makeImageNodeFromEncode(ENC, 2, 'cat.png', {
       originId: 'abc123', srcWidth: 60, srcHeight: 30,
     }).values;
     expect(v.originId).toBe('abc123');
@@ -131,7 +133,7 @@ describe('makeImageNodeData', () => {
 
   it('never writes half a dimension pair', () => {
     // srcWidth/srcHeight are paired with each other and with nothing else.
-    const v = makeImageNodeData(URL_PNG, 64, 32, 2, 'cat.png', { originId: 'abc123', srcWidth: 60 }).values;
+    const v = makeImageNodeFromEncode(ENC, 2, 'cat.png', { originId: 'abc123', srcWidth: 60 }).values;
     expect(v.originId).toBe('abc123');
     expect('srcWidth' in v).toBe(false);
     expect('srcHeight' in v).toBe(false);

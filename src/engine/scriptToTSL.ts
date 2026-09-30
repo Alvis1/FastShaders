@@ -20,7 +20,7 @@ import { maskNonCode, splitTopLevelArgs, stripComments } from './tslCodeProcesso
 import { stripMirrorParts } from './partKeyLiteral';
 import { safeJsonReviver } from '@/utils/safeJson';
 import type { MaterialSettings } from '@/types';
-import { materialSettingsFromSource } from './materialSettingsCode';
+import { materialSettingsFromSource, PART_SETTING_KEYS } from './materialSettingsCode';
 
 // Handle babel traverse CJS/ESM interop
 const traverse = (typeof (_traverse as unknown as { default?: unknown }).default === 'function'
@@ -41,11 +41,21 @@ const NODE_PROP_TO_CHANNEL = new Map<string, string>([
   ['envNode', 'env'],
 ]);
 
-/** Material settings keys injected by tslToShaderModule that should be stripped */
-const MATERIAL_KEYS = new Set(['transparent', 'side', 'alphaTest', 'depthWrite', 'mergeVertices']);
+/** Top-level settings keys the module carries: stripped from the TSL and read back. */
+const MATERIAL_KEYS: ReadonlySet<string> = new Set([...PART_SETTING_KEYS, 'mergeVertices']);
 
 /** A Splat Output scope Fn's declarator line — graphToCode's exact spelling. */
 const SPLAT_FN_DECL_RE = /^const\s+sp\d+(?:Shade|Shape|Size|Feather)\s*=\s*Fn\s*\(/;
+
+/** Net brace depth change across `s`: every `{` minus every `}`. */
+function braceDelta(s: string): number {
+  let d = 0;
+  for (const ch of s) {
+    if (ch === '{') d++;
+    else if (ch === '}') d--;
+  }
+  return d;
+}
 
 /**
  * String-only entry point, kept for every caller that doesn't need the
@@ -57,8 +67,8 @@ export function scriptToTSL(scriptCode: string): string {
 }
 
 /**
- * Same conversion, plus the `transparent`/`side`/`alphaTest`/`depthWrite` keys
- * the module carries at the TOP of its return object — the DEFAULT material's.
+ * Same conversion, plus the settings keys (MATERIAL_KEYS) the module carries
+ * at the TOP of its return object — the DEFAULT material's.
  * Those are NOT representable in editor TSL (graphToCode never emits the
  * default's settings — they ride tslToShaderModule's options), so they were
  * simply deleted here while useSyncEngine's mergeMatch re-applied the PREVIOUS
@@ -68,7 +78,7 @@ export function scriptToTSL(scriptCode: string): string {
  * `materialSettingsFromSource` (engine/materialSettingsCode), shared with
  * buildShaderModule and codeToGraph.
  *
- * An ADDED material's four keys are different: they ARE editor TSL (inside
+ * An ADDED material's settings keys are different: they ARE editor TSL (inside
  * `parts`, in the loader's own spelling), so they pass through here verbatim
  * and codeToGraph reads them back. Known gap: the node-prop names inside
  * `parts` are NOT reversed (`colorNode:` stays `colorNode:` and lands on a
@@ -180,20 +190,12 @@ export function scriptToTSLWithSettings(
 
     // Skip schema block (already consumed)
     if (/^export\s+const\s+schema\s*=\s*\{/.test(trimmed)) {
-      skipSchema = true;
-      schemaBraces = 0;
-      for (const ch of trimmed) {
-        if (ch === '{') schemaBraces++;
-        if (ch === '}') schemaBraces--;
-      }
-      if (schemaBraces <= 0) skipSchema = false;
+      schemaBraces = braceDelta(trimmed);
+      skipSchema = schemaBraces > 0;
       continue;
     }
     if (skipSchema) {
-      for (const ch of trimmed) {
-        if (ch === '{') schemaBraces++;
-        if (ch === '}') schemaBraces--;
-      }
+      schemaBraces += braceDelta(trimmed);
       if (schemaBraces <= 0) skipSchema = false;
       continue;
     }
@@ -229,21 +231,13 @@ export function scriptToTSLWithSettings(
     // .js → editor direction.
     if (!insideFn && !keepHelper &&
         /^\s*const\s+(hsl|toHsl)\s*=\s*Fn\(/.test(trimmed)) {
-      keepHelper = true;
-      helperBraces = 0;
-      for (const ch of line) {
-        if (ch === '{') helperBraces++;
-        if (ch === '}') helperBraces--;
-      }
+      helperBraces = braceDelta(line);
+      keepHelper = helperBraces > 0;
       outLines.push(line);
-      if (helperBraces <= 0) keepHelper = false;
       continue;
     }
     if (keepHelper) {
-      for (const ch of line) {
-        if (ch === '{') helperBraces++;
-        if (ch === '}') helperBraces--;
-      }
+      helperBraces += braceDelta(line);
       outLines.push(line);
       if (helperBraces <= 0) keepHelper = false;
       continue;
@@ -259,6 +253,11 @@ export function scriptToTSLWithSettings(
 
     // --- Inside function body ---
     if (insideFn) {
+      // Every line moves the outer depth, kept or skipped, so the closing `}`
+      // of the shader function is still found.
+      const delta = braceDelta(maskedTrimmed);
+      fnBraceDepth += delta;
+
       // A Splat Output's scope Fns (`const sp1Shade = Fn(([p, pw, n, c]) => {`,
       // Shape, Size, Feather) are GRAPH CONTENT, not wrapper artifacts: codeToGraph
       // walks their bodies and routes their returns to the node's sockets, and
@@ -266,20 +265,12 @@ export function scriptToTSLWithSettings(
       // or a bare splat module would come back as a Splat Output with its
       // program gone and a return naming Fns that no longer exist.
       if (keepSplatFn > 0) {
-        for (const ch of maskedTrimmed) {
-          if (ch === '{') { keepSplatFn++; fnBraceDepth++; }
-          if (ch === '}') { keepSplatFn--; fnBraceDepth--; }
-        }
+        keepSplatFn += delta;
         outLines.push(line);
         continue;
       }
       if (SPLAT_FN_DECL_RE.test(maskedTrimmed)) {
-        keepSplatFn = 0;
-        for (const ch of maskedTrimmed) {
-          if (ch === '{') { keepSplatFn++; fnBraceDepth++; }
-          if (ch === '}') { keepSplatFn--; fnBraceDepth--; }
-        }
-        if (keepSplatFn < 0) keepSplatFn = 0;
+        keepSplatFn = Math.max(0, delta);
         outLines.push(line);
         continue;
       }
@@ -287,35 +278,12 @@ export function scriptToTSLWithSettings(
       // These appear when graphToCode emits an unknown node's rawExpression containing
       // the original Fn wrapper, and tslToShaderModule passes it through verbatim.
       if (skipNestedFn > 0) {
-        for (const ch of maskedTrimmed) {
-          if (ch === '{') skipNestedFn++;
-          if (ch === '}') skipNestedFn--;
-        }
-        // Also track outer fnBraceDepth so the closing } count stays correct
-        for (const ch of maskedTrimmed) {
-          if (ch === '{') fnBraceDepth++;
-          if (ch === '}') fnBraceDepth--;
-        }
+        skipNestedFn += delta;
         continue;
       }
       if (/\bFn\s*\(/.test(maskedTrimmed)) {
-        skipNestedFn = 0;
-        for (const ch of maskedTrimmed) {
-          if (ch === '{') skipNestedFn++;
-          if (ch === '}') skipNestedFn--;
-        }
-        // Also track outer fnBraceDepth
-        for (const ch of maskedTrimmed) {
-          if (ch === '{') fnBraceDepth++;
-          if (ch === '}') fnBraceDepth--;
-        }
-        if (skipNestedFn <= 0) skipNestedFn = 0;
+        skipNestedFn = Math.max(0, delta);
         continue;
-      }
-
-      for (const ch of maskedTrimmed) {
-        if (ch === '{') fnBraceDepth++;
-        if (ch === '}') fnBraceDepth--;
       }
 
       // Closing brace
@@ -506,11 +474,6 @@ function collapseCodeWhitespace(entry: string): string {
 }
 
 /**
- * Pull `default:` values out of the module's `export const schema = { ... }`
- * block. Read before any pre-pass runs, since the hoist needs them and the
- * pre-passes never touch the schema block.
- */
-/**
  * One schema `default:` literal → its typed value. Numbers stay numbers;
  * a quoted '#rrggbb' string is a COLOUR default (the loader's typed schema,
  * since 0.5 — 0.6 is what every export now references) and
@@ -525,6 +488,11 @@ function parseSchemaDefault(raw: string): number | string | undefined {
   return isNaN(val) ? undefined : val;
 }
 
+/**
+ * Pull `default:` values out of the module's `export const schema = { ... }`
+ * block. Read before any pre-pass runs, since the hoist needs them and the
+ * pre-passes never touch the schema block.
+ */
 function extractSchemaDefaults(scriptCode: string): Map<string, number | string> {
   const schemaDefaults = new Map<string, number | string>();
   let inSchema = false;
@@ -533,11 +501,7 @@ function extractSchemaDefaults(scriptCode: string): Map<string, number | string>
     const trimmed = line.trim();
     if (/^export\s+const\s+schema\s*=\s*\{/.test(trimmed)) {
       inSchema = true;
-      schemaBraceDepth = 0;
-      for (const ch of trimmed) {
-        if (ch === '{') schemaBraceDepth++;
-        if (ch === '}') schemaBraceDepth--;
-      }
+      schemaBraceDepth = braceDelta(trimmed);
       // Single-line schema
       if (schemaBraceDepth <= 0) {
         const propMatches = trimmed.matchAll(/(\w+)\s*:\s*\{[^}]*default\s*:\s*([^,}]+)/g);
@@ -550,10 +514,7 @@ function extractSchemaDefaults(scriptCode: string): Map<string, number | string>
       continue;
     }
     if (inSchema) {
-      for (const ch of trimmed) {
-        if (ch === '{') schemaBraceDepth++;
-        if (ch === '}') schemaBraceDepth--;
-      }
+      schemaBraceDepth += braceDelta(trimmed);
       // Extract: name: { type: 'number', default: 1.5 } / { type: 'color', default: '#22aa5e' }
       const propMatch = trimmed.match(/^(\w+)\s*:\s*\{[^}]*default\s*:\s*([^,}]+)/);
       if (propMatch) {

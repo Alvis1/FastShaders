@@ -130,6 +130,15 @@ describe('where the rule is applied', () => {
   });
 });
 
+describe('the drop-into-group hit test', () => {
+  it('reads the frame through the ONE shared reader', () => {
+    // A local reader with its own precedence was the third one; see
+    // docs/dev/canvas-interaction.md, "Groups".
+    expect(NODE_EDITOR).toContain('groupFrameSize(other)');
+    expect(NODE_EDITOR).not.toMatch(/function groupSize\(/);
+  });
+});
+
 describe('an expanded frame is dragged by its HEADER only', () => {
   it('passes pointer events through the frame body', () => {
     // The other half of "select inside a group": if the body captured the

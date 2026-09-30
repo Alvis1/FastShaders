@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   initialNodeValues,
-  randomColorHex,
+  pickSpreadColor,
   randomGroupColor,
   nextGroupLabel,
   NEW_COLOR_PALETTE,
@@ -52,28 +52,30 @@ describe('NEW_COLOR_PALETTE', () => {
   });
 });
 
-describe('randomColorHex', () => {
+describe('pickSpreadColor with nothing used yet (the plain roll)', () => {
+  const pick = (rand?: () => number) => pickSpreadColor(NEW_COLOR_PALETTE, new Set(), rand);
+
   it('only ever returns palette entries', () => {
     const seen = new Set<string>();
-    for (let i = 0; i < 500; i++) seen.add(randomColorHex());
+    for (let i = 0; i < 500; i++) seen.add(pick());
     for (const c of seen) expect(NEW_COLOR_PALETTE).toContain(c);
   });
 
   it('can reach every entry', () => {
     const seen = new Set<string>();
-    for (let i = 0; i < 500; i++) seen.add(randomColorHex());
+    for (let i = 0; i < 500; i++) seen.add(pick());
     expect(seen.size).toBe(NEW_COLOR_PALETTE.length);
   });
 
   it('is driven entirely by the injected rand (no hidden entropy)', () => {
-    expect(randomColorHex(seeded(0.1))).toBe(randomColorHex(seeded(0.1)));
-    expect(randomColorHex(seeded(0.1))).not.toBe(randomColorHex(seeded(0.9)));
+    expect(pick(seeded(0.1))).toBe(pick(seeded(0.1)));
+    expect(pick(seeded(0.1))).not.toBe(pick(seeded(0.9)));
   });
 
   it('stays in range at rand() === 1 (the exclusive-upper-bound edge)', () => {
     // Math.random() never returns 1, but an injected rand might — and an
     // unclamped floor would index one past the end.
-    expect(randomColorHex(seeded(1))).toBe(NEW_COLOR_PALETTE[NEW_COLOR_PALETTE.length - 1]);
+    expect(pick(seeded(1))).toBe(NEW_COLOR_PALETTE[NEW_COLOR_PALETTE.length - 1]);
   });
 });
 

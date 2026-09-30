@@ -251,19 +251,3 @@ export function sanitizeSplatReport(
   if (sh !== 0 && sh !== 1 && sh !== 2 && sh !== 3) return null;
   return { meshId, count: r.count, shDropped: sh };
 }
-
-/**
- * How many meshes share each name — the "(x2)" the picker shows.
- *
- * A `Map`, not a plain object, for the reason the module header gives: these
- * keys come from a dropped file. Duplicate names are ordinary rather than
- * exceptional — three's de-duplication is bypassed when several glTF nodes
- * instance one multi-primitive mesh (three.js #30090), and OBJ never de-dupes
- * at all — and a name that appears twice addresses BOTH meshes, so the count is
- * information the user needs before binding, not a warning.
- */
-export function meshNameCounts(meshes: readonly MeshInventoryEntry[]): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const m of meshes) counts.set(m.name, (counts.get(m.name) ?? 0) + 1);
-  return counts;
-}

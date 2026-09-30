@@ -15,13 +15,16 @@ import { resolve } from 'node:path';
 import { commitGlbImport } from './projectImport';
 import { useAppStore, cancelPendingGraphSave } from '@/store/useAppStore';
 import { createPreviewMesh, type PreviewMesh } from '@/utils/previewMesh';
-import { HISTORY_IDLE, makeNode } from '@/test-utils';
+import { HISTORY_IDLE, makeNode, stubLocalStorage } from '@/test-utils';
 import { MAX_IMAGE_ENCODED_CHARS } from '@/utils/imageNode';
 import type { FastShadersProject } from './fastShadersProject';
 import { blenderGlb } from './gltfImportFixtures';
 
 let ls: Record<string, string>;
 let savedName = '';
+// The commit keeps palettes by design, so a test that seeds one must put the
+// store's back, or the next file's autosave writes it (storagePersistence).
+let savedPalettes: ReturnType<typeof useAppStore.getState>['shaderPalettes'];
 let events: string[];
 
 function mesh(): PreviewMesh {
@@ -58,16 +61,12 @@ function reset() {
 
 beforeAll(() => {
   savedName = useAppStore.getState().shaderName;
+  savedPalettes = useAppStore.getState().shaderPalettes;
 });
 beforeEach(() => {
   reset();
-  ls = {};
+  ls = stubLocalStorage();
   events = [];
-  vi.stubGlobal('localStorage', {
-    getItem: (k: string) => (Object.prototype.hasOwnProperty.call(ls, k) ? ls[k] : null),
-    setItem: (k: string, v: string) => { ls[k] = String(v); },
-    removeItem: (k: string) => { delete ls[k]; },
-  });
   const target = new EventTarget();
   vi.stubGlobal('window', Object.assign(target, {
     // A listener on fs:project-imported already sees the mesh in the store.
@@ -89,7 +88,7 @@ afterEach(() => {
 afterAll(() => {
   cancelPendingGraphSave();
   vi.unstubAllGlobals();
-  useAppStore.setState({ shaderName: savedName });
+  useAppStore.setState({ shaderName: savedName, shaderPalettes: savedPalettes });
 });
 
 describe('commitGlbImport', () => {

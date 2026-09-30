@@ -92,7 +92,7 @@ describe('graphToCode — Sound node emission', () => {
     // `.fastshader` files are adversarial, so a bogus sourceHandle must not
     // produce a reference to an undeclared variable (a module-load
     // ReferenceError = blank preview, no useful message). Emitter and resolver
-    // share micChannelForHandle, which falls back to `level`.
+    // share soundChannelForHandle, which falls back to `level`.
     const mic = makeNode('m1', 'soundNode', {});
     const out = makeNode('out', 'output');
     const { code } = graphToCode([mic, out], [makeEdge('m1', 'bogus', 'out', 'color')]);
@@ -133,7 +133,7 @@ describe('graphToCode — Sound node emission', () => {
       makeEdge('m1', 'bass', 'out', 'color'),
     ];
     const { code } = graphToCode([prop, mic, out], edges);
-    // `sound1_bass` is free, so the Sound node keeps base `mic1`.
+    // `sound1_bass` is free, so the Sound node keeps base `sound1`.
     expect(code).toContain('const sound1_bass = uniform(0);');
     const declared = [...code.matchAll(/\bconst\s+(\w+)\s*=/g)].map((m) => m[1]);
     expect(new Set(declared).size).toBe(declared.length);

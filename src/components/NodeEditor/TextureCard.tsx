@@ -1,13 +1,11 @@
-import { useCallback, useRef, useEffect, memo } from 'react';
+import { memo } from 'react';
 import type { BuiltinTexture } from '@/registry/builtinTextures';
 import { useAppStore } from '@/store/useAppStore';
 import { assetText, t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { perlin2D } from '@/utils/noisePreview';
-import { startTileDrag, tileGhostZoom, tileActivationProps, setHtml5TileDrag } from './tileDrag';
-import { useAssetTooltip } from './AssetTooltip';
-import { AssetCostBadge } from './AssetCostBadge';
-import { PREVIEW_SIZE, clamp01, lerp3, smoothstep, renderPixels } from './tilePreview';
+import { AssetTile } from './AssetTile';
+import { clamp01, lerp3, smoothstep, renderPixels } from './tilePreview';
 // This tile's `.saved-group-card*` classes are defined in ContentBrowser.css,
 // which until now was imported by ContentBrowser.tsx and NOTHING else — so on
 // node-editor.html (which mounts TextureCard directly, never the browser) the
@@ -212,90 +210,28 @@ const PREVIEW_RENDERERS: Record<string, (ctx: CanvasRenderingContext2D) => void>
 };
 
 export const TextureCard = memo(function TextureCard({ texture }: TextureCardProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const language = useAppStore((s) => s.language);
 
-  useEffect(() => {
-    const ctx = canvasRef.current?.getContext('2d');
-    if (!ctx) return;
-    const renderer = PREVIEW_RENDERERS[texture.id];
-    if (renderer) renderer(ctx);
-  }, [texture.id]);
-
-  const onDragStart = useCallback(
-    (event: React.DragEvent) => {
-      event.dataTransfer.setData(BUILTIN_TEXTURE_DRAG_TYPE, texture.id);
-      event.dataTransfer.effectAllowed = 'move';
-      // Record the payload for dragover (dataTransfer is unreadable there) so
-      // the canvas can withhold the drop-on-edge highlight — a texture drop
-      // never splices, and the preview must not promise one. Teardown rides
-      // ContentBrowser's root onDragEnd (endHtml5TileDrag).
-      setHtml5TileDrag({ kind: 'texture', id: texture.id });
-    },
-    [texture.id],
-  );
-
-  const onPointerDown = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
-      const tile = event.currentTarget as HTMLElement;
-      startTileDrag(
-        event.nativeEvent,
-        { kind: 'texture', id: texture.id },
-        `<div class="saved-group-card saved-group-card--preview" style="zoom: ${tileGhostZoom(tile)}">${tile.innerHTML}</div>`,
-      );
-    },
-    [texture.id],
-  );
-
+  // Member count = total nodes minus the group container itself.
   const memberCount = Math.max(0, texture.nodes.length - 1);
-  // The NUMBER stays outside the translation key: Latvian inflects the noun
-  // with it ("1 mezgls" / "5 mezgli"), so the singular and plural words are two
-  // separate lv.json entries rather than an "s" appended to one — the same
-  // reason CostBar keeps a whole sentence per plural branch.
+  // The NUMBER stays outside the key: Latvian inflects the noun with it
+  // ("1 mezgls" / "5 mezgli"), so singular and plural are two lv.json entries.
   const countLabel = `${memberCount} ${t(memberCount === 1 ? 'node' : 'nodes', language)}`;
   // Built-in text, shown in Latvian through `assetText` (keyed by the English).
   const name = assetText(texture.name, language);
-  const { tooltip, tooltipHandlers } = useAssetTooltip(
-    `${assetText(texture.description, language)} ${t('Click, or drag onto the canvas, to add it.', language)}`,
-  );
 
   return (
-    <div
-      className="saved-group-card saved-group-card--preview"
-      draggable
-      onDragStart={onDragStart}
-      onPointerDown={onPointerDown}
-      {...tileActivationProps({ kind: 'texture', id: texture.id }, fillTemplate(t('Add {name} texture', language), { name }))}
-      {...tooltipHandlers}
-    >
-      {tooltip}
-      <AssetCostBadge cost={texture.totalCost} />
-      <div
-        className="saved-group-card__frame"
-        style={{
-          background: `${texture.color}1A`,
-          borderColor: `${texture.color}66`,
-        }}
-      >
-        <div
-          className="saved-group-card__header"
-          style={{ background: texture.color }}
-        >
-          <span className="saved-group-card__title">{name}</span>
-        </div>
-        <div className="saved-group-card__body">
-          <canvas
-            ref={canvasRef}
-            width={PREVIEW_SIZE}
-            height={PREVIEW_SIZE}
-            // Fills the card's content width — the tile is meant to be the
-            // image, not a small swatch adrift in a large frame.
-            style={{ width: '100%', height: 'auto', aspectRatio: '1 / 1', display: 'block', borderRadius: 0, imageRendering: 'auto' }}
-          />
-          <span className="saved-group-card__count" style={{ marginTop: 2 }}>{countLabel}</span>
-        </div>
-      </div>
-    </div>
+    <AssetTile
+      kind="texture"
+      id={texture.id}
+      dragType={BUILTIN_TEXTURE_DRAG_TYPE}
+      name={name}
+      tooltipText={`${assetText(texture.description, language)} ${t('Click, or drag onto the canvas, to add it.', language)}`}
+      activationLabel={fillTemplate(t('Add {name} texture', language), { name })}
+      countLabel={countLabel}
+      color={texture.color}
+      totalCost={texture.totalCost}
+      paint={PREVIEW_RENDERERS[texture.id]}
+    />
   );
 });

@@ -29,15 +29,8 @@ import { safeJsonReviver } from './safeJson';
  * from a tampered file, and it buys nothing on screen: graphToCode re-caps to
  * MAX_TEXTURE_WIDTH before baking. What it does buy is a `JSON.stringify` in
  * every 300 ms autosave (against a localStorage budget the whole graph shares),
- * a re-embed in every export, and an `atob` on every graphToCode pass.
- *
- * It used to say "~51 `structuredClone` history copies" first. That is no
- * longer true of THIS key: the store's `cloneNodesSharingPayloads` carries
- * `values.dataB64` by reference into every undo entry — safe because JS strings
- * are immutable and every edit path replaces `values` wholesale — so the blob
- * exists once however deep the history is. Everything else on the node is still
- * deep copied per entry, which is precisely why the bulk belongs in this one
- * shared string.
+ * a re-embed in every export, and an `atob` per decode. History shares the
+ * string by reference (`cloneNodesSharingPayloads`), so undo depth costs nothing.
  */
 export const MAX_DATA_ENCODED_CHARS = 4 * Math.ceil((MAX_COLUMNS * MAX_TEXTURE_WIDTH * 4) / 3);
 
@@ -54,14 +47,9 @@ export function makeDataNodeData(parsed: ParsedCsv, cost: number, fileName = '')
   const { columnNames, columns } = parsed;
   const columnCount = columns.length;
 
-  // Downsample each column to the texture budget BEFORE storing. graphToCode
-  // only ever bakes `capToWidth(col, MAX_TEXTURE_WIDTH)`, so storing the full
-  // (up to 1M-row) column is pure waste — it inflates the base64 payload that
-  // is re-serialized by every 300 ms localStorage autosave and re-embedded in
-  // every export, exhausting the storage quota far sooner than necessary. (The
-  // undo ring costs nothing extra here any more: history shares this string by
-  // reference — see MAX_DATA_ENCODED_CHARS.) Capping here is output-
-  // identical (graphToCode's later capToWidth becomes a no-op copy).
+  // Downsample to the texture budget BEFORE storing: graphToCode only ever
+  // bakes `capToWidth(col, MAX_TEXTURE_WIDTH)`, so the full (up to 1M-row)
+  // column would only inflate every autosave and export. Output-identical.
   const cappedCols = columns.map((c) => capToWidth(c, MAX_TEXTURE_WIDTH));
   const storedRows = cappedCols.length > 0 ? cappedCols[0].length : 0;
 
@@ -113,31 +101,33 @@ export function columnForHandle(
   return capToWidth(col, MAX_TEXTURE_WIDTH);
 }
 
+// One decode per `values` object: every edit path replaces `values` wholesale,
+// and the columns are read-only views (both consumers copy via capToWidth).
+const DECODE_MEMO = new WeakMap<object, DecodedDataNode | null>();
+
 /** Decode a Data node's stored columns. Returns null if the payload is missing
  *  or malformed (graphToCode then emits an inert fallback). */
 export function decodeDataNode(values: Record<string, string | number>): DecodedDataNode | null {
+  if (typeof values !== 'object' || values === null) return null;
+  let decoded = DECODE_MEMO.get(values);
+  if (decoded === undefined) {
+    decoded = decodeUncached(values);
+    DECODE_MEMO.set(values, decoded);
+  }
+  return decoded;
+}
+
+function decodeUncached(values: Record<string, string | number>): DecodedDataNode | null {
   const rowCount = valueNum(values.rowCount);
   const columnCount = valueNum(values.columnCount);
   const dataB64 = valueStr(values.dataB64 ?? '');
   if (!Number.isInteger(rowCount) || rowCount <= 0) return null;
   if (!Number.isInteger(columnCount) || columnCount <= 0) return null;
   if (!dataB64) return null;
-  // Three O(1) ceilings BEFORE the decode — same first-check discipline as
-  // `decodeImageNode`. `atob` + the byte loop are linear in the payload, and
-  // this runs on EVERY graphToCode pass (the decode happens before it even
-  // checks whether a column is wired), so an unbounded string out of a
-  // tampered file is re-decoded on every graph edit.
-  //
-  // The COLUMN ceiling is not redundant with the length one: a blob of exactly
-  // the legal size declared as `rowCount: 1, columnCount: 131072` passes both
-  // the length cap and the `flat.length >= rowCount * columnCount` check below,
-  // then allocates 131k Float32Array views plus 131k synthesized names per pass
-  // (measured 13.5 ms vs 0.1 ms for the legitimate 16x8192 shape).
-  //
-  // None of the three can reject anything this app wrote: `parseCsv` /
-  // `transposeCsv` cap real files at MAX_COLUMNS and `makeDataNodeData` stores
-  // `capToWidth(col, MAX_TEXTURE_WIDTH)`, so the construction worst case is
-  // exactly MAX_DATA_ENCODED_CHARS at MAX_COLUMNS x MAX_TEXTURE_WIDTH.
+  // Three O(1) ceilings BEFORE the linear decode; none can reject anything this
+  // app wrote (see MAX_DATA_ENCODED_CHARS). The COLUMN one is not redundant: a
+  // legal-size blob declared `rowCount: 1, columnCount: 131072` passes the
+  // other checks and allocates 131k views (measured 13.5 ms vs 0.1 ms).
   if (dataB64.length > MAX_DATA_ENCODED_CHARS) return null;
   if (columnCount > MAX_COLUMNS) return null;
   if (rowCount > MAX_TEXTURE_WIDTH) return null;
@@ -157,12 +147,8 @@ export function decodeDataNode(values: Record<string, string | number>): Decoded
 
   let columnNames: string[] = [];
   try {
-    // `values` came out of a `.fastshader` / localStorage payload, so this is a
-    // trust boundary like every other JSON.parse in the app — hence the shared
-    // deny-list reviver rather than a bare parse. The `Array.isArray` + String()
-    // pass below already contains the damage, but the rule lives in ONE place
-    // (utils/safeJson.ts) precisely so the next key added to the deny-list
-    // reaches every boundary instead of only the sites that opted in.
+    // A trust boundary (`.fastshader` / localStorage), hence the shared
+    // deny-list reviver — pinned by safeJson.test.ts.
     const parsed = JSON.parse(valueStr(values.columnNames ?? '[]'), safeJsonReviver);
     if (Array.isArray(parsed)) columnNames = parsed.map((s) => String(s));
   } catch {
@@ -186,12 +172,9 @@ export interface DataSanitizeResult {
  * drop path (project import, the localStorage graph, the saved-group library)
  * — the data-side twin of `sanitizeImageNodes`.
  *
- * `dataB64` was the last unbounded attacker-controlled string on a node.
- * Unlike `imageB64` nothing capped it on any load path, yet it rides ~51
- * `structuredClone` history copies, is `JSON.stringify`'d into every 300 ms
- * autosave, re-embeds into every export, and is `atob`-decoded on every
- * `graphToCode` pass. A hand-edited 60 MB payload OOMs the tab within a few
- * dozen edits.
+ * An unbounded `dataB64` is `JSON.stringify`'d into every 300 ms autosave,
+ * re-embedded into every export and `atob`-decoded; a hand-edited 60 MB
+ * payload OOMs the tab within a few dozen edits.
  *
  * There is deliberately NO soft/hard split (the shape `sanitizeImageNodes`
  * has): images need one because the user can opt out of the soft caps via

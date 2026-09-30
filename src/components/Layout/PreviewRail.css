@@ -1,5 +1,5 @@
 /*
- * The preview rail — the sockets either side of the column seam.
+ * The preview rail — the sockets down the canvas's right edge.
  *
  * The disc matches the Output node's own decorative socket exactly (the same
  * `--handle-size` tokens, the same white rim, the same hard contact shadow), so
@@ -13,19 +13,16 @@
   position: absolute;
   top: 0;
   bottom: 0;
+  /* Half the disc hangs past the pane's right edge, where `.node-editor__canvas`
+     clips it — so the socket reads as meeting the seam rather than sitting
+     beside it, the same way a node's own handle straddles its border. */
+  right: calc(var(--handle-size) * -1);
   width: calc(var(--handle-size) * 2);
   z-index: var(--z-controls);
   /* The container passes EVERYTHING through; only the discs opt back in. A
      full-height box down the canvas edge would otherwise eat presses aimed at
      the graph, and the column seam's own hit zone already reaches ~4px in. */
   pointer-events: none;
-}
-
-/* Half the disc hangs past the pane's right edge, where `.node-editor__canvas`
-   clips it — so the socket reads as meeting the seam rather than sitting beside
-   it, the same way a node's own handle straddles its border. */
-.preview-rail {
-  right: calc(var(--handle-size) * -1);
 }
 
 .preview-rail__socket {
@@ -35,7 +32,7 @@
   height: calc(var(--handle-size) * 2);
   padding: 0;
   /* `top` is set inline as a PERCENTAGE of the pane (previewRailGeometry), so
-     the two rails line up at every split ratio; this centres the disc on it. */
+     the wire's end and the disc agree at every size; this centres the disc. */
   transform: translateY(-50%);
   border: var(--handle-border) solid white;
   border-radius: 50%;

@@ -8,18 +8,18 @@ import { registerTSLLanguage } from './tslLanguage';
 import { tslToShaderModule, type PropertyInfo } from '@/engine/tslToShaderModule';
 import { inlineImageAssetsFromNodes } from '@/engine/imageAssets';
 import { collectShaderProperties, shaderBaseName } from '@/engine/exportShader';
-import { buildAFrameEmbedHTML, readPreviewGeometry } from '@/engine/tslToAFrameHTML';
+import { buildAFrameEmbedHTML, bundledModelForPage, readPreviewGeometry, type AFrameBundledModel } from '@/engine/tslToAFrameHTML';
+import { exportFormatFor, exportModelChoice, exportModelFile } from '@/engine/exportModel';
 import { buildThreeEmbedHTML } from '@/engine/tslToThreeHTML';
 import { MARCH_WINDOW_GEOMETRY } from '@/engine/tslToPreviewHTML';
 import { marchWindowRadius } from '@/utils/sdfPartition';
-import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { getUnwrappedEdges } from '@/engine/cpuEvaluator';
 import { importShaderText, importShaderZip, isZipFile, reportZipImportError } from '@/engine/projectImport';
 import { detectMeshKind } from '@/utils/previewMesh';
 import { requestPreviewModelLoad } from '@/utils/previewModelDrop';
 import { evalLog } from '@/eval/telemetry';
 import { isEvalMode } from '@/eval/evalMode';
 import { requestShaderImport } from '@/utils/shaderDropRequest';
-import { effectiveExportFormat } from '@/utils/glbExportAvailability';
 import { GLB_EXPORT_KEYS } from '@/utils/glbExportCopy';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { parseCostFile, parseCostProfileBundle } from '@/utils/costOverride';
@@ -125,8 +125,8 @@ export function CodeEditor() {
   //
   // Material settings: a narrow reference selector. A position/selection-only
   // notify replaces the node OBJECT but keeps its `.data` — and therefore its
-  // materialSettings — reference, so Object.is bails. (ShaderPreview.tsx:264-267
-  // holds the identical dependency on that fact.)
+  // materialSettings — reference, so Object.is bails. (ShaderPreview's
+  // `rawMaterialSettings` selector holds the identical dependency on that fact.)
   //
   // `moduleSettingsOutput` (D1): these four keys are written at MODULE level,
   // so an untargeted Output owns them whenever one exists — the same read
@@ -141,8 +141,9 @@ export function CodeEditor() {
   // While a Raymarch Output drives (Field OR Density wired), the module is
   // double-sided (exportShader's marchMaterialSettings — the march starts at
   // the camera on a back face) and the A-Frame page renders through the march
-  // window SPHERE: `<a-sphere radius=…>`, not a box.
-  const marchWindow = useAppStore((s) => marchWindowRadius(s.nodes, unwrapCollapsedGroupEdges(s.nodes, s.edges)));
+  // window SPHERE: `<a-sphere radius=…>`, not a box. `getUnwrappedEdges` is the
+  // ctx-memoized unwrap (read-only), as in ShaderPreview's identical selector.
+  const marchWindow = useAppStore((s) => marchWindowRadius(s.nodes, getUnwrappedEdges(s.nodes, s.edges)));
   const sdfDrives = marchWindow !== null;
   const materialSettings = useMemo(
     () => (sdfDrives ? { ...rawMaterialSettings, side: 'double' as const } : rawMaterialSettings),
@@ -151,7 +152,7 @@ export function CodeEditor() {
   const [activeTab, setActiveTab] = useState<CodeTab>('tsl');
   const [copied, setCopied] = useState(false);
 
-  // Declared property list — the cheap-key two-step (ShaderNode.tsx:291-332):
+  // Declared property list — the cheap-key two-step (as ShaderNode's `edgeKey`):
   // fold every property node's type/name/default into ONE primitive string, in
   // nodes order (the order buildShaderModule's duplicate-name disambiguation
   // and buildHeader's dedupe both walk), then rebuild the array from
@@ -169,7 +170,7 @@ export function CodeEditor() {
       const v = getNodeValues(n);
       // JSON.stringify makes each name/hex span SELF-DELIMITING (it escapes any
       // embedded quote), so the concatenation is unambiguous while staying
-      // PRINTABLE. ShaderNode.tsx:297 folds its key with raw \u0000/\u0001
+      // PRINTABLE. ShaderNode's `edgeKey` folds its key with raw \u0000/\u0001
       // separators; that is deliberately NOT copied here, because a raw NUL byte
       // in a source file makes grep/ripgrep classify it as binary and silently
       // skip the file (SoundNode.tsx/OutputNode.tsx trip exactly that today).
@@ -180,8 +181,8 @@ export function CodeEditor() {
     return key;
   });
   // The SAME implementation the Download-Shader bundle uses, so the A-Frame tab
-  // cannot drift from the file the user actually gets (exportShader.ts:18-36 —
-  // this was a byte-for-byte hand copy of it).
+  // cannot drift from the file the user actually gets (`collectShaderProperties`
+  // — this was a byte-for-byte hand copy of it).
   const properties: PropertyInfo[] = useMemo(
     () => collectShaderProperties(useAppStore.getState().nodes),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -223,9 +224,10 @@ export function CodeEditor() {
   // to their `data:` payloads here — the TSL tab above keeps the short references.
   //
   // Nodes are read IMPERATIVELY, for the same reason and with the same proof as
-  // ShaderPreview.tsx:1065-1076: the module depends on nodes only through image
-  // payloads, and the `fs-asset:<node>-<hash>` placeholder embeds an FNV-1a hash
-  // of the stored payload (imageAssets.ts:47-61, emitted at graphToCode.ts:700),
+  // ShaderPreview's `inlineImageAssetsFromNodes` srcDoc build: the module depends
+  // on nodes only through image payloads, and the `fs-asset:<node>-<hash>`
+  // placeholder embeds an FNV-1a hash of the stored payload (`IMAGE_PLACEHOLDER_RE`
+  // in imageAssets.ts, emitted by graphToCode's `fs-asset:` placeholder branch),
   // so swapping an image always changes `code` — and therefore `settledCode` —
   // and re-runs this memo. Dimensions and file name ride the same emitted line;
   // an undecodable payload emits no placeholder at all. Everything the module
@@ -240,10 +242,13 @@ export function CodeEditor() {
   // needs them as a real dep. Two-step, like every per-notify read here: a
   // cheap string key, then the plan rebuilt from getState() when it moves.
   const mirrorKey = useAppStore((s) => mirrorPlanKey(materialPartsMirrorPlanAcross(contributingOutputs(s.nodes))));
-  // Import-built INDEX sections target a glTF model's materials, while both
-  // tabs hang the shader on a PRIMITIVE (the model page is Phase 7): the tab
-  // label says so, since the page itself carries no comments. A boolean
-  // selector, so an ordinary edit re-renders nothing.
+  // Import-built INDEX sections target a glTF model's materials, while the
+  // Three.js tab — and the A-Frame tab whenever it stands on no model at all
+  // (`aframeOnModel` null below) — hangs the shader on a PRIMITIVE: the tab
+  // label says so, since the page itself carries no comments. (A page on an
+  // OBJ gets no note: it is not a primitive, and the sections are dormant on
+  // an OBJ in the editor too.) A boolean selector, so an ordinary edit
+  // re-renders nothing.
   //
   // Asked of the CONTRIBUTING set, never of the DEFAULT Output: since the
   // Output split the untargeted default carries neither a signature nor an
@@ -279,55 +284,89 @@ export function CodeEditor() {
 
   // ── The A-Frame tab: a copy-ready index.html, and nothing else ──────────
   //
-  // The page's one editor-derived setting (the preview's primitive) is
-  // localStorage-backed and fires no change event, so the page is a SNAPSHOT
-  // taken when the tab is opened — `embedStamp` is what re-takes it.
+  // The page follows what the preview SHOWS and which model EXPORT ships, both
+  // read live from the store below. Only the fallback — before the pane has
+  // reported its shape, and always in a study session, whose page stays what
+  // it was — is localStorage-backed (it fires no change event), so that read
+  // is a SNAPSHOT taken when the tab is opened (`fallbackGeometry`), and
+  // `embedStamp` is what re-takes it.
   const [embedStamp, setEmbedStamp] = useState(0);
 
   const jsFileName = useMemo(() => `${shaderBaseName(shaderName)}.js`, [shaderName]);
   const glbFileName = useMemo(() => `${shaderBaseName(shaderName)}.glb`, [shaderName]);
-  // Which file EXPORT would write right now (a string selector, so it is
-  // stable): in `.glb` mode the A-Frame page hangs the shader on the MODEL.
-  const exportFormat = useAppStore((s) =>
-    effectiveExportFormat(s.exportAsGlb, s.previewMesh, isEvalMode()),
+  // Which file the EXPORT button would write right now (a string selector, so
+  // it is stable): EXPORT is contextual, so with a packable model on screen
+  // it is the `.glb` and the A-Frame page hangs the shader on the MODEL.
+  const exportFormat = useAppStore((s) => exportFormatFor(s, isEvalMode(), 'primary'));
+  // Otherwise, the model the `.zip` ships under models/ (an OBJ on screen) —
+  // the page hangs the `.js` on it (tslToAFrameHTML's `bundledModel`). Asked
+  // of the SAME decision the EXPORT button builds from, so it follows a model
+  // dropped or removed and the Model dropdown live. A string selector
+  // (`<kind>|<file>`, or ''; the kind is one of three bare words, so the
+  // first `|` splits it), rebuilt into the pair once per change below.
+  const bundledModelKey = useAppStore((s) => {
+    // A study session keeps the page it always had — a primitive: what the
+    // study host shows participants must not move under a running study.
+    if (isEvalMode()) return '';
+    const choice = exportModelChoice(s, false, 'primary');
+    const m = choice && bundledModelForPage(exportModelFile(choice), choice.kind === 'builtin' ? choice.shape : null);
+    return m ? `${m.kind}|${m.file}` : '';
+  });
+  const bundledModel = useMemo<AFrameBundledModel | null>(() => {
+    const bar = bundledModelKey.indexOf('|');
+    return bar < 0
+      ? null
+      : { kind: bundledModelKey.slice(0, bar) as AFrameBundledModel['kind'], file: bundledModelKey.slice(bar + 1) };
+  }, [bundledModelKey]);
+  // What the 3D pane RENDERS (ShaderPreview reports it to the store), so the
+  // page follows the Model dropdown live. Before the pane has reported, and in
+  // a study session, the persisted choice is read instead — the march window
+  // while a Raymarch Output drives, the same rule the preview applies.
+  const shownGeometry = useAppStore((s) => (isEvalMode() ? null : (s.previewShape?.geometry ?? null)));
+  const fallbackGeometry = useMemo(
+    () => (marchWindow !== null ? MARCH_WINDOW_GEOMETRY : readPreviewGeometry()),
+    // embedStamp is the deliberate re-read trigger (the tab being opened).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [marchWindow, embedStamp],
   );
+  const pageGeometry = shownGeometry ?? fallbackGeometry;
+  // Which model the A-Frame page stands on: the `.glb` itself, the bundle's
+  // model, or neither (a primitive).
+  const aframeOnModel = exportFormat === 'glb' ? 'glb' : bundledModel ? bundledModel.kind : null;
 
   const embedHtml = useMemo(() => {
     if (activeTab !== 'script') return '';
     try {
       return buildAFrameEmbedHTML(scriptCode, {
         shaderFile: jsFileName,
-        ...(exportFormat === 'glb' ? { modelFile: glbFileName } : {}),
+        ...(exportFormat === 'glb' ? { modelFile: glbFileName } : { bundledModel }),
         title: shaderName,
-        // The march window sphere replaces the Model dropdown's primitive while
-        // a Raymarch Output drives — the same rule the preview applies.
-        geometry: marchWindow !== null ? MARCH_WINDOW_GEOMETRY : readPreviewGeometry(),
+        geometry: pageGeometry,
         marchWindow: marchWindow ?? 1,
       });
     } catch (e) {
       return `<!-- Export error: ${e instanceof Error ? e.message : String(e)} -->`;
     }
-    // embedStamp is the deliberate re-read trigger; it feeds nothing else.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scriptCode, jsFileName, glbFileName, exportFormat, shaderName, activeTab, embedStamp, marchWindow]);
+  }, [scriptCode, jsFileName, glbFileName, exportFormat, bundledModel, shaderName, activeTab, marchWindow, pageGeometry]);
 
-  // The Three.js drop-in page. Same inputs and the same snapshot rule as the
-  // A-Frame page above — it is the same shader on the same primitive, differing
-  // only in what host it is wired into.
+  // The Three.js drop-in page. Same inputs and the same geometry rule as the
+  // A-Frame page above — the same shader, differing only in what host it is
+  // wired into — except that it never loads a model: it stays on the primitive.
   const threeHtml = useMemo(() => {
     if (activeTab !== 'three') return '';
     try {
       return buildThreeEmbedHTML(scriptCode, {
         shaderFile: jsFileName,
         title: shaderName,
-        geometry: marchWindow !== null ? MARCH_WINDOW_GEOMETRY : readPreviewGeometry(),
+        geometry: pageGeometry,
         marchWindow: marchWindow ?? 1,
       });
     } catch (e) {
       return `<!-- Export error: ${e instanceof Error ? e.message : String(e)} -->`;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scriptCode, jsFileName, shaderName, activeTab, embedStamp, marchWindow]);
+  }, [scriptCode, jsFileName, shaderName, activeTab, marchWindow, pageGeometry]);
 
   // Whichever embed tab is open — the button sits in a bar shared by both, so
   // copying the A-Frame page from the Three.js tab is the bug this guards.
@@ -561,18 +600,18 @@ export function CodeEditor() {
             const errorCount = codeErrors.filter(e => e.severity !== 'warning').length;
             const warnCount = codeErrors.filter(e => e.severity === 'warning').length;
             return errorCount > 0 ? (
-              <span className="code-editor__errors">
+              <span className="code-editor__badge">
                 {errorCount} {t(errorCount > 1 ? 'errors' : 'error', language)}
               </span>
             ) : warnCount > 0 ? (
-              <span className="code-editor__warnings">
+              <span className="code-editor__badge code-editor__badge--warn">
                 {warnCount} {t(warnCount > 1 ? 'warnings' : 'warning', language)}
               </span>
             ) : null;
           })()}
           {isTSL && (
             <button
-              className="code-editor__save"
+              className="code-editor__btn code-editor__btn--apply"
               onClick={() => {
                 evalLog('code-apply');
                 requestCodeSync();
@@ -583,7 +622,7 @@ export function CodeEditor() {
             </button>
           )}
           {isTSL && (
-            <button className="code-editor__action-btn" onClick={handleLoadScript} title={t('Import a shaderloader .js file into the editor', language)}>
+            <button className="code-editor__btn code-editor__btn--accent" onClick={handleLoadScript} title={t('Import a shaderloader .js file into the editor', language)}>
               {t('Import', language)}
             </button>
           )}
@@ -598,7 +637,9 @@ export function CodeEditor() {
                   here if the page stays comment-free. In `.glb` mode the
                   A-Frame page loads the MODEL instead (and needs loader 0.8,
                   which it loads itself), while the Three.js page stays on the
-                  `.js` export — so each names its own file. */}
+                  `.js` export — so each names its own file. In bundle mode
+                  with a model the `.zip` ships, the A-Frame page loads that
+                  model from models/, so the label names both files. */}
               <span
                 className="code-editor__filename"
                 title={
@@ -614,20 +655,26 @@ export function CodeEditor() {
                       )
                     : exportFormat === 'glb'
                       ? fillTemplate(t(GLB_EXPORT_KEYS.tabAFrameGlb, language), { file: glbFileName })
-                      : fillTemplate(
-                          t('A ready-to-run VR page. Put {file} next to it and serve the folder over http(s) — file:// blocks the shader load.', language),
-                          { file: jsFileName },
-                        )) +
-                  // Only for a page that really shows a PRIMITIVE: in .glb mode the
-                  // A-Frame page loads the MODEL, so the index sections do apply.
-                  (hasIndexSections && (activeTab === 'three' || exportFormat !== 'glb')
+                      : bundledModel
+                        ? fillTemplate(
+                            t('A ready-to-run VR page on the model the export .zip carries. Put {file} and models/{model} next to it and serve the folder over http(s) — file:// blocks the shader load.', language),
+                            { file: jsFileName, model: bundledModel.file },
+                          )
+                        : fillTemplate(
+                            t('A ready-to-run VR page. Put {file} next to it and serve the folder over http(s) — file:// blocks the shader load.', language),
+                            { file: jsFileName },
+                          )) +
+                  // Only for a page that really shows a PRIMITIVE: the .glb and a
+                  // bundled glTF/GLB load the MODEL, where the sections apply, and
+                  // an OBJ page is no primitive (the note would say it is).
+                  (hasIndexSections && (activeTab === 'three' || aframeOnModel === null)
                     ? ' ' + t(INDEX_SECTIONS_TAB_NOTE, language)
                     : '')
                 }
               >
                 index.html
               </span>
-              <button className="code-editor__action-btn" onClick={handleCopyEmbed}>
+              <button className="code-editor__btn code-editor__btn--accent" onClick={handleCopyEmbed}>
                 {copied ? t('Copied', language) : t('Copy', language)}
               </button>
             </>
@@ -638,14 +685,14 @@ export function CodeEditor() {
         const errors = codeErrors.filter(e => e.severity !== 'warning');
         const warnings = codeErrors.filter(e => e.severity === 'warning');
         return (
-          <div className={errors.length > 0 ? 'code-editor__error-details' : 'code-editor__warning-details'}>
+          <div className={errors.length > 0 ? 'code-editor__banner' : 'code-editor__banner code-editor__banner--warn'}>
             {errors.map((err, i) => (
-              <div key={`e${i}`} className="code-editor__error-line">
+              <div key={`e${i}`} className="code-editor__banner-line">
                 {err.line ? t('Line {n}: ', language).replace('{n}', String(err.line)) : ''}{err.message}
               </div>
             ))}
             {warnings.map((err, i) => (
-              <div key={`w${i}`} className="code-editor__warning-line">
+              <div key={`w${i}`} className="code-editor__banner-line code-editor__banner-line--warn">
                 {err.line ? t('Line {n}: ', language).replace('{n}', String(err.line)) : ''}{err.message}
               </div>
             ))}

@@ -5,7 +5,8 @@ import type { MathPreviewFlowNode, NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { valueNum } from '@/utils/valueCoerce';
 import { useAppStore } from '@/store/useAppStore';
-import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
+import { CAT_HEX } from '@/utils/colorUtils';
+import { useCostChrome } from './useCostChrome';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { WaveformSvg, applyWaveFrame, type WaveformDynamicRefs } from './WaveformSvg';
@@ -28,14 +29,8 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   selected,
 }: NodeProps<MathPreviewFlowNode>) {
   const def = NODE_REGISTRY.get(data.registryType);
-  // Rules-of-Hooks note: this return sits ABOVE the hooks below. Safe because
-  // `def` cannot flip defined<->undefined on a MOUNTED instance: React Flow keys
-  // node components by node.id, every registryType the app writes is in
-  // NODE_REGISTRY (`unknown` included), and nothing mutates registryType in place
-  // to or from an unregistered value. A tampered .fastshader with an unknown
-  // registryType renders null for the whole life of that node. Moving the return
-  // below the hooks is NOT a mechanical edit here (ShaderNode/PreviewNode hooks
-  // dereference `def`) — see CLEAN-3.
+  // Early return above the hooks is safe: React Flow keys node components by id
+  // and registryType never changes on a mounted node.
   if (!def) return null;
   const headerTip = useHeaderTip(def);
 
@@ -56,12 +51,6 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   const lastLabelRef = useRef<string | null>(null);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const varName = useAppStore((s) => s.nodeVarNames[id]);
-  const costColorLow = useAppStore((s) => s.costColorLow);
-  const costColorHigh = useAppStore((s) => s.costColorHigh);
-  // The header mixes into the card, and the card follows the theme
-  // (getCostColor). `codeEditorTheme` is the app-wide dark switch; the store
-  // field keeps its historical name.
-  const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
 
   // A wire hunting nearby forces the input socket's name-tooltip visible
   // (floated left of the dot) — same rule as every node with input sockets.
@@ -71,18 +60,14 @@ export const MathPreviewNode = memo(function MathPreviewNode({
 
   const func = MATH_FUNCTIONS[data.registryType] ?? Math.sin;
   const catHex = CAT_HEX[def.category as NodeCategory] ?? CAT_HEX.unknown;
-  const costColor = getCostColor(data.cost, costColorLow, costColorHigh, darkTheme);
-  const headerTextColor = getContrastColor(costColor);
-  const costTextColor = getCostTextColor(data.cost, costColorLow, costColorHigh);
-  const costScale = getCostScale(data.cost);
+  const { costColor, headerTextColor, costTextColor, costScale } = useCostChrome(data.cost);
 
   // ── Upstream-derived render inputs, without a whole-array subscription ──
   // Subscribing to s.nodes/s.edges re-rendered every sin/cos card on every
   // store notify (a drag pointermove mints new array identities, so the memo()
   // above is bypassed), each render paying an O(E) edges.find plus a full
-  // graph walk for the time check. Same idiom as PreviewNode's
-  // inputsKey (PreviewNode.tsx:117-126) and ShaderNode's edgeKey
-  // (ShaderNode.tsx:291-300): fold everything the waveform depends on into ONE
+  // graph walk for the time check. Same idiom as PreviewNode's `inputsKey` and
+  // ShaderNode's `edgeKey`: fold everything the waveform depends on into ONE
   // primitive string, so a position-only notify produces an identical string
   // and Object.is bails before any re-render.
   //
@@ -94,7 +79,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   // renders phase 0 with no readout for a connected input and therefore never
   // reads it, and the animated branch re-reads the graph every frame. If the
   // static branch is ever changed to show the arriving value, this key MUST
-  // grow an `evaluateNodeScalar(source, ..., 0)` component.
+  // grow a component carrying that value.
   //
   // BOTH lookups run on the UNWRAPPED view, and that pairing is load-bearing.
   // getTargetEdges reports the real producer inside a collapsed frame (a raw

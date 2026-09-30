@@ -1,24 +1,9 @@
 /**
- * The analyser half of live-audio capture, shared by the two capture surfaces:
- * `micCapture.ts` (`getUserMedia` — a microphone, or any other audio INPUT
- * device, which is how a loopback driver like BlackHole / VB-Cable is reached)
- * and `systemAudioCapture.ts` (`getDisplayMedia` — whatever the machine or a
- * browser tab is PLAYING).
- *
- * Split out because the two differ ONLY in WHICH media call is made and what it
- * is given. Everything around that call — the timeout race and its lost-race
- * cleanup (`acquireStream`), then the AudioContext, the AnalyserNode, the
- * per-frame reduction to four floats, the fftSize realloc rule, and the teardown
- * that clears the OS capture indicator — is identical, and a hand-copied twin of
- * it is precisely the drift class this codebase kills elsewhere (micGeometry,
- * soundStatusMessage, the `fit-bounds` twin guard). The two rules that must never
- * drift — never leak a stream nobody reads, and always report `ended` — are
- * therefore each written once, here.
- *
- * The "no PCM ever leaves the audio graph" guarantee lives HERE, so it holds for
- * both sources: the analyser is read synchronously each frame and reduced to
- * four numbers. Nothing is buffered, recorded, or connected to `ctx.destination`
- * — the latter would also feed a microphone straight back into the speakers.
+ * The analyser half of live-audio capture, written ONCE for both sources
+ * (`deviceCapture.ts`, `systemAudioCapture.ts`): the pre-flight gate, the
+ * timeout race, the analyser graph and the teardown.
+ * No PCM leaves the audio graph: each frame is reduced to four numbers and
+ * nothing is buffered or recorded. Reasoning: docs/dev/node-types.md → Sound.
  */
 
 import { analyseSound, type SoundLevels, SOUND_LEVELS_ZERO } from './soundAnalysis';
@@ -157,6 +142,19 @@ export function audioContextCtor(): typeof AudioContext | undefined {
 }
 
 /**
+ * The pre-flight both starters run on their own media call: null when capture
+ * can start. `navigator.mediaDevices` is undefined outside a secure context (the
+ * LAN bench server is plain HTTP), which is reported apart from "no Web Audio".
+ */
+export function mediaGate(api: unknown): AudioStartResult | null {
+  if (typeof api !== 'function') {
+    const insecure = typeof window !== 'undefined' && window.isSecureContext === false;
+    return { ok: false, error: insecure ? 'insecure-context' : 'unsupported' };
+  }
+  return audioContextCtor() ? null : { ok: false, error: 'unsupported' };
+}
+
+/**
  * Wrap a live `MediaStream` in the analyser graph and hand back the capture.
  *
  * Takes ownership of the stream: on any failure here, and on `stop()`, EVERY
@@ -165,10 +163,8 @@ export function audioContextCtor(): typeof AudioContext | undefined {
  * has stopped listening.
  *
  * `onEnded` fires when the source disappears from underneath us — the user
- * pressing Chrome's "Stop sharing" button, or a USB device being unplugged. The
- * session needs that: without it the status stays 'on' forever while every band
- * reads a frozen last value, which is the same wrong signal as a mic that never
- * disarms.
+ * pressing Chrome's "Stop sharing" button, or a USB device being unplugged.
+ * Without it the session's status stays 'on' forever over a dead source.
  */
 export async function buildAnalyserCapture(
   stream: MediaStream,

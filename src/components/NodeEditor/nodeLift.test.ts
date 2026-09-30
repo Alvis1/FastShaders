@@ -129,7 +129,7 @@ describe('a lifted node', () => {
     // all gone; React Flow's reported endpoints are simply used.
     expect(edge).not.toContain('nodeRisePx');
     expect(edge).not.toContain('liftedBySelection');
-    expect(edge).toContain('const sourceX = rawSourceX;');
+    expect(edge).not.toContain('rawSourceX');
   });
 });
 
@@ -347,7 +347,9 @@ describe('dark mode reaches the node ART and the canvas ink', () => {
   it('keeps getContrastColor binary for text ON a swatch', () => {
     // Header text sits on a saturated cost colour and note colour, where every
     // bit of contrast counts — that caller must not inherit the easing.
-    const shader = read('./nodes/ShaderNode.tsx');
-    expect(shader).toContain('getContrastColor(costColor)');
+    // Every node card takes its header colours from this one hook.
+    const chrome = read('./nodes/useCostChrome.ts');
+    expect(chrome).toContain('getContrastColor(costColor)');
+    expect(read('./nodes/ShaderNode.tsx')).toContain('useCostChrome(cost)');
   });
 });

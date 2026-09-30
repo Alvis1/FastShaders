@@ -20,10 +20,20 @@ import { getCostTextColor } from '@/utils/colorUtils';
 import { initialNodeValues } from '@/utils/newNodeValues';
 import { getRecentNodeTypes, noteNodeUsed } from './recentNodes';
 import { hiddenOptionalCategories } from '@/registry/optionalCategories';
-import complexityData from '@/registry/complexity.json';
+import { getBaseCosts } from '@/utils/costTable';
 import { evalTask } from '@/eval/evalTask';
 
-const COSTS = complexityData.costs as Record<string, number>;
+const COSTS = getBaseCosts();
+
+/** Selected nodes eligible for grouping: not groups, not notes (annotations). */
+const isGroupable = (n: AppNode) => !!n.selected && n.type !== 'group' && n.type !== 'note';
+/** Organize re-lays the selection; groups ride as single units, notes never. */
+const isOrganizable = (n: AppNode) => !!n.selected && n.type !== 'note';
+function countNodes(nodes: AppNode[], pred: (n: AppNode) => boolean): number {
+  let count = 0;
+  for (const n of nodes) if (pred(n)) count++;
+  return count;
+}
 
 /**
  * Flat, render-order action item used for keyboard navigation. Mirrors what's
@@ -52,7 +62,10 @@ export function AddNodeMenu() {
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
   const addNode = useAppStore((s) => s.addNode);
   const addNote = useAppStore((s) => s.addNote);
-  const nodes = useAppStore((s) => s.nodes);
+  // Two COUNTS, not `s.nodes` (a new array per notify); the handlers read the
+  // live graph from getState().
+  const groupableCount = useAppStore((s) => countNodes(s.nodes, isGroupable));
+  const organizableCount = useAppStore((s) => countNodes(s.nodes, isOrganizable));
   const groupSelection = useAppStore((s) => s.groupSelection);
   const organizeSelection = useAppStore((s) => s.organizeSelection);
   const costColorLow = useAppStore((s) => s.costColorLow);
@@ -60,20 +73,8 @@ export function AddNodeMenu() {
   const language = useAppStore((s) => s.language);
   const { screenToFlowPosition, fitView } = useReactFlow();
 
-  // Selected nodes eligible for grouping — excludes groups + notes (annotations).
-  const selectedGroupable = useMemo(
-    () => nodes.filter((n) => n.selected && n.type !== 'group' && n.type !== 'note'),
-    [nodes],
-  );
-  const canGroup = selectedGroupable.length >= 2;
-  // Organize re-lays the selection: groups participate as single units (their
-  // members ride along), only notes are excluded (annotations have no place in
-  // the dataflow layout).
-  const selectedOrganizable = useMemo(
-    () => nodes.filter((n) => n.selected && n.type !== 'note'),
-    [nodes],
-  );
-  const canOrganize = selectedOrganizable.length >= 2;
+  const canGroup = groupableCount >= 2;
+  const canOrganize = organizableCount >= 2;
 
   // Source pin info for auto-connect when dragged from an output handle
   const sourceNodeId = contextMenu.sourceNodeId;
@@ -144,6 +145,7 @@ export function AddNodeMenu() {
       y: contextMenu.y,
     });
     const cost = COSTS[def.type] ?? 0;
+    const nodes = useAppStore.getState().nodes;
 
     // A singleton type already on the canvas is not added twice — the row
     // becomes "take me to it" (singletonNodes.ts). Before the auto-connect
@@ -225,12 +227,12 @@ export function AddNodeMenu() {
     }
 
     closeContextMenu();
-  }), [contextMenu.x, contextMenu.y, screenToFlowPosition, fitView, nodes, addNode, closeContextMenu, sourceNodeId, sourceHandleId, sourceHandleType, spliceEdgeId]);
+  }), [contextMenu.x, contextMenu.y, screenToFlowPosition, fitView, addNode, closeContextMenu, sourceNodeId, sourceHandleId, sourceHandleType, spliceEdgeId]);
 
   const handleGroupSelection = useCallback(() => {
-    groupSelection(selectedGroupable.map((n) => n.id));
+    groupSelection(useAppStore.getState().nodes.filter(isGroupable).map((n) => n.id));
     closeContextMenu();
-  }, [groupSelection, selectedGroupable, closeContextMenu]);
+  }, [groupSelection, closeContextMenu]);
 
   const handleOrganizeSelection = useCallback(() => {
     organizeSelection();
@@ -289,7 +291,7 @@ export function AddNodeMenu() {
       }
     }
     return items;
-  }, [query, canGroup, canOrganize, nodes, grouped, results, recentDefs, handleGroupSelection, handleOrganizeSelection, handleAddNode, handleAddNote]);
+  }, [query, canGroup, canOrganize, grouped, results, recentDefs, handleGroupSelection, handleOrganizeSelection, handleAddNode, handleAddNote]);
 
   // Reset focus to the first item whenever the visible list changes (typing in
   // the search box, selection toggling, output-node presence flipping, etc.).
@@ -298,20 +300,9 @@ export function AddNodeMenu() {
     setFocusedIndex(0);
   }, [actionItems.length, query]);
 
-  // Scroll the focused item into view as the user arrows past the visible
-  // bounds. `block: 'nearest'` keeps the menu from jumping when the item is
-  // already visible.
-  //
-  // ONLY for keyboard moves and list swaps. Hover sets `focusedIndex` too, and
-  // scrolling then is both pointless — the row is under the cursor, so it is on
-  // screen — and actively harmful: a row clipped by the list's bottom edge got
-  // nudged into view, the resulting `scroll` event is one of TooltipLayer's
-  // dismiss triggers, and it fired inside the 1s dwell of the tooltip that the
-  // very same hover had just armed. The pointer is then at rest, so no further
-  // `mouseover` ever re-arms it: those rows could never show their description,
-  // which since the description moved into the tooltip is the only place it
-  // exists. (Measured: hovering the clipped row moved scrollTop 47 → 66 and the
-  // tooltip never appeared.)
+  // Scroll the focused row into view for keyboard moves and list swaps ONLY:
+  // a hover-driven scroll fires inside the tooltip's dwell (TooltipLayer
+  // DELAY_MS) and dismisses it for good. See docs/dev/canvas-interaction.md.
   useEffect(() => {
     if (!scrollOnFocusRef.current) return;
     const el = listRef.current?.querySelector<HTMLElement>(
@@ -457,7 +448,7 @@ export function AddNodeMenu() {
               >
                 <span>{t('Organize', language)}</span>
                 <span className="context-menu__item-category">
-                  {selectedOrganizable.length} {t('nodes', language)}
+                  {organizableCount} {t('nodes', language)}
                 </span>
               </button>
             )}
@@ -470,7 +461,7 @@ export function AddNodeMenu() {
               >
                 <span>{t('Group Selection', language)}</span>
                 <span className="context-menu__item-category">
-                  {selectedGroupable.length} {t('nodes', language)}
+                  {groupableCount} {t('nodes', language)}
                 </span>
               </button>
             )}

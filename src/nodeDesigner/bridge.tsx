@@ -42,7 +42,7 @@ export function savedDesignsBaseline(): Record<string, GlyphDesign> {
 /** Built-in art for a node type as an inner-SVG string ('' when none). */
 export function builtinGlyphSvg(type: string): string {
   if (!hasBuiltinGlyph(type)) return '';
-  const art = renderArt(type, 0);
+  const art = renderArt(type);
   return art == null ? '' : renderToStaticMarkup(<>{art}</>);
 }
 

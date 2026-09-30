@@ -43,24 +43,64 @@
   flex-shrink: 0;
 }
 
-/* Reset is the red icon in the bottom cluster ("✕" per the UI sketch) — the
-   color carries the destructive-action signal that the old "Reset" text did. */
-.shader-preview__reset-btn {
+/* Every button in the preview chrome is ONE box — --ctl-size tall, flat,
+   bordered — and each class below adds only what differs from it. */
+.shader-preview__reset-btn,
+.shader-preview__vr-btn,
+.shader-preview__play-btn,
+.shader-preview__anim-play,
+.shader-preview__anim-inplace,
+.shader-preview__anim-clips-btn,
+.shader-preview__fs-btn,
+.shader-preview__props-btn,
+.shader-preview__mic-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: var(--ctl-size);
   height: var(--ctl-size);
-  padding: 0;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--font-size-sm);
   line-height: 1;
-  color: #d32f2f;
+  color: var(--text-primary);
   background: var(--bg-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
   cursor: pointer;
   font-family: var(--font-sans);
+}
+
+/* The glyph buttons are square. The turntable ▶ and the model-animation ▶/◎
+   are the same control shape in different boxes — see the JSX for why they are
+   deliberately not merged. */
+.shader-preview__reset-btn,
+.shader-preview__play-btn,
+.shader-preview__anim-play,
+.shader-preview__anim-inplace,
+.shader-preview__anim-clips-btn,
+.shader-preview__fs-btn {
+  width: var(--ctl-size);
+  padding: 0;
+}
+
+.shader-preview__vr-btn:hover,
+.shader-preview__play-btn:hover,
+.shader-preview__anim-play:hover,
+.shader-preview__anim-clips-btn:hover,
+.shader-preview__anim-inplace:not(:disabled):hover,
+.shader-preview__fs-btn:hover,
+.shader-preview__props-btn:hover,
+.shader-preview__mic-btn:hover,
+.shader-preview__geo-select:hover,
+.shader-preview__subdivision:hover,
+.shader-preview__bottom-controls .shader-preview__bg-color:hover {
+  border-color: var(--border-focus);
+}
+
+/* Reset is the red icon in the bottom cluster ("✕" per the UI sketch) — the
+   color carries the destructive-action signal that the old "Reset" text did. */
+.shader-preview__reset-btn {
+  font-size: 14px;
+  font-weight: 600;
+  color: #d32f2f;
 }
 
 .shader-preview__reset-btn:hover {
@@ -72,99 +112,46 @@
   background: rgba(211, 47, 47, 0.12);
 }
 
-/* Lives in the bottom-right display cluster beside Fullscreen, so it takes
-   that row's --ctl-size height rather than the top bar's auto-height pill.
-   Width is text-driven (it is the one lettered control among glyphs). */
+/* Lives in the bottom-right display cluster beside Fullscreen. Width is
+   text-driven (it is the one lettered control among glyphs). */
 .shader-preview__vr-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: var(--ctl-size);
   padding: 0 9px;
-  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.02em;
-  line-height: 1;
-  color: var(--text-primary);
-  background: var(--bg-panel);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--border-radius-sm);
-  cursor: pointer;
-  font-family: var(--font-sans);
 }
 
-.shader-preview__vr-btn:hover {
-  border-color: var(--border-focus);
+.shader-preview__fs-btn {
+  font-size: 14px;
 }
 
-/* The turntable ▶ and the model-animation ▶/◎ are the same control shape in
-   different boxes — see the JSX for why they are deliberately not merged. */
-.shader-preview__play-btn,
-.shader-preview__anim-play,
-.shader-preview__anim-inplace,
-.shader-preview__anim-clips-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--ctl-size);
-  height: var(--ctl-size);
-  padding: 0;
-  font-size: 12px;
-  line-height: 1;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--border-radius-sm);
-  background: var(--bg-panel);
-  color: var(--text-primary);
-  cursor: pointer;
-  font-family: var(--font-sans);
+/* The toggles of the top control bar (WGSL/GLSL, FPS, Uniforms, the model ✕). */
+.shader-preview__props-btn {
+  padding: 0 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
 }
 
-.shader-preview__play-btn:hover,
-.shader-preview__anim-play:hover,
-.shader-preview__anim-clips-btn:hover,
-.shader-preview__anim-inplace:not(:disabled):hover {
-  border-color: var(--border-focus);
-}
-
-/* Held open — the button is a disclosure, so it stays down while its menu is. */
-.shader-preview__anim-clips-btn--active {
+/* Held states, each lit for as long as it holds: a toggle that is on, the clip
+   disclosure while its menu is open, and "in place" while root motion is
+   suppressed. AFTER the deltas above — same specificity, so order decides. */
+.shader-preview__props-btn--active,
+.shader-preview__anim-clips-btn--active,
+.shader-preview__anim-inplace--active {
   color: var(--text-primary);
   border-color: var(--border-focus);
   background: rgba(0, 0, 0, 0.04);
 }
 
-:root[data-theme="dark"] .shader-preview__anim-clips-btn--active {
+/* The black wash becomes a light one on the dark theme. */
+:root[data-theme="dark"] .shader-preview__props-btn--active,
+:root[data-theme="dark"] .shader-preview__anim-clips-btn--active,
+:root[data-theme="dark"] .shader-preview__anim-inplace--active {
   background: rgba(255, 255, 255, 0.06);
-}
-
-.shader-preview__fs-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--ctl-size);
-  height: var(--ctl-size);
-  padding: 0;
-  font-size: 14px;
-  line-height: 1;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--border-radius-sm);
-  background: var(--bg-panel);
-  color: var(--text-primary);
-  cursor: pointer;
-}
-
-.shader-preview__fs-btn:hover {
-  border-color: var(--border-focus);
 }
 
 /* When the preview pane is the fullscreen element, let it fill the screen and
    keep its own dark backdrop (the iframe paints its scene bg on top). */
 .shader-preview:fullscreen {
-  width: 100vw;
-  height: 100vh;
-  background: var(--bg-panel);
-}
-.shader-preview:-webkit-full-screen {
   width: 100vw;
   height: 100vh;
   background: var(--bg-panel);
@@ -193,13 +180,11 @@
   flex-shrink: 0;
 }
 
-.shader-preview__bottom-controls .shader-preview__bg-color:hover {
-  border-color: var(--border-focus);
-}
-
 .shader-preview__geo-select {
-  box-sizing: border-box;
   height: var(--ctl-size);
+  /* Guards against a long dropped-model name widening the select (its label
+     is already middle-ellipsed in JS; this is the belt-and-braces). */
+  max-width: 180px;
   font-size: var(--font-size-sm);
   font-family: var(--font-sans);
   padding: 0 6px;
@@ -211,10 +196,6 @@
   outline: none;
 }
 
-.shader-preview__geo-select:hover {
-  border-color: var(--border-focus);
-}
-
 .shader-preview__subdivision {
   display: flex;
   align-items: center;
@@ -224,10 +205,6 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
   background: var(--bg-panel);
-}
-
-.shader-preview__subdivision:hover {
-  border-color: var(--border-focus);
 }
 
 .shader-preview__subdivision-slider {
@@ -259,7 +236,7 @@
 
 .shader-preview__subdivision-value {
   font-size: 12px;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   color: var(--text-secondary);
   min-width: var(--ctl-size);
   text-align: right;
@@ -292,8 +269,7 @@
 
 /* No far edge to frame when the pane IS the screen — there is no seam below it
    to separate from, so the line would just sit along the bottom of the render. */
-.shader-preview:fullscreen .shader-preview__body,
-.shader-preview:-webkit-full-screen .shader-preview__body {
+.shader-preview:fullscreen .shader-preview__body {
   border-bottom: none;
 }
 
@@ -352,8 +328,8 @@
   pointer-events: auto;
 }
 
-/* Frosted pills like the canvas bar — one shared rule, since nothing differs
-   between the three but their contents. */
+/* Frosted pills like the canvas's cost pill — one shared rule, since nothing
+   differs between the three but their contents. */
 .shader-preview__bottom-controls,
 .shader-preview__anim-controls,
 .shader-preview__display-controls {
@@ -456,18 +432,6 @@
   background: rgba(70, 74, 81, 0.85);
 }
 
-/* Lit while root motion is suppressed: "in place" is a held state of the
-   playback, not a momentary action, so the control stays visibly down. */
-.shader-preview__anim-inplace--active {
-  color: var(--text-primary);
-  border-color: var(--border-focus);
-  background: rgba(0, 0, 0, 0.04);
-}
-
-:root[data-theme="dark"] .shader-preview__anim-inplace--active {
-  background: rgba(255, 255, 255, 0.06);
-}
-
 /* A clip with no root translation has nothing to pin — kept visible (the
    cluster's width must not jump between models) but plainly inert. */
 .shader-preview__anim-inplace:disabled {
@@ -492,7 +456,7 @@
   background: var(--bg-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-md);
-  box-shadow: var(--shadow-md, 0 4px 16px rgba(0, 0, 0, 0.25));
+  box-shadow: var(--shadow-md);
   font-family: var(--font-sans);
 }
 
@@ -700,31 +664,6 @@
   outline-offset: 1px;
 }
 
-/* Guard against a long dropped-model name widening the select (its label is
-   already middle-ellipsed in JS; this is the belt-and-braces). */
-.shader-preview__geo-select {
-  max-width: 180px;
-}
-
-/* Properties toggle button in the controls bar */
-.shader-preview__props-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  height: var(--ctl-size);
-  padding: 0 10px;
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  line-height: 1;
-  font-family: var(--font-sans);
-  color: var(--text-secondary);
-  background: var(--bg-panel);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--border-radius-sm);
-  cursor: pointer;
-}
-
 /* The right-hand toggle group (WGSL/GLSL + FPS + Uniforms). The auto margin lives HERE
    rather than on the buttons: two auto-margined flex siblings divide the free
    space between them instead of both being pushed right, so putting it on each
@@ -734,10 +673,6 @@
   align-items: center;
   gap: 8px;
   margin-left: auto;
-}
-
-.shader-preview__props-btn:hover {
-  border-color: var(--border-focus);
 }
 
 /* The ✕ beside the Model select that removes a dropped model: a props button,
@@ -756,12 +691,6 @@
 }
 .shader-preview__props-btn[aria-disabled='true']:hover {
   border-color: var(--border-subtle);
-}
-
-.shader-preview__props-btn--active {
-  color: var(--text-primary);
-  border-color: var(--border-focus);
-  background: rgba(0, 0, 0, 0.04);
 }
 
 /* ── FPS / frame-time readout ─────────────────────────────────────────────
@@ -789,7 +718,7 @@
   background: rgba(20, 21, 25, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: var(--border-radius-sm);
-  font: 12px/1.35 var(--font-mono, ui-monospace, Menlo, monospace);
+  font: 12px/1.35 var(--font-mono);
   font-variant-numeric: tabular-nums;
   white-space: pre;
   pointer-events: none;
@@ -840,16 +769,11 @@
   color: var(--text-primary);
 }
 
-/* Dark theme: these two float over the 3D viewport with hardcoded light fills
-   (the overlay is near-white with --text-primary text, which flips to light →
-   unreadable). Give them a dark translucent panel; the active-state black wash
-   also needs to become a light wash. */
+/* Dark theme: the overlay floats over the 3D viewport with a hardcoded
+   near-white fill and --text-primary text, which flips to light → unreadable.
+   Give it a dark translucent panel. */
 :root[data-theme="dark"] .shader-preview__uniforms {
   background: rgba(60, 64, 70, 0.94);
-}
-
-:root[data-theme="dark"] .shader-preview__props-btn--active {
-  background: rgba(255, 255, 255, 0.06);
 }
 
 /* Bakes the tuned values into the graph. Sits above the rows it acts on, and
@@ -887,7 +811,7 @@
 
 .shader-preview__uniform-name {
   font-weight: 600;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   font-size: 10px;
   white-space: nowrap;
   overflow: hidden;
@@ -895,21 +819,12 @@
 }
 
 .shader-preview__uniform-value {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   font-size: 9px;
   color: var(--text-secondary);
   flex-shrink: 0;
 }
 
-/* "The graph says something else" — the chip carries the GRAPH's number while
-   the row's own value carries the PREVIEW's, so each surface shows the one the
-   other is hiding.
-   `--text-primary`, not a literal #000: the uniform panel flips to
-   rgba(60,64,70,.94) in the dark theme (see the block above), where black type
-   and a black border would be all but invisible. The token is #1A1A1A in light
-   and #eceef0 in dark, so the control reads as black where the user sees black
-   and stays legible where they don't. It is also what makes these controls a
-   full step DARKER than the rows around them, which are --text-secondary. */
 /* Reset-to-graph button, parked at the END of the controls row (right of the
    Max input; on a colour row, right of the swatch — the same screen position).
 
@@ -955,6 +870,9 @@
   border-color: #b21e1e;
 }
 
+/* Override marks are --text-primary, never a literal #000: the panel goes
+   dark in the dark theme, and the token keeps them a step darker than the
+   --text-secondary rows on both. */
 .shader-preview__uniform-value--override {
   color: var(--text-primary);
   font-weight: 600;
@@ -1013,11 +931,11 @@
 .shader-preview__uniform-bound {
   width: 100%;
   font-size: 10px;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   padding: 1px 3px;
   border: 1px solid var(--border-subtle);
   border-radius: 0;
-  background: var(--bg-input, #fff);
+  background: var(--bg-input);
   color: var(--text-primary);
   text-align: center;
   outline: none;
@@ -1042,11 +960,11 @@
 
 /* ── Live microphone input ────────────────────────────────────────────────
    Rendered at the START of the bottom-left cluster, and only while the shader
-   actually reads a mic uniform. Leading rather than trailing on purpose: the
+   actually reads a Sound uniform. Leading rather than trailing on purpose: the
    destructive red Reset ✕ ends that cluster, and a toggle that appears and
    disappears must not land next to it, where a mis-aimed click is a lost
    session. Appearing shifts play/bg/reset right once, which only happens when
-   the user deliberately wires a Mic node. */
+   the user deliberately wires a Sound node. */
 .shader-preview__mic {
   display: flex;
   align-items: center;
@@ -1054,23 +972,8 @@
 }
 
 .shader-preview__mic-btn {
-  display: flex;
-  align-items: center;
   gap: 6px;
-  height: var(--ctl-size);
   padding: 0 8px;
-  font-size: var(--font-size-sm);
-  line-height: 1;
-  color: var(--text-primary);
-  background: var(--bg-panel);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--border-radius-sm);
-  cursor: pointer;
-  font-family: var(--font-sans);
-}
-
-.shader-preview__mic-btn:hover {
-  border-color: var(--border-focus);
 }
 
 /* Live: a red ring, matching the universal "this is recording" convention.

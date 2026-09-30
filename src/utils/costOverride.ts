@@ -1,5 +1,5 @@
 import complexityData from '@/registry/complexity.json';
-import { sanitizeCostMap } from '@/utils/nodeCost';
+import { sanitizeCostMap } from '@/utils/costTable';
 import { toKebabCase } from '@/utils/nameUtils';
 import { safeJsonReviver } from '@/utils/safeJson';
 

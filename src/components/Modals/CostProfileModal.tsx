@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { t, type Language } from '@/i18n';
 import type { CostProfile } from '@/utils/costOverride';
+import { useModalKeys } from './useModalKeys';
 import './CsvImportModal.css';
 import './CostProfileModal.css';
 
@@ -47,13 +48,9 @@ export function CostProfileModal({
     else panelRef.current?.focus();
   }, [mode]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+  useModalKeys(true, (e) => {
+    if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
+  }, true);
 
   const trimmed = name.trim();
   const submit = () => {

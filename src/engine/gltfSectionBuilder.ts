@@ -120,11 +120,7 @@ function portType(d: NodeDefinition, handle: string): TSLDataType {
  * (owner, 2026-09-18).
  *
  * The section comes from `outputRank` — the TARGET NODE's `emitOrder` — and
- * never from the handle. Since the Output split every material wears the BARE
- * channel ids, so the old `parseChannelHandle(...).index * 100` term is 0 for
- * every wire in the graph and the key collapses to the channel alone: nothing
- * fails, the layout simply INTERLEAVES every material's feeders by channel,
- * which is the exact tangle this function was written to fix.
+ * never from the handle.
  *
  * A node feeding two sections (a shared ORM texture) belongs to the FIRST,
  * which is the one place it can be; its second wire still crosses, inherently.
@@ -221,15 +217,19 @@ export function buildGltfSectionGraph(
 
   /* ── node factories ────────────────────────────────────────────────────── */
 
-  const constant = (type: string, values: Record<string, string | number>, tag: string): Ref => {
-    const d = def(type);
-    const id = `gi_${tag}_${++serial}`;
+  const pushNode = (d: NodeDefinition, id: string, values: Record<string, string | number>): void => {
     nodes.push({
       id,
       type: getFlowNodeType(d),
       position: { x: 0, y: 0 },
-      data: { registryType: d.type, label: d.label, cost: getCost(d.type), values: { ...d.defaultValues, ...values } },
+      data: { registryType: d.type, label: d.label, cost: getCost(d.type), values },
     } as AppNode);
+  };
+
+  const constant = (type: string, values: Record<string, string | number>, tag: string): Ref => {
+    const d = def(type);
+    const id = `gi_${tag}_${++serial}`;
+    pushNode(d, id, { ...d.defaultValues, ...values });
     return { id, handle: 'out', dataType: portType(d, 'out') };
   };
 
@@ -241,12 +241,7 @@ export function buildGltfSectionGraph(
   const mul = (a: Ref, b: Ref, tag: string): Ref => {
     const d = def('mul');
     const id = `gi_${tag}_mul_${++serial}`;
-    nodes.push({
-      id,
-      type: getFlowNodeType(d),
-      position: { x: 0, y: 0 },
-      data: { registryType: d.type, label: d.label, cost: getCost(d.type), values: {} },
-    } as AppNode);
+    pushNode(d, id, {});
     wire(a, id, 'a');
     wire(b, id, 'b');
     return { id, handle: 'out', dataType: 'any' };
@@ -256,12 +251,7 @@ export function buildGltfSectionGraph(
   const wOf = (v: Ref, tag: string): Ref => {
     const d = def('split');
     const id = `gi_${tag}_split_${++serial}`;
-    nodes.push({
-      id,
-      type: getFlowNodeType(d),
-      position: { x: 0, y: 0 },
-      data: { registryType: d.type, label: d.label, cost: getCost(d.type), values: {} },
-    } as AppNode);
+    pushNode(d, id, {});
     wire(v, id, 'v');
     return { id, handle: 'w', dataType: portType(d, 'w') };
   };
@@ -359,12 +349,8 @@ export function buildGltfSectionGraph(
         modelSignature: { materials: signature!.materials.slice() },
       },
     } as AppNode;
-    // Wired on the BARE channel handles: one Output NODE is one material since
-    // the split, so the namespaced handle builder is retired here and the section
-    // node's own id is what every edge below names. Both used to be re-bound —
-    // `outputId = sectionId` shadowed the DEFAULT's id for this whole loop body,
-    // and `h` was left as an identity function. Harmless (no site in here wants
-    // the default) but a trap: the two ids are read ~170 lines apart.
+    // BARE channel handles: since the split each Output node is one material,
+    // so every edge below names `sectionId` directly (pinned by gltfSectionBuilder.test.ts).
     const tag = `m${gi}`;
     const vals: Record<string, string | number> = {};
     const settings: MaterialSettings = {};
@@ -521,7 +507,7 @@ export function buildGltfSectionGraph(
   // VERTEX_PORTS, which the registry's own order already spells), so the
   // feeders can be stacked in the order of the sockets they land on.
   const channelRank = new Map(outDef.inputs.map((p, i) => [p.id, i]));
-  const laid = autoLayout(nodes, edges, 'LR', undefined, feederOrder(outputRank, edges, channelRank));
+  const laid = autoLayout(nodes, edges, undefined, feederOrder(outputRank, edges, channelRank));
 
   /**
    * The DEFAULT Output is wired to NOTHING, so dagre has no reason to put it

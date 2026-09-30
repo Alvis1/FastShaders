@@ -15,11 +15,8 @@
  * the Sound node renders through its own component, so it needs its own shared
  * source.
  *
- * NAMING: the node is called "Sound", but every identifier here still says
- * `MIC`, matching the registry type (`soundNode`), the React Flow type (`mic`)
- * and the emitted uniform base (`mic1_level`). Those are persisted contracts —
- * inside saved `.fastshader` files and inside every module the app has ever
- * exported — so the module names follow them rather than drifting from them.
+ * NAMING: five exports still say `MIC_`. They are plain constants, not a
+ * persisted contract — the node, its registry type and its uniforms say "sound".
  *
  * Layout: header, then the two parameter chips stacked full-width at the top
  * of the body — param sockets on the LEFT edge aligned with them — then the
@@ -35,13 +32,6 @@
  *
  * Every `*_TOP` below is a CENTRE, not an edge: `.shader-node__param-row` and
  * `.shader-node__arm-wrap` both carry `transform: translateY(-50%)`.
- *
- * This IS the Audio Input node's arrangement: that node was folded into the
- * Sound node on 2026-09-08, since a microphone is just one of the sources the
- * picker offers. The numbers below are the deleted `audioGeometry.ts`'s,
- * verbatim, under this module's export names — which stayed `MIC_*` so the
- * three consumers above kept compiling and so the whole merge reads as one
- * node growing a row rather than as a rename sweep.
  *
  * All tops are px from the top of the BODY (not the card), so the header can
  * grow — a long name wraps in some languages, and NodeTitle wraps it to two

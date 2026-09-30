@@ -2,8 +2,11 @@
  * Built-in texture definitions for the Textures category in the content browser.
  *
  * Each texture is defined as TSL code that gets parsed into a node graph via
- * codeToGraph at startup, then wrapped in a group container so it can be
+ * codeToGraph on first use, then wrapped in a group container so it can be
  * dragged onto the canvas like a saved group.
+ *
+ * Loaded ON DEMAND by every app surface (`import()` in the content browser and
+ * the store): a static import from the boot path puts Babel on the entry wave.
  */
 
 import { buildCodeGroup, type CodeGroupAsset, type CodeGroupEntry } from '@/registry/codeGroupBuilder';
@@ -477,20 +480,20 @@ const TEXTURE_ENTRIES: CodeGroupEntry[] = [
 
 /**
  * Parse each texture's TSL code into nodes/edges, wrap in a group container,
- * and apply auto-layout. Called once at startup.
+ * and apply auto-layout. Built by the FIRST call and cached; this module is
+ * loaded on demand, never at boot.
  */
 let _cachedTextures: BuiltinTexture[] | null = null;
 
 /**
- * The texture ids, WITHOUT building them. `getBuiltinTextures()` parses 8 TSL
- * snippets through codeToGraph and lays them out (~84 ms), which the content
- * browser defers until the Textures tab is opened — so anything that only needs
- * to know which ids exist (the visibility filter deciding whether that tab
- * should render at all) must ask here instead.
+ * The texture ids, WITHOUT building the textures. The list itself lives in the
+ * Babel-free leaf `builtinTextureIds.ts` and is re-exported here, so whoever
+ * already holds this module keeps its one import. Anything on the BOOT path
+ * (the content browser's module scope) imports the leaf: importing this module
+ * statically pulls `codeGroupBuilder` → `codeToGraph` → @babel/* into the
+ * entry wave.
  */
-export function getBuiltinTextureIds(): string[] {
-  return TEXTURE_ENTRIES.map((e) => e.id);
-}
+export { getBuiltinTextureIds } from './builtinTextureIds';
 
 export function getBuiltinTextures(): BuiltinTexture[] {
   if (_cachedTextures) return _cachedTextures;

@@ -418,51 +418,20 @@ export interface TypedEdgeData {
 export type AppEdge = Edge<TypedEdgeData>;
 
 /**
- * The stored `values` object exactly as it sits on the node — shape-guarded,
- * but NOT filtered by node type.
- *
- * `?? {}` guards nullish and NOTHING else, which is not enough for a field that
- * arrives verbatim from `fs:graph` / a `.fastshader` / `fs:savedGroups`. A
- * tampered `values: 5` used to reach every caller as a primitive, where
- * `'originId' in values` THROWS — and that throw, inside `loadGraph`, returns
- * null and lets the 300 ms autosave overwrite the user's entire saved graph
- * with the demo one. Closing it here (both public accessors below go through
- * it, and the codebase already mandates them over `node.data as ...`) covers
- * every call site at once. Identity is preserved for the normal case, so no
- * memo is invalidated.
+ * `values` is adversarial and `?? {}` guards only nullish: a tampered
+ * `values: 5` made `'originId' in values` THROW inside `loadGraph`, which
+ * returned null and let the 300 ms autosave overwrite the saved graph with the
+ * demo. Both accessors below go through this guard.
  */
 function isValuesObject(v: unknown): v is Record<string, string | number> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 /**
- * Can this entry be coerced at all?
- *
- * The guard above closes a tampered `values` OBJECT; this closes a tampered
- * ENTRY, which is the same bug one level down and was reachable for far longer.
- * `String(v)` and `Number(v)` run ToPrimitive, which THROWS when neither
- * `valueOf` nor `toString` yields a primitive:
- *
- *     String({ toString: 1 })   // TypeError: Cannot convert object to primitive
- *     Number(Symbol('x'))       // TypeError
- *
- * There are ~40 such coercions across codegen, the CPU evaluator, the export
- * paths and the node components, and a `.fastshader` carrying
- * `{"values":{"speed":{"toString":1}}}` made every one of them throw — inside
- * `graphToCode`, inside the sync engine, inside a render, in an app with NO
- * error boundary. React unmounts the root, the screen goes blank, and because
- * the 300 ms autosave is a store SUBSCRIPTION outside React, the poisoned graph
- * is written back to `fs:graph` and the app blanks again on every reload.
- * MEASURED 2026-09-19: 38 poisoned single-key graphs across 17 node types, all
- * of them fatal. Guarding the call sites one at a time did not converge —
- * every node family has its own reads — so it is closed HERE, where every
- * reader already comes through.
- *
- * Deliberately permissive: anything that coerces WITHOUT throwing is kept
- * EXACTLY as it was, including a boolean (`Number(false)` is 0, and the Image
- * node's `repeat` reads that 0 as CLAMP — pinned in imageTextureSpec.test.ts)
- * and an array. Only what would throw is dropped, so no legitimate graph and
- * no pinned junk-value behaviour changes at all.
+ * Can this ENTRY be coerced without throwing? `String(v)`/`Number(v)` run
+ * ToPrimitive, which throws on `{ toString: 1 }` or a symbol. Permissive on
+ * purpose: whatever coerces is kept EXACTLY, a boolean and an array included
+ * (docs/dev/storage-and-limits.md, pinned by nodeValuesAdversarial.test.ts).
  */
 function coercibleEntry(v: unknown): boolean {
   const t = typeof v;
@@ -509,33 +478,11 @@ export function getNodeValues(node: AppNode): Record<string, string | number> {
 }
 
 /**
- * An OUTPUT node's stored per-channel values — the accessor `getNodeValues`
- * cannot be.
- *
- * `getNodeValues` hard-returns `{}` for `output` / `group` / `note`, which is
- * right for every caller that wants "this node's operand values" and useless
- * for the one type that genuinely stores CHANNEL values (`OutputNodeData.values`
- * — color, emissive, roughness, metalness, opacity, discard, normal, env,
- * position). So every Output reader wrote its own
- * `(data as OutputNodeData).values ?? {}` instead, i.e. exactly the nullish-only
- * guard `rawNodeValues` above exists to replace.
- *
- * It is not belt-and-braces here. NO restore path coerces this field: the
- * sanitizer (`sanitizeOutputMaterialsReport`) runs `cleanValues` on MATERIALS
- * ENTRIES only, and `unfoldOutputMaterials`' material-0 branch is a shallow
- * `{ ...out.data }`. So a `values: 5` out of a `.fastshader`, `fs:graph` or
- * `fs:savedGroups` reaches ShaderSettingsMenu's `'opacity' in values` and the
- * node's own `channel in current`, and `in` THROWS on a primitive — inside a
- * React event handler, which renders as a checkbox and a clear-swatch that
- * silently do nothing. Same class as `sanitizeDataRangeNodes`
- * (utils/dataRangeFormula.ts) and `sanitizeOriginKeys` (utils/imageNode.ts),
- * where the same `in` on the same kind of data returned null out of `loadGraph`
- * and let the autosave overwrite the user's whole saved graph.
- *
- * Takes node DATA rather than a node, because all three callers hold data: a
- * component's `NodeProps.data`, a raw `node.data` cast, and a `getState()`
- * lookup's `node?.data`. Identity is preserved for the normal case, so no memo
- * is invalidated — the same contract `rawNodeValues` holds.
+ * An OUTPUT node's stored per-channel values, for which `getNodeValues`
+ * hard-returns `{}`. Shape-guarded because NO restore path coerces this field
+ * (`sanitizeOutputMaterialsReport` cleans MATERIALS entries only) and `in`
+ * THROWS on a primitive. Takes node DATA, which is what every caller holds;
+ * identity is preserved, so no memo is invalidated.
  */
 export function outputNodeValues(data: unknown): Record<string, string | number> {
   const values = (data as { values?: unknown } | null | undefined)?.values;

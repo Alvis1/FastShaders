@@ -27,9 +27,6 @@
        subdivision pills omit `justify-content` because their content is a
        gapped row, and the eval badge is `cursor: default` because it is not a
        button at all. Those are deviations to preserve, not drift to flatten.
-     · And `box-sizing: border-box` in those rules is already redundant —
-       reset.css sets it on `*` — so a slice of the duplication is dead weight
-       that needs no primitive to remove.
 
    If it is extracted: keep it to the properties no consumer overrides, and
    note that this file is imported BEFORE any component stylesheet (main.tsx),

@@ -7,7 +7,7 @@ import {
   getSoundSource,
   setSoundSource,
   listInputDevices,
-  systemAudioAvailable,
+  systemAudioSupported,
 } from '@/utils/soundSession';
 import {
   encodeSoundSource,
@@ -18,47 +18,20 @@ import {
 } from '@/utils/soundSource';
 
 /**
- * The source picker that lives ON the Sound node card.
+ * The Sound node's source picker: a microphone, any other input device (a
+ * loopback driver like BlackHole / VB-Cable lands in the same list) or the
+ * machine's own audio. It lives in the node's right-click settings menu, not
+ * on the card, and the palette tile renders none (docs/dev/node-types.md).
  *
- * It is what made the Audio Input node redundant: that node existed only
- * because the Mic node's device dropdown was buried in the right-click settings
- * menu, so "what is this node listening to?" was invisible until you went
- * looking. With the picker on the card the answer IS the control, and one node
- * covers a microphone, any other input device (a loopback driver like BlackHole
- * / VB-Cable lands in the very same list) and the machine's own audio. The two
- * were merged on 2026-09-08 and this component came across unchanged apart from
- * the session it talks to.
- *
- * Putting a real `<select>` inside the React Flow viewport is a first for this
- * codebase — every other on-node non-numeric element is inert display (the
- * colormap strip, the image thumbnail). Three things make it safe:
- *
- *   - `nodrag`, so a pointerdown on it never starts a node drag. (NodeEditor's
- *     own `isInteractive()` / `isChrome()` guards already list `select`, so the
- *     custom pan/draw capture was never a problem — React Flow's drag is.)
- *   - `stopPropagation` on pointerdown/click, so opening the menu does not also
- *     change the canvas selection.
- *   - CHOOSING A SOURCE CAN NEVER START A CAPTURE — `setSoundSource` only
- *     redirects one that is already running (see soundSession). Arming stays the
- *     arm light's job, because in this app a node's presence in a graph IS its
- *     execution, so the click is the whole consent model.
+ * CHOOSING A SOURCE CAN NEVER START A CAPTURE — `setSoundSource` only
+ * redirects one that is already running (see soundSession). Arming stays the
+ * arm light's job, because in this app a node's presence in a graph IS its
+ * execution, so the click is the whole consent model.
  *
  * Device LABELS are empty strings until the page holds a media permission (the
  * spec's anti-fingerprinting rule, not a bug), so before the first successful
  * arm the list shows the right NUMBER of inputs with positional names. That is
  * why the system entry leads: it is the one entry that is always meaningful.
- *
- * WHERE IT LIVES: the Sound node's right-click settings menu, by owner
- * decision (2026-09-08). It sat on the node face when the Audio Input node was
- * folded in, which answered "what is this listening to?" at a glance but spent
- * 22px of node height and a wider card on a control most graphs set once. The
- * node is back to its compact size; the arm light on the face still reports
- * whether capture is live, which is the question that changes minute to minute.
- *
- * The palette tile therefore renders NO picker at all — previously it needed a
- * disabled `<select>` twin, because a card's `pointer-events: none` stops the
- * pointer but not the keyboard and a live one would have made every tile a tab
- * stop that enumerates the machine's audio devices.
  */
 export function SoundSourceSelect() {
   const language = useAppStore((s) => s.language);
@@ -88,7 +61,7 @@ export function SoundSourceSelect() {
     };
   }, [status]);
 
-  const systemOk = systemAudioAvailable();
+  const systemOk = systemAudioSupported();
   const value = encodeSoundSource(source);
   // Real, addressable devices only. Before the page holds a media permission
   // enumerateDevices() returns a placeholder with an EMPTY deviceId (and no

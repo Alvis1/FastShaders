@@ -37,7 +37,7 @@
  * a full-height box down the canvas edge would eat presses aimed at the graph,
  * and the seam's own hit zone reaches ~4px into this pane.
  */
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { linkLabelText } from '@/components/NodeEditor/nodes/sectionLabelText';
@@ -49,7 +49,8 @@ import './PreviewRail.css';
 /** The hollow socket's own words: it is the one control that ADDS something. */
 export const RAIL_EMPTY_KEY = 'No output yet — click to add one';
 
-export function PreviewRail() {
+// memo(): NodeEditor re-renders every drag frame and this takes no props.
+export const PreviewRail = memo(function PreviewRail() {
   const language = useAppStore((s) => s.language);
   // The cheap-string two-step: subscribe to a KEY so a notify that moves no
   // wire re-renders nothing, then rebuild the list from getState(). The key is
@@ -99,4 +100,4 @@ export function PreviewRail() {
       )}
     </div>
   );
-}
+});

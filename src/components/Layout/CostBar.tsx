@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useAppStore, VR_HEADSETS, resolveDeviceBudget } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
+import { downloadBlob } from '@/utils/downloadBlob';
 import {
   parseCostFile, parseCostProfileBundle, buildMergedComplexity, mergedComplexityFileName,
   buildProfileFile, buildProfileBundle, profileFileName, profileBundleFileName, editedCostCount,
@@ -16,7 +17,7 @@ import {
 // the pole-picker rule below is written with two classes anyway, so this is
 // belt-and-braces rather than the mechanism.
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
-import { placePopover, pickPortalHost } from '@/components/inputs/colorPickerModel';
+import { fullscreenElement, placePopover, pickPortalHost } from '@/components/inputs/colorPickerModel';
 import { formatSplatCount } from '@/utils/previewMesh';
 import './CostBar.css';
 
@@ -39,15 +40,9 @@ const ACTION_OPTIONS = new Set([IMPORT_OPTION, NEW_OPTION, EDIT_OPTION, EXPORT_O
 /** How long a one-line notice stays up — the image-convert notice's 12 s. */
 const NOTICE_TIMEOUT_MS = 12000;
 
-/** Blob-and-anchor JSON download, shared by every file this bar writes. */
+/** Every file this bar writes is pretty-printed JSON. */
 function downloadJson(data: unknown, fileName: string): void {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fileName;
-  a.click();
-  URL.revokeObjectURL(url);
+  downloadBlob(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), fileName);
 }
 
 export interface CostBarProps {
@@ -179,10 +174,7 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
   // actually mounted — an effect without that key attaches to nothing.
   useLayoutEffect(() => {
     if (!capMenuAt) return;
-    // Both spellings, per the picker's rule — WebKit only has the prefixed one.
-    const doc = document as Document & { webkitFullscreenElement?: Element | null };
-    const fsEl = (document.fullscreenElement ?? doc.webkitFullscreenElement ?? null) as HTMLElement | null;
-    setCapHost(pickPortalHost(fsEl, barRef.current, document.body));
+    setCapHost(pickPortalHost(fullscreenElement(), barRef.current, document.body));
   }, [capMenuAt]);
   useLayoutEffect(() => {
     if (!capMenuAt || !capBoxRef.current) return;

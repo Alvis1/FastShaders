@@ -3,6 +3,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { displayImageFileName } from '@/utils/imageNode';
+import { formatKbMb } from '@/utils/formatSize';
 import type { ImageConvertMode } from '@/utils/imageImport';
 import {
   projectTextureSources,
@@ -55,14 +56,6 @@ function thumbnailUrl(src: TextureSource, modelThumbs: ReadonlyMap<number, strin
   }
 }
 
-/** Compact byte size for a hover title. Not `formatMiB` (utils/formatSize.ts):
- *  that one rounds UP to whole MiB for the storage limits, which prints every
- *  texture as "1 MiB". */
-function compactBytes(n: number): string {
-  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-  return `${Math.max(1, Math.round(n / 1024))} KB`;
-}
-
 /** A cell's hover text: the picture's name and, when known, its size. A model
  *  source adds the encoded byte size, because "which of these four 2048px maps
  *  is the big one" is the question the grid cannot answer by eye. */
@@ -72,7 +65,7 @@ function cellTitle(src: TextureSource): string {
       return `${displayImageFileName(src.fileName, src.dataUrl)} — ${src.width} × ${src.height}`;
     case 'model': {
       const dims = src.width && src.height ? ` — ${src.width} × ${src.height}` : '';
-      return `${src.fileName}${dims} — ${compactBytes(src.byteLength)}`;
+      return `${src.fileName}${dims} — ${formatKbMb(src.byteLength)}`;
     }
     default: {
       const unhandled: never = src;

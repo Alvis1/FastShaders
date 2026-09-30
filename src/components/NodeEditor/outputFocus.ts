@@ -2,7 +2,7 @@ import type { FitViewOptions } from '@xyflow/react';
 import type { AppEdge, AppNode } from '@/types';
 import { activeSink, isSinkNode } from '@/utils/sdfPartition';
 import { contributingOutputs } from '@/utils/outputMaterials';
-import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { getUnwrappedEdges } from '@/engine/cpuEvaluator';
 import { nodeCentre } from './keyboardNav';
 
 /**
@@ -193,7 +193,7 @@ export function zoomStepTarget(
  * resort was not. (Step 9 makes repeated presses CYCLE all of them.)
  */
 export function costFocusId(nodes: readonly AppNode[], edges: readonly AppEdge[]): string | null {
-  const real = unwrapCollapsedGroupEdges(nodes as AppNode[], edges as AppEdge[]);
+  const real = getUnwrappedEdges(nodes as AppNode[], edges as AppEdge[]);
   return (activeSink(nodes, real) ?? contributingOutputs(nodes)[0])?.id ?? null;
 }
 

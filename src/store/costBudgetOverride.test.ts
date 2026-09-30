@@ -22,17 +22,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { useAppStore, VR_HEADSETS, resolveDeviceBudget } from './useAppStore';
 import { setCostOverrides } from '@/utils/nodeCost';
 import { parseCostFile } from '@/utils/costOverride';
+import { stubLocalStorage } from '@/test-utils';
 
 const QUEST = VR_HEADSETS[0];
 
 describe('point-cap override', () => {
   beforeEach(() => {
-    const store: Record<string, string> = {};
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => store[k] ?? null,
-      setItem: (k: string, v: string) => { store[k] = v; },
-      removeItem: (k: string) => { delete store[k]; },
-    });
+    stubLocalStorage();
     useAppStore.setState({
       costProfiles: [],
       costBudgetOverrides: Object.create(null) as Record<string, number>,
@@ -41,6 +37,9 @@ describe('point-cap override', () => {
   });
   afterEach(() => {
     setCostOverrides(null);
+    // isolate: false shares the store with the next file: leave no cap behind
+    // (costProfiles.test.ts read a leaked 320 as quest3's budget).
+    useAppStore.setState({ costBudgetOverrides: Object.create(null) as Record<string, number> });
     vi.unstubAllGlobals();
   });
 

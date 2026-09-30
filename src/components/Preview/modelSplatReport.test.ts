@@ -4,7 +4,7 @@
  * and dropped-SH info lines and the Splat Output pane notice.
  *
  * ShaderPreview has no rendering test (the vitest env is `node` — an iframe,
- * postMessage and localStorage in a ~3000-line component; see
+ * postMessage and localStorage in a large component; see
  * modelDropNotices.test.ts for the pattern). So the rules are tested where they
  * LIVE — the report validator (`sanitizeSplatReport`) and the store field, for
  * real — and the component is pinned from SOURCE to call them in the right

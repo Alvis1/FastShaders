@@ -13,7 +13,7 @@ import { DragNumberInput } from './inputs/DragNumberInput';
 import { nodeTextScale } from './nodes/glyphs/NodeGlyph';
 import { WaveformSvg } from './nodes/WaveformSvg';
 import { renderNoisePreview, type NoiseType } from '@/utils/noisePreview';
-import complexityData from '@/registry/complexity.json';
+import { getBaseCosts } from '@/utils/costTable';
 import {
   SOUND_BODY_W, SOUND_BODY_H, MIC_PARAM_TOPS, MIC_CHIP_H,   SOUND_METER_TOP, MIC_METER_H, SOUND_BTN_TOP, MIC_OUT_TOPS, MIC_PAD_X,
 } from './nodes/soundGeometry';
@@ -36,11 +36,13 @@ import {
 import './nodes/ClockNode.css';
 import './nodes/SoundNode.css';
 import './nodes/OutputNode.css';
-import { MARCH_NODE_CONFIG } from './nodes/RaymarchOutputNode';
+import { MARCH_NODE_CONFIG, type MarchNodeConfig } from './nodes/RaymarchOutputNode';
 import { SPLAT_NODE_CONFIG, SPLAT_OWN_COLOUR_KEY } from './nodes/SplatOutputNode';
 import { OutputTitle } from './nodes/OutputTitle';
 import './NodePreviewCard.css';
 import { NODE_BORDER_WIDTH } from './nodes/nodeFrame';
+
+const COSTS = getBaseCosts();
 
 interface NodePreviewCardProps {
   def: NodeDefinition;
@@ -396,14 +398,9 @@ function ClockCardContent(props: ContentProps) {
 
 function SoundCardContent(props: ContentProps) {
   const { def } = props;
-  // Geometry comes from micGeometry.ts — the SAME constants SoundNode.tsx and
-  // the auto-layout footprint read, so the tile is a true miniature by
-  // construction (the old hand-copied twin of these values is the drift class
-  // that let the tile and the node disagree).
-  //
-  // This is the one card the Audio Input node's merge touched: that node's
-  // tile was a byte-for-byte sibling of this one plus the source picker, so
-  // folding the two left exactly this — the mic tile, grown by one row.
+  // Geometry comes from nodes/soundGeometry.ts — the SAME constants SoundNode.tsx
+  // and the auto-layout footprint read, so the tile cannot drift from the node
+  // (docs/dev/node-types.md, Sound).
   return (
     <CardShell {...props} nodeClassName="sound-node" hideOutput>
       <div className="sound-node__body" style={{ width: SOUND_BODY_W, height: SOUND_BODY_H }}>
@@ -446,13 +443,6 @@ function SoundCardContent(props: ContentProps) {
     </CardShell>
   );
 }
-
-/* (SliderCardContent is gone: it drew a hand-built div track + thumb + a
-   min/value/max caption that NO other surface has. The canvas node and the
-   Node Designer both render a real `<input type="range">` — ShaderNode.tsx and
-   NodeVisual.tsx — and slider's flow type is 'shader', so deleting the special
-   case routes it through the shared replica and the tile now shows the actual
-   widget.) */
 
 /* ============================================================
  * OutputCardContent — static replica of the OutputNode
@@ -548,20 +538,33 @@ function OutputCardContent({ def, cost, costColor, costTextColor, headerTextColo
 }
 
 /* ============================================================
- * MarchOutputCardContent — the Raymarch Output, in the Output's chrome
+ * SinkCardContent — the Raymarch and Splat Outputs, in the Output's chrome
  * ============================================================ */
 
-function MarchOutputCardContent({ def, cost, costColor, costTextColor, headerTextColor }: ContentProps) {
+// Only the DEFAULT-exposed sockets, like the Output card: the rest live in
+// the node's right-click menu (utils/exposedPorts).
+const MARCH_CARD_EXPOSED = new Set<string>(MARCH_DEFAULT_EXPOSED);
+const SPLAT_CARD_EXPOSED = new Set<string>(SPLAT_DEFAULT_EXPOSED);
+
+interface SinkCardProps extends ContentProps {
+  config: MarchNodeConfig;
+  exposed: ReadonlySet<string>;
+  /** The live node's class list and frame colour. */
+  className: string;
+  frame: string;
+  /** The colour cell of a FRESH node (nothing wired, nothing stored). */
+  colorCell: React.ReactNode;
+}
+
+// Mirrors the live sink node's markup and reuses OutputNode.css outright (the
+// Output card's rule), rendered inert at the registry defaults.
+function SinkCardContent({
+  def, cost, costColor, costTextColor, headerTextColor, config, exposed, className, frame, colorCell,
+}: SinkCardProps) {
   const language = useAppStore((s) => s.language);
-  // Mirrors RaymarchOutputNode.tsx's markup and reuses OutputNode.css outright
-  // (the Output card's rule): header, the node's own labelled sections, one
-  // labelled row per socket with the same value cell — rendered inert.
-  const config = MARCH_NODE_CONFIG;
   const defaults = def.defaultValues ?? {};
   const cell = (portId: string) => {
-    if (config.colorPorts.includes(portId)) {
-      return <span className="palette-swatch output-node__val" style={{ background: '#ffffff' }} />;
-    }
+    if (config.colorPorts.includes(portId)) return colorCell;
     const setting = config.settings[portId];
     if (setting && portId in defaults) {
       return (
@@ -572,9 +575,6 @@ function MarchOutputCardContent({ def, cost, costColor, costTextColor, headerTex
     }
     return <span className="output-node__val" />;
   };
-  // Only the DEFAULT-exposed sockets, like the Output card: the settings live
-  // in the node's right-click menu (MARCH_DEFAULT_EXPOSED, utils/exposedPorts).
-  const exposed = new Set<string>(MARCH_DEFAULT_EXPOSED);
   const rows = (ids: string[]) =>
     def.inputs.filter((p) => ids.includes(p.id) && exposed.has(p.id)).map((port) => (
       <div key={port.id} className="output-node__row">
@@ -584,7 +584,7 @@ function MarchOutputCardContent({ def, cost, costColor, costTextColor, headerTex
       </div>
     ));
   return (
-    <div className="output-node output-node--sdf node-preview-card__node" style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid var(--cat-sdf)` }}>
+    <div className={className} style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid ${frame}` }}>
       {cost > 0 && (
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
       )}
@@ -607,70 +607,31 @@ function MarchOutputCardContent({ def, cost, costColor, costTextColor, headerTex
   );
 }
 
-/* ============================================================
- * SplatOutputCardContent — the Splat Output, in the Output's chrome
- * ============================================================ */
-
-function SplatOutputCardContent({ def, cost, costColor, costTextColor, headerTextColor }: ContentProps) {
-  const language = useAppStore((s) => s.language);
-  // Mirrors SplatOutputNode.tsx's markup and reuses OutputNode.css outright
-  // (the Output card's rule), rendered inert: a FRESH node — nothing wired,
-  // nothing stored — so Color is the UNSET swatch ("Own colour": every splat
-  // keeps the colour it was captured with) and the numbers are the registry
-  // defaults.
-  const config = SPLAT_NODE_CONFIG;
-  const defaults = def.defaultValues ?? {};
-  const cell = (portId: string) => {
-    if (config.colorPorts.includes(portId)) {
-      return (
-        <span
-          className="palette-swatch palette-swatch--unset output-node__val"
-          title={t(SPLAT_OWN_COLOUR_KEY, language)}
-        />
-      );
-    }
-    const setting = config.settings[portId];
-    if (setting && portId in defaults) {
-      return (
-        <span className="output-node__val node-preview-card__inert">
-          <DragNumberInput compact value={Number(defaults[portId])} decimals={setting.decimals} onChange={() => {}} />
-        </span>
-      );
-    }
-    return <span className="output-node__val" />;
-  };
-  // Only the DEFAULT-exposed sockets, like the Output card: Feather and Size
-  // live in the node's right-click menu (SPLAT_DEFAULT_EXPOSED).
-  const exposed = new Set<string>(SPLAT_DEFAULT_EXPOSED);
-  const rows = (ids: string[]) =>
-    def.inputs.filter((p) => ids.includes(p.id) && exposed.has(p.id)).map((port) => (
-      <div key={port.id} className="output-node__row">
-        <CardSocket side="left" dataType={port.dataType} />
-        {cell(port.id)}
-        <span className="output-node__port-label">{portLabel(port.label, language)}</span>
-      </div>
-    ));
+function MarchOutputCardContent(props: ContentProps) {
   return (
-    <div className="output-node output-node--splat node-preview-card__node" style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid var(--cat-output)` }}>
-      {cost > 0 && (
-        <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
-      )}
-      <div className="output-node__header" style={{ background: costColor }}>
-        <OutputTitle title={config.title} type={def.type} original={config.original} language={language} color={headerTextColor} />
-      </div>
-      <div className="output-node__material">
-        <span className="output-node__preview-socket" aria-hidden="true" />
-        {config.sections.filter((section) => section.ports.some((p) => exposed.has(p))).map((section, i) => (
-          <div key={section.label}>
-            {i > 0 && <div className="output-node__subdivider" />}
-            <div className="output-node__section">
-              <div className="output-node__section-label">{t(section.label, language)}</div>
-              <div className="output-node__ports">{rows(section.ports)}</div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
+    <SinkCardContent
+      {...props}
+      config={MARCH_NODE_CONFIG}
+      exposed={MARCH_CARD_EXPOSED}
+      className="output-node output-node--sdf node-preview-card__node"
+      frame="var(--cat-sdf)"
+      colorCell={<span className="palette-swatch output-node__val" style={{ background: '#ffffff' }} />}
+    />
+  );
+}
+
+function SplatOutputCardContent(props: ContentProps) {
+  const language = useAppStore((s) => s.language);
+  return (
+    <SinkCardContent
+      {...props}
+      config={SPLAT_NODE_CONFIG}
+      exposed={SPLAT_CARD_EXPOSED}
+      className="output-node output-node--splat node-preview-card__node"
+      frame="var(--cat-output)"
+      // "Own colour": every splat keeps the colour it was captured with.
+      colorCell={<span className="palette-swatch palette-swatch--unset output-node__val" title={t(SPLAT_OWN_COLOUR_KEY, language)} />}
+    />
   );
 }
 
@@ -746,8 +707,7 @@ function ColorCardContent({ def, cost, costTextColor }: { def: NodeDefinition; c
  * ============================================================ */
 
 export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart }: NodePreviewCardProps) {
-  const costs = complexityData.costs as Record<string, number>;
-  const cost = costs[def.type] ?? 0;
+  const cost = COSTS[def.type] ?? 0;
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   // The header mixes into the card, and the card follows the theme

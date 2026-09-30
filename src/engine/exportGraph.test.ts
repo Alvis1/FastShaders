@@ -263,7 +263,6 @@ describe('buildShaderExportChecked scope (real store)', () => {
       shaderPalettes: [],
       shaderName: 'Scope',
       exportIncludeMesh: false,
-      exportAsGlb: false,
       previewMesh: null,
       importNote: null,
     });

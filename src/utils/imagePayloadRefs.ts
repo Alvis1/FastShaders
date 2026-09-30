@@ -1,53 +1,7 @@
 /**
- * An image payload is STORED once per localStorage document.
- *
- * In memory nothing changes: every Image node holds its full
- * `values.imageB64`, so graphToCode, imageAssets, cost, thumbnails, history
- * and the export never see a reference. The de-duplication happens only at the
- * two localStorage writers (`fs:graph` and `fs:savedGroups`) and is undone on
- * every restore path.
- *
- * FORMAT. Within ONE document, the first Image node in document order holding
- * a payload keeps it inline. A later Image node holding the byte-identical
- * payload is written `imageB64: ''` (same key position) plus an appended
- * `imageRef: 'img1-<FNV-1a hex>-<payload length base36>'`. The format version
- * is the `img1-` prefix. There are no new top-level keys, and `fs:savedGroups`
- * stays a bare array. A document without duplicates is written byte-identically
- * (the writers return the SAME array).
- *
- * WHY NOT A TABLE OBJECT. `fs:savedGroups` must stay a bare array: 0.3.33
- * returns `[]` for anything else, and its next save overwrites the whole
- * library. A top-level table in `fs:graph` is ignored on read by an older build
- * but DROPPED by its first autosave, which would lose every referenced image
- * after a rollback. A third shared key would need cross-key garbage collection
- * over localStorage, which is neither transactional nor consistent across tabs.
- * With inline canonicals, 0.3.33 shows each first copy with pixels and each
- * duplicate as a named card without a thumbnail that samples black; its own
- * autosave keeps `imageRef`, so this build restores those pixels.
- *
- * COLLISIONS. FNV-1a is a 32-bit bucket, not an identity (a colliding pair of
- * real equal-length payloads is pinned in payloadDigest.test.ts). Identity is
- * decided by CONTENT: the writer de-duplicates by the string itself, and only
- * the printed ref is hashed. A payload may be referenced only when it is the
- * first VALID payload of the document with its key; a later, different payload
- * with the same key is always written inline. The reader resolves a ref to the
- * first valid inline payload of the SAME document whose RE-DERIVED key matches,
- * so nothing stored is trusted as a key and a ref only ever reaches that
- * document's own pixels.
- *
- * AMPLIFICATION. A ref lets a small document expand to N copies of a payload in
- * consumers that work per instance (preview inlining, the project block, the
- * per-call hash). At most MAX_REF_RESOLVED_IMAGE_CHARS characters per document
- * resolve through refs, counted in document order. The writer applies the same
- * guard in the same order and writes inline beyond it (an over-quota write then
- * raises the storage-quota notice as it always did), so the reader never strips
- * what the writer wrote.
- *
- * Writer and reader share ONE ordering rule, one validity function
- * (`validImageDataUrl`) and one guard: change them together.
- *
- * Every value here is read by plain property access, never the `in` operator:
- * these objects come out of untrusted JSON, and `in` throws on a primitive.
+ * An image payload is STORED once per localStorage document: the first VALID
+ * inline one wins, a later identical one becomes `imageRef: 'img1-<fnv>-<len36>'`.
+ * Identity is CONTENT, never the hash: docs/dev/storage-and-limits.md § STORED once.
  */
 
 import type { AppNode } from '@/types';

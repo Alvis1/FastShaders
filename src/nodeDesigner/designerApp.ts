@@ -24,12 +24,13 @@
  * retyping it wholesale would churn every line for no behavioural gain.
  */
 import * as ND from './bridge';
-import { scaleSocketOffsets, scaleSocketOffsetsRaw } from './socketScale';
+import { SOCK_SNAP, scaleSocketOffsets, scaleSocketOffsetsRaw } from './socketScale';
 import { scanGlyphSource, tagsAlign, drawableIndexAtOffset, mergeRanges, formatGlyphSource, DRAWABLE_TAGS } from './glyphSource';
 import { rotatePt, normalizeDeg, snapDeg, rotateTransform, projectOnSegment, nearestOnCurve, simplifyRdp, freehandPathData, shouldCloseStroke, penPathData } from './glyphGeometry';
-import { PATH_ARGC, tokenizePath, fmtN, serializePath, segEnd, segStart, pathSegEnds, degradeCurve, pathSpans, insertIntoPath, insertIntoPoly, canInsertInto } from './glyphPath';
-import { GLYPH_PALETTE, isPaletteColor, normalizePaintValue, normalizePaintNumber, displayPaintNumber, summarizePaint } from './glyphPaint';
+import { tokenizePath, fmtN, serializePath, segStart, pathSegEnds, degradeCurve, pathSpans, insertIntoPath, insertIntoPoly, canInsertInto } from './glyphPath';
+import { GLYPH_PALETTE, normalizePaintValue, normalizePaintNumber, displayPaintNumber, summarizePaint } from './glyphPaint';
 import { isTypingTarget } from '@/utils/isTypingTarget';
+import { RIBBON_DASH, RIBBON_GAP, ribbonStrokeWidth } from '@/components/NodeEditor/edges/bezierGeometry';
 
 /* ---------------- registry data (live imports — see bridge.tsx) ---------------- */
 const NODES = ND.designerNodes();
@@ -48,21 +49,9 @@ NODES.forEach((n) => { NODE_BY_TYPE[n.type] = n; });
 let ND_LANG = (lsGet('nd:lang', 'en') === 'lv') ? 'lv' : 'en';
 
 /* ---------------- display names (renaming) ----------------
-   A node's NAME is registry source — `label` in nodeRegistry.ts (English) and
-   node-i18n.json's `nodes` map (Latvian) — so unlike every other field in this
-   inspector it does NOT live in customGlyphs.ts and cannot ride the glyph file's
-   save. It gets its own patch endpoint and its own dirty bookkeeping.
-
-   Renaming is safe precisely because `label` is display-only: `type` is the
-   registry key, the `registryType` stored in every saved .fastshader, and what
-   codeToGraph matches on — none of which the label touches. That separation is
-   pinned by nodeLabelRename.test.ts, and `type` is deliberately NOT editable here.
-
-   Names resolve in three layers, nearest first, because the BUNDLE cannot see a
-   save (nodeRegistry.ts HMR reloads the page; a deployed build never changes):
-     labelEdits[type]  — this session's unsaved rename
-     savedLabels[type] — the on-disk file as /__nd/labels last reported it
-     NODE_BY_TYPE      — what this build was compiled with */
+   Names are registry SOURCE (nodeRegistry.ts `label`, node-i18n.json), not
+   customGlyphs.ts — docs/dev/node-visuals-and-designer.md, "Renaming a node".
+   Nearest first: labelEdits (unsaved) → savedLabels (on disk) → NODE_BY_TYPE (this build). */
 let savedLabels = Object.create(null);      // type -> EN label (on-disk truth)
 let savedLvLabels = Object.create(null);    // type -> LV label (on-disk truth)
 let labelEdits = Object.create(null);       // type -> { en?, lv? }, only when DIFFERENT
@@ -123,17 +112,12 @@ function updateLangBtn() {
 const LINE_COUNT = ND.TYPE_CHANNELS;
 /* per-channel edge colors — the REAL TypedEdge table (1-ch flips vs canvas) */
 const COUNT_EDGE_COLORS = ND.COUNT_EDGE_COLORS;
-/* Edge-stub geometry mirrors TypedEdge.tsx (GAP = 3.5/3, per-count widths,
-   `4 0.5` dash). Stubs aren't part of the node, so this stays a documented
-   mirror — TypedEdge needs React Flow context and can't render standalone. */
-const EDGE_GAP = 3.5 / 3, STUB_LEN = 64;
-
-function builtinGlyph(t) { return ND.builtinGlyphSvg(t); }
+/* Edge stubs draw TypedEdge's ribbon (gap, widths, dash: edges/bezierGeometry). */
+const STUB_LEN = 64;
 
 /* ---------------- helpers ---------------- */
 function contrast(hex) { return ND.contrastColor(String(hex || '#ffffff')); }
-function costColor(c) { return ND.costColorOf(c); }
-function costScaleOf(c) { return ND.costScaleOf(c); }
+function nodeCostScale() { return ND.costScaleOf(COSTS[state.type] ?? 0); }
 function toast(m) { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2400); }
 function el(id) { return document.getElementById(id); }
 function lsGet(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch (e) { return d; } }
@@ -166,7 +150,7 @@ function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
  * trips that test, which is the point of it.
  */
 function innerSvgOf(svg) {
-  const host = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  const host = svgEl('svg');
   const kids = Array.prototype.slice.call(svg.childNodes);
   for (let i = 0; i < kids.length; i++) host.appendChild(document.importNode(kids[i], true));
   return host.innerHTML;
@@ -299,10 +283,9 @@ function collectGlyphPoints(root) {
       });
       add(() => ({ x: g('x') + g('width'), y: g('y') + g('height') }), (x, y) => { S('width', Math.max(.5, x - g('x'))); S('height', Math.max(.5, y - g('y'))); }, 'ctrl', null);
     } else if (tag === 'polyline' || tag === 'polygon') {
-      const nums = () => (elm.getAttribute('points') || '').split(/[\s,]+/).filter(Boolean).map(Number);
-      const count = nums().length;
+      const count = polyNums(elm).length;
       for (let i = 0; i + 1 < count; i += 2) {
-        ((idx) => { add(() => { const a = nums(); return { x: a[idx] || 0, y: a[idx + 1] || 0 }; }, (x, y) => { const a = nums(); a[idx] = x; a[idx + 1] = y; elm.setAttribute('points', a.map(fmtN).join(' ')); }, 'anchor', { k: 'poly', i: idx }); })(i);
+        ((idx) => { add(() => { const a = polyNums(elm); return { x: a[idx] || 0, y: a[idx + 1] || 0 }; }, (x, y) => { const a = polyNums(elm); a[idx] = x; a[idx + 1] = y; elm.setAttribute('points', a.map(fmtN).join(' ')); }, 'anchor', { k: 'poly', i: idx }); })(i);
       }
     } else if (tag === 'text') {
       add(() => ({ x: g('x'), y: g('y') }), (x, y) => { S('x', x); S('y', y); });
@@ -381,6 +364,20 @@ function viewPtOf(e) {
   if (!box.width || !box.height) return null;
   return { x: (e.clientX - box.left) / box.width * 56, y: (e.clientY - box.top) / box.height * 56 };
 }
+/* The parsed preview <svg>. Re-query on every use: refreshMPreview replaces it. */
+function previewRoot() { return el('mPreview').querySelector('svg'); }
+/* The selection as ASCENDING indices into `pts` — write order matters, see onPtMove. */
+function selectedIdx(pts) { return Array.from(glyphSel).filter((i) => i < pts.length).sort((a, b) => a - b); }
+/* A point's CTM `m` and view-space position `o`, or null when it cannot be read. */
+function viewPosOf(p, root) {
+  try { const m = ctmOf(p.el, root), lp = p.get(); return { m: m, o: applyMat(m, lp.x, lp.y) }; } catch (e) { return null; }
+}
+function polyNums(elm) { return (elm.getAttribute('points') || '').split(/[\s,]+/).filter(Boolean).map(Number); }
+function svgEl(tag, attrs) {
+  const e = document.createElementNS(SVG_NS, tag);
+  Object.keys(attrs || {}).forEach((k) => e.setAttribute(k, attrs[k]));
+  return e;
+}
 function r2(v) { return Math.round(v * 100) / 100; }   // fine
 function rHalf(v) { return Math.round(v * 2) / 2; }    // the editor's 0.5 grid
 const MOVE_T = .6;                      // ≈3px on the 280px canvas: below this a press is a CLICK
@@ -400,6 +397,17 @@ function dropPointer(id) {
   if (id == null) return;
   try { el('mPtsLay').releasePointerCapture(id); } catch (err) {}
 }
+/* One gesture's window listeners; a gesture with no abandon path cancels as it ends. */
+function armDrag(move, up, cancel = up) {
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', cancel);
+}
+function disarmDrag(move, up, cancel = up) {
+  window.removeEventListener('pointermove', move);
+  window.removeEventListener('pointerup', up);
+  window.removeEventListener('pointercancel', cancel);
+}
 /* A pointermove with no button held means the release happened where we never
    saw it — outside the browser window, the classic case — and the gesture would
    otherwise keep rewriting the art on every hover. Only a TRUSTED event may end
@@ -407,30 +415,9 @@ function dropPointer(id) {
    it says nothing about the physical device. */
 function pointerReleased(e) { return e.isTrusted && e.buttons === 0; }
 
-/* Every gesture takes the keyboard target off #mSvg by hand: the gestures
-   preventDefault (which kills the implicit focus change) and openGlyph leaves
-   the caret in the markup box, where Del would edit text.
-   preventScroll is LOAD-BEARING, not tidiness. .modal is max-height:92vh with
-   overflow:auto, so on a normal laptop it scrolls — and a plain focus() scrolls
-   #mPrevBox back into view BETWEEN the browser's hit test and this gesture's own
-   viewPtOf() read. The press lands on the handle the user saw; the layer then
-   moves under the still-stationary pointer and the coordinate is measured
-   against the NEW rect. Scroll is px, the canvas is 56 units over 280px, so it
-   converts 5:1 — measured on a 700px-tall window: 139px = 27.8 units. A dragged
-   point teleported 28 units (half the canvas) on the first move; a marquee's
-   ORIGIN corner landed 28 units off the one that was drawn, silently selecting
-   the wrong points; a scale grip's vertical lever (grab − opp) was measured from
-   the wrong side of its anchor, turning a 1.53× drag into 0.375× — i.e. a drag
-   that should GROW the selection shrank it. (The bbox move survives it: its
-   leader offset is taken from the same shifted read and cancels out — but the
-   LEADER, "nearest selected point to the press", is then chosen against a
-   position 28 units away, so the wrong point owns the snap.)
-   It reads as intermittent because a repeat focus() on
-   the already-focused element does not re-scroll — only the FIRST gesture after
-   focus was elsewhere (the state on open, and after every click on #mSvg, the
-   Load select or a button) misbehaves.
-   Nothing is lost by not scrolling: the element is the one the user just
-   pressed, so it is on screen by construction. */
+/* Gestures preventDefault the implicit focus change, so each takes the keyboard
+   off #mSvg by hand. preventScroll is load-bearing: .modal scrolls between the hit
+   test and viewPtOf — docs/dev/node-visuals-and-designer.md, point editor (b). */
 function focusPtCanvas() { el('mPrevBox').focus({ preventScroll: true }); }
 
 /* ---- gesture undo ----
@@ -486,9 +473,7 @@ function onMarqDown(e) {
   focusPtCanvas();                       // must not scroll — see focusPtCanvas
   const v = viewPtOf(e); if (!v) return;
   ptMarq = { o: v, v: v, add: e.shiftKey || e.metaKey || e.ctrlKey, sub: e.altKey, moved: false, pid: grabPointer(e) };
-  window.addEventListener('pointermove', onMarqMove);
-  window.addEventListener('pointerup', endMarq);
-  window.addEventListener('pointercancel', endMarq);
+  armDrag(onMarqMove, endMarq);
 }
 function onMarqMove(e) {
   if (!ptMarq) return;
@@ -501,28 +486,26 @@ function onMarqMove(e) {
 }
 function endMarq() {
   const m = ptMarq; ptMarq = null;
-  window.removeEventListener('pointermove', onMarqMove);
-  window.removeEventListener('pointerup', endMarq);
-  window.removeEventListener('pointercancel', endMarq);
+  disarmDrag(onMarqMove, endMarq);
   if (!m) return;
   dropPointer(m.pid);
   if (!m.moved) { if (!m.add && !m.sub) clearGlyphSel(); renderGlyphPts(); return; } // plain click on empty = deselect
-  const root = el('mPreview').querySelector('svg');
+  const root = previewRoot();
   if (!root) { renderGlyphPts(); return; }
   const x0 = Math.min(m.o.x, m.v.x), x1 = Math.max(m.o.x, m.v.x);
   const y0 = Math.min(m.o.y, m.v.y), y1 = Math.max(m.o.y, m.v.y);
   const pts = glyphPoints(root);
   if (!m.add && !m.sub) glyphSel.clear();
   pts.forEach((p, i) => {
-    let o; try { const lp = p.get(); o = applyMat(ctmOf(p.el, root), lp.x, lp.y); } catch (err) { return; }
-    if (o.x < x0 || o.x > x1 || o.y < y0 || o.y > y1) return;   // centre-inside, in view space = what the user sees
+    const vp = viewPosOf(p, root); if (!vp) return;
+    if (vp.o.x < x0 || vp.o.x > x1 || vp.o.y < y0 || vp.o.y > y1) return;   // centre-inside, in view space = what the user sees
     if (m.sub) glyphSel.delete(i); else glyphSel.add(i);
   });
   markGlyphSel(pts);
   renderGlyphPts();
 }
 function selectAllGlyphPts() {
-  const root = el('mPreview').querySelector('svg'); if (!root) return;
+  const root = previewRoot(); if (!root) return;
   const pts = glyphPoints(root);                    // capped: past PT_CAP there is no handle
   glyphSel.clear(); pts.forEach((_p, i) => glyphSel.add(i));
   markGlyphSel(pts); renderGlyphPts();
@@ -535,19 +518,15 @@ function onScaleDown(e, ix, iy, box) {   // ix/iy: 0 = min side, 1 = max side
   if (e.button !== 0) return;
   e.preventDefault(); e.stopPropagation();
   focusPtCanvas();                       // must not scroll — see focusPtCanvas
-  /* Same gate as delete, and it MUST sit above the listeners: onScalePts writes
-     browser-normalized innerHTML back into #mSvg, so arming on art that doesn't
-     parse would rewrite the user's half-typed markup under them. */
-  if (el('mApply').disabled) { toast('Fix the SVG error first — points can’t be scaled in art that doesn’t parse.'); return; }
-  const root = el('mPreview').querySelector('svg'); if (!root) return;
+  if (glyphEditBlocked('points can’t be scaled')) return;   // above the listeners
+  const root = previewRoot(); if (!root) return;
   const pts = glyphPoints(root);
-  const sel = Array.from(glyphSel).filter((i) => i < pts.length).sort((a, b) => a - b);
+  const sel = selectedIdx(pts);
   const items = [];
   sel.forEach((i) => {                   // snapshot ONCE — reading positions back
-    const p = pts[i]; let m, o;          // mid-gesture would compound the scale
-    try { m = ctmOf(p.el, root); const lp = p.get(); o = applyMat(m, lp.x, lp.y); } catch (err) { return; }
-    if (!isFinite(o.x) || !isFinite(o.y)) return;
-    items.push({ p: p, o: o, inv: invMat(m) });
+    const vp = viewPosOf(pts[i], root);  // mid-gesture would compound the scale
+    if (!vp || !isFinite(vp.o.x) || !isFinite(vp.o.y)) return;
+    items.push({ p: pts[i], o: vp.o, inv: invMat(vp.m) });
   });
   if (items.length < 2) return;
   /* The grip is DRAWN PT_PAD outside the true corner, so the true corner is the
@@ -568,9 +547,7 @@ function onScaleDown(e, ix, iy, box) {   // ix/iy: 0 = min side, 1 = max side
     ext: { x: box.x1 - box.x0, y: box.y1 - box.y0 },
     before: el('mSvg').value, moved: false, pid: grabPointer(e),
   };
-  window.addEventListener('pointermove', onScalePts);
-  window.addEventListener('pointerup', endScalePts);
-  window.addEventListener('pointercancel', endScalePts);
+  armDrag(onScalePts, endScalePts);
   renderGlyphPts();
 }
 function onScalePts(e) {
@@ -614,9 +591,7 @@ function onScalePts(e) {
 function endScalePts() {
   const s = ptScale; if (!s) return;
   ptScale = null;
-  window.removeEventListener('pointermove', onScalePts);
-  window.removeEventListener('pointerup', endScalePts);
-  window.removeEventListener('pointercancel', endScalePts);
+  disarmDrag(onScalePts, endScalePts);
   dropPointer(s.pid);
   pushGlyphUndo(s.before);
   refreshMPreview();
@@ -629,16 +604,16 @@ function endScalePts() {
    rides the snapshot its first press already pushed (see nudgeRun). */
 function nudgeGlyphSelection(dx, dy, held) {
   if (!glyphSel.size || el('mApply').disabled) return false;
-  const root = el('mPreview').querySelector('svg'); if (!root) return false;
+  const root = previewRoot(); if (!root) return false;
   const pts = glyphPoints(root);
-  const sel = Array.from(glyphSel).filter((i) => i < pts.length).sort((a, b) => a - b);
+  const sel = selectedIdx(pts);
   /* Snapshot first. Reading a position back inside the write loop would
      double-move it: setting an earlier anchor of a relative path already dragged
      this point along, so get() would return the ALREADY nudged spot. */
   const items = [];
   sel.forEach((i) => {
-    const p = pts[i];
-    try { const m = ctmOf(p.el, root); const lp = p.get(); items.push({ p: p, o: applyMat(m, lp.x, lp.y), inv: invMat(m) }); } catch (e) {}
+    const vp = viewPosOf(pts[i], root);
+    if (vp) items.push({ p: pts[i], o: vp.o, inv: invMat(vp.m) });
   });
   if (!items.length) return false;
   const before = el('mSvg').value;
@@ -751,7 +726,7 @@ function pathDelete(elm, rmSegs, ctrlSegs) {
   }
 }
 function polyDelete(elm, idxs) {
-  const a = (elm.getAttribute('points') || '').split(/[\s,]+/).filter(Boolean).map(Number);
+  const a = polyNums(elm);
   idxs.slice().sort((x, y) => y - x).forEach((i) => { a.splice(i, 2); });   // DESCENDING: lower indices don't shift
   const pairs = Math.floor(a.length / 2);
   if (pairs < (elm.tagName.toLowerCase() === 'polygon' ? 3 : 2)) { elm.remove(); return; }
@@ -777,15 +752,12 @@ function pruneEmptyGroups(root) {
 }
 function deleteGlyphSelection() {
   if (!el('mMove').checked || !glyphSel.size) return;
-  /* Never rewrite art we could not parse: refreshMPreview injects the raw text
-     either way, so a broken document would come back browser-normalized and the
-     user's half-typed markup would be silently rewritten under them. */
-  if (el('mApply').disabled) { toast('Fix the SVG error first — points can’t be deleted from art that doesn’t parse.'); return; }
-  const root = el('mPreview').querySelector('svg'); if (!root) return;
+  if (glyphEditBlocked('points can’t be deleted', 'from')) return;
+  const root = previewRoot(); if (!root) return;
   const before = el('mSvg').value;
   const pts = glyphPoints(root);
   const nBefore = glyphPointCount(root);          // UNCAPPED — see glyphPointCount
-  const sel = Array.from(glyphSel).filter((i) => i < pts.length).sort((a, b) => a - b);
+  const sel = selectedIdx(pts);
   /* grouped PER ELEMENT so no index shifts under another deletion on the same
      element (polyline vertices splice; path segments re-index) */
   const groups = new Map();
@@ -861,12 +833,8 @@ function renderGlyphPtsInner() {
   lay.innerHTML = '';
   if (!el('mMove').checked) { lay.style.display = 'none'; return null; }
   lay.style.display = '';
-  const root = el('mPreview').querySelector('svg'); if (!root) return null;
-  const mkRect = (x, y, w, h, cls) => {
-    const r = document.createElementNS(SVG_NS, 'rect');
-    r.setAttribute('x', x); r.setAttribute('y', y); r.setAttribute('width', w); r.setAttribute('height', h);
-    r.setAttribute('class', cls); lay.appendChild(r); return r;
-  };
+  const root = previewRoot(); if (!root) return null;
+  const mkRect = (x, y, w, h, cls) => lay.appendChild(svgEl('rect', { x: x, y: y, width: w, height: h, class: cls }));
   /* marquee hit surface FIRST — SVG hit-testing is topmost-wins, so every
      handle appended after it still gets the pointerdown.
      It covers the whole VISIBLE preview box, not just the 0..56 canvas:
@@ -878,11 +846,7 @@ function renderGlyphPtsInner() {
   mkRect(-3.2, -3.2, 62.4, 62.4, 'pt-bg').addEventListener('pointerdown', onCanvasDown);
   /* alignment guide lines (drawn under the handles) */
   if (ptDrag && ptDrag.guides) {
-    const mk = (x1, y1, x2, y2) => {
-      const l = document.createElementNS(SVG_NS, 'line');
-      l.setAttribute('x1', x1); l.setAttribute('y1', y1); l.setAttribute('x2', x2); l.setAttribute('y2', y2);
-      l.setAttribute('class', 'pt-guide'); lay.appendChild(l);
-    };
+    const mk = (x1, y1, x2, y2) => lay.appendChild(svgEl('line', { x1: x1, y1: y1, x2: x2, y2: y2, class: 'pt-guide' }));
     if (ptDrag.guides.x != null) mk(ptDrag.guides.x, 0, ptDrag.guides.x, 56);
     if (ptDrag.guides.y != null) mk(0, ptDrag.guides.y, 56, ptDrag.guides.y);
   }
@@ -902,8 +866,8 @@ function renderGlyphPtsInner() {
   const P = [];
   let nSel = 0, bx0 = 1e9, by0 = 1e9, bx1 = -1e9, by1 = -1e9;
   pts.forEach((p, i) => {
-    let pos; try { const lp = p.get(); pos = applyMat(ctmOf(p.el, root), lp.x, lp.y); } catch (e) { P.push(null); return; }
-    if (!isFinite(pos.x) || !isFinite(pos.y)) { P.push(null); return; }
+    const vp = viewPosOf(p, root), pos = vp && vp.o;
+    if (!pos || !isFinite(pos.x) || !isFinite(pos.y)) { P.push(null); return; }
     P.push(pos);
     if (!glyphSel.has(i)) return;
     nSel++; bx0 = Math.min(bx0, pos.x); by0 = Math.min(by0, pos.y); bx1 = Math.max(bx1, pos.x); by1 = Math.max(by1, pos.y);
@@ -958,9 +922,7 @@ function renderGlyphPtsInner() {
   pts.forEach((p, i) => {
     const pos = P[i]; if (!pos) return;
     const on = glyphSel.has(i);
-    const c = document.createElementNS(SVG_NS, 'circle');
-    c.setAttribute('cx', pos.x); c.setAttribute('cy', pos.y);
-    c.setAttribute('r', p.kind === 'ctrl' ? (on ? 1.3 : 1) : (on ? 1.45 : 1.15));
+    const c = svgEl('circle', { cx: pos.x, cy: pos.y, r: p.kind === 'ctrl' ? (on ? 1.3 : 1) : (on ? 1.45 : 1.15) });
     /* `#mPtsLay circle{pointer-events:all}` is an ELEMENT rule, so a handle is
        hittable unless a class says otherwise — `.pt-off` is that class. Outside
        Select the handles are a read-only picture of the selection: a press
@@ -991,16 +953,9 @@ function renderGlyphPtsInner() {
    (select-all on full-bleed art), and without this there would be no click left
    anywhere that could drop the selection. */
 function beginPtDrag(e, i, pts, root, mod, off, bbox) {
-  /* Same gate as scale and delete, and FIRST — above the selection bookkeeping,
-     the pointer grab and the listeners. refreshMPreview injects the raw text
-     whether or not it parses, so the HTML parser's RECONSTRUCTION of a half-typed
-     document gets handles drawn on it; the first onPtMove then writes
-     root.innerHTML back into #mSvg, replacing the user's source with that
-     reconstruction — and since the rewrite parses, the red error clears and Apply
-     enables, so it reads as the typo having been ACCEPTED. This was the one
-     mutation path with no gate. It sits above the selection change because
-     nothing below re-renders after an early return. */
-  if (el('mApply').disabled) { toast('Fix the SVG error first — points can’t be moved in art that doesn’t parse.'); return; }
+  /* FIRST, above the selection change: nothing below re-renders after an
+     early return. */
+  if (glyphEditBlocked('points can’t be moved')) return;
   const p = pts[i]; if (!p) return;
   /* grabbing OUTSIDE the selection makes it the selection: what you drag is
      always what is highlighted, so a multi-move can never surprise */
@@ -1008,9 +963,9 @@ function beginPtDrag(e, i, pts, root, mod, off, bbox) {
   /* a modifier grab on a point that is NOT selected drags that point ALONE —
      the selection stays intact until pointerup decides the toggle */
   const withSel = glyphSel.has(i);
-  let m, o;
-  try { m = ctmOf(p.el, root); const lp = p.get(); o = applyMat(m, lp.x, lp.y); } catch (err) { return; }
-  if (!isFinite(o.x) || !isFinite(o.y)) return;
+  const vp = viewPosOf(p, root);
+  if (!vp || !isFinite(vp.o.x) || !isFinite(vp.o.y)) return;
+  const m = vp.m, o = vp.o;
   /* refs = every point that is NOT moving (a selected one would pin the
      drag to itself) + the canvas center. `all` comes out ASCENDING: a
      relative segment's base is written by the points before it, so writing
@@ -1018,10 +973,10 @@ function beginPtDrag(e, i, pts, root, mod, off, bbox) {
   const refs = [{ x: 28, y: 28 }];
   const all = [];
   pts.forEach((q, k) => {
-    let qv, qm; try { qm = ctmOf(q.el, root); const ql = q.get(); qv = applyMat(qm, ql.x, ql.y); } catch (_) { return; }
-    if (!isFinite(qv.x) || !isFinite(qv.y)) return;
-    if (k === i || (withSel && glyphSel.has(k))) { all.push({ p: q, o: qv, inv: invMat(qm), lead: k === i }); return; }
-    if (Math.hypot(qv.x - o.x, qv.y - o.y) > 1e-6) refs.push(qv);
+    const vq = viewPosOf(q, root);
+    if (!vq || !isFinite(vq.o.x) || !isFinite(vq.o.y)) return;
+    if (k === i || (withSel && glyphSel.has(k))) { all.push({ p: q, o: vq.o, inv: invMat(vq.m), lead: k === i }); return; }
+    if (Math.hypot(vq.o.x - o.x, vq.o.y - o.y) > 1e-6) refs.push(vq.o);
   });
   ptDrag = {
     p: p, root: root, m: m, inv: invMat(m), o: o, refs: refs, all: all, guides: null,
@@ -1029,9 +984,7 @@ function beginPtDrag(e, i, pts, root, mod, off, bbox) {
     off: (off && isFinite(off.x) && isFinite(off.y)) ? off : { x: 0, y: 0 },
     toggle: mod ? i : -1, bbox: !!bbox, pts: pts, before: el('mSvg').value, pid: grabPointer(e),
   };
-  window.addEventListener('pointermove', onPtMove);
-  window.addEventListener('pointerup', endPtMove);
-  window.addEventListener('pointercancel', endPtMove);
+  armDrag(onPtMove, endPtMove);
   renderGlyphPts();
 }
 function onPtMove(e) {
@@ -1086,9 +1039,7 @@ function onPtMove(e) {
 function endPtMove() {
   const d = ptDrag; if (!d) return;
   ptDrag = null;
-  window.removeEventListener('pointermove', onPtMove);
-  window.removeEventListener('pointerup', endPtMove);
-  window.removeEventListener('pointercancel', endPtMove);
+  disarmDrag(onPtMove, endPtMove);
   dropPointer(d.pid);
   /* a click on empty space inside the frame is the deselect it always was */
   if (d.bbox && !d.moved) clearGlyphSel();
@@ -1105,19 +1056,9 @@ function endPtMove() {
 /* =====================================================================
    TOOLS · ROTATE · SOURCE HIGHLIGHT · PAINT
    =====================================================================
-   Everything below obeys the same five rules the point gestures do, and each of
-   them is a real failure that happened once:
-     1. the el('mApply').disabled gate is the FIRST statement of any arming path
-        (refreshMPreview injects unparsed text, so a gesture on the HTML parser's
-        reconstruction of half-typed markup writes that reconstruction back and
-        the red error clears — reading as the typo having been accepted);
-     2. focusPtCanvas() with preventScroll, or the modal scrolls between the hit
-        test and viewPtOf and the coordinate is 28 units out;
-     3. pointer capture on #mPtsLay, never on a child the next frame deletes;
-     4. one glyphUndo entry per GESTURE, pushed AFTER the write;
-     5. the commit is pruneEmptyGroups → el('mSvg').value = root.innerHTML →
-        pushGlyphUndo(before) → refreshMPreview().
-   Rule 5 is `commitGlyphEdit` below; every new mutation goes through it. */
+   Same rules as the point gestures (docs/dev/node-visuals-and-designer.md, point editor
+   (a)-(e)): glyphEditBlocked first, focusPtCanvas, capture on #mPtsLay, one undo
+   entry per gesture pushed AFTER the write, and commit through commitGlyphEdit. */
 
 /* The ONE commit path for every new gesture. */
 function commitGlyphEdit(root, before) {
@@ -1127,9 +1068,11 @@ function commitGlyphEdit(root, before) {
   refreshMPreview();
 }
 
-/* Guard shared by every arming path. Returns true when the gesture must not run. */
-function glyphEditBlocked(what) {
-  if (el('mApply').disabled) { toast('Fix the SVG error first — ' + what + ' in art that doesn’t parse.'); return true; }
+/* The gate every mutating gesture runs FIRST; true = it must not run. A gesture
+   on text that does not parse writes the HTML parser's reconstruction back into
+   #mSvg — docs/dev/node-visuals-and-designer.md, point editor (a). */
+function glyphEditBlocked(what, prep = 'in') {
+  if (el('mApply').disabled) { toast('Fix the SVG error first — ' + what + ' ' + prep + ' art that doesn’t parse.'); return true; }
   return false;
 }
 
@@ -1190,7 +1133,7 @@ function syncToolInfo(ctx) {
      no label at all, since it is the only thing that makes the coordinate space
      a new shape is authored in visible. */
   if (toolMode !== 'select' && toolMode !== 'rotate' && toolMode !== 'insert') {
-    const root = (ctx && ctx.root) || el('mPreview').querySelector('svg');
+    const root = (ctx && ctx.root) || previewRoot();
     const tgt = root ? resolveDrawTarget(root, ctx && ctx.pts, toolMode) : null;
     if (tgt && tgt.el !== root) {
       const tr = (tgt.el.getAttribute('transform') || '').trim();
@@ -1268,10 +1211,8 @@ function resolveDrawTarget(root, known, mode) {
 function toolRefs(root) {
   const refs = [{ x: 28, y: 28 }];
   glyphPoints(root).forEach((q) => {
-    try {
-      const v = applyMat(ctmOf(q.el, root), q.get().x, q.get().y);
-      if (isFinite(v.x) && isFinite(v.y)) refs.push(v);
-    } catch (e) {}
+    const vq = viewPosOf(q, root);
+    if (vq && isFinite(vq.o.x) && isFinite(vq.o.y)) refs.push(vq.o);
   });
   return refs;
 }
@@ -1339,9 +1280,7 @@ function shapeIsInvisible(elm) {
   } catch (e) { return false; }
 }
 function makeShape(tag, attrs, host) {
-  const e = document.createElementNS(SVG_NS, tag);
-  Object.keys(attrs).forEach((k) => e.setAttribute(k, attrs[k]));
-  host.appendChild(e);
+  const e = host.appendChild(svgEl(tag, attrs));
   applyDrawPaint(e, host);
   return e;
 }
@@ -1358,7 +1297,7 @@ function drawableIndexOf(root, elm) {
   return Array.prototype.indexOf.call(root.querySelectorAll(DRAWABLE_TAGS.join(',')), elm);
 }
 function selectDrawableAt(idx, filter) {
-  const root = el('mPreview').querySelector('svg'); if (!root || idx < 0) return 0;
+  const root = previewRoot(); if (!root || idx < 0) return 0;
   const elm = root.querySelectorAll(DRAWABLE_TAGS.join(','))[idx];
   if (!elm) return 0;
   const pts = glyphPoints(root);
@@ -1379,9 +1318,7 @@ const FREE_MAX_ANCHORS = 40;             // escalate the tolerance rather than m
 function cancelToolGesture() {
   const t = ptTool; ptTool = null;
   if (!t) return;
-  window.removeEventListener('pointermove', onToolMove);
-  window.removeEventListener('pointerup', onToolUp);
-  window.removeEventListener('pointercancel', onToolUp);
+  disarmDrag(onToolMove, onToolUp);
   dropPointer(t.pid);
 }
 
@@ -1397,7 +1334,7 @@ function onDrawDown(e) {
   e.preventDefault(); e.stopPropagation();
   focusPtCanvas();                       // must not scroll — see focusPtCanvas
   if (glyphEditBlocked('shapes can’t be drawn')) return;
-  const root = el('mPreview').querySelector('svg'); if (!root) return;
+  const root = previewRoot(); if (!root) return;
   const v = viewPtOf(e); if (!v) return;
 
   const host = resolveDrawTarget(root, null, toolMode);
@@ -1418,9 +1355,7 @@ function onDrawDown(e) {
     ptTool.moved = false;
     ptTool.pd = viewPtOf(e) || s.view;
     ptTool.pid = grabPointer(e);
-    window.addEventListener('pointermove', onToolMove);
-    window.addEventListener('pointerup', onToolUp);
-    window.addEventListener('pointercancel', onToolUp);
+    armDrag(onToolMove, onToolUp);
     renderGlyphPts();
     return;
   }
@@ -1439,9 +1374,7 @@ function onDrawDown(e) {
     ptTool.dragging = 0;
   }
   if (toolMode === 'free') ptTool.trail.push({ x: v.x, y: v.y });
-  window.addEventListener('pointermove', onToolMove);
-  window.addEventListener('pointerup', onToolUp);
-  window.addEventListener('pointercancel', onToolUp);
+  armDrag(onToolMove, onToolUp);
   renderGlyphPts();
 }
 
@@ -1473,16 +1406,12 @@ function onToolUp() {
   if (t.mode === 'pen') {                 // the run continues; only the handle drag ended
     t.dragging = -1;
     dropPointer(t.pid); t.pid = null;
-    window.removeEventListener('pointermove', onToolMove);
-    window.removeEventListener('pointerup', onToolUp);
-    window.removeEventListener('pointercancel', onToolUp);
+    disarmDrag(onToolMove, onToolUp);
     renderGlyphPts();
     return;
   }
   ptTool = null;                          // FIRST — commitGlyphEdit runs refreshMPreview, which cancels tool gestures
-  window.removeEventListener('pointermove', onToolMove);
-  window.removeEventListener('pointerup', onToolUp);
-  window.removeEventListener('pointercancel', onToolUp);
+  disarmDrag(onToolMove, onToolUp);
   dropPointer(t.pid);
   if (!t.moved) { renderGlyphPts(); return; }   // a click is not a shape
 
@@ -1535,9 +1464,7 @@ function onToolUp() {
 function finishPen(closed) {
   const t = ptTool; if (!t || t.mode !== 'pen') return;
   ptTool = null;
-  window.removeEventListener('pointermove', onToolMove);
-  window.removeEventListener('pointerup', onToolUp);
-  window.removeEventListener('pointercancel', onToolUp);
+  disarmDrag(onToolMove, onToolUp);
   dropPointer(t.pid);
   if (t.anchors.length < 2) { renderGlyphPts(); toast('A path needs at least two anchors.'); return; }
   const d = penPathData(t.anchors, closed);
@@ -1588,7 +1515,7 @@ function findInsertHit(root, v) {
       consider(elm, 'line', 0, projectOnSegment(v, a, b), false);
       return;
     }
-    const nums = (elm.getAttribute('points') || '').split(/[\s,]+/).filter(Boolean).map(Number);
+    const nums = polyNums(elm);
     const count = Math.floor(nums.length / 2);
     const closed = tag === 'polygon';
     for (let i = 0; i < count; i++) {
@@ -1605,7 +1532,7 @@ function onCanvasHover(e) {
   /* Attached once to #mPrevBox, so it fires during every other gesture too. */
   if (toolMode !== 'insert' || ptDrag || ptScale || ptMarq || ptTool || ptRot) return;
   if (!el('mMove').checked || el('mApply').disabled) return;
-  const root = el('mPreview').querySelector('svg'); if (!root) return;
+  const root = previewRoot(); if (!root) return;
   const v = viewPtOf(e); if (!v) return;
   const hit = findInsertHit(root, v);
   const same = (!hit && !insHit) || (hit && insHit && hit.el === insHit.el && hit.idx === insHit.idx && Math.abs(hit.t - insHit.t) < 1e-4);
@@ -1617,7 +1544,7 @@ function doInsertPoint(e) {
   e.preventDefault(); e.stopPropagation();
   focusPtCanvas();                       // must not scroll — see focusPtCanvas
   if (glyphEditBlocked('points can’t be added')) return;
-  const root = el('mPreview').querySelector('svg'); if (!root) return;
+  const root = previewRoot(); if (!root) return;
   const v = viewPtOf(e); if (!v) return;
   const hit = findInsertHit(root, v);
   if (!hit) { toast('Nothing to add a point to here — click on a line or a curve.'); return; }
@@ -1631,7 +1558,7 @@ function doInsertPoint(e) {
     hit.el.setAttribute('d', serializePath(r.segs));
     newIdx = r.anchorSeg;
   } else if (hit.kind === 'poly') {
-    const nums = (hit.el.getAttribute('points') || '').split(/[\s,]+/).filter(Boolean).map(Number);
+    const nums = polyNums(hit.el);
     const r = insertIntoPoly(nums, hit.idx, hit.t, hit.closed);
     if (!r) { toast('That segment can’t take an extra point.'); return; }
     hit.el.setAttribute('points', r.nums.map(fmtN).join(' '));
@@ -1645,7 +1572,7 @@ function doInsertPoint(e) {
     const x2 = parseFloat(hit.el.getAttribute('x2')) || 0, y2 = parseFloat(hit.el.getAttribute('y2')) || 0;
     const inv = (() => { try { return invMat(ctmOf(hit.el, root)); } catch (err) { return [1, 0, 0, 1, 0, 0]; } })();
     const mid = applyMat(inv, hit.x, hit.y);
-    const poly = document.createElementNS(SVG_NS, 'polyline');
+    const poly = svgEl('polyline');
     Array.prototype.forEach.call(hit.el.attributes, (a) => {
       if (/^(x1|y1|x2|y2)$/.test(a.name)) return;
       poly.setAttribute(a.name, a.value);
@@ -1673,24 +1600,9 @@ function doInsertPoint(e) {
 }
 
 /* ---------------- rotate ----------------
-   A ROTATE TOOL rather than a grip on the selection frame. A grip has to live
-   outside the frame, and on art that fills the canvas (uv reaches 0.42…56.29)
-   there is ~1.6 units of room out there — the grip would be drawn on top of the
-   selected points' own handles, and since grips are appended BEFORE handles so a
-   point always wins an ambiguous press, it would be visible and unclickable in
-   exactly the select-all case people reach for first.
-
-   Two mechanisms, because a selection of POINTS cannot express every rotation:
-     • coords — rotate each selected point about the pivot. Exact for line
-       endpoints, polyline/polygon vertices, text/circle centres and path
-       anchors and controls.
-     • rigid — fold a rotate() into the element's own transform. A <rect> is
-       axis-aligned by construction and an <ellipse>'s rx/ry ARE its axes, so
-       rotating their points cannot rotate them: it just drags the corners, which
-       reads as the shape being resized and skewed.
-   Derived size handles (a circle's r, a rect's bottom-right) are skipped — they
-   are a dimension, not a point, which is exactly what Delete already tells the
-   user about them. */
+   A tool, not a grip on the frame, with two mechanisms: point coordinates rotate,
+   while rect / ellipse / text fold a rotate() into their own transform. Size
+   handles are skipped. docs/dev/node-visuals-and-designer.md, tools (4). */
 let ptRot = null;
 let rotRun = null;                       // { src, total, expect, sig } — see rotateGlyphSelection
 const ROT_MIN_LEVER = 2.5;               // view units: closer to the pivot than this, the angle is noise
@@ -1709,7 +1621,7 @@ function rigidPathSeg(elm, si) {
 }
 function planRotation(root) {
   const pts = glyphPoints(root);
-  const sel = Array.from(glyphSel).filter((i) => i < pts.length).sort((a, b) => a - b);
+  const sel = selectedIdx(pts);
   const byEl = new Map();
   sel.forEach((i) => {
     const p = pts[i];
@@ -1763,11 +1675,10 @@ function planRotation(root) {
          rigid transform), so there is nothing to do for it. */
       if (!p.del) return;
       if (tag === 'path' && p.del && p.del.si != null && rigidPathSeg(p.el, p.del.si)) { refused++; return; }
-      let m, o;
-      try { m = ctmOf(p.el, root); const lp = p.get(); o = applyMat(m, lp.x, lp.y); } catch (e) { return; }
-      if (!isFinite(o.x) || !isFinite(o.y)) return;
-      if (!boxed) grow(o.x, o.y);
-      if (!isRigid) coords.push({ p: p, o: o, inv: invMat(m) });
+      const vp = viewPosOf(p, root);
+      if (!vp || !isFinite(vp.o.x) || !isFinite(vp.o.y)) return;
+      if (!boxed) grow(vp.o.x, vp.o.y);
+      if (!isRigid) coords.push({ p: p, o: vp.o, inv: invMat(vp.m) });
     });
   });
   if (x0 > x1 || y0 > y1) return null;
@@ -1804,7 +1715,7 @@ function onRotDown(e) {
   e.preventDefault(); e.stopPropagation();
   focusPtCanvas();                       // must not scroll — see focusPtCanvas
   if (glyphEditBlocked('the selection can’t be rotated')) return;
-  const root = el('mPreview').querySelector('svg'); if (!root) return;
+  const root = previewRoot(); if (!root) return;
   if (glyphSel.size < 2) { toast('Select at least two points first — a rotation needs something to turn about.'); return; }
   const plan = planRotation(root);
   if (!plan || (!plan.coords.length && !plan.rigid.length)) { toast('Nothing in that selection can be rotated.'); return; }
@@ -1816,9 +1727,7 @@ function onRotDown(e) {
   if (Math.hypot(v.x - plan.pivot.x, v.y - plan.pivot.y) >= ROT_MIN_LEVER) {
     ptRot.raw = Math.atan2(v.y - plan.pivot.y, v.x - plan.pivot.x);
   }
-  window.addEventListener('pointermove', onRotMove);
-  window.addEventListener('pointerup', endRot);
-  window.addEventListener('pointercancel', endRot);
+  armDrag(onRotMove, endRot);
   renderGlyphPts();
 }
 function onRotMove(e) {
@@ -1855,9 +1764,7 @@ function onRotMove(e) {
 function endRot() {
   const t = ptRot; if (!t) return;
   ptRot = null;
-  window.removeEventListener('pointermove', onRotMove);
-  window.removeEventListener('pointerup', endRot);
-  window.removeEventListener('pointercancel', endRot);
+  disarmDrag(onRotMove, endRot);
   dropPointer(t.pid);
   if (!t.moved) { renderGlyphPts(); return; }
   commitGlyphEdit(t.root, t.before);
@@ -1871,9 +1778,7 @@ function endRot() {
 function cancelRotate() {
   const t = ptRot; if (!t) return;
   ptRot = null;
-  window.removeEventListener('pointermove', onRotMove);
-  window.removeEventListener('pointerup', endRot);
-  window.removeEventListener('pointercancel', endRot);
+  disarmDrag(onRotMove, endRot);
   dropPointer(t.pid);
   if (t.moved) { el('mSvg').value = t.before; refreshMPreview(); return; }
   renderGlyphPts();
@@ -1885,31 +1790,16 @@ function rotateGlyphSelection(deg, held) {
   if (!glyphSel.size || el('mApply').disabled) return false;
   if (glyphSel.size < 2) { toast('Select at least two points first — a rotation needs something to turn about.'); return false; }
   const before = el('mSvg').value;
-  /* A RUN, and it is what makes the keys usable at all. Applying a per-press
-     DELTA to the art the previous press produced is not the same operation as
-     one rotation: `planRotation` takes its pivot from the CURRENT bounding box,
-     and the AABB centre of a rotated point set is not the rotated AABB centre —
-     so every press turns about a slightly different place and the selection
-     WALKS. Measured on the shipped `dataviz` polyline: six ⇧⌥→ presses land the
-     whole shape 1.38 view units from where one 90° drag puts it, as a pure
-     translation, and an L-shaped selection spanning the canvas goes 9.3. It also
-     violated `rotateTransform`'s contract (ORIGINAL transform + TOTAL angle),
-     leaving one `rotate()` per keypress stacked in the saved art.
-     So the run keeps the ORIGINAL source and the accumulated total, restores
-     that source, and re-plans against it — the plan can NOT be cached, because
-     refreshMPreview replaces #mPreview's innerHTML and every element reference
-     in it goes with the old tree.
-     The run is validated against the SOURCE TEXT rather than a list of
-     invalidation sites: typing, an undo, a paint change and a tool gesture all
-     move it, so one comparison covers every way the run can stop being valid.
-     `selSig` joins it because a different selection is a different rotation. */
+  /* A RUN: every press restores the run's ORIGINAL source and re-plans with the
+     TOTAL angle, or the pivot walks and rotate() calls stack (tools (4) in the doc,
+     pinned by glyphEditorGuards.test.ts). Valid while source text + selSig match. */
   if (!rotRun || rotRun.expect !== before || rotRun.sig !== selSig) {
     rotRun = { src: before, total: 0, expect: before, sig: selSig };
   } else if (rotRun.src !== before) {
     el('mSvg').value = rotRun.src;
     refreshMPreview();                            // … and with it a LIVE element tree
   }
-  const root = el('mPreview').querySelector('svg'); if (!root) { rotRun = null; return false; }
+  const root = previewRoot(); if (!root) { rotRun = null; return false; }
   const plan = planRotation(root);
   if (!plan || (!plan.coords.length && !plan.rigid.length)) { rotRun = null; toast('Nothing in that selection can be rotated.'); return false; }
   rotRun.total += deg;
@@ -1927,8 +1817,7 @@ function rotateGlyphSelection(deg, held) {
 /* ---------------- tool + rotate overlays ---------------- */
 function drawToolOverlays(lay, root, pts, P, box, nSel) {
   const mk = (tag, attrs, cls) => {
-    const e = document.createElementNS(SVG_NS, tag);
-    Object.keys(attrs).forEach((k) => e.setAttribute(k, attrs[k]));
+    const e = svgEl(tag, attrs);
     e.setAttribute('class', cls + ' pt-dec');   // .pt-dec — see the CSS note about #mPtsLay circle
     lay.appendChild(e);
     return e;
@@ -2025,7 +1914,7 @@ function syncGlyphHl(ctx) {
     hlWidth = ta.clientWidth;
   }
   const text = ta.value || '';
-  const root = (ctx && ctx.root) || el('mPreview').querySelector('svg');
+  const root = (ctx && ctx.root) || previewRoot();
   const note = el('mMapNote');
   let ranges = [];
   let noteText = '';
@@ -2060,7 +1949,7 @@ function syncGlyphHl(ctx) {
    is the direction that makes the source usable as a picker. */
 function selectFromCaret() {
   if (!el('mMove').checked || el('mApply').disabled) return;
-  const root = el('mPreview').querySelector('svg'); if (!root) return;
+  const root = previewRoot(); if (!root) return;
   const map = glyphSourceMap(root); if (!map) return;
   const idx = drawableIndexAtOffset(map.scan, el('mSvg').selectionStart || 0);
   if (idx < 0 || idx >= map.domEls.length) return;
@@ -2118,7 +2007,7 @@ function renderPaintBar(ctx) {
      user likes, so it must not freeze the bar — that is exactly when someone
      picks the colour for the path they are drawing. */
   if (ptDrag || ptScale || ptMarq || ptRot || (ptTool && !(ptTool.mode === 'pen' && ptTool.dragging < 0))) return;
-  const root = (ctx && ctx.root) || el('mPreview').querySelector('svg');
+  const root = (ctx && ctx.root) || previewRoot();
   const targets = (root && el('mMove').checked) ? paintTargets(root, ctx && ctx.pts) : [];
   const sums = {};
   ['fill', 'stroke', 'stroke-width'].forEach((prop) => {
@@ -2156,7 +2045,7 @@ function renderPaintBar(ctx) {
   }
 }
 function applyPaint(prop, value) {
-  const root = el('mPreview').querySelector('svg');
+  const root = previewRoot();
   const targets = (root && el('mMove').checked) ? paintTargets(root) : [];
   if (!targets.length) {                 // set the pen's colours instead
     drawPaint[prop] = value;
@@ -2178,19 +2067,12 @@ function applyPaint(prop, value) {
   /* A style change touches attributes only, and ptsSig folds tag + delete-kind +
      point-kind — so the selection survives it by construction. */
   commitGlyphEdit(root, before);
-  /* WebKit and Firefox/macOS do not focus a <button> on click, so after a swatch
-     press the caret can still be in #mSvg (the source→canvas link puts it there)
-     — and the modal keydown bails above the ⌘Z branch on that, with the
-     textarea's own undo empty because the value was assigned programmatically.
-     The undo entry just pushed would be unreachable. Same trap replaceGlyphSource
-     and the Format button document. */
-  focusPtCanvas();
+  focusPtCanvas();                       // or ⌘Z cannot reach that entry — see replaceGlyphSource
   renderGlyphPts();
 }
 
 /* ---------------- state ---------------- */
 /* Node frame style is FIXED app-wide: radius 8px, border 1.5px (category color). */
-const SOCK_SNAP = 4;                    // px snap increment for socket positions
 const DEF_OFF = [-12.5, 12.5];          // default input offsets from body center (a, b)
 const DEFAULTS = { justify: 'center', scale: 1, dx: 0, dy: 0, width: 0, height: 0, text: 1 };
 const state = { type: null, glyph: '', justify: 'center', scale: 1, dx: 0, dy: 0, width: 0, height: 0, text: 1, sockets: {} };
@@ -2236,26 +2118,20 @@ function previewFor(type) {
   previews[type] = p; return p;
 }
 
-/* Inspector nudge bound: glyph-space ±28 for glyph nodes, ±400 CSS px for art
-   nodes (an art element can need to travel across a 400px-wide node). */
-// One bound for glyphs AND art. Glyphs used to be clamped to ±28 (half the 56
-// canvas), which stopped a drag dead after ~25 screen px — "the art won't move
-// freely" — and the shipped uv design sits exactly AT dy 28, i.e. the wall was
-// already being hit. dx/dy are decorative-only offsets rendered with
-// overflow:visible, so a generous shared bound is safe.
-function inputNudgeLim() { return 400; }
+/* One nudge bound for glyphs AND art: dx/dy are decorative offsets drawn with
+   overflow:visible (the old glyph-space ±28 clamp stopped a drag after ~25px). */
+const NUDGE_LIM = 400;
 function syncLayoutInputs() {
   const set = (id, v) => { const e = el(id); if (e) e.value = v; };
   set('gScale', state.scale); set('just', state.justify); set('nW', state.width); set('nH', state.height); set('nT', state.text); set('gDx', state.dx); set('gDy', state.dy);
-  const lim = inputNudgeLim();
-  ['gDx', 'gDy'].forEach((id) => { const e = el(id); if (e) { e.min = -lim; e.max = lim; } });
+  ['gDx', 'gDy'].forEach((id) => { const e = el(id); if (e) { e.min = -NUDGE_LIM; e.max = NUDGE_LIM; } });
   const k = Object.keys(state.sockets);
   el('sockInfo').textContent = k.length ? k.map((x) => x + ' ' + (state.sockets[x] > 0 ? '+' : '') + state.sockets[x]).join(' · ') : 'default';
 }
 
 /* the diff that would be written for the current node ({} = registry default) */
 function currentDesign() {
-  const d = {}, b = builtinGlyph(state.type);
+  const d = {}, b = ND.builtinGlyphSvg(state.type);
   // empty can't override built-in art in the app; art nodes never persist an
   // svg (belt-and-braces behind the openGlyph guard — a stale stash or
   // hand-edited nd:edits must not sneak one into a save)
@@ -2282,7 +2158,7 @@ function draftDesign() {
   return d;
 }
 function applyDesignTo(st, type, d) {
-  const b = builtinGlyph(type);
+  const b = ND.builtinGlyphSvg(type);
   st.glyph = (d && d.svg != null) ? d.svg : b;
   st.justify = (d && d.justify) || DEFAULTS.justify;
   st.scale = (d && d.scale != null) ? d.scale : DEFAULTS.scale;
@@ -2463,7 +2339,7 @@ function renderInfo() {
   const n = NODE_BY_TYPE[state.type]; const cat = ND.categoryHex(n.cat); const cost = COSTS[state.type] ?? 0;
   el('iType').textContent = n.type;
   const ic = el('iCat'); ic.querySelector('.dot').style.background = cat; ic.querySelector('span:last-child').textContent = ndCatLabel(n.cat);
-  const io = el('iCost'); io.querySelector('.dot').style.background = costColor(cost); io.querySelector('span:last-child').textContent = cost + ' pts';
+  const io = el('iCost'); io.querySelector('.dot').style.background = ND.costColorOf(cost); io.querySelector('span:last-child').textContent = cost + ' pts';
   el('pasteBtn').disabled = !copyBuf;
   syncNameInputs();
 }
@@ -2604,7 +2480,7 @@ function rAFEdges() { requestAnimationFrame(renderEdges); }
 function renderEdges() {
   const wrap = el('nodeWrap'); const node = wrap.querySelector('.node-base'); if (!node) return;
   let svg = wrap.querySelector('.stubs');
-  if (!svg) { svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('class', 'stubs'); wrap.insertBefore(svg, wrap.firstChild); }
+  if (!svg) { svg = svgEl('svg', { class: 'stubs' }); wrap.insertBefore(svg, wrap.firstChild); }
   const wB = wrap.getBoundingClientRect(); if (wB.width === 0) return;
   const z = ui.zoom || 1;
   const W = wB.width / z + 180, H = wB.height / z + 180;
@@ -2613,11 +2489,11 @@ function renderEdges() {
   const p = previewFor(state.type);
   const line = (x0, y0, x1, y1, ch) => {
     const colors = ch === 1 ? [contrast(ui.bg)] : (COUNT_EDGE_COLORS[ch] || ['#000']);
-    const w = ch >= 4 ? 0.8 : ch >= 3 ? 1 : ch >= 2 ? 1.2 : 1.5;
+    const w = ribbonStrokeWidth(ch);
     const half = (ch - 1) / 2; let s = '';
     for (let i = 0; i < ch; i++) {
-      const off = (i - half) * EDGE_GAP;
-      s += '<line x1="' + x0 + '" y1="' + (y0 + off) + '" x2="' + x1 + '" y2="' + (y1 + off) + '" stroke="' + colors[i] + '" stroke-width="' + w + '"' + (ch > 1 ? ' stroke-dasharray="4 0.5"' : '') + ' opacity="0.9"/>';
+      const off = (i - half) * RIBBON_GAP;
+      s += '<line x1="' + x0 + '" y1="' + (y0 + off) + '" x2="' + x1 + '" y2="' + (y1 + off) + '" stroke="' + colors[i] + '" stroke-width="' + w + '"' + (ch > 1 ? ' stroke-dasharray="' + RIBBON_DASH + '"' : '') + ' opacity="0.9"/>';
     }
     return s;
   };
@@ -2649,37 +2525,26 @@ function onGlyphDown(e, target, isArt) {
   /* pxPerUnit converts SCREEN px → design units. Glyph: the rendered svg's
      rect already folds in zoom + cost scale (screen px per 56-space unit).
      Art (the colormap ramp): units ARE element-local CSS px, so divide by
-     zoom × cost scale explicitly. Both share the ±400 clamp (nudgeLim). */
+     zoom × cost scale explicitly. Both share the ±400 clamp (NUDGE_LIM). */
   let pxPerUnit;
   if (isArt) {
-    pxPerUnit = (ui.zoom || 1) * costScaleOf(COSTS[state.type] ?? 0);
+    pxPerUnit = (ui.zoom || 1) * nodeCostScale();
   } else {
     const svg = target.querySelector('svg'); if (!svg) return;
     pxPerUnit = svg.getBoundingClientRect().width / 56;
     if (!pxPerUnit) return;
   }
   glyphDrag = { x: e.clientX, y: e.clientY, dx0: state.dx, dy0: state.dy, pxPerUnit: pxPerUnit, moved: false, isArt: isArt };
-  window.addEventListener('pointermove', onGlyphMove);
-  window.addEventListener('pointerup', endGlyphMove);
-  window.addEventListener('pointercancel', cancelGlyphMove);
+  armDrag(onGlyphMove, endGlyphMove, cancelGlyphMove);
 }
-/* One generous bound for both (matches inputNudgeLim): the old glyph-space
-   ±28 clamp stopped a drag after ~25 screen px at default scale. */
-function nudgeLim() { return 400; }
 function onGlyphMove(e) {
   if (!glyphDrag) return;
   const mx = e.clientX - glyphDrag.x, my = e.clientY - glyphDrag.y;
   if (!glyphDrag.moved && Math.hypot(mx, my) < 3) return;
   glyphDrag.moved = true;
-  const lim = nudgeLim();
-  state.dx = Math.max(-lim, Math.min(lim, Math.round((glyphDrag.dx0 + mx / glyphDrag.pxPerUnit) * 2) / 2));
-  state.dy = Math.max(-lim, Math.min(lim, Math.round((glyphDrag.dy0 + my / glyphDrag.pxPerUnit) * 2) / 2));
+  state.dx = Math.max(-NUDGE_LIM, Math.min(NUDGE_LIM, Math.round((glyphDrag.dx0 + mx / glyphDrag.pxPerUnit) * 2) / 2));
+  state.dy = Math.max(-NUDGE_LIM, Math.min(NUDGE_LIM, Math.round((glyphDrag.dy0 + my / glyphDrag.pxPerUnit) * 2) / 2));
   syncLayoutInputs(); renderNode();
-}
-function unbindGlyphMove() {
-  window.removeEventListener('pointermove', onGlyphMove);
-  window.removeEventListener('pointerup', endGlyphMove);
-  window.removeEventListener('pointercancel', cancelGlyphMove);
 }
 /* A cancelled pointer (second-finger gesture takeover, pen cancel) never
    fires pointerup — without this the window-level drag stays armed and every
@@ -2688,12 +2553,12 @@ function unbindGlyphMove() {
    editor open — the gesture is simply abandoned. */
 function cancelGlyphMove() {
   glyphDrag = null;
-  unbindGlyphMove();
+  disarmDrag(onGlyphMove, endGlyphMove, cancelGlyphMove);
   syncLayoutInputs(); renderNode();
 }
 function endGlyphMove() {
   const d = glyphDrag; glyphDrag = null;
-  unbindGlyphMove();
+  disarmDrag(onGlyphMove, endGlyphMove, cancelGlyphMove);
   if (!d) return;
   if (d.moved) { stash(); renderNode(); renderGlyphCard(); }
   else if (!d.isArt) openGlyph();
@@ -2711,7 +2576,7 @@ function endGlyphMove() {
    Divides by z * cs — the cost scale is inside the card's own wrapper. */
 function measuredSockOff(sockEl, regionEl) {
   if (!sockEl || !regionEl) return null;
-  const cs = costScaleOf(COSTS[state.type] ?? 0), z = ui.zoom || 1;
+  const cs = nodeCostScale(), z = ui.zoom || 1;
   const sb = sockEl.getBoundingClientRect(), rb = regionEl.getBoundingClientRect();
   return ((sb.top + sb.height / 2) - (rb.top + rb.height / 2)) / (z * cs);
 }
@@ -2758,7 +2623,7 @@ function onSockDown(e, sock) {
   const key = io === 'out' ? 'out' : port;
   e.preventDefault(); e.stopPropagation();
   const rows = !layoutIsOp();
-  const cs = costScaleOf(COSTS[state.type] ?? 0), z = ui.zoom || 1;
+  const cs = nodeCostScale(), z = ui.zoom || 1;
   const regionEl = rows ? el('nodeWrap').querySelector('.shader-node__region') : null;
   let off0;
   if (state.sockets[key] != null) off0 = state.sockets[key];
@@ -2768,9 +2633,7 @@ function onSockDown(e, sock) {
   } else off0 = defOffFor(key);
   const limH = rows ? (regionEl ? regionEl.getBoundingClientRect().height / (z * cs) : 52) : opBodyH();
   sockDrag = { key, y0: e.clientY, off0, limH, rows, moved: false };
-  window.addEventListener('pointermove', onSockMove);
-  window.addEventListener('pointerup', endSockMove);
-  window.addEventListener('pointercancel', cancelSockMove);
+  armDrag(onSockMove, endSockMove, cancelSockMove);
   renderNode(); // mounts the snap ruler
 }
 /* Same abandoned-gesture guard as the glyph drag (the old page lacked it here
@@ -2778,14 +2641,12 @@ function onSockDown(e, sock) {
    platform invites). No stash, no click fallback — just unmount the ruler. */
 function cancelSockMove() {
   sockDrag = null;
-  window.removeEventListener('pointermove', onSockMove);
-  window.removeEventListener('pointerup', endSockMove);
-  window.removeEventListener('pointercancel', cancelSockMove);
+  disarmDrag(onSockMove, endSockMove, cancelSockMove);
   syncLayoutInputs(); renderNode();
 }
 function onSockMove(e) {
   if (!sockDrag) return;
-  const cs = costScaleOf(COSTS[state.type] ?? 0), z = ui.zoom || 1;
+  const cs = nodeCostScale(), z = ui.zoom || 1;
   const dy = (e.clientY - sockDrag.y0) / (z * cs);
   if (!sockDrag.moved && Math.abs(dy) < 3) return;
   sockDrag.moved = true;
@@ -2798,9 +2659,7 @@ function onSockMove(e) {
 }
 function endSockMove() {
   const d = sockDrag; sockDrag = null;
-  window.removeEventListener('pointermove', onSockMove);
-  window.removeEventListener('pointerup', endSockMove);
-  window.removeEventListener('pointercancel', cancelSockMove);
+  disarmDrag(onSockMove, endSockMove, cancelSockMove);
   if (!d) return;
   if (d.moved) { sockRaw[d.key] = state.sockets[d.key]; stash(); renderNode(); }
   else {
@@ -2836,8 +2695,7 @@ function startScale(e) {
     sock0: { ...state.sockets },
   };
   e.currentTarget.setPointerCapture(e.pointerId);
-  window.addEventListener('pointermove', onScale); window.addEventListener('pointerup', endScale);
-  window.addEventListener('pointercancel', cancelScale);
+  armDrag(onScale, endScale, cancelScale);
 }
 function cancelScale() {
   // A cancelled gesture must UNDO, not merely stop: this handler used to leave
@@ -2845,9 +2703,7 @@ function cancelScale() {
   // also leaves a fully rewritten socket map, so one stray pointercancel (an
   // iPad second finger) would silently re-author the node with no way back.
   const d = scaleDrag; scaleDrag = null;
-  window.removeEventListener('pointermove', onScale);
-  window.removeEventListener('pointerup', endScale);
-  window.removeEventListener('pointercancel', cancelScale);
+  disarmDrag(onScale, endScale, cancelScale);
   if (d) {
     state.height = d.h0; state.width = d.w0; state.sockets = d.sock0;
     syncLayoutInputs(); renderNode();
@@ -2869,7 +2725,7 @@ function onScale(e) {
   }
   syncLayoutInputs(); renderNode();
 }
-function endScale() { if (scaleDrag) { scaleDrag = null; stash(); } window.removeEventListener('pointermove', onScale); window.removeEventListener('pointerup', endScale); window.removeEventListener('pointercancel', cancelScale); }
+function endScale() { if (scaleDrag) { scaleDrag = null; stash(); } disarmDrag(onScale, endScale, cancelScale); }
 
 (function bindStageGestures() {
   const wrap = el('nodeWrap');
@@ -2948,29 +2804,14 @@ function populateLoadList() {
     const t = n.type;
     const d = (t in sessionEdits) ? sessionEdits[t] : savedGlyphs[t];
     if (d && d.svg) custom.push(['c:' + t, ndBaseLabel(t) + ' (' + t + ')' + (t === state.type ? ' — current' : '')]);
-    if (builtinGlyph(t)) builtins.push(['b:' + t, ndBaseLabel(t) + ' (' + t + ')']);
+    if (ND.builtinGlyphSvg(t)) builtins.push(['b:' + t, ndBaseLabel(t) + ' (' + t + ')']);
   });
   addGroup('Saved / session designs', custom);
   addGroup('Built-in glyphs', builtins);
 }
-/* The ONE path for replacing the WHOLE document (Clear / Built-in / Load /
-   Upload / .svg drop). Writing .value by hand fires no `input` event, so the
-   listener that drops stale point snapshots never ran: drag a point (snapshot
-   pushed), press Built-in, hit ⌘Z — and the box came back holding neither the
-   built-in art nor the dragged art, but the PRE-drag version, under a toast
-   claiming "Undid the last point edit."
-   The answer is to PUSH the outgoing document, not to drop the stack. Clearing
-   it made ⌘Z answer "nothing to undo — this stack holds point gestures only"
-   immediately after a run of real point gestures, which is simply false, and
-   left Cancel — which throws the whole modal session away, including the work
-   the user wanted — as the only recovery from a mis-clicked Clear (a mini button
-   one slot from Built-in, two from Copy SVG).
-   No new mechanism is needed: the stack already holds whole #mSvg strings and
-   undoGlyphEdit already restores one wholesale and clears the selection, so a
-   document-level replacement is exactly the shape it handles. The stack is still
-   cleared on the TEXTAREA input path (those snapshots describe a document the
-   user has since retyped, and the browser's own undo covers typing) and by
-   openGlyph (the history belongs to ONE glyph session). */
+/* The ONE path for replacing the WHOLE document (Clear / Built-in / Load / Upload /
+   .svg drop). It PUSHES the outgoing document as one undo entry: a bare .value
+   write fires no `input` event — docs/dev/node-visuals-and-designer.md, point editor. */
 function replaceGlyphSource(text) {
   const before = el('mSvg').value;
   clearGlyphSel();
@@ -2982,16 +2823,12 @@ function replaceGlyphSource(text) {
   el('mSvg').value = text;
   pushGlyphUndo(before);
   /* Hand the keyboard to the canvas, or the entry just pushed is UNREACHABLE:
-     the modal keydown handler bails at `if (caret) return;` before the ⌘Z
-     branch, and the textarea's own native undo is empty because the value was
-     assigned programmatically — so ⌘Z is a dead key and Cancel (which throws the
-     whole session away) is the only recovery left. openGlyph parks the caret in
-     #mSvg and a file drop on a <div> moves focus nowhere, so the DROP path sat
-     in exactly that state; Clear / Built-in / Load / Upload escaped it only by
-     accident, each having put focus on its own button or select first.
-     Doing it here covers all five callers uniformly (a no-op for the four whose
-     focus is already off the textarea). Nothing is lost: replacing the whole
-     document is not a text-entry gesture. */
+     the modal keydown bails at `if (caret) return;` above the ⌘Z branch, and the
+     textarea's native undo is empty because the value was assigned by code — so
+     Cancel, which discards the whole session, is the only recovery left.
+     openGlyph parks the caret in #mSvg, a file drop moves focus nowhere, and
+     WebKit and Firefox/macOS do not focus a <button> on click, so a swatch press
+     (applyPaint) and Format sit in exactly that state too. */
   focusPtCanvas();                       // must not scroll — see focusPtCanvas
   refreshMPreview();
 }
@@ -3001,7 +2838,7 @@ el('mLoad').onchange = (e) => {
   const t = v.slice(2);
   let art = '';
   if (v[0] === 'c') { const d = (t in sessionEdits) ? sessionEdits[t] : savedGlyphs[t]; art = (d && d.svg) || ''; }
-  else art = builtinGlyph(t);
+  else art = ND.builtinGlyphSvg(t);
   if (!art) { toast('No art found for "' + t + '".'); return; }
   replaceGlyphSource(art);
   toast('Loaded "' + t + '" art — Apply to keep it.');
@@ -3027,7 +2864,7 @@ function openGlyph() {
      svg key and the node rendered as a bare titled box in the app. Gate it on
      the fact. (Nothing is lost where it greys out: the recovery that always
      works is ⌘Z for the last gesture, Cancel for the whole window.) */
-  const hasBuiltin = !!builtinGlyph(state.type);
+  const hasBuiltin = !!ND.builtinGlyphSvg(state.type);
   el('mBuiltin').disabled = !hasBuiltin;
   el('mBuiltin').title = hasBuiltin
     ? 'Restore the built-in FastShaders art'
@@ -3109,12 +2946,7 @@ el('mFmt').onclick = () => {
   if (out === before) { toast('Already one element per line.'); return; }
   el('mSvg').value = out;
   pushGlyphUndo(before);
-  /* Hand the keyboard to the canvas or the entry just pushed is UNREACHABLE —
-     the modal's keydown bails at `if (caret) return;` before the ⌘Z branch, and
-     the textarea's native undo is empty because the value was assigned
-     programmatically. replaceGlyphSource documents the same trap; WebKit makes
-     it certain, since clicking a <button> there does not move focus at all. */
-  focusPtCanvas();
+  focusPtCanvas();                       // or ⌘Z cannot reach that entry — see replaceGlyphSource
   refreshMPreview();
   toast('Formatted — one element per line. The drawing is unchanged.');
 };
@@ -3154,7 +2986,7 @@ el('mMove').onchange = (e) => {
 el('mClose').onclick = closeGlyphModal;
 el('mClear').onclick = () => replaceGlyphSource('');
 el('mBuiltin').onclick = () => {
-  const art = builtinGlyph(state.type);
+  const art = ND.builtinGlyphSvg(state.type);
   /* belt and braces beside the disabled state openGlyph sets: this handler is
      the one that would WIPE the art, so it refuses on its own evidence */
   if (!art) { toast('"' + state.type + '" has no built-in art — this glyph was authored in the designer. ⌘Z undoes the last point edit; Cancel discards this window.'); return; }
@@ -3329,17 +3161,9 @@ function labelPatchFor(types) {
 
 /** Splice both files through the LINKED FOLDER (File System Access API). */
 async function writeLabelsToFolder(patch) {
-  // Dynamic import: descriptionSplice pulls in @babel/parser, and nothing else in
-  // this module needs it, so the split keeps it in its own ~4 KB chunk that only
-  // a folder-link rename ever fetches.
-  // It does NOT, on its own, keep Babel off the designer's initial load, and the
-  // built output says so: bridge.tsx imports the store, which statically imports
-  // the built-in texture/preset builders -> codeGroupBuilder -> codeToGraph ->
-  // @babel/*, so Babel is reachable from BOTH entries and Rollup hoists it into
-  // the shared chunk node-designer.html modulepreloads. This deferral is what
-  // makes dropping it POSSIBLE; the drop only happens once that store path is
-  // broken too. Check dist/node-designer.html for the chunks it preloads before
-  // claiming otherwise.
+  // Dynamic import: descriptionSplice pulls in @babel/parser, which only a
+  // folder-link rename needs. Measured in dist, 2026-09-28: node-designer.html
+  // preloads no vendor-babel chunk; only dynamic imports reach it.
   const splice = await import('@/registry/descriptionSplice');
 
   // Compute BOTH outputs before writing EITHER. The two files must not be able to
@@ -3515,8 +3339,8 @@ el('search').addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { e.target.value = ''; filterText = ''; rebuildDropdown(); e.target.blur(); }
 });
 el('gScale').oninput = (e) => { state.scale = Math.max(0.2, Math.min(3, parseFloat(e.target.value) || 1)); stash(); renderNode(); renderGlyphCard(); };
-el('gDx').oninput = (e) => { const lim = inputNudgeLim(); state.dx = Math.max(-lim, Math.min(lim, parseFloat(e.target.value) || 0)); stash(); renderNode(); renderGlyphCard(); };
-el('gDy').oninput = (e) => { const lim = inputNudgeLim(); state.dy = Math.max(-lim, Math.min(lim, parseFloat(e.target.value) || 0)); stash(); renderNode(); renderGlyphCard(); };
+el('gDx').oninput = (e) => { state.dx = Math.max(-NUDGE_LIM, Math.min(NUDGE_LIM, parseFloat(e.target.value) || 0)); stash(); renderNode(); renderGlyphCard(); };
+el('gDy').oninput = (e) => { state.dy = Math.max(-NUDGE_LIM, Math.min(NUDGE_LIM, parseFloat(e.target.value) || 0)); stash(); renderNode(); renderGlyphCard(); };
 el('nudge0').onclick = () => { state.dx = 0; state.dy = 0; syncLayoutInputs(); stash(); renderNode(); renderGlyphCard(); };
 el('just').onchange = (e) => { state.justify = e.target.value; stash(); renderNode(); };
 el('nW').oninput = (e) => { const v = parseInt(e.target.value) || 0; state.width = v <= 0 ? 0 : Math.max(24, Math.min(400, v)); stash(); renderNode(); };
@@ -3547,45 +3371,18 @@ document.addEventListener('keydown', (e) => {
      would be a behaviour change with no defect behind it. */
   const typing = isTypingTarget(document.activeElement, { anyInputType: true });
   if (overlay.classList.contains('show')) {
-    /* ⌘S is INSIDE the modal gate, and that is the whole fix: mApply is the SOLE
-       commit path, so save()/saveAll() serialise currentDesign() from
-       `state.glyph` — the art as it was BEFORE this window opened. Above the gate
-       it happily reported "Downloaded customGlyphs.ts…" for a session whose every
-       move, scale, nudge and delete was still sitting in #mSvg and in no saved
-       file; the very next Cancel then asks "Discard the glyph edits made in this
-       window?", a question someone who believes they just saved will accept.
-       preventDefault ALWAYS (never the browser's save-page dialog), but only
-       REFUSE when there is something to lose: with the document still equal to
-       state.glyph — the same test closeGlyphModal calls dirty — Apply would be a
-       no-op and the save really is complete, so blocking it would be a refusal
-       with nothing behind it. */
+    /* ⌘S sits INSIDE the modal gate: mApply is the sole commit, so a save from
+       here would write the art from BEFORE this window opened. Always
+       preventDefault; refuse only while the document differs from state.glyph. */
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
       e.preventDefault();
       if (normalizeSvg(el('mSvg').value) !== state.glyph) { toast('Apply the glyph first — this window’s edits are not in a save until you do.'); return; }
       saveFromKey();
       return;
     }
-    /* Point-editor keys. openGlyph leaves the caret in #mSvg and every pointer
-       gesture preventDefaults the implicit focus change, so the gestures focus
-       #mPrevBox (tabindex=0) by hand precisely to get OUT of that state; without
-       it Delete would edit the SVG source.
-       `caret`, NOT the outer `typing`: that predicate covers INPUT|TEXTAREA|SELECT, and
-       #mSvg is the modal's only text surface — the others are the 56-grid and
-       drag-points CHECKBOXES and the load-art SELECT, none of which take a
-       character. Gating the keys on `typing` meant ticking "56-grid" to check
-       alignment, or focusing the Load select, silently killed Del / ⌘A / the
-       arrow nudge while the selection stayed drawn on screen, with no feedback of
-       any kind — and no plain click could hand focus back without destroying that
-       selection (empty canvas deselects, inside the frame deselects, on a point
-       replaces it), so the only recovery was ⇧-clicking a selected point twice.
-       Escape below was already special-cased out of exactly this trap; the other
-       four keys were left in it. ⌘A still falls through to the textarea's own
-       select-all, because that is precisely when the caret IS in #mSvg.
-       The one thing this takes: with a live selection the arrows no longer walk
-       #mLoad's options. That select LOADS on change (and resets its value), so
-       arrowing it was never browsing — it was replacing the art one press at a
-       time; and with nothing selected the nudge doesn't act, so it still
-       navigates normally. */
+    /* Point-editor keys gate on `caret` (#mSvg), NOT the page's `typing` test, which
+       also matches the two checkboxes and the load <select> —
+       docs/dev/node-visuals-and-designer.md, point editor (f). */
     const pts = el('mMove').checked;
     const caret = document.activeElement === el('mSvg');
     /* Delete / ⌘A / the arrows must also stay out of the OTHER field that takes
@@ -3595,8 +3392,7 @@ document.addEventListener('keydown', (e) => {
        matches the two checkboxes and the load <select>, none of which do —
        nor can utils/isTypingTarget stand in, which drops the checkboxes but
        KEEPS the <select>, and the arrows have to keep working while #mLoad has
-       focus (see the paragraph above: that select LOADS on change, so arrowing
-       it was never browsing). */
+       focus (that select LOADS on change, so arrowing it was never browsing). */
     const a0 = document.activeElement;
     const keysDead = !!a0 && (a0.tagName === 'TEXTAREA'
       || (a0.tagName === 'INPUT' && !/^(checkbox|radio|button|file|range)$/.test(a0.type)));

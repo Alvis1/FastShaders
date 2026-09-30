@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { stubLocalStorage } from '@/test-utils';
 import { normalizeHex } from './colorUtils';
 import {
   sanitizeRecentColors,
@@ -127,12 +128,7 @@ describe('pushRecentColor', () => {
 
 describe('persistence', () => {
   beforeEach(() => {
-    const store: Record<string, string> = {};
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => store[k] ?? null,
-      setItem: (k: string, v: string) => { store[k] = v; },
-      removeItem: (k: string) => { delete store[k]; },
-    });
+    stubLocalStorage();
   });
   afterAll(() => { vi.unstubAllGlobals(); });
 

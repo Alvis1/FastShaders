@@ -39,19 +39,74 @@ interface FitComponent {
   fit: (this: { el: { getObject3D: () => THREE.Object3D | null }; data: { size: number; regen: boolean } }) => void;
 }
 
-/** Evaluate the iframe script with a stub AFRAME and capture the component. */
-function loadComponent(): FitComponent {
-  const body = FIT_BOUNDS_SCRIPT.replace(/^<script>/, '').replace(/<\/script>$/, '');
+/**
+ * Evaluate a fit-bounds script with a stub AFRAME and hand back what it
+ * registered. `win` hands the script a `window` parameter (the editor's copy
+ * takes one, podest's does not); `aframeThree` becomes AFRAME.THREE.
+ */
+function evalFit(body: string, win: boolean, aframeThree?: object): FitComponent {
   const registry: Record<string, FitComponent> = {};
   const AFRAME = {
+    ...(aframeThree ? { THREE: aframeThree } : {}),
     components: {} as Record<string, unknown>,
     registerComponent: (name: string, def: FitComponent) => { registry[name] = def; },
   };
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
-  new Function('THREE', 'window', 'AFRAME', body)(THREE, { AFRAME }, AFRAME);
-  const comp = registry['fit-bounds'];
+  if (win) new Function('THREE', 'window', 'AFRAME', body)(THREE, { AFRAME }, AFRAME);
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  else new Function('THREE', 'AFRAME', body)(THREE, AFRAME);
+  return registry['fit-bounds'];
+}
+
+const editorFitBody = (): string => FIT_BOUNDS_SCRIPT.replace(/^<script>/, '').replace(/<\/script>$/, '');
+
+/** Evaluate the iframe script with a stub AFRAME and capture the component. */
+function loadComponent(): FitComponent {
+  const comp = evalFit(editorFitBody(), true);
   expect(comp, 'fit-bounds was not registered').toBeTruthy();
   return comp;
+}
+
+/** podest.html's fit-bounds twin: each helper is one `L.push('  <needle>…');` line. */
+const PODEST_FIT_PUSHES = ['function mergeByPosition', 'function rawComponent', 'function expandAttribute', 'function splitUVSeam', 'function splitByAuthored', 'function sphericalUVs', 'function flipWinding', 'function dequantize', 'AFRAME.registerComponent("fit-bounds"'];
+
+/** The payloads of those lines, each passed through `payload`, joined into one script. */
+function podestPushes(needles: string[], payload: (body: string) => string): string {
+  const html = readFileSync(new URL('../../public/podest.html', import.meta.url), 'utf8');
+  return needles
+    .map((needle) => {
+      const line = html.split('\n').find((l) => l.includes(`L.push('  ${needle}`));
+      expect(line, `podest.html is missing its ${needle} push`).toBeTruthy();
+      return payload(line!.trim().replace(/^L\.push\('/, '').replace(/'\);$/, ''));
+    })
+    .join('\n');
+}
+
+/**
+ * A GaussianSplat as the `splat-model` component hands it over: a Mesh whose
+ * geometry is ONE instanced ±2 quad (`instanceCount` = splats). Stubbed rather
+ * than built — the addon is not part of the node three — with the two facts
+ * fit-bounds could trip on: `isMesh` and a real geometry.
+ */
+function makeSplatStub(splats = 1000): THREE.Mesh {
+  const g = new THREE.InstancedBufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-2, -2, 0, 2, -2, 0, 2, 2, 0, -2, 2, 0]), 3));
+  g.setIndex([0, 1, 2, 0, 2, 3]);
+  g.instanceCount = splats;
+  return Object.assign(new THREE.Mesh(g, new THREE.MeshBasicMaterial()), { isGaussianSplat: true });
+}
+
+/** Run `fn` with `Box3.setFromObject` and the splat geometry's `clone` spied on. */
+function withSpies(splat: THREE.Mesh, fn: () => void): { setFromObject: number; clone: number } {
+  const box = vi.spyOn(THREE.Box3.prototype, 'setFromObject');
+  const clone = vi.spyOn(splat.geometry, 'clone');
+  try {
+    fn();
+    return { setFromObject: box.mock.calls.length, clone: clone.mock.calls.length };
+  } finally {
+    box.mockRestore();
+    clone.mockRestore();
+  }
 }
 
 function runFit(root: THREE.Object3D, { size = 1.6, regen = true } = {}): void {
@@ -733,33 +788,6 @@ describe('fit-bounds normalization', () => {
     expect(() => runFit(root)).not.toThrow();
   });
 
-  /**
-   * A GaussianSplat as the `splat-model` component hands it over: a Mesh whose
-   * geometry is ONE instanced ±2 quad (`instanceCount` = splats). Stubbed rather
-   * than built — the addon is not part of the node three — with the two facts
-   * fit-bounds could trip on: `isMesh` and a real geometry.
-   */
-  function makeSplatStub(splats = 1000): THREE.Mesh {
-    const g = new THREE.InstancedBufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-2, -2, 0, 2, -2, 0, 2, 2, 0, -2, 2, 0]), 3));
-    g.setIndex([0, 1, 2, 0, 2, 3]);
-    g.instanceCount = splats;
-    return Object.assign(new THREE.Mesh(g, new THREE.MeshBasicMaterial()), { isGaussianSplat: true });
-  }
-
-  /** Run `fn` with `Box3.setFromObject` and the splat geometry's `clone` spied on. */
-  function withSpies(splat: THREE.Mesh, fn: () => void): { setFromObject: number; clone: number } {
-    const box = vi.spyOn(THREE.Box3.prototype, 'setFromObject');
-    const clone = vi.spyOn(splat.geometry, 'clone');
-    try {
-      fn();
-      return { setFromObject: box.mock.calls.length, clone: clone.mock.calls.length };
-    } finally {
-      box.mockRestore();
-      clone.mockRestore();
-    }
-  }
-
   it('leaves a Gaussian splat exactly as splat-model built it — never cloned, baked or scaled', () => {
     const splat = makeSplatStub();
     splat.position.set(0.3, -0.2, 0.1);
@@ -814,28 +842,13 @@ describe('fit-bounds normalization', () => {
  */
 describe('podest fit-bounds twin', () => {
   function loadPodestComponent(): FitComponent {
-    const html = readFileSync(
-      new URL('../../public/podest.html', import.meta.url),
-      'utf8',
-    );
-    // Each helper is one `L.push('…');` line; the payloads quote with " so the
-    // single-quoted host string needs no unescaping.
-    const wanted = ['function mergeByPosition', 'function rawComponent', 'function expandAttribute', 'function splitUVSeam', 'function splitByAuthored', 'function sphericalUVs', 'function flipWinding', 'function dequantize', 'AFRAME.registerComponent("fit-bounds"'];
-    const parts = wanted.map((needle) => {
-      const line = html.split('\n').find((l) => l.includes(`L.push('  ${needle}`));
-      expect(line, `podest.html is missing its ${needle} push`).toBeTruthy();
-      const body = line!.trim().replace(/^L\.push\('/, '').replace(/'\);$/, '');
+    // The payloads quote with " so the single-quoted host string needs no
+    // unescaping.
+    const script = podestPushes(PODEST_FIT_PUSHES, (body) => {
       expect(body).not.toContain("\\'");
       return body;
     });
-    const registry: Record<string, FitComponent> = {};
-    const AFRAME = {
-      components: {} as Record<string, unknown>,
-      registerComponent: (name: string, def: FitComponent) => { registry[name] = def; },
-    };
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    new Function('THREE', 'AFRAME', parts.join('\n'))(THREE, AFRAME);
-    const comp = registry['fit-bounds'];
+    const comp = evalFit(script, false);
     expect(comp, 'podest fit-bounds was not registered').toBeTruthy();
     return comp;
   }
@@ -975,34 +988,13 @@ describe('podest fit-bounds twin', () => {
    * kept baking would clone the one instanced ±2 quad and scale the already
    * normalised scene (or measure the quad with a Box3) on the pedestal only.
    */
-  const podestSplatStub = (splats = 1000): THREE.Mesh => {
-    const g = new THREE.InstancedBufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-2, -2, 0, 2, -2, 0, 2, 2, 0, -2, 2, 0]), 3));
-    g.setIndex([0, 1, 2, 0, 2, 3]);
-    g.instanceCount = splats;
-    const splat = new THREE.Mesh(g, new THREE.MeshBasicMaterial());
-    (splat as unknown as { isGaussianSplat: boolean }).isGaussianSplat = true;
-    return splat;
-  };
-  const podestSpied = (splat: THREE.Mesh, fn: () => void): { setFromObject: number; clone: number } => {
-    const box = vi.spyOn(THREE.Box3.prototype, 'setFromObject');
-    const clone = vi.spyOn(splat.geometry, 'clone');
-    try {
-      fn();
-      return { setFromObject: box.mock.calls.length, clone: clone.mock.calls.length };
-    } finally {
-      box.mockRestore();
-      clone.mockRestore();
-    }
-  };
-
   it('leaves a Gaussian splat exactly as splat-model built it, like the editor copy', () => {
     const run = (fit: (r: THREE.Object3D) => void) => {
-      const splat = podestSplatStub();
+      const splat = makeSplatStub();
       splat.position.set(0.3, -0.2, 0.1);
       const geometry = splat.geometry;
       const before = Array.from(geometry.attributes.position.array as Float32Array);
-      const calls = podestSpied(splat, () => fit(splat));
+      const calls = withSpies(splat, () => fit(splat));
       expect(splat.geometry).toBe(geometry);
       expect(Array.from(geometry.attributes.position.array as Float32Array)).toEqual(before);
       expect((geometry as THREE.InstancedBufferGeometry).instanceCount).toBe(1000);
@@ -1017,11 +1009,11 @@ describe('podest fit-bounds twin', () => {
     for (const regen of [true, false]) {
       const root = new THREE.Group();
       root.scale.setScalar(3);
-      const splat = podestSplatStub();
+      const splat = makeSplatStub();
       const box = makeBoxMesh(50);
       const boxGeometry = box.geometry;
       root.add(box, splat);
-      const calls = podestSpied(splat, () => runPodestFit(root, regen));
+      const calls = withSpies(splat, () => runPodestFit(root, regen));
       expect(calls).toEqual({ setFromObject: 0, clone: 0 });
       expect(box.geometry).toBe(boxGeometry);
       expect(root.scale.toArray()).toEqual([3, 3, 3]);
@@ -1031,9 +1023,9 @@ describe('podest fit-bounds twin', () => {
   it('never measures a splat by its world box, even on the animated (Object3D-scaling) path', () => {
     const root = new THREE.Group();
     root.animations = [new THREE.AnimationClip('spin', 1, [])];
-    const splat = podestSplatStub();
+    const splat = makeSplatStub();
     root.add(splat);
-    const calls = podestSpied(splat, () => runPodestFit(root));
+    const calls = withSpies(splat, () => runPodestFit(root));
     expect(calls.setFromObject).toBe(0);
     expect(root.scale.toArray()).toEqual([1, 1, 1]);
     expect(root.position.toArray()).toEqual([0, 0, 0]);
@@ -1068,38 +1060,17 @@ describe('a bare OBJ is welded, not split by invented normals', () => {
   // first cut patched window.THREE's, a no-op the browser caught.
   function editorWithLoader() {
     class ProbeOBJLoader extends OBJLoader {}
-    const body = FIT_BOUNDS_SCRIPT.replace(/^<script>/, '').replace(/<\/script>$/, '');
-    const registry: Record<string, FitComponent> = {};
-    const AFRAME = {
-      THREE: { OBJLoader: ProbeOBJLoader },
-      components: {} as Record<string, unknown>,
-      registerComponent: (name: string, def: FitComponent) => { registry[name] = def; },
-    };
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    new Function('THREE', 'window', 'AFRAME', body)(THREE, { AFRAME }, AFRAME);
-    return { comp: registry['fit-bounds'], Loader: ProbeOBJLoader };
+    return { comp: evalFit(editorFitBody(), true, { OBJLoader: ProbeOBJLoader }), Loader: ProbeOBJLoader };
   }
 
   function podestWithLoader() {
     class ProbeOBJLoader extends OBJLoader {}
-    const html = readFileSync(new URL('../../public/podest.html', import.meta.url), 'utf8');
-    const wanted = ['function patchObjNormals', 'patchObjNormals();', 'function mergeByPosition', 'function rawComponent', 'function expandAttribute', 'function splitUVSeam', 'function splitByAuthored', 'function sphericalUVs', 'function flipWinding', 'function dequantize', 'AFRAME.registerComponent("fit-bounds"'];
-    const parts = wanted.map((needle) => {
-      const line = html.split('\n').find((l) => l.includes(`L.push('  ${needle}`));
-      expect(line, `podest.html is missing its ${needle} push`).toBeTruthy();
-      // The host string is single-quoted JS: undo its one escape (\\ → \), as
-      // the runtime does when it writes the line into the document.
-      return line!.trim().replace(/^L\.push\('/, '').replace(/'\);$/, '').replace(/\\\\/g, '\\');
-    });
-    const registry: Record<string, FitComponent> = {};
-    const AFRAME = {
-      THREE: { OBJLoader: ProbeOBJLoader },
-      components: {} as Record<string, unknown>,
-      registerComponent: (name: string, def: FitComponent) => { registry[name] = def; },
-    };
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    new Function('THREE', 'AFRAME', parts.join('\n'))(THREE, AFRAME);
-    return { comp: registry['fit-bounds'], Loader: ProbeOBJLoader };
+    // The host string is single-quoted JS: undo its one escape (\\ → \), as
+    // the runtime does when it writes the line into the document.
+    const script = podestPushes(['function patchObjNormals', 'patchObjNormals();', ...PODEST_FIT_PUSHES], (body) =>
+      body.replace(/\\\\/g, '\\'),
+    );
+    return { comp: evalFit(script, false, { OBJLoader: ProbeOBJLoader }), Loader: ProbeOBJLoader };
   }
 
   /** Coincident vertices whose normals differ — a crack under displacement. */

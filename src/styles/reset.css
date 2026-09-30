@@ -21,6 +21,25 @@ body {
   background: var(--bg-app);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* The app is chrome, not a document: nothing is selectable by default. A
+     stray drag across a button label (the preview's VR / fullscreen plate,
+     2026-09-29) left a native selection that no later click could clear —
+     almost every surface a user presses next is itself `user-select: none` or
+     preventDefaults the press — so it stayed until a reload. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Opt back in where text is the point: editable fields (note bodies, rename
+   inputs, Monaco's input area) and literal strings people copy by hand
+   (`pre`/`code`: the VR URL, chrome://flags, hex values, the feedback report's
+   environment lines). EXPLICIT, not `auto`: WebKit inherits
+   `-webkit-user-select: none` into an <input> and then refuses to place a caret
+   in it. `:where()` keeps it at zero specificity so a component's own
+   `user-select` rule still wins. */
+:where(input, textarea, [contenteditable]:not([contenteditable='false']), pre, code) {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 input,

@@ -47,7 +47,9 @@ describe('GlbImportModal', () => {
 
   it('Escape cancels, in the CAPTURE phase, and every other key but Tab is swallowed', () => {
     expect(code).toMatch(/e\.key === 'Escape'[\s\S]{0,80}onChoose\('cancel'\)/);
-    expect(code).toContain("window.addEventListener('keydown', onKey, true)");
+    // The binding lives in useModalKeys; its third argument is the capture flag.
+    expect(code).toMatch(/useModalKeys\(open, \(e\) => \{[\s\S]{0,240}\}, true\);/);
+    expect(codeOnly(read('useModalKeys.ts'))).toContain("window.addEventListener('keydown', listener, capture)");
     expect(code).toMatch(/if \(e\.key !== 'Tab'\) e\.stopPropagation\(\)/);
   });
 
@@ -147,7 +149,7 @@ describe('useGlbImport', () => {
   });
 
   it('the portal host follows fullscreen (pickPortalHost), and unmount aborts', () => {
-    expect(code).toContain('pickPortalHost(fullscreenEl(), depsRef.current.anchorRef.current, document.body)');
+    expect(code).toContain('pickPortalHost(fullscreenElement(), depsRef.current.anchorRef.current, document.body)');
     expect(code).toContain("document.addEventListener('fullscreenchange', resolve)");
     expect(code).toMatch(/useEffect\(\(\) => \(\) => \{ abortRef\.current\?\.abort\(\); \}, \[\]\)/);
   });

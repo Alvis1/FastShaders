@@ -28,14 +28,13 @@ import { useAppStore, resolveDeviceTextureDim } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { readGltfModel, type GltfModelReport } from '@/utils/gltfReader';
-import { glbImportFactsOf, planGlbImportDialog, type GlbDialogPlan, type GlbImportFacts } from '@/utils/glbImportGate';
+import { glbImportFactsOf, planGlbImportDialog, restoreFactOf, type GlbDialogPlan, type GlbImportFacts } from '@/utils/glbImportGate';
 import { GLB_IMPORT_KEYS, fsRefusalNotice } from '@/utils/glbImportCopy';
 import { readGlbFsExtras, type FsExtrasRead } from '@/utils/glbShaderExtras';
-import { restoreFactOf } from '@/utils/glbImportGate';
 import { sanitizeMeshFileName } from '@/utils/previewMesh';
 import { glbImportReportLines } from '@/utils/glbImportReport';
 import { gltfBuildRefusalMessage, meshRefusalMessage } from '@/utils/previewMeshMessage';
-import { pickPortalHost } from '@/components/inputs/colorPickerModel';
+import { fullscreenElement, pickPortalHost } from '@/components/inputs/colorPickerModel';
 import { buildGlbImport } from '@/engine/gltfImport';
 import { commitGlbImport, importShaderGlb } from '@/engine/projectImport';
 import { GlbImportModal, type GlbImportChoice } from '@/components/Modals/GlbImportModal';
@@ -69,12 +68,6 @@ interface Request {
   source: 'dom' | 'iframe';
 }
 
-function fullscreenEl(): HTMLElement | null {
-  const d = document as Document & { webkitFullscreenElement?: Element | null };
-  const el = document.fullscreenElement ?? d.webkitFullscreenElement ?? null;
-  return el instanceof HTMLElement ? el : null;
-}
-
 export function useGlbImport(deps: {
   applyModelBytes(fileName: string, bytes: Uint8Array<ArrayBuffer>): void;
   showDropNotice(msg: string, tone?: 'error' | 'info'): void;
@@ -105,7 +98,7 @@ export function useGlbImport(deps: {
   // be invisible there (the colour picker's rule).
   useEffect(() => {
     if (!request) return;
-    const resolve = () => setPortalHost(pickPortalHost(fullscreenEl(), depsRef.current.anchorRef.current, document.body));
+    const resolve = () => setPortalHost(pickPortalHost(fullscreenElement(), depsRef.current.anchorRef.current, document.body));
     resolve();
     document.addEventListener('fullscreenchange', resolve);
     document.addEventListener('webkitfullscreenchange', resolve);

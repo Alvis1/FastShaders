@@ -1,12 +1,6 @@
 /**
  * Entry point for node-editor.html — the localhost-only node & texture overview /
- * description editor.
- *
- * CORE SAFETY INVARIANT: `./nodeEditorBootstrap` MUST stay the first import — it
- * disables the store's graph autosave, without which this page could overwrite
- * the user's real graph in localStorage. Read that file before touching the
- * import order here; "first statement in the body" would NOT be good enough,
- * because imports evaluate before any statement runs.
+ * description editor. `./nodeEditorBootstrap` must stay the FIRST import — see that file.
  */
 import './nodeEditorBootstrap';
 
@@ -14,22 +8,8 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { GraphsPage } from './components/Graphs/GraphsPage';
 
-// Mirrors main.tsx's CSS bootstrap exactly — without tokens.css the whole page
-// renders token-less (no colors, no spacing, no fonts). Latin subsets only, for
-// the reason main.tsx spells out: the bare `400.css` entry declares all seven
-// Google subsets and drags 24 unreachable woff2 files into dist.
-import '@fontsource/inter/latin-400.css';
-import '@fontsource/inter/latin-ext-400.css';
-import '@fontsource/inter/latin-500.css';
-import '@fontsource/inter/latin-ext-500.css';
-import '@fontsource/inter/latin-600.css';
-import '@fontsource/inter/latin-ext-600.css';
-import '@fontsource/inter/latin-700.css';
-import '@fontsource/inter/latin-ext-700.css';
-import '@fontsource/jetbrains-mono/latin-400.css';
-import '@fontsource/jetbrains-mono/latin-ext-400.css';
-import '@fontsource/jetbrains-mono/latin-500.css';
-import '@fontsource/jetbrains-mono/latin-ext-500.css';
+// Mirrors main.tsx's CSS bootstrap — without tokens.css the page renders token-less.
+import './styles/fonts';
 import './styles/tokens.css';
 import './styles/reset.css';
 import '@xyflow/react/dist/style.css';

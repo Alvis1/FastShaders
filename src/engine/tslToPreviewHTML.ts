@@ -151,39 +151,11 @@ export interface PreviewOptions {
   /** Spin parent rotation to restore so the object angle survives iframe rebuilds. */
   initialRotation?: CameraPosition | null;
   /**
-   * Build a top-level (non-sandboxed) immersive-VR page instead of the
-   * sandboxed editor preview. Immersive WebXR can NEVER run inside the
-   * preview iframe — but NOT at the Permissions-Policy layer (researched
-   * 2026-08-07: the spec matches a `*` allowlist BEFORE the opaque-origin
-   * rejection, and Chromium's parser sets matches_opaque_src for it, so
-   * `allow="xr-spatial-tracking *"` would delegate fine). Three blockers
-   * sit below that layer: (1) Chromium's permission layer auto-denies any
-   * permission request from an opaque origin before grant logic runs
-   * (permission_context_base.cc — the same mechanism that blocks
-   * getUserMedia there), and immersive-vr needs the VR permission;
-   * (2) Meta Quest Browser empirically fails — and can crash — running
-   * WebXR in allow-scripts-only sandboxed iframes (its forum bug tracker
-   * says allow-same-origin is required, which this app must never grant);
-   * (3) a parent click never confers transient activation on an
-   * opaque-origin child (HTML activation propagates to same-origin
-   * descendants only), so requestSession's gesture requirement could not be
-   * met from the app's chrome anyway. Hence entry happens from a top-level
-   * document (ShaderPreview opens an about:blank popup that inherits the
-   * app's real origin). In xr mode the page:
-   *   - forces the WebGL2 backend with `renderer="backend: webgl"` on the
-   *     scene tag (the bundle's aframe#5847 carry maps it onto
-   *     WebGPURenderer's `forceWebGL`; aframeBackendProperty.test.ts guards
-   *     the patch) — the WebGPU backend hard-throws in XRManager.setSession
-   *     (r173–r184) and Quest Browser has no WebXR+WebGPU at all; TSL
-   *     compiles identically via GLSLNodeBuilder. This replaced hiding
-   *     `navigator.gpu` up front (2026-08-31), which forced the same backend
-   *     imperatively.
-   *   - keeps `navigator.xr` visible (the normal preview hides it because
-   *     A-Frame's XR init path breaks on the WebGPU backend).
-   *   - enables A-Frame's own Enter-VR button (`vr-mode-ui`).
-   *   - loads OBJ models directly by URL — the page is same-origin, so the
-   *     CORS constraint that forces the sandboxed preview onto the
-   *     postMessage model feed does not apply.
+   * Build the top-level immersive-VR page instead of the sandboxed preview.
+   * WebXR cannot start in the opaque-origin iframe, so ShaderPreview opens an
+   * about:blank popup at the app's real origin. The page forces WebGL2 with
+   * `renderer="backend: webgl"`, keeps `navigator.xr`, enables `vr-mode-ui` and
+   * loads models by URL. See docs/dev/preview-and-runtime.md, "XR popup".
    */
   xr?: boolean;
   /**
@@ -193,7 +165,7 @@ export interface PreviewOptions {
    * will render without leaving the editor. It can only narrow to WebGL2
    * (WebGPU cannot be forced into existence), and the platform rule
    * (`__fsForceWebGL2`) still applies underneath. Meaningless in xr mode,
-   * which hides `navigator.gpu` up front regardless.
+   * whose scene tag forces WebGL2 regardless.
    */
   forceWebGL2?: boolean;
   /** Document title — the XR popup shows the shader name in its tab. */
@@ -320,14 +292,6 @@ export function decoderAssetUrl(file: DecoderFile): string {
 }
 
 /**
- * The sandboxed model document's decoder configuration, emitted right after the
- * loader's <script src>, before any gltf-model can initialise. The resolver
- * reads a null-prototype table that the model feed fills with blob: URLs of the
- * bytes the parent pushed, BEFORE it sets `gltf-model`; an empty slot answers
- * null, so loader 0.8 installs no Draco loader and a Draco model fails fast
- * with model-error instead of hanging on A-Frame's gstatic one.
- */
-/**
  * Loader 0.8's one-way model-module latch, the first statement of both
  * URL-modifier scripts (sandboxed pane and XR popup). A no-op on a loader
  * without it. These documents run the module their parent hands them and
@@ -336,6 +300,14 @@ export function decoderAssetUrl(file: DecoderFile): string {
 export const MODEL_MODULE_LATCH =
   'try{if(window.FastShaders&&typeof FastShaders.disableModelModules==="function")FastShaders.disableModelModules();}catch(e){}';
 
+/**
+ * The sandboxed model document's decoder configuration, emitted right after the
+ * loader's <script src>, before any gltf-model can initialise. The resolver
+ * reads a null-prototype table that the model feed fills with blob: URLs of the
+ * bytes the parent pushed, BEFORE it sets `gltf-model`; an empty slot answers
+ * null, so loader 0.8 installs no Draco loader and a Draco model fails fast
+ * with model-error instead of hanging on A-Frame's gstatic one.
+ */
 const SANDBOX_DECODER_CONFIG =
   'window.__fsDecoderUrls=Object.create(null);try{FastShaders.decoders.configure({resolve:function(f){return window.__fsDecoderUrls[f]||null;}});}catch(e){}';
 
@@ -367,19 +339,11 @@ export function escapeHtml(s: string): string {
 }
 
 /**
- * Resolve the absolute URL of an OBJ model in `public/models/`.
- *
- * Exported so ShaderPreview can fetch the model text for the sandboxed
- * preview's postMessage model feed (and for any future direct-URL use).
+ * The absolute URL of the bunny — the only model FILE the editor fetches (the
+ * teapot is tessellated in-document). Exported so ShaderPreview can fetch its
+ * text for the sandboxed preview's postMessage model feed.
  */
-export function getModelUrl(_geometry: 'bunny'): string {
-  // Only the bunny is a model FILE now; the teapot is tessellated in-document
-  // (public/models/teapot.obj still exists — podest and the copy-ready pages
-  // load it — but the editor never fetches it). The parameter survives so the
-  // signature still says which model set this resolves, and widens without a
-  // call-site change if a second file ever comes back; the teapot arm of the
-  // old ternary did not, since no value of the declared type could reach it and
-  // a live-looking reference to a 1.2 MB asset misleads an asset audit.
+export function getBunnyModelUrl(): string {
   return resolveAssetUrl('models/stanford-bunny.obj');
 }
 
@@ -568,31 +532,6 @@ const XR_STATS_SCRIPT = `<script>
 <${''}/script>`;
 
 /**
- * Frame-time / FPS reporter for the EDITOR's preview pane (non-xr).
- *
- * The XR twin above draws its own head-locked panel because a popup has no
- * parent to draw for it. Here the parent owns the chrome, so this half only
- * MEASURES and posts `fs:stats {fps, ms}` — the same split, and the same
- * message vocabulary, that `public/podest.html` already uses between its stage
- * and its panel, so the three surfaces share one contract.
- *
- * Measurement rides A-Frame's tick (driven by `renderer.setAnimationLoop`)
- * rather than a bare `requestAnimationFrame` loop, so it counts frames the
- * renderer actually presented instead of compositor callbacks that keep firing
- * after the scene stops. The number is the presented frame PERIOD — it
- * includes vsync, so it reads the display's refresh rate until the shader
- * genuinely misses frames. Same caveat as the XR panel and podest.
- *
- * Reported ~4x/s: fast enough to react to an edit, slow enough that the
- * readout cannot meaningfully bias the cost it reports. Deltas over 2 s are
- * DROPPED rather than averaged in — that is a backgrounded tab returning, not
- * a slow frame.
- *
- * Silent until the parent asks (`fs:stats-on`), so a preview with the readout
- * off carries no traffic at all: this iframe is rebuilt on every shader edit,
- * and an always-on feed would be pure cost for a number nobody switched on.
- */
-/**
  * Two small services the eval study needs from inside the sandboxed stage.
  *
  * **Activity pings.** The preview is an iframe, so the parent's capture-phase
@@ -653,6 +592,31 @@ const EVAL_BRIDGE_SCRIPT = `<script>
   })();
 <\/script>`;
 
+/**
+ * Frame-time / FPS reporter for the EDITOR's preview pane (non-xr).
+ *
+ * The XR twin above draws its own head-locked panel because a popup has no
+ * parent to draw for it. Here the parent owns the chrome, so this half only
+ * MEASURES and posts `fs:stats {fps, ms}` — the same split, and the same
+ * message vocabulary, that `public/podest.html` already uses between its stage
+ * and its panel, so the three surfaces share one contract.
+ *
+ * Measurement rides A-Frame's tick (driven by `renderer.setAnimationLoop`)
+ * rather than a bare `requestAnimationFrame` loop, so it counts frames the
+ * renderer actually presented instead of compositor callbacks that keep firing
+ * after the scene stops. The number is the presented frame PERIOD — it
+ * includes vsync, so it reads the display's refresh rate until the shader
+ * genuinely misses frames. Same caveat as the XR panel and podest.
+ *
+ * Reported ~4x/s: fast enough to react to an edit, slow enough that the
+ * readout cannot meaningfully bias the cost it reports. Deltas over 2 s are
+ * DROPPED rather than averaged in — that is a backgrounded tab returning, not
+ * a slow frame.
+ *
+ * Silent until the parent asks (`fs:stats-on`), so a preview with the readout
+ * off carries no traffic at all: this iframe is rebuilt on every shader edit,
+ * and an always-on feed would be pure cost for a number nobody switched on.
+ */
 export const STATS_REPORT_SCRIPT = `<script>
   if (window.AFRAME && !AFRAME.components["fs-stats"]) {
     AFRAME.registerComponent("fs-stats", {
@@ -2048,95 +2012,94 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
  * comment in tslToPreviewHTML. Its text is exactly what every mesh document
  * carried before the splat kinds existed — its three-kind lines give the same
  * answers MODEL_FEED_KINDS gives for glb / gltf / obj (tslToPreviewHTML.test.ts).
+ *
+ * `fillDecoders`: the decoder bytes the parent pushed with a compressed model
+ * become blob: URLs in the table SANDBOX_DECODER_CONFIG reads. Only the known
+ * names (generated from DECODER_FILES, never retyped), only the declared types
+ * — an ArrayBuffer for a `.wasm`, a string otherwise — at most
+ * MAX_DECODER_FILE_BYTES each; a slot already filled keeps its URL.
+ *
+ * A KTX2 texture that did not transcode is NOT a model error — the model loads,
+ * wearing its fallback image or none at all. The loader counts both
+ * (FastShaders.decoders.ktx2Stats), so the parent is told once per document.
+ * Forgeable like everything posted from here, so it can only raise a line.
  */
-function pushMeshModelFeed(lines: string[]): void {
-  lines.push('  (function () {');
-  lines.push('    var applied = false;');
-  lines.push('    var ktx2Reported = false;');
-  // The decoder bytes the parent pushed with a compressed model become blob:
-  // URLs in the table the configure script above reads. Only the known names
-  // (generated from DECODER_FILES, never retyped), only the declared types —
-  // an ArrayBuffer for a `.wasm`, a string otherwise — at most
-  // MAX_DECODER_FILE_BYTES each; a slot already filled keeps its URL.
-  lines.push(`    var DEC_FILES = ${FEED_DECODER_FILES};`);
-  lines.push(`    var DEC_MAX = ${MAX_DECODER_FILE_BYTES};`);
-  lines.push('    function fillDecoders(dec) {');
-  lines.push('      var table = window.__fsDecoderUrls;');
-  lines.push('      if (!table || !dec) return;');
-  lines.push('      for (var i = 0; i < DEC_FILES.length; i++) {');
-  lines.push('        var name = DEC_FILES[i][0], type = DEC_FILES[i][1];');
-  lines.push('        if (table[name] || !Object.prototype.hasOwnProperty.call(dec, name)) continue;');
-  lines.push('        var v = dec[name];');
-  lines.push('        var ok = type === "application/wasm"');
-  lines.push('          ? v instanceof ArrayBuffer && v.byteLength > 0 && v.byteLength <= DEC_MAX');
-  lines.push('          : typeof v === "string" && v.length > 0 && v.length <= DEC_MAX;');
-  lines.push('        if (!ok) continue;');
-  lines.push('        try { table[name] = URL.createObjectURL(new Blob([v], { type: type })); } catch (e) {}');
-  lines.push('      }');
-  lines.push('    }');
-  lines.push('    function decoderError() {');
-  lines.push('      try {');
-  lines.push('        var d = typeof FastShaders === "object" && FastShaders ? FastShaders.decoders : null;');
-  lines.push('        return d && typeof d.lastError === "string" ? d.lastError : "";');
-  lines.push('      } catch (e) { return ""; }');
-  lines.push('    }');
-  lines.push('    function apply(kind, payload, dec) {');
-  lines.push('      if (applied) return;');
-  lines.push('      var entity = document.getElementById("preview-entity");');
-  lines.push('      if (!entity) return;');
-  lines.push('      applied = true;');
-  lines.push('      // A model that fails to PARSE (corrupt bytes, or a compression whose');
-  lines.push('      // decoder is missing or refused it) must surface, not die in the');
-  lines.push('      // console. A decoder cap names itself through lastError.');
-  lines.push('      entity.addEventListener("model-error", function () {');
-  lines.push('        __fsShowStickyError("Failed to load 3D model (" + __fsExpectedLabel + "): " + (decoderError() || "the file could not be parsed (corrupt, or compressed in a way FastShaders cannot decode)."));');
-  lines.push('      });');
-  // A KTX2 texture that did not transcode is NOT a model error — the model
-  // loads, wearing its fallback image or none at all. The loader counts both
-  // (FastShaders.decoders.ktx2Stats), so the parent is told once per
-  // document and raises an info line. Forgeable like everything posted from
-  // here, which is why it can only ever raise a line.
-  lines.push('      entity.addEventListener("model-loaded", function () {');
-  lines.push('        if (ktx2Reported) return;');
-  lines.push('        ktx2Reported = true;');
-  lines.push('        try {');
-  lines.push('          var st = window.FastShaders && FastShaders.decoders ? FastShaders.decoders.ktx2Stats : null;');
-  lines.push('          if (!st) return;');
-  lines.push('          var fb = Math.min(Math.max(st.fallbacks | 0, 0), 1024);');
-  lines.push('          var ms = Math.min(Math.max(st.missing | 0, 0), 1024);');
-  lines.push('          if (fb <= 0 && ms <= 0) return;');
-  lines.push('          window.parent.postMessage({ type: "fs:model-ktx2", geometry: __fsExpectedObj, fallbacks: fb, missing: ms }, "*");');
-  lines.push('        } catch (e) {}');
-  lines.push('      });');
-  lines.push('      if (dec) fillDecoders(dec);');
-  lines.push('      var blob = kind === "glb" ? new Blob([payload], { type: "model/gltf-binary" }) : new Blob([payload]);');
-  lines.push('      var url = URL.createObjectURL(blob);');
-  lines.push('      if (kind === "glb" || kind === "gltf") entity.setAttribute("gltf-model", "url(" + url + ")");');
-  lines.push('      else entity.setAttribute("obj-model", "obj: url(" + url + ")");');
-  lines.push('    }');
-  lines.push('    window.addEventListener("message", function (e) {');
-  lines.push('      if (e.source !== window.parent) return;');
-  lines.push('      var msg = e.data;');
-  lines.push('      if (!msg || msg.geometry !== __fsExpectedObj) return;');
-  lines.push('      if (msg.type === "fs:obj-model-error") {');
-  lines.push('        // Sticky, like a vendored-script 404: a later successful shader');
-  lines.push('        // apply must not clear it — there is still no mesh to shade.');
-  lines.push('        __fsShowStickyError("Failed to load 3D model (" + __fsExpectedLabel + "): " + msg.message);');
-  lines.push('        return;');
-  lines.push('      }');
-  lines.push('      if (msg.type !== "fs:obj-model") return;');
-  lines.push('      // obj/gltf ride as text; glb as binary. Anything else is dropped.');
-  lines.push('      var kind = msg.kind === "glb" || msg.kind === "gltf" ? msg.kind : "obj";');
-  lines.push('      var payload = kind === "glb" ? msg.bytes : msg.text;');
-  lines.push('      if (kind === "glb") {');
-  lines.push('        if (!(payload instanceof ArrayBuffer) && !ArrayBuffer.isView(payload)) return;');
-  lines.push('      } else if (typeof payload !== "string") return;');
-  lines.push('      // Decoder bytes ride only with a model that needs them (see fillDecoders).');
-  lines.push('      var dec = msg.decoders && typeof msg.decoders === "object" ? msg.decoders : null;');
-  lines.push('      window.__fsWhenSceneBooted(function () { apply(kind, payload, dec); });');
-  lines.push('    });');
-  lines.push('  })();');
-}
+const MESH_FEED_SCRIPT = `  (function () {
+    var applied = false;
+    var ktx2Reported = false;
+    var DEC_FILES = ${FEED_DECODER_FILES};
+    var DEC_MAX = ${MAX_DECODER_FILE_BYTES};
+    function fillDecoders(dec) {
+      var table = window.__fsDecoderUrls;
+      if (!table || !dec) return;
+      for (var i = 0; i < DEC_FILES.length; i++) {
+        var name = DEC_FILES[i][0], type = DEC_FILES[i][1];
+        if (table[name] || !Object.prototype.hasOwnProperty.call(dec, name)) continue;
+        var v = dec[name];
+        var ok = type === "application/wasm"
+          ? v instanceof ArrayBuffer && v.byteLength > 0 && v.byteLength <= DEC_MAX
+          : typeof v === "string" && v.length > 0 && v.length <= DEC_MAX;
+        if (!ok) continue;
+        try { table[name] = URL.createObjectURL(new Blob([v], { type: type })); } catch (e) {}
+      }
+    }
+    function decoderError() {
+      try {
+        var d = typeof FastShaders === "object" && FastShaders ? FastShaders.decoders : null;
+        return d && typeof d.lastError === "string" ? d.lastError : "";
+      } catch (e) { return ""; }
+    }
+    function apply(kind, payload, dec) {
+      if (applied) return;
+      var entity = document.getElementById("preview-entity");
+      if (!entity) return;
+      applied = true;
+      // A model that fails to PARSE (corrupt bytes, or a compression whose
+      // decoder is missing or refused it) must surface, not die in the
+      // console. A decoder cap names itself through lastError.
+      entity.addEventListener("model-error", function () {
+        __fsShowStickyError("Failed to load 3D model (" + __fsExpectedLabel + "): " + (decoderError() || "the file could not be parsed (corrupt, or compressed in a way FastShaders cannot decode)."));
+      });
+      entity.addEventListener("model-loaded", function () {
+        if (ktx2Reported) return;
+        ktx2Reported = true;
+        try {
+          var st = window.FastShaders && FastShaders.decoders ? FastShaders.decoders.ktx2Stats : null;
+          if (!st) return;
+          var fb = Math.min(Math.max(st.fallbacks | 0, 0), 1024);
+          var ms = Math.min(Math.max(st.missing | 0, 0), 1024);
+          if (fb <= 0 && ms <= 0) return;
+          window.parent.postMessage({ type: "fs:model-ktx2", geometry: __fsExpectedObj, fallbacks: fb, missing: ms }, "*");
+        } catch (e) {}
+      });
+      if (dec) fillDecoders(dec);
+      var blob = kind === "glb" ? new Blob([payload], { type: "model/gltf-binary" }) : new Blob([payload]);
+      var url = URL.createObjectURL(blob);
+      if (kind === "glb" || kind === "gltf") entity.setAttribute("gltf-model", "url(" + url + ")");
+      else entity.setAttribute("obj-model", "obj: url(" + url + ")");
+    }
+    window.addEventListener("message", function (e) {
+      if (e.source !== window.parent) return;
+      var msg = e.data;
+      if (!msg || msg.geometry !== __fsExpectedObj) return;
+      if (msg.type === "fs:obj-model-error") {
+        // Sticky, like a vendored-script 404: a later successful shader
+        // apply must not clear it — there is still no mesh to shade.
+        __fsShowStickyError("Failed to load 3D model (" + __fsExpectedLabel + "): " + msg.message);
+        return;
+      }
+      if (msg.type !== "fs:obj-model") return;
+      // obj/gltf ride as text; glb as binary. Anything else is dropped.
+      var kind = msg.kind === "glb" || msg.kind === "gltf" ? msg.kind : "obj";
+      var payload = kind === "glb" ? msg.bytes : msg.text;
+      if (kind === "glb") {
+        if (!(payload instanceof ArrayBuffer) && !ArrayBuffer.isView(payload)) return;
+      } else if (typeof payload !== "string") return;
+      // Decoder bytes ride only with a model that needs them (see fillDecoders).
+      var dec = msg.decoders && typeof msg.decoders === "object" ? msg.decoders : null;
+      window.__fsWhenSceneBooted(function () { apply(kind, payload, dec); });
+    });
+  })();`;
 
 /**
  * The model feed's IIFE for a Gaussian-SPLAT document. The same handshake as
@@ -2157,51 +2120,425 @@ function pushMeshModelFeed(lines: string[]): void {
  *    shDropped}` — forgeable like everything posted from here, so the parent
  *    validates it and treats it as display-only.
  */
-function pushSplatModelFeed(lines: string[], kind: SplatKind): void {
-  lines.push('  (function () {');
-  lines.push('    var applied = false;');
-  lines.push(`    var FEED_KINDS = ${JSON.stringify(MODEL_FEED_KINDS)};`);
-  lines.push(`    var EXPECTED_KIND = ${JSON.stringify(kind)};`);
-  lines.push('    function apply(kind, payload) {');
-  lines.push('      if (applied) return;');
-  lines.push('      var entity = document.getElementById("preview-entity");');
-  lines.push('      if (!entity) return;');
-  lines.push('      applied = true;');
-  lines.push('      // The runtime names every refusal in a sentence of its own (a count');
-  lines.push('      // over the cap, spherical-harmonic bands, a damaged header, …).');
-  lines.push('      entity.addEventListener("model-error", function (ev) {');
-  lines.push('        var d = ev && ev.detail;');
-  lines.push('        var m = d && typeof d.message === "string" && d.message ? d.message.slice(0, 400) : "the file could not be parsed.";');
-  lines.push('        __fsShowStickyError("Failed to load the Gaussian splat: " + m);');
-  lines.push('      });');
-  lines.push('      entity.addEventListener("splat-loaded", function (ev) {');
-  lines.push('        var d = ev && ev.detail;');
-  lines.push('        try {');
-  lines.push('          window.parent.postMessage({ type: "fs:model-splat", geometry: __fsExpectedObj, count: d ? d.count : null, shDropped: d ? d.shDropped : null }, "*");');
-  lines.push('        } catch (e) {}');
-  lines.push('      });');
-  lines.push('      var url = URL.createObjectURL(new Blob([payload]));');
-  lines.push(`      entity.setAttribute("splat-model", "src: url(" + url + "); kind: " + kind + "; size: ${SPLAT_MODEL_SIZE}");`);
-  lines.push('    }');
-  lines.push('    window.addEventListener("message", function (e) {');
-  lines.push('      if (e.source !== window.parent) return;');
-  lines.push('      var msg = e.data;');
-  lines.push('      if (!msg || msg.geometry !== __fsExpectedObj) return;');
-  lines.push('      if (msg.type === "fs:obj-model-error") {');
-  lines.push('        __fsShowStickyError("Failed to load the Gaussian splat: " + msg.message);');
-  lines.push('        return;');
-  lines.push('      }');
-  lines.push('      if (msg.type !== "fs:obj-model") return;');
-  lines.push('      var kind = typeof msg.kind === "string" && Object.prototype.hasOwnProperty.call(FEED_KINDS, msg.kind) ? msg.kind : "";');
-  lines.push('      if (kind !== EXPECTED_KIND) return;');
-  lines.push('      var payload = FEED_KINDS[kind] === "bytes" ? msg.bytes : msg.text;');
-  lines.push('      if (FEED_KINDS[kind] === "bytes") {');
-  lines.push('        if (!(payload instanceof ArrayBuffer) && !ArrayBuffer.isView(payload)) return;');
-  lines.push('      } else if (typeof payload !== "string") return;');
-  lines.push('      window.__fsWhenSceneBooted(function () { apply(kind, payload); });');
-  lines.push('    });');
-  lines.push('  })();');
+function splatFeedScript(kind: SplatKind): string {
+  return `  (function () {
+    var applied = false;
+    var FEED_KINDS = ${JSON.stringify(MODEL_FEED_KINDS)};
+    var EXPECTED_KIND = ${JSON.stringify(kind)};
+    function apply(kind, payload) {
+      if (applied) return;
+      var entity = document.getElementById("preview-entity");
+      if (!entity) return;
+      applied = true;
+      // The runtime names every refusal in a sentence of its own (a count
+      // over the cap, spherical-harmonic bands, a damaged header, …).
+      entity.addEventListener("model-error", function (ev) {
+        var d = ev && ev.detail;
+        var m = d && typeof d.message === "string" && d.message ? d.message.slice(0, 400) : "the file could not be parsed.";
+        __fsShowStickyError("Failed to load the Gaussian splat: " + m);
+      });
+      entity.addEventListener("splat-loaded", function (ev) {
+        var d = ev && ev.detail;
+        try {
+          window.parent.postMessage({ type: "fs:model-splat", geometry: __fsExpectedObj, count: d ? d.count : null, shDropped: d ? d.shDropped : null }, "*");
+        } catch (e) {}
+      });
+      var url = URL.createObjectURL(new Blob([payload]));
+      entity.setAttribute("splat-model", "src: url(" + url + "); kind: " + kind + "; size: ${SPLAT_MODEL_SIZE}");
+    }
+    window.addEventListener("message", function (e) {
+      if (e.source !== window.parent) return;
+      var msg = e.data;
+      if (!msg || msg.geometry !== __fsExpectedObj) return;
+      if (msg.type === "fs:obj-model-error") {
+        __fsShowStickyError("Failed to load the Gaussian splat: " + msg.message);
+        return;
+      }
+      if (msg.type !== "fs:obj-model") return;
+      var kind = typeof msg.kind === "string" && Object.prototype.hasOwnProperty.call(FEED_KINDS, msg.kind) ? msg.kind : "";
+      if (kind !== EXPECTED_KIND) return;
+      var payload = FEED_KINDS[kind] === "bytes" ? msg.bytes : msg.text;
+      if (FEED_KINDS[kind] === "bytes") {
+        if (!(payload instanceof ArrayBuffer) && !ArrayBuffer.isView(payload)) return;
+      } else if (typeof payload !== "string") return;
+      window.__fsWhenSceneBooted(function () { apply(kind, payload); });
+    });
+  })();`;
 }
+
+/**
+ * Drag/drop forwarding for the sandboxed preview (same pattern as podest.html).
+ * The iframe covers the whole preview body, so its document captures drag
+ * events there and they never reach the parent — without preventDefault a drop
+ * would even navigate the frame. It forwards a drag SIGNAL and the dropped File
+ * objects to the parent (ShaderPreview), which owns validation and loading; the
+ * files never execute here. Emitted BEFORE the bundle <script src> tags so an
+ * early drop is caught. The dragover heartbeat (250ms) keeps the parent's
+ * overlay safety-timeout armed.
+ */
+const DRAG_FORWARD_SCRIPT = `  <script>
+  (function () {
+    function toParent(m) { try { parent.postMessage(m, "*"); } catch (e) {} }
+    // Only FILE drags participate — internal drags (palette tiles, text
+    // selections) must neither raise the parent veil nor be intercepted.
+    function hasFiles(e) { var t = e.dataTransfer && e.dataTransfer.types; return !!t && Array.prototype.indexOf.call(t, "Files") !== -1; }
+    var depth = 0, lastBeat = 0, lastEvt = 0;
+    // dragenter/dragleave pairing is NOT guaranteed for a drag aborted
+    // with Esc or dropped outside the window — a stale depth would make
+    // every later leave under-count and stop the on:false signal forever.
+    // A fresh drag after >1s of drag-silence starts from depth 0.
+    function touch() { var t = Date.now(); if (t - lastEvt > 1000) depth = 0; lastEvt = t; }
+    addEventListener("dragenter", function (e) { if (!hasFiles(e)) return; e.preventDefault(); touch(); if (depth++ === 0) toParent({ type: "fs:preview-drag", on: true }); });
+    addEventListener("dragover", function (e) { if (!hasFiles(e)) return; e.preventDefault(); touch(); try { if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"; } catch (err) {} var t = Date.now(); if (t - lastBeat > 250) { lastBeat = t; toParent({ type: "fs:preview-drag", on: true }); } });
+    addEventListener("dragleave", function (e) { if (!hasFiles(e)) return; e.preventDefault(); touch(); if (--depth <= 0) { depth = 0; toParent({ type: "fs:preview-drag", on: false }); } });
+    addEventListener("drop", function (e) { if (!hasFiles(e)) return; e.preventDefault(); depth = 0; lastEvt = 0; var f = e.dataTransfer && e.dataTransfer.files ? Array.prototype.slice.call(e.dataTransfer.files) : []; toParent({ type: "fs:preview-drag", on: false }); if (f.length) toParent({ type: "fs:preview-drop", files: f }); });
+  })();
+  <\/script>`;
+
+/**
+ * SECURITY: the loader URL allowlist. A dropped .gltf/.glb can name buffers or
+ * textures by ABSOLUTE http(s) URL, and GLTFLoader would fetch them, leaking
+ * the viewer's IP (no CSP in dev or desktop builds, so this is the control). A
+ * blocked URL lands on an inert data: URL: the request never leaves the page
+ * and the loader surfaces a normal parse error. The sandbox allows blob:/data:
+ * only; the XR popup (`sameOrigin`) has REAL network access, so it also allows
+ * its own origin, where the built-in models load by real URL. MODEL_MODULE_LATCH
+ * goes first in both. Same guard in podest.html.
+ */
+function urlModifierScript(sameOrigin: boolean): string {
+  const ownOrigin = sameOrigin
+    ? 'try{if(new URL(s,window.location.href).origin===window.location.origin)return s;}catch(e){}'
+    : '';
+  return `  <script>${MODEL_MODULE_LATCH}try{if(window.THREE&&THREE.DefaultLoadingManager&&THREE.DefaultLoadingManager.setURLModifier){THREE.DefaultLoadingManager.setURLModifier(function(u){var s=String(u);if(/^(blob:|data:)/i.test(s))return s;${ownOrigin}try{console.warn("[FastShaders] blocked non-${sameOrigin ? 'origin' : 'blob'} resource URL:",s.slice(0,200));}catch(e){}return "data:application/octet-stream;base64,";});}}catch(e){}<\/script>`;
+}
+
+/**
+ * The sandbox's backend pre-flight, the tail of the scene boot IIFE: request a
+ * real adapter (2s timeout against a hung requestAdapter) and hide
+ * navigator.gpu when it can't deliver.
+ *
+ * `__fsForceWebGL2`: three r184's WebGPU backend does not paint reliably on
+ * Apple's WebKit — an adapter can be granted yet no frame ever renders, a
+ * flat-color pane with no error. It must cover ALL WebKit: every browser on
+ * iOS/iPadOS is WKWebView, and iPadOS 13+ desktop mode reports as Macintosh.
+ * Vendor can be blanked by privacy settings, so desktop Safari is matched by
+ * UA shape (WebKit, no Chromium/Gecko token).
+ *
+ * The user's WGSL/GLSL toggle rides a SEPARATE branch, never a clause inside
+ * `__fsForceWebGL2`: feedbackReport.test.ts evaluates that function's emitted
+ * source against previewBackend()'s platform rule.
+ */
+function sandboxPreflightScript(forceWebGL2: boolean): string {
+  return `    function hideGpu() {
+      try { Object.defineProperty(Navigator.prototype, "gpu", { get: function () { return undefined; }, configurable: true }); } catch (e) {}
+      try { Object.defineProperty(navigator, "gpu", { value: undefined, configurable: true }); } catch (e) {}
+    }
+    function __fsForceWebGL2() {
+      var ua = navigator.userAgent || "";
+      if (/iPad|iPhone|iPod/.test(ua)) return true;
+      if (navigator.platform === "MacIntel" && (navigator.maxTouchPoints || 0) > 1) return true;
+      if (/Chrome|Chromium|CriOS|FxiOS|Edg|EdgiOS|OPR|OPiOS|SamsungBrowser|Firefox|Android/.test(ua)) return false;
+      return /Safari|AppleWebKit/.test(ua);
+    }
+    var __FS_USER_FORCE_WEBGL2 = ${forceWebGL2 ? 'true' : 'false'};
+    if (__FS_USER_FORCE_WEBGL2) { hideGpu(); boot(); return; }
+    if (__fsForceWebGL2()) { hideGpu(); boot(); return; }
+    if (!navigator.gpu) { boot(); return; }
+    var settled = false;
+    function go(adapter) {
+      if (settled) return;
+      settled = true;
+      if (!adapter) hideGpu();
+      boot();
+    }
+    try {
+      Promise.resolve(navigator.gpu.requestAdapter()).then(go, function () { go(null); });
+    } catch (e) { go(null); }
+    setTimeout(function () { go(null); }, 2000);`;
+}
+
+/**
+ * The scene slot and its boot script. The <a-scene> is injected AFTER the
+ * backend is decided instead of being parsed statically: three r184 picks
+ * WebGPU on `navigator.gpu != null` ALONE, and Safari 26 exposes navigator.gpu
+ * inside the sandboxed iframe while adapter requests can still fail there — the
+ * preview then stays blank forever. Scripts that need the scene run via
+ * `__fsWhenSceneBooted`. See docs/dev/preview-and-runtime.md, "Preview
+ * renderer backend".
+ *
+ *  - `__fsHasWebGL2`: WebGL2 is a HARD FLOOR (three dropped WebGL1 in r163, so
+ *    the bundle throws on a null "webgl2" context). Without the probe such a
+ *    machine got a blank pane and then the watchdog's "Reload to retry", an
+ *    action that can never work. The probe releases its context slot straight
+ *    away: browsers cap live contexts (~16). It runs only when this document is
+ *    on WebGL2 — a sandbox that reaches boot() there has no navigator.gpu, and
+ *    xr always is — so a WebGPU machine is never turned away.
+ *  - `fs:backend` (sandbox only) tells the parent's WGSL/GLSL toggle the truth.
+ *    Posted from boot() rather than fs:preview-ready, so it arrives even when
+ *    the shader fails to compile.
+ *  - The watchdog surfaces a WebGPU DEVICE-level failure. xr names "WebGL2"
+ *    outright: navigator.gpu is still visible there and would misname it.
+ *  - xr boots straight away: its scene tag already fixed the backend, so the
+ *    pre-flight would only delay the scene by up to its 2s timeout.
+ */
+function sceneBootScript(sceneHTML: string, xr: boolean, forceWebGL2: boolean): string {
+  return `<div id="scene-slot"></div>
+<script>
+  var __fsSceneHTML = ${JSON.stringify(sceneHTML)};
+  window.__fsSceneBooted = false;
+  window.__fsWhenSceneBooted = function (fn) {
+    if (window.__fsSceneBooted) { fn(); return; }
+    window.addEventListener("fs:scene-booted", fn, { once: true });
+  };
+  (function () {
+    function __fsHasWebGL2() {
+      try {
+        var c = document.createElement("canvas").getContext("webgl2");
+        if (!c) return false;
+        var lose = c.getExtension("WEBGL_lose_context");
+        if (lose) lose.loseContext();
+        return true;
+      } catch (e) { return false; }
+    }
+    function boot() {
+      if (${xr ? '' : '!navigator.gpu && '}!__fsHasWebGL2()) {
+        __fsShowStickyError("This browser cannot draw the 3D preview: no WebGL2 context is available. WebGL2 needs Chrome 56+, Firefox 51+ or Safari 15+, and may be switched off or blocked by the graphics driver.");
+        return;
+      }
+      document.getElementById("scene-slot").innerHTML = __fsSceneHTML;
+      window.__fsSceneBooted = true;
+      window.dispatchEvent(new Event("fs:scene-booted"));${xr ? '' : `
+      try { parent.postMessage({ type: "fs:backend", backend: navigator.gpu ? "webgpu" : "webgl2" }, "*"); } catch (e) {}`}
+      // Watchdog: a WebGPU DEVICE-level failure (healthy adapter, dead
+      // device) still white-screens — surface it instead of staying silent.
+      setTimeout(function () {
+        var s = document.querySelector("a-scene");
+        if (s && !s.renderStarted) {
+          __fsShowStickyError("3D preview failed to start: the " + ${xr ? '"WebGL2"' : '(navigator.gpu ? "WebGPU" : "WebGL2")'} + " renderer never began rendering. Reload to retry.");
+        }
+      }, 6000);
+    }
+${xr ? '    boot();' : sandboxPreflightScript(forceWebGL2)}
+  })();
+<\/script>`;
+}
+
+/**
+ * Sub-mesh protocol of a sandboxed model document: what named meshes the model
+ * actually put in the scene (up, `fs:model-meshes`), and which to light up
+ * while the user picks (down, `fs:highlight-mesh`). Model documents only — a
+ * primitive has one unnamed mesh and nothing to report — and both halves share
+ * ONE traversal, which is what stops the report and the highlight from ever
+ * disagreeing about which nodes are "the meshes". The parent treats everything
+ * posted from here as forgeable, so nothing is a security boundary; the caps
+ * only keep a pathological model from posting a payload that hurts the parent.
+ *
+ *  - Over-length names are reported EMPTY, never truncated. The parent drops an
+ *    unusable name, so the mesh is honestly not offered; a truncated one would
+ *    be offered, targeted and emitted, then match nothing at runtime (the
+ *    loader dispatches on the raw `node.name`) with no warning on the node.
+ *  - `splat`: a Gaussian splat is ONE row that can never be a part target — no
+ *    name, no material, its splat COUNT in place of a vertex count — and is
+ *    never highlighted (a flat material on its instanced quad would draw every
+ *    splat as an opaque 4x4 square).
+ */
+function meshInventoryScript(meshKey: string, splat: boolean): string {
+  return `<script>
+  var __fsMeshKey = ${JSON.stringify(meshKey)};
+  (function () {
+    var HL_CAP = 512;
+    var lit = [];
+    var hlMat = null;
+    function ent() { return document.getElementById("preview-entity"); }
+    function shaderComp() {
+      var e = ent();
+      return (e && e.components && e.components.shader) || null;
+    }
+    function meshList() {
+      var out = [];
+      var e = ent();
+      var root = e && e.getObject3D ? e.getObject3D("mesh") : null;
+      if (!root || typeof root.traverse !== "function") return out;
+      root.traverse(function (n) { if (n && n.isMesh && out.length < HL_CAP) out.push(n); });
+      return out;
+    }
+    function report() {
+      var list = meshList();
+      var comp = shaderComp();
+      var payload = [];
+      for (var i = 0; i < list.length; i++) {
+        var n = list[i];${splat ? `
+        if (n.isGaussianSplat) {
+          payload.push({ index: i, name: "", materialName: "", vertexCount: 0, splat: true, splats: n.geometry && typeof n.geometry.instanceCount === "number" ? n.geometry.instanceCount : 0 });
+          continue;
+        }` : ''}
+        // The AUTHORED material name. By now the shaderloader has usually
+        // already stamped its own material over every mesh, so ask it for the
+        // original it kept by uuid first and only then look at the mesh.
+        var orig = comp && comp.originalMaterials ? comp.originalMaterials[n.uuid] : null;
+        var mat = orig || n.material;
+        var pos = n.geometry && n.geometry.attributes ? n.geometry.attributes.position : null;
+        payload.push({
+          index: i,
+          name: typeof n.name === "string" && n.name.length <= 128 ? n.name : "",
+          materialName: mat && typeof mat.name === "string" ? mat.name.slice(0, 64) : "",
+          vertexCount: pos && typeof pos.count === "number" ? pos.count : 0
+        });
+      }
+      try {
+        window.parent.postMessage({ type: "fs:model-meshes", geometry: __fsMeshKey, meshes: payload }, "*");
+      } catch (e) {}
+    }
+    function clearHighlight() {
+      // Restore by RE-DERIVING the material from the live shader component —
+      // never by writing back a reference stashed before the swap. The
+      // loader disposes the outgoing material BEFORE assigning the new one,
+      // so a stash taken across a shader re-apply would restore a disposed
+      // material, and a restore landing after the apply would overwrite the
+      // material that apply just installed.
+      //
+      // Per-mesh FIRST (loader 0.6 records what each mesh actually got): a
+      // mesh wearing a per-part material must come back to THAT material,
+      // not to the default every other mesh wears. The default is the 0.5
+      // fallback, and the authored material covers a part-only module,
+      // where unmatched meshes never had a shader material at all.
+      var comp = shaderComp();
+      for (var i = 0; i < lit.length; i++) {
+        var n = lit[i];
+        var next = (comp && comp._appliedMaterials ? comp._appliedMaterials[n.uuid] : null) ||
+          (comp && comp._shaderMaterial) ||
+          (comp && comp.originalMaterials ? comp.originalMaterials[n.uuid] : null);
+        if (next) n.material = next;
+      }
+      lit = [];
+    }
+    // \`target\` is one mesh name or a LIST of them (an import-built index
+    // section shades every mesh of a glTF material; hovering its chip lights
+    // them all). Only non-empty strings count, at most 256.
+    function highlight(target) {
+      clearHighlight();
+      var wanted = {};
+      var any = false;
+      var raw = Array.isArray(target) ? target : [target];
+      for (var k = 0; k < raw.length && k < 256; k++) {
+        if (typeof raw[k] === "string" && raw[k]) { wanted[raw[k]] = true; any = true; }
+      }
+      if (!any) return;
+      // One shared flat material for every match, minted once: a highlight is
+      // transient and must not add a pipeline per hovered row.
+      if (!hlMat && window.THREE) {
+        hlMat = new window.THREE.MeshBasicMaterial({ color: 0xffc400 });
+        // Flagged so the loader can never record it as a mesh's "original".
+        hlMat.userData.__fsHighlight = true;
+      }
+      if (!hlMat) return;
+      var list = meshList();
+      for (var i = 0; i < list.length; i++) {${splat ? `
+        if (list[i].isGaussianSplat) continue;` : ''}
+        if (Object.prototype.hasOwnProperty.call(wanted, list[i].name)) { list[i].material = hlMat; lit.push(list[i]); }
+      }
+    }
+    window.addEventListener("message", function (e) {
+      if (e.source !== window.parent) return;
+      var msg = e.data;
+      if (!msg || msg.type !== "fs:highlight-mesh") return;
+      highlight(Array.isArray(msg.names) && msg.names.length ? msg.names : msg.name);
+    });
+    window.__fsWhenSceneBooted(function () {
+      var e = ent();
+      if (!e) return;
+      // Deferred one tick so the report is taken AFTER fit-bounds has baked
+      // the geometry and the loader has stored the authored materials —
+      // both listen for model-loaded and both were registered before this.
+      e.addEventListener("model-loaded", function () { setTimeout(report, 0); });
+      // A model that finished loading before this listener existed still
+      // gets reported: without this a fast local blob: URL can beat the
+      // registration and the picker would stay empty until the next edit.
+      if (e.getObject3D && e.getObject3D("mesh")) setTimeout(report, 0);
+    });
+  })();
+<\/script>`;
+}
+
+/**
+ * Immersive entry of the XR popup. The VR button's promise is "press it and
+ * you're in VR": requestSession needs transient user activation, and whether
+ * the opening click's activation carries into a window.open + document.write
+ * document is browser-dependent (NOT verified on a headset here). So entry is
+ * attempted automatically, with a real in-document button as the fallback — a
+ * gesture inside this document is what Quest Browser reliably accepts (the
+ * reason ShaderCarousel's bench-inout keeps its start gate inside the iframe).
+ * The button stays visible until a session actually starts, so a
+ * never-resolving enterVR() can't strand the user with no way in.
+ */
+const VR_GATE_SCRIPT = `<script>
+  __fsWhenSceneBooted(function () {
+    var scene = document.querySelector("a-scene");
+    var gate = document.getElementById("vr-gate");
+    if (!scene || !gate) return;
+    // One button, two meanings — whichever "as immersive as this
+    // device gets" means here: a headset enters an immersive session,
+    // a desktop goes fullscreen. Resolved once from real capability
+    // rather than a UA sniff, and the label always says which it is.
+    var supportsVR = false;
+    function isFullscreen() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+    function refresh() { gate.textContent = supportsVR ? "Enter VR" : (isFullscreen() ? "Exit fullscreen" : "Fullscreen"); }
+    function enter() { try { return scene.enterVR(); } catch (e) { return null; } }
+    function toggleFullscreen() {
+      try {
+        if (isFullscreen()) {
+          var exit = document.exitFullscreen || document.webkitExitFullscreen;
+          if (exit) exit.call(document);
+        } else {
+          var el = document.documentElement;
+          var req = el.requestFullscreen || el.webkitRequestFullscreen;
+          if (req) req.call(el);
+        }
+      } catch (e) { /* denied (no activation / policy) — label is unchanged */ }
+    }
+    scene.addEventListener("enter-vr", function () { gate.hidden = true; });
+    scene.addEventListener("exit-vr", function () { gate.hidden = false; refresh(); });
+    document.addEventListener("fullscreenchange", refresh);
+    document.addEventListener("webkitfullscreenchange", refresh);
+    gate.addEventListener("click", function () { if (supportsVR) enter(); else toggleFullscreen(); });
+    // Only ever call enterVR when a REAL immersive-vr session is
+    // available. With no headset A-Frame falls into its magic-window
+    // fallback, which hides the entry affordances and leaves the page
+    // in a pseudo-VR state the user cannot get out of — worse than
+    // simply staying flat. Where that check fails the button stays,
+    // as the fullscreen toggle.
+    function autoEnter() {
+      var xr = navigator.xr;
+      gate.hidden = false;
+      if (!xr || typeof xr.isSessionSupported !== "function") { refresh(); return; }
+      xr.isSessionSupported("immersive-vr").then(function (ok) {
+        supportsVR = !!ok;
+        refresh();
+        if (!ok) return;
+        var p = enter();
+        // Rejected = no transient activation carried into this
+        // document; the button is showing, which is the way in.
+        if (p && typeof p.catch === "function") p.catch(function () {});
+      }).catch(function () { supportsVR = false; refresh(); });
+    }
+    refresh();
+    if (scene.hasLoaded) autoEnter();
+    else scene.addEventListener("loaded", autoEnter, { once: true });
+  });
+<\/script>`;
+
+/** Sets the shader attribute once the scene (and thus the entity) exists. */
+const SHADER_ATTACH_SCRIPT = `<script>
+  __fsWhenSceneBooted(function () {
+    try {
+      document.getElementById("preview-entity").setAttribute("shader", "src: " + window.__shaderUrl);
+    } catch (e) {
+      console.error("[FastShaders Preview]", e);
+      var errEl = document.getElementById("error");
+      if (errEl) errEl.textContent = String(e);
+    }
+  });
+<\/script>`;
 
 export function tslToPreviewHTML(
   tslCode: string,
@@ -2251,14 +2588,8 @@ export function tslToPreviewHTML(
     isCustom && customModel && isSplatKind(customModel.kind) ? customModel.kind : null;
   const { iife, shaderloader, orbitControls, splatRuntime } = getScriptUrls();
 
-  // NB welding coincident primitive vertices (so a displaced box does not split
-  // into floating faces) is NOT done here any more: shaderloader 0.8 owns it
-  // (as the frozen 0.6 did),
-  // gated on the same three conditions this file used to express — a primitive,
-  // a material carrying a positionNode, and the author's "Merge Vertices"
-  // choice, which now travels as `mergeVertices: false` in the emitted module.
-  // That put ONE implementation behind the editor preview, podest, the
-  // copy-ready A-Frame page and every exported module at once.
+  // Primitive welding lives in loader 0.8 (`mergeVertices: false` opts out):
+  // docs/dev/preview-and-runtime.md, the weld bullet.
 
   // Plane spins on its Z axis (in-plane, like a record), since the flat face
   // is already pointed at the camera. Everything else spins on Y like a turntable.
@@ -2341,7 +2672,7 @@ export function tslToPreviewHTML(
       // Custom meshes use the parent-minted blob URL (same-origin here too).
       const url = isCustom
         ? customModel?.url ?? ''
-        : getModelUrl('bunny');
+        : getBunnyModelUrl();
       const modelAttr = isCustom && customModel?.kind !== 'obj'
         ? `gltf-model="url(${url})"`
         : `obj-model="obj: url(${url})"`;
@@ -2388,32 +2719,7 @@ export function tslToPreviewHTML(
     // the plain desktop renderer. (The XR popup skips this — there navigator.xr
     // must stay visible, and the WebGL2 fallback avoids the broken init path.)
     lines.push(`  <script>try{Object.defineProperty(navigator,"xr",{value:undefined,configurable:true});}catch(e){}<${''}/script>`);
-    // Drag/drop forwarding (same pattern as podest.html): this iframe covers
-    // the whole preview body, so its document captures drag events over that
-    // area and they never reach the parent — without preventDefault a drop
-    // would even navigate the frame. Forward a drag SIGNAL and the dropped
-    // File objects to the parent (ShaderPreview), which owns validation and
-    // loading; the files never execute here. Installed BEFORE the heavy
-    // bundle <script src> tags so an early drop is caught. The dragover
-    // heartbeat (250ms) keeps the parent's overlay safety-timeout armed.
-    lines.push('  <script>');
-    lines.push('  (function () {');
-    lines.push('    function toParent(m) { try { parent.postMessage(m, "*"); } catch (e) {} }');
-    lines.push('    // Only FILE drags participate — internal drags (palette tiles, text');
-    lines.push('    // selections) must neither raise the parent veil nor be intercepted.');
-    lines.push('    function hasFiles(e) { var t = e.dataTransfer && e.dataTransfer.types; return !!t && Array.prototype.indexOf.call(t, "Files") !== -1; }');
-    lines.push('    var depth = 0, lastBeat = 0, lastEvt = 0;');
-    lines.push('    // dragenter/dragleave pairing is NOT guaranteed for a drag aborted');
-    lines.push('    // with Esc or dropped outside the window — a stale depth would make');
-    lines.push('    // every later leave under-count and stop the on:false signal forever.');
-    lines.push('    // A fresh drag after >1s of drag-silence starts from depth 0.');
-    lines.push('    function touch() { var t = Date.now(); if (t - lastEvt > 1000) depth = 0; lastEvt = t; }');
-    lines.push('    addEventListener("dragenter", function (e) { if (!hasFiles(e)) return; e.preventDefault(); touch(); if (depth++ === 0) toParent({ type: "fs:preview-drag", on: true }); });');
-    lines.push('    addEventListener("dragover", function (e) { if (!hasFiles(e)) return; e.preventDefault(); touch(); try { if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"; } catch (err) {} var t = Date.now(); if (t - lastBeat > 250) { lastBeat = t; toParent({ type: "fs:preview-drag", on: true }); } });');
-    lines.push('    addEventListener("dragleave", function (e) { if (!hasFiles(e)) return; e.preventDefault(); touch(); if (--depth <= 0) { depth = 0; toParent({ type: "fs:preview-drag", on: false }); } });');
-    lines.push('    addEventListener("drop", function (e) { if (!hasFiles(e)) return; e.preventDefault(); depth = 0; lastEvt = 0; var f = e.dataTransfer && e.dataTransfer.files ? Array.prototype.slice.call(e.dataTransfer.files) : []; toParent({ type: "fs:preview-drag", on: false }); if (f.length) toParent({ type: "fs:preview-drop", files: f }); });');
-    lines.push('  })();');
-    lines.push(`  <${''}/script>`);
+    lines.push(DRAG_FORWARD_SCRIPT);
   }
   // The onerror attributes route through __fsShowStickyError (never a direct
   // getElementById — these fire while <head> is still parsing, before the
@@ -2436,28 +2742,7 @@ export function tslToPreviewHTML(
     lines.push(`  <script>${xr ? xrDecoderConfig() : SANDBOX_DECODER_CONFIG}<${''}/script>`);
   }
   lines.push(`  <script src="${orbitControls}" onerror="__fsShowStickyError('Failed to load orbit controls')"><${''}/script>`);
-  // SECURITY: dropped model files are adversarial input. A .gltf/.glb can
-  // reference buffers or textures by ABSOLUTE http(s) URL — GLTFLoader
-  // would fetch them, leaking the viewer's IP to an attacker-controlled
-  // host (a CSP is not present in dev or desktop builds, so it cannot be
-  // the control). Neutralized URLs land on an inert data: URL — the request
-  // never leaves the page and the loader surfaces a normal parse error; a
-  // console.warn records what was blocked. Same guard in podest.html.
-  // These documents get their modules from the parent and must never run a
-  // module found inside a model (the loader's model opt-in); its one-way latch,
-  // first in both scripts, makes that a rule, not a habit.
-  if (!xr) {
-    // Sandboxed stage: everything it legitimately loads through THREE's
-    // loading managers is a blob: URL minted inside the iframe or a data:
-    // URI — allowlist exactly those.
-    lines.push(`  <script>${MODEL_MODULE_LATCH}try{if(window.THREE&&THREE.DefaultLoadingManager&&THREE.DefaultLoadingManager.setURLModifier){THREE.DefaultLoadingManager.setURLModifier(function(u){var s=String(u);if(/^(blob:|data:)/i.test(s))return s;try{console.warn("[FastShaders] blocked non-blob resource URL:",s.slice(0,200));}catch(e){}return "data:application/octet-stream;base64,";});}}catch(e){}<${''}/script>`);
-  } else {
-    // XR popup: same-origin page with REAL network access — and the dropped
-    // custom mesh is exactly as adversarial here as in the sandbox. Allowlist
-    // blob:/data: PLUS this origin (the built-in teapot/bunny load by real
-    // same-origin URL on this page); everything else is neutralized.
-    lines.push(`  <script>${MODEL_MODULE_LATCH}try{if(window.THREE&&THREE.DefaultLoadingManager&&THREE.DefaultLoadingManager.setURLModifier){THREE.DefaultLoadingManager.setURLModifier(function(u){var s=String(u);if(/^(blob:|data:)/i.test(s))return s;try{if(new URL(s,window.location.href).origin===window.location.origin)return s;}catch(e){}try{console.warn("[FastShaders] blocked non-origin resource URL:",s.slice(0,200));}catch(e){}return "data:application/octet-stream;base64,";});}}catch(e){}<${''}/script>`);
-  }
+  lines.push(urlModifierScript(xr));
   lines.push('  <style>');
   // Body background matches the scene bg so the gap between document load
   // and the first WebGPU paint shows the chosen color, not a white flash.
@@ -2502,13 +2787,14 @@ export function tslToPreviewHTML(
   // `<` escape, which JS decodes back to `<`: the blob the module is built
   // from is byte-identical, and the HTML source contains no tag-open at all.
   //
-  // This is the SINK half of the defence (`graphToCode.partKeyLiteral` is the
-  // source half). It is written here as well as there because it covers every
-  // string that can reach this line — mesh names, an `unknown` node's raw
-  // expression, an image asset's file name — rather than the one that is known
-  // to be attacker-chosen today. Without it, a hostile `.fastshader` could
-  // close this script early and run markup in the XR popup, which unlike the
-  // sandboxed preview is a top-level document at the app's REAL origin.
+  // This is the SINK half of the defence (`moduleStringLiteral`, in
+  // engine/partKeyLiteral.ts, is the source half). It is written here as well
+  // as there because it covers every string that can reach this line — mesh
+  // names, an `unknown` node's raw expression, an image asset's file name —
+  // rather than the one that is known to be attacker-chosen today. Without it,
+  // a hostile `.fastshader` could close this script early and run markup in the
+  // XR popup, which unlike the sandboxed preview is a top-level document at the
+  // app's REAL origin.
   lines.push(`  var __shaderCode = ${JSON.stringify(shaderModule).replace(/</g, '\\u003C')};`);
   // `__shaderCode` stays the UNRESOLVED module (the hot-swap receiver's
   // idempotency seed, which the parent compares byte for byte); only the blob
@@ -2522,27 +2808,14 @@ export function tslToPreviewHTML(
   lines.push(`<${''}/script>`);
   lines.push('');
 
-  // Register the fit-bounds component used by OBJ-backed previews. Inert for
-  // primitive geometries — the component is only attached to OBJ entities.
+  // Registered unconditionally so a primitive can hot-swap into any model or
+  // the teapot; attached only via entityAttrs / __applyGeometry.
   lines.push(FIT_BOUNDS_SCRIPT);
   lines.push('');
 
-  // Register the runtime Utah teapot (teapot-mesh). Unconditional, like
-  // fit-bounds: the parent hot-swaps primitive↔teapot without a rebuild, so
-  // every document must be able to become the teapot.
-  //
-  // SIZE, re-measured 2026-09-05 (the old '~16 KB, mostly the control points'
-  // was the stripped figure): TEAPOT_SCRIPT is 19.2 KB, of which 16.1 KB is
-  // code+data and 3.1 KB is comments and indent. FIT_BOUNDS_SCRIPT above is
-  // 22.7 KB / 11.9 KB — i.e. nearly HALF of it is comment — and
-  // GLTF_ANIM_SCRIPT is 11.9 KB / 6.5 KB. A default sphere document is
-  // therefore ~31% comment bytes, and because these are TypeScript template
-  // literals no minifier rewrites them: the same bytes ship in the app
-  // bundle (~7.6 KB gzipped on the boot chunk) and are re-parsed by the
-  // iframe on every rebuild. Both scripts stay UNCONDITIONAL — that is the
-  // hot-swap contract above — and the comments stay in the SOURCE, because
-  // they carry the measurement rationale the fit-bounds and teapot
-  // conventions depend on. Strip them at BUILD time if it ever matters.
+  // The runtime Utah teapot (teapot-mesh). Both scripts stay unconditional, the
+  // hot-swap contract; sizes and rationale: docs/dev/preview-and-runtime.md,
+  // the teapot bullet.
   lines.push(TEAPOT_SCRIPT);
   lines.push('');
 
@@ -2569,18 +2842,7 @@ export function tslToPreviewHTML(
     lines.push('');
   }
 
-  // The <a-scene> is injected AFTER a WebGPU pre-flight instead of being
-  // parsed statically: three r184 picks its WebGPU backend on
-  // `navigator.gpu != null` ALONE (no adapter check), and Safari 26 exposes
-  // navigator.gpu inside this sandboxed opaque-origin iframe while adapter
-  // requests can still fail there — the renderer's async init then dies and
-  // the preview stays blank forever, because the WebGL2 fallback only fires
-  // when navigator.gpu is absent. Requesting a real adapter first (with a 2s
-  // timeout against a hung requestAdapter) and hiding navigator.gpu when it
-  // can't deliver makes three fall back to WebGL2 deterministically. Scripts
-  // that need the scene run via __fsWhenSceneBooted. XR popups skip the
-  // pre-flight entirely — their backend is forced by the scene tag's
-  // renderer="backend: webgl" attribute, so they boot() immediately.
+  // The scene markup, injected by sceneBootScript once the backend is decided.
   const sceneLines: string[] = [];
   // vr-mode-ui only in xr mode: A-Frame then renders its own Enter-VR button,
   // which is the immersive entry point for the popup page.
@@ -2649,121 +2911,7 @@ export function tslToPreviewHTML(
 
   sceneLines.push('</a-scene>');
 
-  lines.push('<div id="scene-slot"></div>');
-  lines.push('<script>');
-  lines.push(`  var __fsSceneHTML = ${JSON.stringify(sceneLines.join('\n'))};`);
-  lines.push('  window.__fsSceneBooted = false;');
-  lines.push('  window.__fsWhenSceneBooted = function (fn) {');
-  lines.push('    if (window.__fsSceneBooted) { fn(); return; }');
-  lines.push('    window.addEventListener("fs:scene-booted", fn, { once: true });');
-  lines.push('  };');
-  lines.push('  (function () {');
-  // WebGL2 is a HARD FLOOR for the WebGL path and nothing tested for it. three
-  // dropped WebGL1 in r163, so the vendored r184 bundle only ever asks for a
-  // "webgl2" context and throws on a null one — a machine with WebGL2 absent,
-  // disabled or driver-blocklisted (Safari <15, a locked-down enterprise
-  // profile, a headless VM) got a blank pane for six seconds and then the
-  // watchdog's "the WebGL2 renderer never began rendering. Reload to retry.",
-  // which names a consequence and prescribes an action that can never work.
-  // Probe first and say the real thing. The probe releases its context slot
-  // straight away: browsers cap live contexts (~16) and this document is about
-  // to ask for one more.
-  lines.push('    function __fsHasWebGL2() {');
-  lines.push('      try {');
-  lines.push('        var c = document.createElement("canvas").getContext("webgl2");');
-  lines.push('        if (!c) return false;');
-  lines.push('        var lose = c.getExtension("WEBGL_lose_context");');
-  lines.push('        if (lose) lose.loseContext();');
-  lines.push('        return true;');
-  lines.push('      } catch (e) { return false; }');
-  lines.push('    }');
-  lines.push('    function boot() {');
-  // Gated on this document actually running on WebGL2, so a WebGPU-capable
-  // machine is never turned away by a probe it does not need: in the sandbox
-  // every path that reaches boot() on the WebGL2 backend has already hidden (or
-  // never had) navigator.gpu, and the xr popup is forced there by its scene's
-  // renderer="backend: webgl" attribute regardless of what navigator.gpu says.
-  // __fsShowStickyError posts fs:preview-error, so the parent's "Compiling
-  // shader…" overlay drops immediately instead of covering the message.
-  lines.push(`      if (${xr ? '' : '!navigator.gpu && '}!__fsHasWebGL2()) {`);
-  lines.push('        __fsShowStickyError("This browser cannot draw the 3D preview: no WebGL2 context is available. WebGL2 needs Chrome 56+, Firefox 51+ or Safari 15+, and may be switched off or blocked by the graphics driver.");');
-  lines.push('        return;');
-  lines.push('      }');
-  lines.push('      document.getElementById("scene-slot").innerHTML = __fsSceneHTML;');
-  lines.push('      window.__fsSceneBooted = true;');
-  lines.push('      window.dispatchEvent(new Event("fs:scene-booted"));');
-  if (!xr) {
-    // Report which renderer this document settled on (post-pre-flight:
-    // hidden navigator.gpu = WebGL2) so the parent's WGSL/GLSL toggle can
-    // label itself with the truth instead of a prediction. Posted from
-    // boot() rather than fs:preview-ready so it arrives even when the
-    // shader itself fails to compile. Sandbox-only: the XR popup is a
-    // top-level document whose parent is itself.
-    lines.push('      try { parent.postMessage({ type: "fs:backend", backend: navigator.gpu ? "webgpu" : "webgl2" }, "*"); } catch (e) {}');
-  }
-  lines.push('      // Watchdog: a WebGPU DEVICE-level failure (healthy adapter, dead');
-  lines.push('      // device) still white-screens — surface it instead of staying silent.');
-  lines.push('      setTimeout(function () {');
-  lines.push('        var s = document.querySelector("a-scene");');
-  lines.push('        if (s && !s.renderStarted) {');
-  // xr documents are forced onto WebGL2 by the scene's renderer attribute, so
-  // navigator.gpu (still visible there) would misname the backend.
-  lines.push(`          __fsShowStickyError("3D preview failed to start: the " + ${xr ? '"WebGL2"' : '(navigator.gpu ? "WebGPU" : "WebGL2")'} + " renderer never began rendering. Reload to retry.");`);
-  lines.push('        }');
-  lines.push('      }, 6000);');
-  lines.push('    }');
-  if (xr) {
-    // The scene attribute (renderer="backend: webgl") already fixed the
-    // backend, so the popup boots straight away: the adapter pre-flight would
-    // only delay scene injection (up to the 2s timeout on a hung
-    // requestAdapter) to decide something that is no longer a decision, and
-    // hideGpu() would only restate what the attribute already says.
-    lines.push('    boot();');
-  } else {
-    lines.push('    function hideGpu() {');
-    lines.push('      try { Object.defineProperty(Navigator.prototype, "gpu", { get: function () { return undefined; }, configurable: true }); } catch (e) {}');
-    lines.push('      try { Object.defineProperty(navigator, "gpu", { value: undefined, configurable: true }); } catch (e) {}');
-    lines.push('    }');
-    // three r184's WebGPU backend does not paint reliably on Apple's WebKit: an
-    // adapter can be granted (so the pre-flight below keeps WebGPU) yet no frame
-    // ever renders — a flat-color pane with no error, exactly the reported
-    // symptom. WebKit's WebGL2 path (GLSLNodeBuilder) is solid and compiles TSL
-    // identically, so force it there — the same move the XR popup makes. This must
-    // cover ALL WebKit, not just desktop Safari: every browser on iOS/iPadOS is
-    // WKWebView (Chrome/Firefox/Edge for iOS included), and iPadOS 13+ desktop-
-    // mode reports as Macintosh. Vendor can be blanked by privacy settings, so
-    // desktop Safari is matched by UA shape (WebKit, no Chromium/Gecko token).
-    lines.push('    function __fsForceWebGL2() {');
-    lines.push('      var ua = navigator.userAgent || "";');
-    lines.push('      if (/iPad|iPhone|iPod/.test(ua)) return true;');
-    lines.push('      if (navigator.platform === "MacIntel" && (navigator.maxTouchPoints || 0) > 1) return true;');
-    lines.push('      if (/Chrome|Chromium|CriOS|FxiOS|Edg|EdgiOS|OPR|OPiOS|SamsungBrowser|Firefox|Android/.test(ua)) return false;');
-    lines.push('      return /Safari|AppleWebKit/.test(ua);');
-    lines.push('    }');
-    // The user's WGSL/GLSL toggle rides a SEPARATE branch, deliberately not a
-    // clause inside __fsForceWebGL2: feedbackReport.test.ts extracts that
-    // function's source verbatim and evaluates it against previewBackend()'s
-    // platform rule, so a flag reference inside it would break the drift guard
-    // (the toggle is app state the feedback report reads from the store
-    // instead).
-    lines.push(`    var __FS_USER_FORCE_WEBGL2 = ${forceWebGL2 ? 'true' : 'false'};`);
-    lines.push('    if (__FS_USER_FORCE_WEBGL2) { hideGpu(); boot(); return; }');
-    lines.push('    if (__fsForceWebGL2()) { hideGpu(); boot(); return; }');
-    lines.push('    if (!navigator.gpu) { boot(); return; }');
-    lines.push('    var settled = false;');
-    lines.push('    function go(adapter) {');
-    lines.push('      if (settled) return;');
-    lines.push('      settled = true;');
-    lines.push('      if (!adapter) hideGpu();');
-    lines.push('      boot();');
-    lines.push('    }');
-    lines.push('    try {');
-    lines.push('      Promise.resolve(navigator.gpu.requestAdapter()).then(go, function () { go(null); });');
-    lines.push('    } catch (e) { go(null); }');
-    lines.push('    setTimeout(function () { go(null); }, 2000);');
-  }
-  lines.push('  })();');
-  lines.push(`<${''}/script>`);
+  lines.push(sceneBootScript(sceneLines.join('\n'), xr, forceWebGL2));
   lines.push('');
 
   if (isModel && !xr) {
@@ -2780,247 +2928,25 @@ export function tslToPreviewHTML(
     // the geometry name, dropped meshes on their custom:<id> identity) — a
     // late-resolving feed for the previous model can never apply here.
     // Two feeds share this handshake: the MESH feed (obj / glb / gltf,
-    // pushMeshModelFeed) and the SPLAT feed (pushSplatModelFeed), which sets
+    // MESH_FEED_SCRIPT) and the SPLAT feed (splatFeedScript), which sets
     // `splat-model` instead and reports the built splat up as fs:model-splat.
     lines.push('<script>');
     lines.push(`  var __fsExpectedObj = ${JSON.stringify(customKey ?? geometry)};`);
     lines.push(`  var __fsExpectedLabel = ${JSON.stringify(isCustom ? 'custom model' : geometry)};`);
-    if (splatKind) pushSplatModelFeed(lines, splatKind);
-    else pushMeshModelFeed(lines);
+    lines.push(splatKind ? splatFeedScript(splatKind) : MESH_FEED_SCRIPT);
     lines.push(`<${''}/script>`);
     lines.push('');
 
-    // Sub-mesh protocol: what named meshes this model actually put in the
-    // scene (up), and which one to light up while the user picks (down).
-    //
-    // It lives HERE, in the model-only block, rather than in the bridge
-    // template, for two reasons: a primitive has exactly one unnamed mesh and
-    // nothing to report, and both halves need the same traversal, so keeping
-    // them together is what stops the report and the highlight from ever
-    // disagreeing about which nodes are "the meshes".
-    //
-    // The parent treats everything posted from here as forgeable — this
-    // document runs the loaded shader — so nothing below is a security
-    // boundary; the caps are here only so a pathological model cannot post a
-    // structured-clone payload big enough to hurt the parent.
-    lines.push('<script>');
-    lines.push(`  var __fsMeshKey = ${JSON.stringify(customKey ?? geometry)};`);
-    lines.push('  (function () {');
-    lines.push('    var HL_CAP = 512;');
-    lines.push('    var lit = [];');
-    lines.push('    var hlMat = null;');
-    lines.push('    function ent() { return document.getElementById("preview-entity"); }');
-    lines.push('    function shaderComp() {');
-    lines.push('      var e = ent();');
-    lines.push('      return (e && e.components && e.components.shader) || null;');
-    lines.push('    }');
-    lines.push('    function meshList() {');
-    lines.push('      var out = [];');
-    lines.push('      var e = ent();');
-    lines.push('      var root = e && e.getObject3D ? e.getObject3D("mesh") : null;');
-    lines.push('      if (!root || typeof root.traverse !== "function") return out;');
-    lines.push('      root.traverse(function (n) { if (n && n.isMesh && out.length < HL_CAP) out.push(n); });');
-    lines.push('      return out;');
-    lines.push('    }');
-    lines.push('    function report() {');
-    lines.push('      var list = meshList();');
-    lines.push('      var comp = shaderComp();');
-    lines.push('      var payload = [];');
-    lines.push('      for (var i = 0; i < list.length; i++) {');
-    lines.push('        var n = list[i];');
-    if (splatKind) {
-      // A Gaussian splat is ONE row, and a row that can never be a part
-      // target: no name (the parent's sanitizer keeps it out of the mesh list
-      // every target is picked from, and loader 0.8 never gives a splat a
-      // plain material anyway), no material, and its splat COUNT in place of a
-      // vertex count — the instanced quad's 4 vertices mean nothing to anyone.
-      lines.push('        if (n.isGaussianSplat) {');
-      lines.push('          payload.push({ index: i, name: "", materialName: "", vertexCount: 0, splat: true, splats: n.geometry && typeof n.geometry.instanceCount === "number" ? n.geometry.instanceCount : 0 });');
-      lines.push('          continue;');
-      lines.push('        }');
-    }
-    lines.push('        // The AUTHORED material name. By now the shaderloader has usually');
-    lines.push('        // already stamped its own material over every mesh, so ask it for the');
-    lines.push('        // original it kept by uuid first and only then look at the mesh.');
-    lines.push('        var orig = comp && comp.originalMaterials ? comp.originalMaterials[n.uuid] : null;');
-    lines.push('        var mat = orig || n.material;');
-    lines.push('        var pos = n.geometry && n.geometry.attributes ? n.geometry.attributes.position : null;');
-    lines.push('        payload.push({');
-    lines.push('          index: i,');
-    // Over-length names are reported EMPTY, never truncated. The parent's
-    // sanitizer drops an unusable name, so the mesh is honestly not offered as
-    // a target; a truncated one would be offered, targeted, and emitted, and
-    // would then match nothing at runtime (the loader dispatches on the raw
-    // `node.name`) — the mesh silently keeps the default material, and the node
-    // shows no warning because the truncated name IS in the inventory it is
-    // checked against. The cap is still applied here so the message stays
-    // bounded whatever the model contains.
-    lines.push('          name: typeof n.name === "string" && n.name.length <= 128 ? n.name : "",');
-    lines.push('          materialName: mat && typeof mat.name === "string" ? mat.name.slice(0, 64) : "",');
-    lines.push('          vertexCount: pos && typeof pos.count === "number" ? pos.count : 0');
-    lines.push('        });');
-    lines.push('      }');
-    lines.push('      try {');
-    lines.push('        window.parent.postMessage({ type: "fs:model-meshes", geometry: __fsMeshKey, meshes: payload }, "*");');
-    lines.push('      } catch (e) {}');
-    lines.push('    }');
-    lines.push('    function clearHighlight() {');
-    lines.push('      // Restore by RE-DERIVING the material from the live shader component —');
-    lines.push('      // never by writing back a reference stashed before the swap. The');
-    lines.push('      // loader disposes the outgoing material BEFORE assigning the new one,');
-    lines.push('      // so a stash taken across a shader re-apply would restore a disposed');
-    lines.push('      // material, and a restore landing after the apply would overwrite the');
-    lines.push('      // material that apply just installed.');
-    lines.push('      //');
-    lines.push('      // Per-mesh FIRST (loader 0.6 records what each mesh actually got): a');
-    lines.push('      // mesh wearing a per-part material must come back to THAT material,');
-    lines.push('      // not to the default every other mesh wears. The default is the 0.5');
-    lines.push('      // fallback, and the authored material covers a part-only module,');
-    lines.push('      // where unmatched meshes never had a shader material at all.');
-    lines.push('      var comp = shaderComp();');
-    lines.push('      for (var i = 0; i < lit.length; i++) {');
-    lines.push('        var n = lit[i];');
-    lines.push('        var next = (comp && comp._appliedMaterials ? comp._appliedMaterials[n.uuid] : null) ||');
-    lines.push('          (comp && comp._shaderMaterial) ||');
-    lines.push('          (comp && comp.originalMaterials ? comp.originalMaterials[n.uuid] : null);');
-    lines.push('        if (next) n.material = next;');
-    lines.push('      }');
-    lines.push('      lit = [];');
-    lines.push('    }');
-    lines.push('    // `target` is one mesh name or a LIST of them (an import-built index');
-    lines.push('    // section shades every mesh of a glTF material; hovering its chip lights');
-    lines.push('    // them all). Only non-empty strings count, at most 256.');
-    lines.push('    function highlight(target) {');
-    lines.push('      clearHighlight();');
-    lines.push('      var wanted = {};');
-    lines.push('      var any = false;');
-    lines.push('      var raw = Array.isArray(target) ? target : [target];');
-    lines.push('      for (var k = 0; k < raw.length && k < 256; k++) {');
-    lines.push('        if (typeof raw[k] === "string" && raw[k]) { wanted[raw[k]] = true; any = true; }');
-    lines.push('      }');
-    lines.push('      if (!any) return;');
-    lines.push('      // One shared flat material for every match, minted once: a highlight is');
-    lines.push('      // transient and must not add a pipeline per hovered row.');
-    lines.push('      if (!hlMat && window.THREE) {');
-    lines.push('        hlMat = new window.THREE.MeshBasicMaterial({ color: 0xffc400 });');
-    lines.push('        // Flagged so the loader can never record it as a mesh\'s "original".');
-    lines.push('        hlMat.userData.__fsHighlight = true;');
-    lines.push('      }');
-    lines.push('      if (!hlMat) return;');
-    lines.push('      var list = meshList();');
-    lines.push('      for (var i = 0; i < list.length; i++) {');
-    // Never onto a splat: a flat material on its instanced quad would draw
-    // every splat as an opaque 4x4 square.
-    if (splatKind) lines.push('        if (list[i].isGaussianSplat) continue;');
-    lines.push('        if (Object.prototype.hasOwnProperty.call(wanted, list[i].name)) { list[i].material = hlMat; lit.push(list[i]); }');
-    lines.push('      }');
-    lines.push('    }');
-    lines.push('    window.addEventListener("message", function (e) {');
-    lines.push('      if (e.source !== window.parent) return;');
-    lines.push('      var msg = e.data;');
-    lines.push('      if (!msg || msg.type !== "fs:highlight-mesh") return;');
-    lines.push('      highlight(Array.isArray(msg.names) && msg.names.length ? msg.names : msg.name);');
-    lines.push('    });');
-    lines.push('    window.__fsWhenSceneBooted(function () {');
-    lines.push('      var e = ent();');
-    lines.push('      if (!e) return;');
-    lines.push('      // Deferred one tick so the report is taken AFTER fit-bounds has baked');
-    lines.push('      // the geometry and the loader has stored the authored materials —');
-    lines.push('      // both listen for model-loaded and both were registered before this.');
-    lines.push('      e.addEventListener("model-loaded", function () { setTimeout(report, 0); });');
-    lines.push('      // A model that finished loading before this listener existed still');
-    lines.push('      // gets reported: without this a fast local blob: URL can beat the');
-    lines.push('      // registration and the picker would stay empty until the next edit.');
-    lines.push('      if (e.getObject3D && e.getObject3D("mesh")) setTimeout(report, 0);');
-    lines.push('    });');
-    lines.push('  })();');
-    lines.push(`<${''}/script>`);
+    lines.push(meshInventoryScript(customKey ?? geometry, splatKind !== null));
     lines.push('');
   }
 
-  // Immersive entry. The VR button's promise is "press it and you're in VR",
-  // and this gets as close as the platform allows: requestSession needs
-  // transient user activation, and this document was produced by
-  // window.open + document.write, so whether the opening click's activation
-  // carries into it is browser-dependent (NOT verified on a headset here).
-  //
-  // So: attempt entry automatically, and keep a real in-document button as the
-  // fallback — a gesture originating inside this document is what Quest
-  // Browser reliably accepts (the same reason ShaderCarousel's bench-inout
-  // keeps its start gate inside the iframe rather than adopting it into the
-  // parent). The button stays visible until a session actually starts, so a
-  // silently-never-resolving enterVR() can't strand the user with no way in.
   if (xr) {
-    lines.push('<script>');
-    lines.push('  __fsWhenSceneBooted(function () {');
-    lines.push('    var scene = document.querySelector("a-scene");');
-    lines.push('    var gate = document.getElementById("vr-gate");');
-    lines.push('    if (!scene || !gate) return;');
-    lines.push('    // One button, two meanings — whichever "as immersive as this');
-    lines.push('    // device gets" means here: a headset enters an immersive session,');
-    lines.push('    // a desktop goes fullscreen. Resolved once from real capability');
-    lines.push('    // rather than a UA sniff, and the label always says which it is.');
-    lines.push('    var supportsVR = false;');
-    lines.push('    function isFullscreen() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }');
-    lines.push('    function refresh() { gate.textContent = supportsVR ? "Enter VR" : (isFullscreen() ? "Exit fullscreen" : "Fullscreen"); }');
-    lines.push('    function enter() { try { return scene.enterVR(); } catch (e) { return null; } }');
-    lines.push('    function toggleFullscreen() {');
-    lines.push('      try {');
-    lines.push('        if (isFullscreen()) {');
-    lines.push('          var exit = document.exitFullscreen || document.webkitExitFullscreen;');
-    lines.push('          if (exit) exit.call(document);');
-    lines.push('        } else {');
-    lines.push('          var el = document.documentElement;');
-    lines.push('          var req = el.requestFullscreen || el.webkitRequestFullscreen;');
-    lines.push('          if (req) req.call(el);');
-    lines.push('        }');
-    lines.push('      } catch (e) { /* denied (no activation / policy) — label is unchanged */ }');
-    lines.push('    }');
-    lines.push('    scene.addEventListener("enter-vr", function () { gate.hidden = true; });');
-    lines.push('    scene.addEventListener("exit-vr", function () { gate.hidden = false; refresh(); });');
-    lines.push('    document.addEventListener("fullscreenchange", refresh);');
-    lines.push('    document.addEventListener("webkitfullscreenchange", refresh);');
-    lines.push('    gate.addEventListener("click", function () { if (supportsVR) enter(); else toggleFullscreen(); });');
-    lines.push('    // Only ever call enterVR when a REAL immersive-vr session is');
-    lines.push('    // available. With no headset A-Frame falls into its magic-window');
-    lines.push('    // fallback, which hides the entry affordances and leaves the page');
-    lines.push('    // in a pseudo-VR state the user cannot get out of — worse than');
-    lines.push('    // simply staying flat. Where that check fails the button stays,');
-    lines.push('    // as the fullscreen toggle.');
-    lines.push('    function autoEnter() {');
-    lines.push('      var xr = navigator.xr;');
-    lines.push('      gate.hidden = false;');
-    lines.push('      if (!xr || typeof xr.isSessionSupported !== "function") { refresh(); return; }');
-    lines.push('      xr.isSessionSupported("immersive-vr").then(function (ok) {');
-    lines.push('        supportsVR = !!ok;');
-    lines.push('        refresh();');
-    lines.push('        if (!ok) return;');
-    lines.push('        var p = enter();');
-    lines.push('        // Rejected = no transient activation carried into this');
-    lines.push('        // document; the button is showing, which is the way in.');
-    lines.push('        if (p && typeof p.catch === "function") p.catch(function () {});');
-    lines.push('      }).catch(function () { supportsVR = false; refresh(); });');
-    lines.push('    }');
-    lines.push('    refresh();');
-    lines.push('    if (scene.hasLoaded) autoEnter();');
-    lines.push('    else scene.addEventListener("loaded", autoEnter, { once: true });');
-    lines.push('  });');
-    lines.push(`<${''}/script>`);
+    lines.push(VR_GATE_SCRIPT);
     lines.push('');
   }
 
-  // Set shader attribute once the scene (and thus the entity) exists.
-  lines.push('<script>');
-  lines.push('  __fsWhenSceneBooted(function () {');
-  lines.push('    try {');
-  lines.push('      document.getElementById("preview-entity").setAttribute("shader", "src: " + window.__shaderUrl);');
-  lines.push('    } catch (e) {');
-  lines.push('      console.error("[FastShaders Preview]", e);');
-  lines.push('      var errEl = document.getElementById("error");');
-  lines.push('      if (errEl) errEl.textContent = String(e);');
-  lines.push('    }');
-  lines.push('  });');
-  lines.push(`<${''}/script>`);
+  lines.push(SHADER_ATTACH_SCRIPT);
   lines.push('');
 
   // Shader hot-swap receiver. Sandboxed preview only: it needs a parent to ack
@@ -3067,7 +2993,7 @@ export function tslToPreviewHTML(
           // so the key only needs to be unique per document.
           m: isCustom
             ? customKey
-            : `obj: url(${getModelUrl('bunny')})`,
+            : `obj: url(${getBunnyModelUrl()})`,
           t: null,
           g: null,
           r: rotationAttr,

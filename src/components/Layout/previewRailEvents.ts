@@ -1,19 +1,13 @@
 /**
  * The rail's two requests, as CustomEvents on `window`.
  *
- * The 3D preview pane is a different React tree from the canvas — a sibling of
- * the node editor under SplitPane — so its rail has no React Flow handle to
- * glide with and no business calling `addNode` itself. It asks, and NodeEditor
- * (which owns `fitView`, the node list and the one add path) answers. The
- * `fs:preview-model-file` / `fs:mesh-highlight` idiom: a CustomEvent is how a
- * surface in this app reaches a capability that lives in another pane.
- *
- * The CANVAS rail goes the same way even though it could call `focusNode`
- * directly, so there is ONE path to debug rather than two that can drift.
+ * The rail is chrome outside <ReactFlow>, so it asks, and NodeEditor (which
+ * owns `fitView`, the node list and the one add path) answers — the
+ * `fs:preview-model-file` / `fs:mesh-highlight` idiom.
  *
  * Deliberately not store state: "the user asked to look at this node" is not a
  * fact about the graph and must never reach history, the autosave or a shared
- * file — the `previewLinkHit` / `hoveredNodeId` rule.
+ * file — the `previewLinkHit` rule.
  */
 
 /** Glide the canvas to an Output node. */

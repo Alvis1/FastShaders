@@ -68,9 +68,6 @@ export interface GlbImportFacts {
   readonly materialIndices: readonly number[];
   /** EXTRACTABLE textures only. */
   readonly textures: readonly GlbTextureFact[];
-  /** Always null: the facts adapter never reads the extras (the plan carries
-   *  the restore fact, from the reader in utils/glbShaderExtras.ts). */
-  readonly embeddedShader: null;
 }
 
 /** What the dialog needs to know about a stored shader it may RESTORE. */
@@ -233,7 +230,6 @@ export function glbImportFactsOf(report: GltfModelReport, rawName: string, fileB
     fileBytes: Number.isFinite(fileBytes) && fileBytes >= 0 ? Math.floor(fileBytes) : 0,
     materialIndices,
     textures,
-    embeddedShader: null,
   };
 }
 

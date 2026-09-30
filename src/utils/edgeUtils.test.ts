@@ -8,7 +8,7 @@ import {
   restoreCollapsedEdges,
 } from './edgeUtils';
 import { graphToCode } from '@/engine/graphToCode';
-import { getTargetEdges, getUnwrappedEdges, evaluateNodeScalar } from '@/engine/cpuEvaluator';
+import { getTargetEdges, getUnwrappedEdges, evaluateNodeOutput } from '@/engine/cpuEvaluator';
 import { hasTimeUpstream } from '@/utils/graphTraversal';
 import { useAppStore, setGraphPersistence, cancelPendingGraphSave } from '@/store/useAppStore';
 import type { AppNode, AppEdge, BoundarySocket } from '@/types';
@@ -171,7 +171,7 @@ describe('unwrapCollapsedGroupEdges', () => {
     expect(hasTimeUpstream(e.source, nodes, edges)).toBe(false);
     expect(hasTimeUpstream(e.source, nodes, getUnwrappedEdges(nodes, edges))).toBe(true);
     // The evaluator already unwraps internally, so the rAF value is correct.
-    expect(evaluateNodeScalar(e.source, nodes, edges, 1.5)).toBe(3);
+    expect(evaluateNodeOutput(e.source, nodes, edges, 1.5)?.[0]).toBe(3);
   });
 
   it('resolves a collapsed feeder to the real producer (raw find reports the group id)', () => {
@@ -186,11 +186,11 @@ describe('unwrapCollapsedGroupEdges', () => {
 
     const raw = edges.find((x) => x.target === 'sin1' && x.targetHandle === 'x')!;
     expect(raw.source).toBe('g1');
-    expect(evaluateNodeScalar(raw.source, nodes, edges, 1.5)).toBeNull();
+    expect(evaluateNodeOutput(raw.source, nodes, edges, 1.5)).toBeNull();
 
     const un = getTargetEdges(nodes, edges, 'sin1').find((x) => x.targetHandle === 'x')!;
     expect(un.source).toBe('time1');
-    expect(evaluateNodeScalar(un.source, nodes, edges, 1.5)).toBe(1.5);
+    expect(evaluateNodeOutput(un.source, nodes, edges, 1.5)?.[0]).toBe(1.5);
   });
 
   it('with no collapsed group the unwrapped view IS the store array (the ordinary case is untouched)', () => {

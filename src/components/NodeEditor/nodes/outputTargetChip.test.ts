@@ -313,9 +313,9 @@ describe('the Output node\'s preview socket', () => {
     //    the element cache would re-query every frame for as long as it sleeps.
     //    (It counted VISIBLE MATERIALS of one node until the per-material
     //    split; `previewWireTargets` is the node-set form of that question.)
-    // The derivation moved to `previewWires.ts` when the RAILS needed it too —
-    // one list for the wire, the canvas socket it ends on and the preview
-    // socket mirroring it, so the three cannot disagree.
+    // The derivation moved to `previewWires.ts` when the RAIL needed it too —
+    // one list for the wire and the canvas socket it ends on, so the two
+    // cannot disagree.
     expect(wires).toContain('previewWireTargets(');
     const materials = readFileSync(path.resolve(__dirname, '../../../utils/outputMaterials.ts'), 'utf8');
     expect(materials).toMatch(/export function previewWireTargets[\s\S]*?dormantIndicesForPreview\(/);
@@ -363,9 +363,9 @@ describe('the Output node\'s preview socket', () => {
     expect(link).not.toContain("document.querySelector<HTMLElement>('.output-node__preview-socket')");
     // The wire set follows the store's CONTRIBUTING-Output derivation (see the
     // dormancy test above for why it is the shared one).
-    // The derivation moved to `previewWires.ts` when the RAILS needed it too —
-    // one list for the wire, the canvas socket it ends on and the preview
-    // socket mirroring it, so the three cannot disagree.
+    // The derivation moved to `previewWires.ts` when the RAIL needed it too —
+    // one list for the wire and the canvas socket it ends on, so the two
+    // cannot disagree.
     expect(wires).toContain('previewWireTargets(');
     // The per-index d-string dedupe cache must be truncated to the live path
     // count: a shrink-then-regrow (remove a material, undo) mounts a FRESH

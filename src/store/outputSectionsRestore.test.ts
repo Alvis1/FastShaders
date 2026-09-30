@@ -25,7 +25,7 @@ import {
   loadSavedGroupsReport,
   reportOutputSectionsTrimmed,
 } from './useAppStore';
-import { HISTORY_IDLE, makeNode, makeEdge } from '@/test-utils';
+import { HISTORY_IDLE, makeNode, makeEdge, stubLocalStorage } from '@/test-utils';
 import { emitRank, outputMaterials, outputNodes, MAX_PARTS } from '@/utils/outputMaterials';
 import { embedProjectState, type FastShadersProject } from '@/engine/fastShadersProject';
 import { importShaderText } from '@/engine/projectImport';
@@ -106,12 +106,7 @@ function reset() {
 }
 beforeEach(() => {
   reset();
-  ls = {};
-  vi.stubGlobal('localStorage', {
-    getItem: (k: string) => (Object.prototype.hasOwnProperty.call(ls, k) ? ls[k] : null),
-    setItem: (k: string, v: string) => { ls[k] = String(v); },
-    removeItem: (k: string) => { delete ls[k]; },
-  });
+  ls = stubLocalStorage();
 });
 afterEach(() => {
   reset();
@@ -256,7 +251,7 @@ describe('source pins: every restore path counts and prunes', () => {
     expect(lib).toContain('pruneOrphanMaterialEdges(');
     expect(imp).toContain('sanitizeOutputMaterialsReport(dataSanitized.nodes)');
     expect(imp).toContain('pruneOrphanMaterialEdges(nodes, split.edges)');
-    expect(imp).toContain("kind: 'output-sections-trimmed'");
+    expect(imp).toContain("enqueueCount('output-sections-trimmed', secs.trimmed);");
   });
 
   it('instantiateSavedGroup prunes after the split', () => {

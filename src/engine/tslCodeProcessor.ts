@@ -5,6 +5,7 @@
 
 import type { MaterialSettings } from '@/types';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
+import { HEX6 } from '@/utils/colorUtils';
 import { PART_SETTING_KEYS, materialSettingProps, materialSettingsFromSource } from './materialSettingsCode';
 import { THREE_REVISION } from './threeRevision';
 import { TSL_EXPORT_NAMES } from './tslExportNames';
@@ -40,10 +41,6 @@ const CHANNEL_TO_PROP = new Map<string, string>([
   // 0.5; every export references 0.8).
   ['env', 'envNode'],
 ]);
-
-interface TSLImports {
-  tslNames: string[];
-}
 
 interface ProcessedBody {
   defLines: string[];
@@ -171,24 +168,24 @@ export function splitTopLevelArgs(s: string): string[] {
   return args;
 }
 
-// `partEntryColon` (where a `parts` entry's key ends — a mesh name may contain
-// a colon) moved verbatim to the partKeyLiteral.ts leaf, which the lazy
-// scriptToTSL chunk shares.
+/** Append an import name once, keeping first-seen order (the import line's order). */
+function addName(list: string[], name: string): void {
+  if (!list.includes(name)) list.push(name);
+}
 
-/** Collect imported names from 'three/tsl'. */
-function collectImports(tslCode: string, excludeFn = false): TSLImports {
+/** The names imported from 'three/tsl', minus `Fn` (the module adds it back only when it calls one). */
+function collectImports(tslCode: string): string[] {
   const tslNames: string[] = [];
 
   const tslImportRe = /import\s*\{([^}]+)\}\s*from\s*['"]three\/tsl['"]/g;
   let m: RegExpExecArray | null;
   while ((m = tslImportRe.exec(tslCode)) !== null) {
     for (const name of m[1].split(',').map(s => s.trim()).filter(Boolean)) {
-      if (excludeFn && name === 'Fn') continue;
-      if (!tslNames.includes(name)) tslNames.push(name);
+      if (name !== 'Fn') addName(tslNames, name);
     }
   }
 
-  return { tslNames };
+  return tslNames;
 }
 
 /**
@@ -241,19 +238,10 @@ function declaredNames(masked: string): Set<string> {
 const THREE_NAMESPACE_IMPORT = "import * as THREE from 'three/webgpu';";
 
 /**
- * Module-only: rewrite every CODE-position `globalThis.THREE` to `THREE`, which
- * the caller then imports from 'three/webgpu'. graphToCode spells the global for
- * every baked texture (Image, Data, Colormap, and Stripes / Data Viz fed by a
- * Data node), and a module imported without the shaderloader — plain three.js
- * with an import map — has no such global; with the import it runs standalone.
- * On either loader nothing changes at run time: `globalizeBareImports` turns the
- * namespace import back into `const THREE = globalThis.THREE;`.
- *
- * The scan runs over `maskNonCode`, so a string or comment spelling it is never
- * touched. Skipped outright — no rewrite AND no import — when the code already
- * binds `THREE` (a preamble import, e.g. an exported module pasted back through
- * scriptToTSL, or a declaration), since a second binding is a SyntaxError that
- * kills the whole module.
+ * Module-only: rewrite every CODE-position `globalThis.THREE` (over
+ * `maskNonCode`) to `THREE`, which the caller imports from 'three/webgpu', so
+ * the module runs standalone. Skipped outright when the code already binds
+ * `THREE`: a second binding is a SyntaxError. See docs/dev/codegen.md.
  */
 function bindThreeNamespace(code: string, preambleImports: readonly string[]): { code: string; imported: boolean } {
   if (preambleImports.some((l) => importBindings(l).includes('THREE'))) return { code, imported: false };
@@ -376,7 +364,7 @@ function extractFnBody(tslCode: string, tslNames: string[]): ExtractedFn {
 
   if (!body) {
     body = 'return vec3(1, 0, 0);';
-    if (!tslNames.includes('vec3')) tslNames.push('vec3');
+    addName(tslNames, 'vec3');
   }
   return { body, preambleImports, preambleDecls };
 }
@@ -405,17 +393,8 @@ function fixTDZ(body: string, tslNames: string[]): TDZResult {
   const renames = new Map<string, string>();
 
   // 1. Remove self-referencing bare declarations: const X = X;
-  //
-  // ONE pass with a backreference, not one pass per imported name. This used to
-  // compile a fresh RegExp per name and rescan the entire body with it, i.e.
-  // O(names x bodyLength) with a regex compile per iteration — ~40 full-body
-  // scans on a large graph, paid on every path that builds a runnable module
-  // (each debounced preview rebuild, each Download Shader, and — undebounced —
-  // every graph edit while the A-Frame tab is open). The set membership test in
-  // the replacer does exactly the filtering the per-name pattern used to do, and
-  // the `\s`/anchoring is unchanged, so the multi-line `const X =\n  X;` form
-  // still matches. `[\w$]` rather than `\w` because a JS identifier may carry a
-  // `$`; the gate means the wider class can still only ever match imported names.
+  // ONE pass with a backreference, never a RegExp per imported name (that was
+  // O(names x body) on every module build); the set test does the filtering.
   processedBody = processedBody.replace(
     /^[ \t]*const\s+([\w$]+)\s*=\s*\1\s*;[ \t]*$/gm,
     (whole, name: string) => (importedNames.has(name) ? '' : whole),
@@ -447,43 +426,16 @@ function fixTDZ(body: string, tslNames: string[]): TDZResult {
     /\b(mx_\w+)\(\s*0\s*,/g,
     '$1(uv(),',
   );
-  if (processedBody.includes('uv(') && !tslNames.includes('uv')) {
-    tslNames.push('uv');
-  }
+  if (processedBody.includes('uv(')) addName(tslNames, 'uv');
 
   return { body: processedBody, renames };
 }
 
 /**
- * Pull discard statements out of a body, returning the extracted conditions and
- * the remaining text. Uses paren-balancing (not an end-anchored regex) so a
- * discard with nested parens, a trailing `// comment`, or one split across lines
- * is handled rather than silently dropped. A genuinely unbalanced `Discard(` is
- * left in place (loud syntax error) instead of vanishing.
- *
- * BOTH TSL spellings are lifted, because both reach here:
- *
- *   Discard(cond);   — what graphToCode emits
- *   cond.discard();  — the method-chaining form (`addMethodChaining('discard',
- *                      Discard)` in three's Discard.js), i.e. the idiomatic
- *                      spelling someone writes by hand in the code panel
- *
- * The chained form used to be skipped by the `.`-prefix guard below (which
- * exists for a member call like `foo.Discard(`) and so survived verbatim into
- * the module — landing at plain-function scope where `.toStack()` has no active
- * stack and is a silent no-op. Measured against three r184's GLSLNodeBuilder:
- * the verbatim form emitted ZERO `discard` instructions, the wrapped form one.
- * It reached the preview AND the downloaded `.js`, and `codeToGraph` drops the
- * line with no diagnostic, so the next graph edit erased the user's cutout.
- *
- * An extracted condition of `''` is three's parameterless `Discard()` — an
- * UNCONDITIONAL cull, which the caller must emit without an Fn parameter.
- *
- * The scan runs over `maskNonCode(bodyText)` and slices out of `bodyText`, so a
- * discard inside a comment or a string literal is not code and is left alone.
- * Scanning the raw text meant `/* Discard(a); *\/` had its body eaten AND a live
- * cutout injected, and `const s = 'Discard(1)';` became `const s = '';` plus a
- * real unconditional discard — the mesh vanished because of a string literal.
+ * Pull discard statements out of a body: `Discard(cond);` and the chained
+ * `cond.discard();`, paren-balanced over `maskNonCode`, so one inside a comment
+ * or a string is left alone. A cond of `''` is the unconditional `Discard()`.
+ * See docs/dev/codegen.md, Discard.
  *
  * Only STATEMENT-level discards are lifted. `const k = Discard(n);` used to be
  * sliced at the call, leaving a dangling `const k = ` — a SyntaxError that took
@@ -698,7 +650,7 @@ function parseBody(
 
   if (Object.keys(channels).length === 0) {
     channels['color'] = 'vec3(1, 0, 0)';
-    if (!tslNames.includes('vec3')) tslNames.push('vec3');
+    addName(tslNames, 'vec3');
   }
 
   return { defLines, channels };
@@ -759,29 +711,16 @@ function parseModelSignatureText(src: string | undefined): ModelSignature | null
 }
 
 /**
- * Convert Fn-wrapped editor TSL into a shaderloader-compatible ES module. This
- * is the SINGLE source of truth shared by the live preview (tslToPreviewHTML)
- * and the `.js` export (tslToShaderModule) — they must never diverge, because
- * any divergence means the export ships a shader that differs from what the
- * user previewed.
+ * Convert Fn-wrapped editor TSL into a shaderloader-compatible ES module: the
+ * SINGLE source shared by the live preview and the `.js` export, so the file
+ * is what the user previewed. The loader calls the default export as a PLAIN
+ * function (no active TSL stack), hence two rules:
  *
- * The shaderloader calls the default export as a *plain function* (no active
- * TSL stack) and assigns `material.colorNode = result.colorNode` directly, so
- * two rules are non-negotiable and historically easy to break with ad-hoc
- * per-line string surgery (which is exactly what produced the struct-as-
- * colorNode export bug):
- *
- *   1. Object returns (`{ color, position, ... }`) MUST be parsed per channel.
- *      `parseBody` matches the object-form return before the bare-value form so
- *      a `{ ... }` literal is never swallowed whole into a single color slot —
- *      assigning a struct to `colorNode` makes the renderer read uninitialised
- *      memory (random color each reload) and drops every other channel.
- *   2. `Discard()` needs an active stack, so the color channel is routed
- *      through a tiny `__pixel` Fn. Its discard conditions and color node are
- *      passed as explicit Fn *parameters*, never closure-captured: Three.js
- *      r173 (where first diagnosed; the bundled A-Frame build is now r184) did not propagate closure-captured
- *      derived nodes into an Fn body invoked from an outer plain function,
- *      which would otherwise resolve the color to a default (solid red).
+ *   1. An object return is parsed PER CHANNEL. A struct assigned to colorNode
+ *      reads uninitialised memory and drops every other channel.
+ *   2. `Discard()` needs an active stack, so colour is routed through a tiny
+ *      `__pixel` Fn whose conditions and colour are explicit PARAMETERS, never
+ *      closure-captured (a captured node resolved to solid red on r173).
  */
 export function buildShaderModule(
   tslCode: string,
@@ -789,44 +728,31 @@ export function buildShaderModule(
 ): string {
   const { materialSettings, header, properties } = options;
 
-  const { tslNames } = collectImports(tslCode, true);
+  const tslNames = collectImports(tslCode);
+  const need = (name: string): void => addName(tslNames, name);
   const { body, preambleImports, preambleDecls } = extractFnBody(tslCode, tslNames);
   const { body: processedBody, renames } = fixTDZ(body, tslNames);
   const { defLines, channels } = parseBody(processedBody, tslNames);
 
   // Module-scope helper Fns (hsl/toHsl) live in the preamble and need `Fn`.
-  if (/\bFn\s*\(/.test(preambleDecls.join('\n')) && !tslNames.includes('Fn')) {
-    tslNames.push('Fn');
-  }
+  if (/\bFn\s*\(/.test(preambleDecls.join('\n'))) need('Fn');
 
   // Ensure positionLocal (and normalLocal for normal-based displacement) are available.
   const displacementMode = materialSettings?.displacementMode ?? 'normal';
   if (channels.position) {
-    if (!tslNames.includes('positionLocal')) tslNames.push('positionLocal');
-    if (displacementMode === 'normal' && !tslNames.includes('normalLocal')) {
-      tslNames.push('normalLocal');
-    }
+    need('positionLocal');
+    if (displacementMode === 'normal') need('normalLocal');
   }
+  /** A displaced position: along the normal, or the raw offset. */
+  const displaced = (ref: string): string =>
+    `positionLocal.add(${displacementMode === 'normal' ? `normalLocal.mul(${ref})` : ref})`;
 
   // --- Property uniforms → params + schema --------------------------------
-  //
-  // Rewriting `const X = uniform(N)` to `const X = params.X` (plus an explicit
-  // `schema`) makes the shaderloader create the uniforms up-front and pass them
-  // in, so the live overlay's `_propertyUniforms.X.value = …` reaches the
-  // material instead of mutating a throwaway anonymous uniform.
-  //
-  // EVERY `uniform()` line is keyed off its ACTUAL generated var name (only
-  // property_float emits uniform(), and the shaderloader auto-detects every
-  // `const X = uniform(V)` as a property at runtime regardless). Keying off the
-  // real var — not a name recomputed from the property list — is what keeps two
-  // properties whose names sanitize to the same base (`my speed`, `my-speed` →
-  // graphToCode emits `my_speed`, `my_speed2`) BOTH exposed instead of one
-  // silently overwriting the other.
-  //
-  // The schema key is the *pre-fixTDZ* var name (`reverseRename`) — the name the
-  // live overlay & shaderloader auto-detect from the un-rewritten code — so a
-  // property whose name collides with a TSL import (renamed `mix` → `_mix`)
-  // still resolves to `params.mix`.
+  // `const X = uniform(N)` becomes `const X = params.X` plus a `schema` entry,
+  // so the loader creates the uniform and the live overlay reaches it. Keyed by
+  // the ACTUAL generated var name, so two properties that sanitize to one base
+  // both stay exposed; the schema key is the PRE-fixTDZ name (`reverseRename`),
+  // so a property renamed `mix` → `_mix` still resolves to `params.mix`.
   const reverseRename = new Map<string, string>();
   for (const [orig, renamed] of renames) reverseRename.set(renamed, orig);
 
@@ -889,31 +815,20 @@ export function buildShaderModule(
   );
   const nonDiscardLines = nonDiscardText.split('\n').filter((l) => l.trim());
   const hasDiscard = discardConds.length > 0;
-  if (hasDiscard && !tslNames.includes('Fn')) tslNames.push('Fn');
+  if (hasDiscard) need('Fn');
   // The wrapper below CALLS `Discard`, so the module must import it even when
   // the source didn't — a `.discard()` chain names it nowhere. Existing exports
   // are unaffected: their source already imports it, so this never pushes.
   // (The shaderloader's auto-import recovers a missing name at runtime, but a
   // bare `import()` of the downloaded `.js` does not.)
-  if (hasDiscard && !tslNames.includes('Discard')) tslNames.push('Discard');
+  if (hasDiscard) need('Discard');
 
-  // Colour carried through the discard wrapper when no colour channel is wired.
-  // Emissive first: the loader copies emissiveNode→colorNode only when
-  // colorNode is undefined, and the wrapper always defines colorNode — so
-  // falling straight to white made adding a discard wash an emissive-only
-  // shader out to lit white. Passing the emissive ref reproduces exactly what
-  // the loader would have done. White remains the last resort: it is the
-  // MeshStandard base colour, so the cutout applies without changing the look
-  // of the surviving fragments.
-  // The copy-when-undefined rule arrived in loader 0.5, and 0.6 and 0.8 carry
-  // it verbatim; cite the frozen 0.6 in the SUBMODULE when you need the line:
-  // a-frame-shaderloader/js/a-frame-shaderloader-0.6.js:346-350. Neither 0.5
-  // nor 0.6 is vendored into public/js any more, so a `public/js/…` citation of
-  // either can no longer be followed.
+  // Colour carried through the discard wrapper when none is wired: EMISSIVE
+  // before white, because the wrapper always defines colorNode and the loader
+  // copies emissiveNode→colorNode only when it is undefined (the frozen
+  // a-frame-shaderloader/js/a-frame-shaderloader-0.6.js:346-350).
   const discardColor = channels.color ?? channels.emissive ?? 'vec3(1, 1, 1)';
-  if (hasDiscard && !channels.color && !channels.emissive && !tslNames.includes('vec3')) {
-    tslNames.push('vec3');
-  }
+  if (hasDiscard && !channels.color && !channels.emissive) need('vec3');
   // An empty condition is three's parameterless `Discard()` — an unconditional
   // cull. It takes NO Fn parameter and NO call argument: passing one through
   // emitted `__pixel(, …)`, a SyntaxError that killed the whole module.
@@ -929,10 +844,7 @@ export function buildShaderModule(
     const prop = CHANNEL_TO_PROP.get(ch);
     if (!prop) continue;
     if (ch === 'position') {
-      const displacement = displacementMode === 'normal'
-        ? `normalLocal.mul(${ref})`
-        : ref;
-      returnProps.push(`${prop}: positionLocal.add(${displacement})`);
+      returnProps.push(`${prop}: ${displaced(ref)}`);
     } else if (ch === 'color' && hasDiscard) {
       returnProps.push(`${prop}: __pixel(${pixelCallArgs.join(', ')})`);
       colorEmitted = true;
@@ -949,29 +861,10 @@ export function buildShaderModule(
   }
 
   // --- Per-sub-mesh materials (the loader's `parts`, 0.6 and 0.8) ---------
-  //
-  // The editor speaks CHANNEL names (`color`) and the loader speaks node-prop
-  // names (`colorNode`), and that translation is this function's job — so a
-  // part's inner keys go through the very same CHANNEL_TO_PROP map as the
-  // default's. Re-emitting the block verbatim would hand the loader keys it
-  // does not know, and it would silently render the default material on every
-  // mesh: right-looking source, wrong picture, no error.
-  //
-  // A part's `discard` is a KEY rather than a statement (a statement belongs
-  // to the module, not to one mesh), so it becomes that part's own __pixel
-  // wrapper. The wrappers are INDEXED because a mesh name is not an
-  // identifier — `Body.001` and `my mesh` are both legal names.
-  //
-  // A part's Transparent / Side / Alpha clip / Depth write (the four
-  // PART_SETTING_KEYS the loader's buildMaterial applies per part) are
-  // collected as TEXT, re-validated through the same sanitizer scriptToTSL
-  // and codeToGraph use (which also strips a value's comments, so this raw
-  // colon-to-comma slice reads what Babel's comment-free value node does),
-  // and re-emitted canonically AFTER the channel props — the code panel
-  // is an editing surface, and a `.fastshader`'s settings reach the code via
-  // graphToCode, so neither is trusted verbatim. A part's `mergeVertices` /
-  // `displacementMode` are ignored: welding is module-level and the
-  // displacement mode is the default's (see materialSettingsCode).
+  // A part's inner keys go through the same CHANNEL_TO_PROP map as the
+  // default's; its `discard` KEY becomes that part's own INDEXED __partPixel
+  // wrapper; its four settings are re-validated and re-emitted canonically.
+  // See docs/dev/outputs-and-materials.md, per-mesh rule (4).
   const partWrappers: string[] = [];
   /**
    * Translate ONE part body `{ … }` — a `parts` entry's or a `materialParts`
@@ -1001,26 +894,12 @@ export function buildShaderModule(
       if (PART_SETTING_KEYS.has(key)) { partSettingText[key] = val; continue; }
       const partPropName = CHANNEL_TO_PROP.get(key);
       if (!partPropName) continue;
-      if (key === 'position') {
-        const displacement = displacementMode === 'normal'
-          ? `normalLocal.mul(${val})`
-          : val;
-        props.push(`${partPropName}: positionLocal.add(${displacement})`);
-      } else {
-        props.push(`${partPropName}: ${val}`);
-      }
+      props.push(`${partPropName}: ${key === 'position' ? displaced(val) : val}`);
     }
     if (partDiscard) {
       const wrapper = `__partPixel${partWrappers.length}`;
       const existingColor = props.findIndex((s) => s.startsWith('colorNode:'));
-      // Emissive before white, for the reason the DEFAULT path documents
-      // above (`discardColor`): the loader copies emissiveNode→colorNode only
-      // when colorNode is undefined, and this wrapper always defines it — so
-      // falling straight to white washes an emissive-only part out to lit
-      // white. The ordinary glow-cutout wiring (Emissive + Discard, no
-      // Colour) rendered correctly on the default Output and wrong on a
-      // targeted one: the same graph, two pictures, decided only by whether
-      // the Output happened to carry a mesh target.
+      // Emissive before white, as on the default path (`discardColor`).
       const existingEmissive = props.findIndex((s) => s.startsWith('emissiveNode:'));
       const colorRef = existingColor !== -1
         ? props[existingColor].slice('colorNode:'.length).trim()
@@ -1039,6 +918,19 @@ export function buildShaderModule(
     if (props.length === 0) return null;
     const partSettings = materialSettingsFromSource(partSettingText);
     return [...props, ...materialSettingProps(partSettings)].join(', ');
+  };
+
+  // Imports for what a parts table itself emitted. `hasDiscard` describes the
+  // DEFAULT output only, so a cutout living on one mesh must register its own
+  // `Fn`/`Discard` or the module dies on a ReferenceError.
+  const needPartImports = (text: string): void => {
+    if (partWrappers.length > 0) {
+      need('Fn');
+      need('Discard');
+    }
+    if (/\bvec3\(/.test(text)) need('vec3');
+    if (/\bpositionLocal\b/.test(text)) need('positionLocal');
+    if (/\bnormalLocal\b/.test(text)) need('normalLocal');
   };
 
   const partsSrc = channels.parts;
@@ -1140,18 +1032,7 @@ export function buildShaderModule(
       ...(mirrorNames.length > 0 ? [`materialPartsMirror: [${mirrorNames.map(moduleStringLiteral).join(', ')}]`] : []),
     ];
     returnProps.push(...tableProps);
-    if (partWrappers.length > 0) {
-      if (!tslNames.includes('Fn')) tslNames.push('Fn');
-      if (!tslNames.includes('Discard')) tslNames.push('Discard');
-    }
-    const tableText = tableProps.join(', ');
-    if (/\bvec3\(/.test(tableText) && !tslNames.includes('vec3')) tslNames.push('vec3');
-    if (/\bpositionLocal\b/.test(tableText) && !tslNames.includes('positionLocal')) {
-      tslNames.push('positionLocal');
-    }
-    if (/\bnormalLocal\b/.test(tableText) && !tslNames.includes('normalLocal')) {
-      tslNames.push('normalLocal');
-    }
+    needPartImports(tableProps.join(', '));
     // The export guard's module half (materialPartsContract): a dev build
     // throws on a shape that breaks the frozen 0.6 or confuses 0.8, so the
     // whole emission corpus is guarded in CI (vitest sets DEV). Never runs in
@@ -1168,23 +1049,7 @@ export function buildShaderModule(
     }
   } else if (partsSrc) {
     if (entries.length > 0) returnProps.push(`parts: { ${entries.join(', ')} }`);
-    // Imports for what the parts block itself emitted. Registered here rather
-    // than beside the default's, because `hasDiscard` describes the DEFAULT
-    // output only — a cutout that exists solely on one mesh would otherwise
-    // emit `Fn(...)`/`Discard(...)` with neither imported, and the module dies
-    // on a ReferenceError before it renders anything.
-    if (partWrappers.length > 0) {
-      if (!tslNames.includes('Fn')) tslNames.push('Fn');
-      if (!tslNames.includes('Discard')) tslNames.push('Discard');
-    }
-    const partsOut = returnProps[returnProps.length - 1] ?? '';
-    if (/\bvec3\(/.test(partsOut) && !tslNames.includes('vec3')) tslNames.push('vec3');
-    if (/\bpositionLocal\b/.test(partsOut) && !tslNames.includes('positionLocal')) {
-      tslNames.push('positionLocal');
-    }
-    if (/\bnormalLocal\b/.test(partsOut) && !tslNames.includes('normalLocal')) {
-      tslNames.push('normalLocal');
-    }
+    needPartImports(returnProps[returnProps.length - 1] ?? '');
   }
 
   // --- The Splat Output's program (loader 0.8's `splat` key) --------------
@@ -1204,39 +1069,17 @@ export function buildShaderModule(
   // rules cannot drift from these; its comments carry the coercion reasoning.
   returnProps.push(...materialSettingProps(materialSettings));
 
-  // The Output node's "Merge Vertices", carried to every host that runs this
-  // module. The loader (0.6 and 0.8) welds a displaced PRIMITIVE's coincident vertices
-  // so a displaced box does not split into floating faces; this key is how an
-  // author who unticked that reaches it.
-  //
-  // Emitted ONLY for an explicit `false` — `=== false`, never `!== true`,
-  // because the settings menu writes a literal `true` when the box is re-ticked
-  // and a truthiness test would then add the key to a perfectly default node.
-  // Absent means weld, matching MaterialSettings.mergeVertices' own
-  // `undefined === true` contract, which is what keeps every already-exported
-  // module and all 32 built-in snapshots byte-identical.
-  //
-  // NB this is the first key here that is not a THREE.Material property — it is
-  // a geometry directive the loader reads off the module's return object rather
-  // than copying onto the material. Older CDN loaders (0.4/0.5) copy named keys
-  // only, so it is inert there.
+  // "Merge Vertices": emitted ONLY for an explicit `false` (`=== false`, never
+  // `!== true`), so absent means weld and every exported module stays
+  // byte-identical. A geometry directive the loader reads off the return
+  // object; see docs/dev/preview-and-runtime.md.
   if (materialSettings?.mergeVertices === false) {
     returnProps.push('mergeVertices: false');
   }
 
-  // The Wireframe node's EDGES mode reads a per-corner barycentric attribute,
-  // and no mesh carries one by default: there is no way to recover triangle
-  // corners from an indexed geometry in either backend, so the loader has to
-  // build them (toNonIndexed + a `bary` attribute). This key is how the module
-  // asks — the `mergeVertices` precedent: a geometry directive the loader reads
-  // off the return object rather than copying onto the material, and inert on
-  // the frozen 0.4/0.5 CDN loaders.
-  //
-  // Detected from the emitted TEXT rather than passed in, because this function
-  // is handed TSL source and never sees the graph. Narrow on purpose: it is the
-  // exact call graphToCode writes, so a user's own `attribute('bary')` in the
-  // code panel asks for the same injection — which is right, that is the only
-  // way their shader could work either.
+  // Wireframe EDGES reads a per-corner `bary` attribute no mesh carries, so the
+  // module asks the loader to build it. Detected from the emitted TEXT (this
+  // function never sees the graph); inert on the frozen 0.4/0.5 loaders.
   if (/\battribute\(\s*['"]bary['"]/.test(tslCode)) {
     returnProps.push('barycentric: true');
   }
@@ -1261,7 +1104,7 @@ export function buildShaderModule(
       // loader builds a Color-valued uniform instead of parseFloat-ing it to 0.
       schemaLines.push(
         typeof def === 'string'
-          ? `  ${name}: { type: 'color', default: '${/^#[0-9a-fA-F]{6}$/.test(def) ? def : '#000000'}' },`
+          ? `  ${name}: { type: 'color', default: '${HEX6.test(def) ? def : '#000000'}' },`
           : `  ${name}: { type: 'number', default: ${def} },`,
       );
     }

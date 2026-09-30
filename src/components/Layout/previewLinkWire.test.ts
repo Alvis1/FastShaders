@@ -7,7 +7,7 @@ import type { AppNode } from '@/types';
 import { previewWireTargets } from '@/utils/outputMaterials';
 import { linkLabelText } from '@/components/NodeEditor/nodes/sectionLabelText';
 import type { LinkWire } from './previewLinkGeometry';
-import { setLivePreviewWires, livePreviewWires, pickLivePreviewWire } from './previewLinkHit';
+import { setLivePreviewWires, pickLivePreviewWire } from './previewLinkHit';
 
 /**
  * The decorative Output→preview wires — ONE PER CONTRIBUTING OUTPUT NODE since
@@ -183,10 +183,8 @@ describe('the live wire registry — what the pane click reads', () => {
   });
 
   it('starts empty, publishes, and clears', () => {
-    expect(livePreviewWires()).toEqual([]);
     expect(pickLivePreviewWire(300, 300)).toBeNull();
     setLivePreviewWires([wire('b', 300)]);
-    expect(livePreviewWires().map((w) => w.id)).toEqual(['b']);
     expect(pickLivePreviewWire(300, 300)?.wire.id).toBe('b');
     // PreviewLink's unmount cleanup: a stale registry would answer a LATER
     // pane click with wires that are no longer drawn anywhere.
@@ -203,10 +201,10 @@ describe('the live wire registry — what the pane click reads', () => {
 
 describe('PreviewLink wiring (source pins — no DOM in this env)', () => {
   it('draws one wire per contributing Output and anchors each on its OWN node', () => {
-    // The derivation lives in `previewWires.ts` since the RAILS needed it too:
-    // the wire, the canvas-edge socket it ends on and the preview socket that
-    // mirrors it are ONE connection seen three times, and a condition gained by
-    // one list and not the others would draw a wire ending on nothing.
+    // The derivation lives in `previewWires.ts` since the RAIL needed it too:
+    // the wire and the canvas-edge socket it ends on are ONE connection, and a
+    // condition gained by one list and not the other would draw a wire ending
+    // on nothing.
     expect(WIRES).toContain('previewWireTargets(s');
     expect(LINK).toContain('useAppStore(wireTargetsKey)');
     expect(LINK).toContain('const pathCount = wires.length;');

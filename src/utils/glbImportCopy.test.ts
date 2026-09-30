@@ -127,7 +127,7 @@ const tex = (over: Partial<GlbTextureFact> = {}): GlbTextureFact => ({
   key: 'k', slot: 'baseColor', width: 1024, height: 1024, sourceLossless: false, materials: [0], ...over,
 });
 const factsOf = (over: Partial<GlbImportFacts> = {}): GlbImportFacts => ({
-  kind: 'glb', fileName: 'm.glb', fileBytes: 1000, materialIndices: [0], textures: [tex()], embeddedShader: null, ...over,
+  kind: 'glb', fileName: 'm.glb', fileBytes: 1000, materialIndices: [0], textures: [tex()], ...over,
 });
 const mats = (n: number) => Array.from({ length: n }, (_, i) => i);
 const many4k = (n: number) => Array.from({ length: n }, (_, i) => tex({ key: `k${i}`, width: 4096, height: 4096 }));

@@ -1,7 +1,8 @@
 /**
  * The Image (Texture) node is an ordinary registry definition since GLB
- * Phase 4 Step 4 — addable EMPTY from the palette and the Add-node menu, and
- * shipped HIDDEN through editorVisibility.json until it is finished.
+ * Phase 4 Step 4 — addable EMPTY from the palette and the Add-node menu. It
+ * shipped HIDDEN through editorVisibility.json and has been offered since
+ * 2026-09-18 (textureNodeOffered.test.ts pins that, for this node alone).
  *
  * Every assertion about visibility follows the FILE, never a hardcoded state:
  * the owner unhides the node by ticking "In editor" in node-editor.html, and

@@ -9,7 +9,8 @@ import { useAppStore } from '@/store/useAppStore';
 import { isEvalMode } from '@/eval/evalMode';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 import { portLabel, t } from '@/i18n';
-import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
+import { CAT_HEX } from '@/utils/colorUtils';
+import { useCostChrome } from './useCostChrome';
 import { nodeCostPoints } from '@/utils/nodeCost';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
@@ -35,9 +36,6 @@ import { modeOf } from '@/engine/moduleHelpers';
 import './ShaderNode.css';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
 import { plainStr, valueNum, valueStr } from '@/utils/valueCoerce';
-
-// (fmtNum/rangeText moved to utils/edgeValueText.ts — shared with the
-// animated LiveEdgeValue span so both paths format identically.)
 
 /** Channel count flowing out of one output SOCKET (1–4) — same formula
  *  TypedEdge uses: the larger of live evaluation length and static shape
@@ -585,14 +583,8 @@ export const ShaderNode = memo(function ShaderNode({
   selected,
 }: NodeProps<ShaderFlowNode>) {
   const def = NODE_REGISTRY.get(data.registryType);
-  // Rules-of-Hooks note: this return sits ABOVE the hooks below. Safe because
-  // `def` cannot flip defined<->undefined on a MOUNTED instance: React Flow keys
-  // node components by node.id, every registryType the app writes is in
-  // NODE_REGISTRY (`unknown` included), and nothing mutates registryType in place
-  // to or from an unregistered value. A tampered .fastshader with an unknown
-  // registryType renders null for the whole life of that node. Moving the return
-  // below the hooks is NOT a mechanical edit here (ShaderNode/PreviewNode hooks
-  // dereference `def`) — see CLEAN-3.
+  // Early return above the hooks is safe: React Flow keys node components by id
+  // and registryType never changes on a mounted node.
   if (!def) return null;
 
   const updateNodeData = useAppStore((s) => s.updateNodeData);
@@ -607,12 +599,6 @@ export const ShaderNode = memo(function ShaderNode({
       : varName ?? data.label;
   const language = useAppStore((s) => s.language);
   const headerTip = useHeaderTip(def);
-  const costColorLow = useAppStore((s) => s.costColorLow);
-  const costColorHigh = useAppStore((s) => s.costColorHigh);
-  // The header mixes into the card, and the card follows the theme
-  // (getCostColor). `codeEditorTheme` is the app-wide dark switch; the store
-  // field keeps its historical name.
-  const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
   // A wire being dragged within snapping distance of this node — one shared
   // signal (see connectionReveal.ts) that drives every proximity behavior:
   // rows-layout nodes force their input name-tooltips visible (floated left
@@ -762,10 +748,7 @@ export const ShaderNode = memo(function ShaderNode({
     costMemo.current = { id, data, edges: s.edges, version: s.costVersion, cost: points };
     return points;
   });
-  const costColor = getCostColor(cost, costColorLow, costColorHigh, darkTheme);
-  const headerTextColor = getContrastColor(costColor);
-  const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
-  const costScale = getCostScale(cost);
+  const { costColor, headerTextColor, costTextColor, costScale } = useCostChrome(cost);
   // Per-node box override (designer): minimum width. Frame style (corner
   // radius, border thickness) is fixed app-wide — only the color varies (category).
   const box = nodeBox(data.registryType);
@@ -794,8 +777,8 @@ export const ShaderNode = memo(function ShaderNode({
   // the noise nodes — hidden until exposed via Node Settings (or auto-exposed
   // when an edge arrives). The rows layout otherwise ignores exposedPorts,
   // so filter the registry inputs here. Hidden inputs never mount as rows —
-  // while a dragged wire is nearby (revealHidden) they render as floating
-  // RevealSockets on the left edge instead, so the card layout never changes.
+  // while a dragged wire is nearby (revealHidden) they render dimmed in the
+  // edge-port rail instead, so the card layout never changes.
   const exposedInputs = useMemo(
     () => new Set(data.exposedPorts ?? []),
     [data.exposedPorts],
@@ -841,9 +824,9 @@ export const ShaderNode = memo(function ShaderNode({
     : effDef.inputs.length;
   // The Image node's opt-in sockets re-measure on any exposed-set change (the
   // count alone can stay equal while the handle ids differ) — same idiom as
-  // PreviewNode's exposedKey. The reveal flag is part of the key: floating
-  // RevealSockets mount mid-drag and must enter React Flow's bounds map to
-  // be snappable.
+  // PreviewNode's exposedKey. The reveal flag is part of the key: revealed
+  // sockets mount mid-drag and must enter React Flow's bounds map to be
+  // snappable.
   // The exposed set is part of the key: soundNode keeps all its inputs in
   // effDef, so without this React Flow would never re-measure when a socket
   // is ticked on or off and the new handle would report a stale position.
@@ -944,23 +927,21 @@ export const ShaderNode = memo(function ShaderNode({
     `node-base${selected ? ' node-base--selected' : ''}` +
     `${stackLayerCount > 0 ? ' node-base--stacked' : ''}`;
 
-  // The Slider's range input and the inline colour swatches (stripes/dataviz
-  // lowColor/highColor) fire a change per pointermove FRAME, and every one
-  // reaches updateNodeData -> an unconditional pushHistory -> a full-graph
-  // structuredClone. Unbracketed, a one-second scrub pushes ~60 entries and
-  // evicts the whole 50-entry undo stack (MAX_HISTORY), so Cmd+Z afterwards
-  // steps through sub-pixel slider values instead of undoing real work.
-  // Bracket the burst so it lands as ONE undo entry — the same fix
-  // ColorNode.tsx:135-154 applies to the native colour picker. Deliberately
-  // NOT inside handleChange: that writer also backs the DragNumberInput rows,
-  // which already bracket their own drags, and a second bracket there would
-  // open a 600 ms coalescing window on a single arrow-button click.
+  // The Slider's range input fires a change per pointermove FRAME, and every
+  // one reaches updateNodeData -> pushHistory -> a full-graph structuredClone,
+  // so the burst is bracketed into ONE undo entry (historyBracketing.test.ts).
+  // Deliberately NOT inside handleChange: that writer also backs the
+  // DragNumberInput rows and the colour picker, which bracket their own
+  // gestures, and a second bracket there would open a 600 ms coalescing window
+  // on a single arrow-button click.
   const { bracket, closeBracket } = useHistoryBracket();
 
   const handleChange = useCallback(
-    (key: string, raw: string) => {
-      const num = parseFloat(raw);
-      const value = isNaN(num) ? raw : num;
+    (key: string, raw: string | number) => {
+      // Through the string for numbers too, so -0 and NaN store as they always did.
+      const text = String(raw);
+      const num = parseFloat(text);
+      const value = isNaN(num) ? text : num;
       updateNodeData(id, { values: { ...data.values, [key]: value } } as Partial<ShaderFlowNode['data']>);
     },
     [id, data.values, updateNodeData],
@@ -1048,7 +1029,7 @@ export const ShaderNode = memo(function ShaderNode({
               list identifies the op by its header name instead. */}
           {!chainListMode && hasNodeGlyph(data.registryType) && (
             <div className="shader-node__op-glyph">
-              <NodeGlyph type={data.registryType} value={valueNum(data.values?.value ?? 0)} size={34} />
+              <NodeGlyph type={data.registryType} size={34} />
             </div>
           )}
           {ins.map((inp, i) => {
@@ -1070,7 +1051,7 @@ export const ShaderNode = memo(function ShaderNode({
                 edge={info && <LiveEdgeValue className="shader-node__edge-val" {...info} />}
                 swatch={colorSwatch(inp.id)}
                 value={valueNum(data.values[inp.id] ?? def.defaultValues?.[inp.id] ?? identity)}
-                onNumber={(v) => handleChange(inp.id, String(v))}
+                onNumber={(v) => handleChange(inp.id, v)}
               />
             );
           })}
@@ -1242,7 +1223,7 @@ export const ShaderNode = memo(function ShaderNode({
           top of it — they live in the rows below, aligned with their sockets. */}
       {hasNodeGlyph(data.registryType) && (
         <div className="shader-node__glyph">
-          <NodeGlyph type={data.registryType} value={valueNum(data.values?.value ?? 0)} size={30} />
+          <NodeGlyph type={data.registryType} size={30} />
         </div>
       )}
 
@@ -1357,11 +1338,7 @@ export const ShaderNode = memo(function ShaderNode({
       <div className="node-base__body">
         {visibleRows.map((row, i) => {
           const inputConnected = row.input ? connectedInputs.has(row.input.id) : false;
-          // Image node's `uv` port never shows an inline number: codegen falls
-          // back to the uv() expression, so an editable scalar here would be a
-          // dead widget (the edge-value label still renders when connected).
-          const showInlineValue =
-            row.input && !inputConnected && !row.settingKey && data.registryType !== 'imageNode';
+          const showInlineValue = row.input && !inputConnected && !row.settingKey;
           // Designer-moved input: its socket + value render detached (below),
           // so this row's left side stays empty.
           const inputMoved = row.input ? sockOv[row.input.id] != null : false;
@@ -1390,12 +1367,8 @@ export const ShaderNode = memo(function ShaderNode({
                     channels={inputChannels.get(row.input.id)}
                   />
                 )}
-                {/* (The Image node's input rows carried their port label here
-                    until 2026-09-19. It never reaches this branch any more —
-                    the node is an edge-port layout and renders no rows — and
-                    the names live in the socket's own tooltip, like every
-                    other node's. `.shader-node__in-label` went with it: no
-                    node draws text beside an INPUT socket.) */}
+                {/* No text beside an INPUT socket: `.shader-node__in-label` is
+                    retired (imageEdgePorts.test.ts). */}
                 {/* Connected input → show the value(s) on the edge next to its socket */}
                 {row.input && inputConnected && (() => {
                   const info = graphInfo.labelByHandle.get(row.input!.id) ?? null;
@@ -1432,43 +1405,27 @@ export const ShaderNode = memo(function ShaderNode({
                     title={String(valueNum(data.values.value ?? 0.5).toFixed(2))}
                   />
                 )}
-                {/* Inline setting from defaultValues (imageNode: numbers live
-                    in the context menu only — see the in-label above) */}
-                {row.settingKey && row.settingType === 'number' && !inputConnected && data.registryType !== 'imageNode' && !(data.registryType === 'slider' && row.settingKey === 'value') && (
+                {/* Inline setting from defaultValues */}
+                {row.settingKey && row.settingType === 'number' && !inputConnected && !(data.registryType === 'slider' && row.settingKey === 'value') && (
                   <DragNumberInput
                     compact
                     step={row.input?.dataType === 'int' ? 1 : undefined}
                     value={valueNum(data.values[row.settingKey] ?? def.defaultValues?.[row.settingKey] ?? 0)}
-                    onChange={(v) => handleChange(row.settingKey!, String(row.input?.dataType === 'int' ? Math.round(v) : v))}
+                    onChange={(v) => handleChange(row.settingKey!, row.input?.dataType === 'int' ? Math.round(v) : v)}
                   />
                 )}
                 {/* The same swatch a colour OPERAND gets — see colorSwatch. */}
                 {row.settingKey && row.settingType === 'color' && colorSwatch(row.settingKey)}
-                {row.settingType === 'vec3' && row.vecBaseKey && (
+                {(row.settingType === 'vec3' || row.settingType === 'vec2') && row.vecBaseKey && (
                   <span className="shader-node__vec-group">
-                    {['x', 'y', 'z'].map((axis) => {
+                    {(row.settingType === 'vec3' ? ['x', 'y', 'z'] : ['x', 'y']).map((axis) => {
                       const k = `${row.vecBaseKey}_${axis}`;
                       return (
                         <DragNumberInput
                           key={axis}
                           compact
                           value={valueNum(data.values[k] ?? def.defaultValues?.[k] ?? 0)}
-                          onChange={(v) => handleChange(k, String(v))}
-                        />
-                      );
-                    })}
-                  </span>
-                )}
-                {row.settingType === 'vec2' && row.vecBaseKey && (
-                  <span className="shader-node__vec-group">
-                    {['x', 'y'].map((axis) => {
-                      const k = `${row.vecBaseKey}_${axis}`;
-                      return (
-                        <DragNumberInput
-                          key={axis}
-                          compact
-                          value={valueNum(data.values[k] ?? def.defaultValues?.[k] ?? 0)}
-                          onChange={(v) => handleChange(k, String(v))}
+                          onChange={(v) => handleChange(k, v)}
                         />
                       );
                     })}
@@ -1480,14 +1437,14 @@ export const ShaderNode = memo(function ShaderNode({
                     compact
                     step={row.input?.dataType === 'int' ? 1 : undefined}
                     value={valueNum(data.values[row.input!.id] ?? 0)}
-                    onChange={(v) => handleChange(row.input!.id, String(row.input?.dataType === 'int' ? Math.round(v) : v))}
+                    onChange={(v) => handleChange(row.input!.id, row.input?.dataType === 'int' ? Math.round(v) : v)}
                   />
                 )}
               </div>
 
               {/* Right side: the output socket (outputs[0] moves out of its row
                   when a designer socket override exists), labelled only for
-                  the #8 exceptions — Data columns, Image channels. */}
+                  the #8 exception — Data columns. */}
               <div className="shader-node__right">{rowOutput(row.output)}</div>
             </div>
           );
@@ -1519,7 +1476,7 @@ export const ShaderNode = memo(function ShaderNode({
               edge={info && <LiveEdgeValue className="shader-node__edge-val" {...info} />}
               swatch={colorSwatch(inp.id)}
               value={valueNum(data.values[inp.id] ?? def.defaultValues?.[inp.id] ?? 0)}
-              onNumber={(v) => handleChange(inp.id, String(v))}
+              onNumber={(v) => handleChange(inp.id, v)}
             />
             <TypedHandle
               type="target"
@@ -1544,17 +1501,10 @@ export const ShaderNode = memo(function ShaderNode({
         />
       )}
       </div>
-      {/* Drag-reveal: hidden param sockets float on the left edge of the card
-          (anchored to .node-base, NOT the rows region — the card layout never
-          changes), named by their forced tooltips.
-
-          `!edgePorts` because an edge-port node reveals its hidden ports IN
-          ITS OWN RAIL, at the slot each one permanently occupies: two
-          independent placements of the same six sockets is how they end up
-          drawn on top of each other. The Image node is the only reveal client
-          today, so this branch is currently unreachable — it is kept because
-          the reveal is a per-node OPT-IN (`revealHidden`), not an Image-node
-          feature, and the next node to want it will not be an edge-port one. */}
+      {/* Drag-reveal for a ROWS-layout node: hidden sockets float on the card's
+          left edge. Unreachable today — the Image node, the only reveal client,
+          reveals IN its own rail — and kept as a per-node opt-in
+          (imageEdgePorts.test.ts pins the `!edgePorts` guard). */}
       {revealHidden && !edgePorts && (
         <RevealSockets
           ports={def.inputs.filter((inp) => !exposedInputs.has(inp.id))}

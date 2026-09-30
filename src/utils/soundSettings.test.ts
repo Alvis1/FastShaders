@@ -1,18 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import {
-  MIC_FFT_SIZES,
-  MIC_SETTINGS_DEFAULTS,
-  MIC_SMOOTHING_MAX,
-  MIC_GAIN_MIN,
-  MIC_GAIN_MAX,
+  SOUND_FFT_SIZES,
+  SOUND_SETTINGS_DEFAULTS,
+  SOUND_SMOOTHING_MAX,
+  SOUND_GAIN_MIN,
+  SOUND_GAIN_MAX,
   readSoundSettings,
 } from './soundSettings';
 
 describe('readSoundSettings', () => {
   it('returns defaults for missing values', () => {
-    expect(readSoundSettings(undefined)).toEqual(MIC_SETTINGS_DEFAULTS);
-    expect(readSoundSettings(null)).toEqual(MIC_SETTINGS_DEFAULTS);
-    expect(readSoundSettings({})).toEqual(MIC_SETTINGS_DEFAULTS);
+    expect(readSoundSettings(undefined)).toEqual(SOUND_SETTINGS_DEFAULTS);
+    expect(readSoundSettings(null)).toEqual(SOUND_SETTINGS_DEFAULTS);
+    expect(readSoundSettings({})).toEqual(SOUND_SETTINGS_DEFAULTS);
   });
 
   it('passes through in-range values', () => {
@@ -34,24 +34,24 @@ describe('readSoundSettings', () => {
   it('clamps smoothing below 1 so the analyser never freezes', () => {
     // smoothingTimeConstant === 1 means the exponential average never admits
     // new data: every band would hold its initial value forever.
-    expect(readSoundSettings({ smoothing: 1 }).smoothing).toBe(MIC_SMOOTHING_MAX);
-    expect(readSoundSettings({ smoothing: 99 }).smoothing).toBe(MIC_SMOOTHING_MAX);
+    expect(readSoundSettings({ smoothing: 1 }).smoothing).toBe(SOUND_SMOOTHING_MAX);
+    expect(readSoundSettings({ smoothing: 99 }).smoothing).toBe(SOUND_SMOOTHING_MAX);
     expect(readSoundSettings({ smoothing: -5 }).smoothing).toBe(0);
   });
 
   it('clamps gain into range', () => {
-    expect(readSoundSettings({ gain: 1000 }).gain).toBe(MIC_GAIN_MAX);
-    expect(readSoundSettings({ gain: 0 }).gain).toBe(MIC_GAIN_MIN);
-    expect(readSoundSettings({ gain: -1 }).gain).toBe(MIC_GAIN_MIN);
+    expect(readSoundSettings({ gain: 1000 }).gain).toBe(SOUND_GAIN_MAX);
+    expect(readSoundSettings({ gain: 0 }).gain).toBe(SOUND_GAIN_MIN);
+    expect(readSoundSettings({ gain: -1 }).gain).toBe(SOUND_GAIN_MIN);
   });
 
   it('SNAPS fftSize to an allowed size rather than clamping', () => {
     // The Web Audio spec throws IndexSizeError unless fftSize is a power of two
     // in [32, 32768]. A clamp would leave 1023 as 1023 and take out capture.
-    expect(readSoundSettings({ fftSize: 1023 }).fftSize).toBe(MIC_SETTINGS_DEFAULTS.fftSize);
-    expect(readSoundSettings({ fftSize: 4096 }).fftSize).toBe(MIC_SETTINGS_DEFAULTS.fftSize);
-    expect(readSoundSettings({ fftSize: 0 }).fftSize).toBe(MIC_SETTINGS_DEFAULTS.fftSize);
-    for (const n of MIC_FFT_SIZES) expect(readSoundSettings({ fftSize: n }).fftSize).toBe(n);
+    expect(readSoundSettings({ fftSize: 1023 }).fftSize).toBe(SOUND_SETTINGS_DEFAULTS.fftSize);
+    expect(readSoundSettings({ fftSize: 4096 }).fftSize).toBe(SOUND_SETTINGS_DEFAULTS.fftSize);
+    expect(readSoundSettings({ fftSize: 0 }).fftSize).toBe(SOUND_SETTINGS_DEFAULTS.fftSize);
+    for (const n of SOUND_FFT_SIZES) expect(readSoundSettings({ fftSize: n }).fftSize).toBe(n);
   });
 
   it('survives adversarial values without throwing or emitting NaN', () => {
@@ -65,9 +65,9 @@ describe('readSoundSettings', () => {
       const s = readSoundSettings(v);
       expect(Number.isFinite(s.smoothing)).toBe(true);
       expect(Number.isFinite(s.gain)).toBe(true);
-      expect(MIC_FFT_SIZES).toContain(s.fftSize);
+      expect(SOUND_FFT_SIZES).toContain(s.fftSize);
       expect(s.smoothing).toBeGreaterThanOrEqual(0);
-      expect(s.smoothing).toBeLessThanOrEqual(MIC_SMOOTHING_MAX);
+      expect(s.smoothing).toBeLessThanOrEqual(SOUND_SMOOTHING_MAX);
     }
   });
 });

@@ -289,7 +289,7 @@ describe('memo keys already fold sourceHandle (re-wiring Color → Alpha must re
     ['../components/NodeEditor/nodes/ClockNode.tsx', "${e.sourceHandle ?? ''}"],
     ['../components/NodeEditor/nodes/LiveEdgeValue.tsx', '[sourceId, sourceHandle, animated]'],
     ['../components/NodeEditor/edges/EdgeInfoCard.tsx', '[sourceId, sourceHandle, isTimeDriven]'],
-    ['../components/NodeEditor/edges/TypedEdge.tsx', 'getUnwrappedEdge(s.nodes, s.edges, id)?.sourceHandle'],
+    ['../components/NodeEditor/edges/TypedEdge.tsx', 'sourceHandle: un?.sourceHandle ?? sourceHandleId ?? null,'],
   ])('%s', (file, needle) => {
     expect(src(file)).toContain(needle);
   });

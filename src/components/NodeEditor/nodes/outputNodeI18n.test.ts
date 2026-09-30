@@ -17,20 +17,26 @@ const MARCH = read('./RaymarchOutputNode.tsx');
 const SPLAT = read('./SplatOutputNode.tsx');
 const CARD = read('../NodePreviewCard.tsx');
 const cardPart = (start: string, end: string) => CARD.slice(CARD.indexOf(start), CARD.indexOf(end, CARD.indexOf(start)));
-const OUTPUT_CARD = cardPart('function OutputCardContent(', 'function MarchOutputCardContent(');
+const OUTPUT_CARD = cardPart('function OutputCardContent(', 'function SinkCardContent(');
+// The Raymarch and Splat tiles are ONE body; each wrapper hands it its config.
+const SINK_CARD = cardPart('function SinkCardContent(', 'function MarchOutputCardContent(');
 const MARCH_CARD = cardPart('function MarchOutputCardContent(', 'function SplatOutputCardContent(');
 const SPLAT_CARD = cardPart('function SplatOutputCardContent(', 'ColorCardContent');
 
 describe('the output nodes are translated on every surface', () => {
   const surfaces: [string, string][] = [
-    ['OutputNode', OUTPUT], ['RaymarchOutputNode', MARCH], ['Output tile', OUTPUT_CARD], ['Raymarch tile', MARCH_CARD],
-    ['SplatOutputNode', SPLAT], ['Splat tile', SPLAT_CARD],
+    ['OutputNode', OUTPUT], ['RaymarchOutputNode', MARCH], ['Output tile', OUTPUT_CARD],
+    ['SplatOutputNode', SPLAT], ['Raymarch + Splat tile', SINK_CARD],
   ];
 
   it('slices every tile out of the card file (a vacuous slice would pass the checks below)', () => {
-    for (const part of [OUTPUT_CARD, MARCH_CARD, SPLAT_CARD]) expect(part.length).toBeGreaterThan(500);
+    for (const part of [OUTPUT_CARD, SINK_CARD]) expect(part.length).toBeGreaterThan(500);
+    // Both wrappers render the shared body, each with its OWN config.
+    for (const part of [MARCH_CARD, SPLAT_CARD]) expect(part).toContain('<SinkCardContent');
+    expect(MARCH_CARD).toContain('config={MARCH_NODE_CONFIG}');
     expect(MARCH_CARD).not.toContain('SPLAT_NODE_CONFIG');
-    expect(SPLAT_CARD).toContain('SPLAT_NODE_CONFIG');
+    expect(SPLAT_CARD).toContain('config={SPLAT_NODE_CONFIG}');
+    expect(SINK_CARD).not.toMatch(/(MARCH|SPLAT)_NODE_CONFIG/);
   });
 
   it('never prints a raw socket or section label', () => {
@@ -67,7 +73,7 @@ describe('the output nodes are translated on every surface', () => {
     expect(MARCH).toMatch(/original: 'Raymarching',/);
     expect(SPLAT).toMatch(/original: 'Gaussian splat',/);
     const glossed: [string, string][] = [
-      ['RaymarchOutputNode', MARCH], ['Raymarch tile', MARCH_CARD], ['SplatOutputNode', SPLAT], ['Splat tile', SPLAT_CARD],
+      ['RaymarchOutputNode', MARCH], ['SplatOutputNode', SPLAT], ['Raymarch + Splat tile', SINK_CARD],
     ];
     for (const [name, src] of glossed) {
       expect(src, name).toMatch(/<OutputTitle\b[^>]*\boriginal=\{config\.original\}/);

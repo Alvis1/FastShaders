@@ -15,6 +15,7 @@
 import { buildZip, type ZipEntry } from './zipWriter';
 import type { PreviewMesh } from './previewMesh';
 import { isSplatKind } from './splatSniff';
+import { GLB_ENTITY_POSITION } from '@/engine/glbUsage';
 import { CDN_BASE, SPLAT_RUNTIME_FILE } from '@/engine/tslToShaderModule';
 
 export interface ExportImageFile {
@@ -61,11 +62,8 @@ export type ExportBundle = (
 ) & ExportBundleSize;
 
 /**
- * The A-Frame pairing snippet for a bundled model (README + docs use it).
- * `0 1.6 -3` is eye height, three metres out — the same placement the A-Frame
- * tab's page uses (OBJECT_POSITION in engine/tslToAFrameHTML.ts; kept a
- * literal here, the A-Frame tab being a whole page generator this pure util
- * has no business importing).
+ * The A-Frame pairing snippet for a bundled model (README + docs use it), at
+ * the placement the A-Frame tab's page uses: eye height, three metres out.
  *
  * A Gaussian splat is TWO lines: A-Frame knows no splat format, so the page
  * needs the splat runtime (`fs-splat-0.1.js`, from the same CDN folder as the
@@ -78,12 +76,12 @@ export function meshPairingSnippet(mesh: ExportMesh, jsName: string): string {
   if (isSplatKind(mesh.kind)) {
     return [
       `<script src="${CDN_BASE}/${SPLAT_RUNTIME_FILE}"></script>`,
-      `<a-entity splat-model="src: url(models/${mesh.name}); kind: ${mesh.kind}; size: 1.6" shader="src: ${jsName}" position="0 1.6 -3"></a-entity>`,
+      `<a-entity splat-model="src: url(models/${mesh.name}); kind: ${mesh.kind}; size: 1.6" shader="src: ${jsName}" position="${GLB_ENTITY_POSITION}"></a-entity>`,
     ].join('\n');
   }
   return mesh.kind === 'obj'
-    ? `<a-entity obj-model="obj: url(models/${mesh.name})" shader="src: ${jsName}" position="0 1.6 -3"></a-entity>`
-    : `<a-entity gltf-model="url(models/${mesh.name})" shader="src: ${jsName}" position="0 1.6 -3"></a-entity>`;
+    ? `<a-entity obj-model="obj: url(models/${mesh.name})" shader="src: ${jsName}" position="${GLB_ENTITY_POSITION}"></a-entity>`
+    : `<a-entity gltf-model="url(models/${mesh.name})" shader="src: ${jsName}" position="${GLB_ENTITY_POSITION}"></a-entity>`;
 }
 
 export function buildExportReadme(

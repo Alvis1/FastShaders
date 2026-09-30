@@ -26,11 +26,9 @@ interface Props {
  * file neither the editor nor Podest could load back. The message names the cap
  * that was crossed (MB for the size, files for the count, both when both are).
  *
- * "Export anyway" is a plain button, not --danger: it discards nothing, and
- * CsvImportModal.css reserves --danger for that. "Export without the 3D model"
- * is offered only when dropping the model brings the bundle under the cap, and
- * answers THIS export alone — the session `exportIncludeMesh` flag is never
- * written, so the next over-cap export asks again.
+ * "Export without the 3D model" is offered only when dropping the model brings
+ * the bundle under the cap, and answers THIS export alone — the session
+ * `exportIncludeMesh` flag is never written, so the next over-cap export asks again.
  *
  * Deliberately no evalLog here: the pre-flight is skipped in a study session,
  * and evalHooks.test.ts's ALLOWED_FILES would fail on a new logging file.

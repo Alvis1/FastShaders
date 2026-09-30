@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { linkLabelText } from '@/components/NodeEditor/nodes/sectionLabelText';
+import { nodeEl } from '@/components/NodeEditor/nodeElement';
 import { resolveWireTargets, wireTargetsKey } from './previewWires';
 import { RAIL_INSET, railY } from './previewRailGeometry';
 import { linkPath, pickLinkAt, rectCenter, type LinkWire } from './previewLinkGeometry';
@@ -26,12 +27,7 @@ import './PreviewLink.css';
  *
  * That clip is why each wire ends on the canvas RAIL (`previewRailGeometry`, a
  * socket per contributing Output on the pane's right edge) and no longer aims
- * at the 3D preview's centre: aiming there LOOKED like a connection and was
- * not, because the curve was cut off at the seam and never reached the pane it
- * pointed at. The preview draws its own mirroring socket at the same fraction
- * of its own height, so the pair either side of a 2px seam reads as one
- * connection — and nothing has to be drawn across two panes, which this layer
- * cannot do.
+ * at the 3D preview's centre — history in PreviewRail.tsx.
  *
  * The START endpoint is read straight off the DOM every animation frame (each
  * node's socket via its class inside that node's React Flow `data-id`
@@ -77,7 +73,7 @@ function idsKey(wires: readonly { id: string }[]): string {
 // component takes no props and reads everything from its own store selectors,
 // so memo is unconditionally effective. It matters more here than for the
 // other canvas panels — a parent re-render NOT caused by nodes/edges
-// (hoveredNodeId, an open context menu, NodeEditor's own local state) re-runs
+// (an open context menu, NodeEditor's own local state) re-runs
 // the whole-graph selector below, which is work no notification asked for.
 export const PreviewLink = memo(function PreviewLink() {
   const language = useAppStore((s) => s.language);
@@ -87,8 +83,7 @@ export const PreviewLink = memo(function PreviewLink() {
   // carries the label as DATA), so a language switch re-words the labels
   // through the memo's own dependency without touching the wire set.
   // The shared key — memoized on the store slices the derivation reads, so the
-  // three surfaces that draw this connection cost ONE walk per notify between
-  // them rather than one each.
+  // wire and the rail cost ONE walk per notify between them, not one each.
   const wireKey = useAppStore(wireTargetsKey);
   const wires = useMemo<{ id: string; label: string }[]>(
     () => resolveWireTargets(useAppStore.getState()).map((w) => ({
@@ -127,9 +122,6 @@ export const PreviewLink = memo(function PreviewLink() {
     // id-list key closes one level up.
     let hotId: string | null = null;
     let labelW = 0;
-
-    const escape = (id: string) =>
-      (window.CSS && typeof window.CSS.escape === 'function') ? window.CSS.escape(id) : id;
 
     const setShown = (svg: SVGSVGElement, shown: boolean) => {
       const v = shown ? '1' : '0';
@@ -199,9 +191,7 @@ export const PreviewLink = memo(function PreviewLink() {
       for (let i = 0; i < list.length; i++) {
         const el = nodeEls[i];
         if (!el || !el.isConnected) {
-          nodeEls[i] = document.querySelector<HTMLElement>(
-            `.react-flow__node[data-id="${escape(list[i].id)}"]`,
-          );
+          nodeEls[i] = nodeEl(list[i].id);
           anchorEls[i] = null;
         }
         const a = anchorEls[i];
@@ -251,15 +241,8 @@ export const PreviewLink = memo(function PreviewLink() {
       // whichever edge the node sits behind. React Flow keeps off-screen nodes
       // mounted (`onlyRenderVisibleElements` is left at its default false), so
       // the off-pane rects above are real and the geometry stays correct.
-      // Each wire now ends on its OWN socket of the canvas rail, at the same
-      // fraction of the pane's height the preview's mirroring socket sits at
-      // (`previewRailGeometry`, which both ask). It used to aim at the 3D
-      // preview's centre, which looked like a connection and was not: the SVG
-      // lives inside `.react-flow` and `.node-editor__canvas` CLIPS it, so the
-      // curve was cut off at the seam and never reached the pane it pointed at.
-      // Ending on the rail is what makes the pair either side of the seam read
-      // as one connection — and it needs no element in the OTHER pane at all,
-      // so the lookup that used to find one is gone with it.
+      // Each wire ends on its own rail socket (previewRailGeometry): the pane
+      // clips the SVG, so it can never reach the preview.
       const endX = svgRect.right - RAIL_INSET;
 
       // React writes `wiresRef` during RENDER, so for the one frame between a

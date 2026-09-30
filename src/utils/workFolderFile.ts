@@ -114,6 +114,38 @@ export function isShaderRenamed(openedName: string, liveName: string): boolean {
 }
 
 /**
+ * Does a Save back to `trackedFile` stay a `.js`/`.zip`? A document save packs
+ * a loaded glTF/GLB model into one `.glb` (engine/exportModel.ts, the
+ * 'document' surface) — right for a new file and for a tracked `.glb`, but a
+ * `waves.zip` the user opened must be written back as a `.zip`: flipping it
+ * would fork a silent `waves.glb` sibling while `waves.zip`, the file they
+ * know, keeps the pre-edit shader.
+ */
+export function keepsBundleFormat(trackedFile: string | null): boolean {
+  return trackedFile !== null && !/\.glb$/i.test(trackedFile);
+}
+
+/**
+ * The same question with NOTHING tracked — which is every first Save after a
+ * relaunch, because the Work folder's origin is session state. The folder is
+ * asked instead: when it already holds this shader's stem as a `.js`/`.zip`
+ * and NOT as a `.glb`, Save keeps writing that bundle rather than forking a
+ * `<stem>.glb` beside the file the user knows. A folder holding the `.glb`
+ * (or neither) follows the document rule. Case-insensitive, like
+ * `sameShaderFile`.
+ */
+export function untrackedKeepsBundle(stem: string, folderFiles: readonly string[]): boolean {
+  const s = stem.toLowerCase();
+  let bundle = false;
+  for (const f of folderFiles) {
+    const lower = f.toLowerCase();
+    if (lower === `${s}.glb`) return false;
+    if (lower === `${s}.zip` || lower === `${s}.js`) bundle = true;
+  }
+  return bundle;
+}
+
+/**
  * The file Save should write.
  *
  * `openedFile` is the tracked work-folder file, or null when the shader has been
@@ -124,10 +156,12 @@ export function isShaderRenamed(openedName: string, liveName: string): boolean {
  * keeping the on-disk casing is what makes the write land on the opened file
  * rather than spawning a lowercase sibling on a case-sensitive volume.
  * Otherwise the stem is re-extended — a graph that gained an image (or a preview
- * model) exports as a zip, so `waves.js` becomes `waves.zip`, and switching the
- * EXPORT popover's Format to one `.glb` makes it `waves.glb`. NOTE the old
- * sibling is left behind: there is no delete command in the IPC surface, so a
- * kind flip forks the pair until it flips back.
+ * model) exports as a zip, so `waves.js` becomes `waves.zip`, and a NEW file
+ * whose document holds a packable glTF/GLB model is `waves.glb` (a document
+ * save packs it, engine/exportModel.ts). A tracked `.js`/`.zip` never flips to
+ * `.glb` (`keepsBundleFormat`). NOTE the old sibling is left behind: there is
+ * no delete command in the IPC surface, so a kind flip forks the pair until it
+ * flips back.
  */
 export function workFolderSaveName(
   openedFile: string | null,

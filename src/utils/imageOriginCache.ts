@@ -1,68 +1,21 @@
 /**
- * Device-local stash of an Image node's ORIGINAL payload — the pre-snap encode
- * behind "Revert to original", and (since 2026-09-09) the source the settings
- * menu's Resolution ladder re-encodes from.
- *
- * WHEN IT IS WRITTEN: only when the stored payload stops being the original —
- * at drop time when the power-of-two snap fired, and at the FIRST resize the
- * user picks (ImageNodeSettings stashes the payload it is about to replace).
- * An untouched, unsnapped image is never stashed: its payload IS the original
- * and the ladder reads it off the node. Stashing on every drop was tried and
- * reverted the same day — every drop then competed for the slots below, so an
- * ordinary drop could evict the one record that undoes a destructive snap.
- *
- * WHY NOT ON THE NODE: `values` is the one surface every cap and validator
- * watches. `totalImageChars` and `sanitizeImageNodes` inspect ONLY
- * `values.imageB64`, so a second payload key would be invisible to the 600 K
- * per-image cap, the 3 M project cap, the 8 M hard ceiling AND the data-URL
- * whitelist — a tampered `.fastshader` could smuggle an unbounded, unvalidated
- * blob past the trust boundary. It would also ride ~101 `structuredClone`s of
- * undo history, the `fs:graph` autosave (already a known quota-failure path),
- * the clipboard, and the FASTSHADERS_PROJECT_V1 embed — roughly doubling an
- * image-heavy export. Only a ~16-char id lives on the node; the bytes live
- * here. Same reasoning, and the same shape, as `previewMeshCache.ts`.
- *
- * WHAT IS STORED is NOT the raw dropped file: that would re-embed the EXIF/GPS
- * the canvas round-trip exists to strip, and blow every cap. It is the payload
- * the import WOULD have produced without the snap — same codec policy, same
- * device cap, same 600 K budget — so it is bounded by construction and revert
- * is a validated field swap rather than a re-decode of untrusted bytes.
- *
- * KEYED BY CONTENT, not by node id: `pasteNodes` and the saved-group library
- * both mint fresh ids while cloning `data` unchanged, so an id-keyed record
- * would be lost by Ctrl+D. Hashing the stashed payload also makes the key
- * self-consistent with the encode parameters that produced it — the same file
- * dropped under a different headset texture cap, or once in "convert" and once
- * in "keep" mode where the browser encodes WebP, yields different bytes, hence
- * a different record, instead of one silently overwriting the other.
- *
- * Every entry point is throw-safe and resolves rather than rejects: private
- * mode, a blocked upgrade, disabled IndexedDB or a quota failure must degrade
- * to "Revert unavailable", never break a drop.
+ * Device-local IndexedDB stash of an Image node's ORIGINAL payload: content-keyed
+ * (survives Ctrl+D/paste), written only when the stored payload stops being the
+ * original, every entry point resolves. docs/dev/images-and-textures.md § Revert.
  */
 
 import { validImageDataUrl, HARD_MAX_IMAGE_ENCODED_CHARS, MAX_IMAGE_ENCODED_CHARS } from './imageNode';
 import { openDb as openDbShared, idbWrite, idbGet } from './idbSafe';
 import { PLATFORM_CAPS } from './platformCaps';
+import { valueNum } from './valueCoerce';
 
 const DB_NAME = 'fastshaders-images';
 const DB_VERSION = 1;
 const STORE = 'imageOrigins';
 
-/** Store-wide caps. `payloadToRecord` caps each record this module WRITES at
- *  the per-image payload cap, so 32 of them is 19.2 M chars — under the byte
- *  cap, which therefore never binds for the app's own records: the COUNT is
- *  the bound (headroom to 40 before the bytes could). The byte cap stays as a
- *  guard against records this module did not write — a foreign, older or
- *  tampered record on this origin may carry up to the 8 M hard ceiling
- *  `recordToPayload` tolerates on read.
- *
- *  Platform-sized (utils/platformCaps.ts): the numbers above are the web's.
- *  On desktop each record may reach the 6M per-image cap, so there the BYTE
- *  cap binds (~42 records at 256M chars) before the 64-record count does, and
- *  the WKWebView/WebView2 IndexedDB quota at that size is unverified (an owner
- *  check). A quota refusal still degrades to "Revert unavailable", never data
- *  loss. `canStashPayload` already follows `MAX_IMAGE_ENCODED_CHARS`. */
+/** Store-wide LRU caps, platform-sized (utils/platformCaps.ts). On the web the
+ *  COUNT binds; the byte cap guards records this module did not write (up to
+ *  the 8 M hard ceiling `recordToPayload` tolerates). On desktop it binds first. */
 const MAX_RECORDS = PLATFORM_CAPS.originRecords;
 const MAX_STORE_CHARS = PLATFORM_CAPS.originStoreChars;
 
@@ -171,8 +124,8 @@ export function recordToPayload(rec: unknown, expectedId: string): ImageOriginPa
   // to its own key has been tampered with or truncated.
   if (originIdFor(dataUrl) !== expectedId) return null;
 
-  const width = Number(r.width);
-  const height = Number(r.height);
+  const width = valueNum(r.width);
+  const height = valueNum(r.height);
   if (!Number.isInteger(width) || width <= 0 || width > 8192) return null;
   if (!Number.isInteger(height) || height <= 0 || height > 8192) return null;
 

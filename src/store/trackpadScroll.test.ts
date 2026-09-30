@@ -2,6 +2,7 @@ import { describe, it, expect, afterAll, beforeEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { useAppStore } from './useAppStore';
+import { stubLocalStorage } from '@/test-utils';
 
 /**
  * The canvas wheel mode is a SETTING, not a device sniff, and these guard the
@@ -31,13 +32,7 @@ afterAll(() => vi.unstubAllGlobals());
 
 describe('trackpadScroll — the canvas wheel-mode setting', () => {
   beforeEach(() => {
-    const store = new Map<string, string>();
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => store.get(k) ?? null,
-      setItem: (k: string, v: string) => void store.set(k, v),
-      removeItem: (k: string) => void store.delete(k),
-      clear: () => store.clear(),
-    });
+    stubLocalStorage();
   });
 
   it('defaults to the MOUSE model', () => {

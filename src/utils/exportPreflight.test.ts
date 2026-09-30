@@ -198,12 +198,21 @@ describe('planExportPreflight: the decision', () => {
 describe('export pre-flight: the three user surfaces are wired, the study is not', () => {
   it('Toolbar EXPORT branches to the study finish dialog BEFORE the pre-flight', () => {
     const src = read('components/Layout/Toolbar.tsx');
-    const call = src.indexOf('buildShaderExportChecked(');
+    // ONE runner makes the export for both buttons…
+    expect(src.split('buildShaderExportChecked(').length - 1).toBe(1);
+    expect(src.lastIndexOf('const runExport = ', src.indexOf('buildShaderExportChecked('))).toBeGreaterThan(-1);
+    // …and EXPORT's click answers the study session before it calls it.
+    const click = src.slice(src.indexOf('className="toolbar__export"'));
+    const call = click.indexOf('runExport();');
     expect(call).toBeGreaterThan(-1);
-    const handler = src.lastIndexOf('onClick={() => {', call);
-    const evalBranch = src.lastIndexOf('if (isEvalMode()) {', call);
+    const handler = click.lastIndexOf('onClick={() => {', call);
+    const evalBranch = click.lastIndexOf('if (isEvalMode()) {', call);
     expect(evalBranch).toBeGreaterThan(handler);
-    expect(src.slice(evalBranch, call)).toContain('setEvalFinishOpen(true)');
+    expect(click.slice(evalBranch, call)).toContain('setEvalFinishOpen(true)');
+    // The popover's smaller button is the only other caller, and it cannot
+    // exist in a study session: `exportAlternate` answers null there.
+    expect(src).toContain('const exportAlt = useAppStore((s) => exportAlternate(s, isEvalMode()));');
+    expect(src.split('runExport(').length - 1).toBe(2); // EXPORT's click and the smaller button
     // No unchecked download left anywhere in the toolbar.
     expect(src).not.toMatch(/downloadShader\(\s*\)/);
   });

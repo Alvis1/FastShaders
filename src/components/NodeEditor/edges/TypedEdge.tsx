@@ -9,11 +9,19 @@ import {
   type ReactFlowState,
 } from '@xyflow/react';
 import type { AppEdge } from '@/types';
+import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '@/store/useAppStore';
 import { COUNT_EDGE_COLORS, getContrastColor } from '@/utils/colorUtils';
 import { setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { evaluateEdgeSource, getEdgeOutputShape, getUnwrappedEdge } from '@/engine/cpuEvaluator';
-import { bezierControlOffset, radialControlPoint, splinePath } from './bezierGeometry';
+import {
+  RIBBON_DASH,
+  RIBBON_GAP,
+  bezierControlOffset,
+  radialControlPoint,
+  ribbonStrokeWidth,
+  splinePath,
+} from './bezierGeometry';
 import { EdgeInfoCard } from './EdgeInfoCard';
 
 type Waypoint = { x: number; y: number };
@@ -106,8 +114,6 @@ function EdgeWaypointHandles({
   );
 }
 
-const GAP = 3.5 / 3;
-
 /**
  * How much a HOVERED wire thickens. Less than a selected one, and that gap is
  * the point: hover says "this is the wire under your pointer", selection says
@@ -117,7 +123,7 @@ const GAP = 3.5 / 3;
  * committed one.
  *
  * Scales the whole ribbon like the selected boost, never the stroke alone:
- * multi-channel lines sit GAP apart and are already up to 1.2px wide, so
+ * multi-channel lines sit RIBBON_GAP apart and are already up to 1.2px wide, so
  * thickening strokes on their own would close those gaps and fuse a 4-channel
  * ribbon into one band — the highlight would destroy the channel count it is
  * highlighting.
@@ -134,7 +140,7 @@ const HOVER_EDGE_BOOST = 1.35;
  *
  *  The boost scales the WHOLE ribbon — both the stroke width and the
  *  per-channel perpendicular offsets (see getOffsets) — rather than the stroke
- *  alone. Multi-channel lines sit GAP (1.167px) apart and are already up to
+ *  alone. Multi-channel lines sit RIBBON_GAP (1.167px) apart and are already up to
  *  1.2px wide, so thickening the strokes on their own would close those gaps
  *  and fuse a 4-channel ribbon into one solid band: the selection highlight
  *  would destroy the channel count it is highlighting. Scaling both keeps the
@@ -146,7 +152,7 @@ function getOffsets(count: number): number[] {
   const offsets: number[] = [];
   const half = (count - 1) / 2;
   for (let i = 0; i < count; i++) {
-    offsets.push((i - half) * GAP);
+    offsets.push((i - half) * RIBBON_GAP);
   }
   return offsets;
 }
@@ -201,10 +207,10 @@ export function TypedEdge({
   source,
   target,
   sourceHandleId,
-  sourceX: rawSourceX,
-  sourceY: rawSourceY,
-  targetX: rawTargetX,
-  targetY: rawTargetY,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
   sourcePosition,
   targetPosition,
   selected,
@@ -222,17 +228,8 @@ export function TypedEdge({
    */
   const [hovered, setHovered] = useState(false);
 
-  // NO LIFT COMPENSATION. A lifted node used to travel 3px and every wire on it
-  // had to travel with it, which was a PREDICTION that only held while React
-  // Flow had measured the sockets at rest — selecting a node resizes it (the
-  // border thickens), the re-measure then caught the card mid-move, and the
-  // displacement was both baked into the bounds AND added here. Nodes no longer
-  // move (NodeBase.css), so the endpoints React Flow reports are simply
-  // correct, and the two store subscriptions this needed are gone with it.
-  const sourceX = rawSourceX;
-  const sourceY = rawSourceY;
-  const targetX = rawTargetX;
-  const targetY = rawTargetY;
+  // Endpoints are used exactly as React Flow reports them — nodes no longer
+  // move when lifted (NodeBase.css), so there is nothing to compensate.
 
   // Color-circle sources get a radial exit tangent (perpendicular to the
   // circle) instead of a cardinal one — see getRadialBezierPath. The radial
@@ -283,16 +280,19 @@ export function TypedEdge({
   // source/target — resolve the LOGICAL endpoints (the real producer/consumer)
   // so the wire's channel count and the info card agree with what the target
   // node's card shows (its labels resolve through the same unwrap).
-  const logicalSource = useAppStore(
-    (s) => getUnwrappedEdge(s.nodes, s.edges, id)?.source ?? source,
-  );
-  const logicalTarget = useAppStore(
-    (s) => getUnwrappedEdge(s.nodes, s.edges, id)?.target ?? target,
-  );
-  // The socket the wire really leaves (see the count selector) — the info card
-  // must measure the same channel the ribbon draws.
-  const logicalSourceHandle = useAppStore(
-    (s) => getUnwrappedEdge(s.nodes, s.edges, id)?.sourceHandle ?? sourceHandleId ?? null,
+  // Resolved only while SELECTED: the info card is the one reader, and every
+  // edge runs this selector on every store notify.
+  const logical = useAppStore(
+    useShallow((s) => {
+      if (!selected) return null;
+      const un = getUnwrappedEdge(s.nodes, s.edges, id);
+      return {
+        source: un?.source ?? source,
+        target: un?.target ?? target,
+        // The socket the wire really leaves — the same one the ribbon counts.
+        sourceHandle: un?.sourceHandle ?? sourceHandleId ?? null,
+      };
+    }),
   );
 
   // Taking max means each path catches the gaps of the other.
@@ -325,7 +325,7 @@ export function TypedEdge({
   // selected multi-channel edge marked by nothing but an opacity nudge.
   const boost = selected ? SELECTED_EDGE_BOOST : hovered ? HOVER_EDGE_BOOST : 1;
   const offsets = getOffsets(count).map((d) => d * boost);
-  const strokeWidth = (count >= 4 ? 0.8 : count >= 3 ? 1 : count >= 2 ? 1.2 : 1.5) * boost;
+  const strokeWidth = ribbonStrokeWidth(count) * boost;
 
   const [px, py] = perp(sourceX, sourceY, targetX, targetY);
   const waypoints = (data?.waypoints ?? []) as Waypoint[];
@@ -464,7 +464,7 @@ export function TypedEdge({
             fill="none"
             stroke={lineColor}
             strokeWidth={strokeWidth}
-            strokeDasharray={count > 1 ? '4 0.5' : undefined}
+            strokeDasharray={count > 1 ? RIBBON_DASH : undefined}
             opacity={selected ? 1 : 0.9}
             style={{ pointerEvents: 'none' }}
           />
@@ -473,12 +473,12 @@ export function TypedEdge({
       {hasWaypoints && (
         <EdgeWaypointHandles edgeId={id} waypoints={waypoints} bgColor={nodeEditorBgColor} />
       )}
-      {selected && (
+      {logical && (
         <EdgeLabelRenderer>
           <EdgeInfoCard
-            sourceId={logicalSource}
-            sourceHandle={logicalSourceHandle}
-            targetId={logicalTarget}
+            sourceId={logical.source}
+            sourceHandle={logical.sourceHandle}
+            targetId={logical.target}
             labelX={labelX}
             labelY={labelY}
           />

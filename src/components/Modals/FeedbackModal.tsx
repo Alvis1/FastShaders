@@ -16,6 +16,7 @@ import {
   type FeedbackKind,
   type FeedbackProject,
 } from '@/utils/feedbackReport';
+import { useModalKeys } from './useModalKeys';
 import './CsvImportModal.css';
 import './FeedbackModal.css';
 
@@ -139,14 +140,9 @@ export function FeedbackModal({ open, onClose }: Props) {
     messageRef.current?.focus();
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  useModalKeys(open, (e) => {
+    if (e.key === 'Escape') onClose();
+  });
 
   const active = KINDS.find((k) => k.id === kind) ?? KINDS[0];
   const trimmed = message.trim();
@@ -225,7 +221,7 @@ export function FeedbackModal({ open, onClose }: Props) {
           />
         </label>
 
-        <label className="feedback-modal__check">
+        <label className="csv-import-modal__check">
           <input
             type="checkbox"
             checked={includeEnv}

@@ -1,26 +1,22 @@
 /**
- * THE preview-wire set, derived once and shared by all three surfaces that draw
- * it: the wires themselves (`PreviewLink`), the rail on the canvas's right edge
- * and the rail on the 3D preview's left edge.
+ * THE preview-wire set, derived once and shared by the two surfaces that draw
+ * it: the wires themselves (`PreviewLink`) and the rail on the canvas's right
+ * edge (`PreviewRail`).
  *
- * One derivation, because the three must agree exactly. The wire a card's
- * socket emits, the rail socket it ends on and the preview socket that mirrors
- * it are the same connection seen three times — if any of them computed its own
- * list, a condition gained by one and not the others would show a wire ending
- * on nothing, or a preview socket for a material the module ignores.
+ * One derivation, because the two must agree exactly: if either computed its
+ * own list, a condition gained by one and not the other would show a wire
+ * ending on nothing, or a rail socket for a material the module ignores.
  *
- * MEMOIZED at module scope on the store slices it reads, which matters now that
- * three subscribers ask per notify rather than one. zustand re-runs every
+ * MEMOIZED at module scope on the store slices it reads. zustand re-runs every
  * selector on every `setState` and NodeEditor notifies at refresh rate through
  * a drag, so the un-memoized form walked the whole Output set — allocating a
  * `Set` of the mesh names PER contributing node inside `dormantMaterialIndices`
- * — three times a frame. The key is `outputBindingsKey` (which folds the node
- * data these answers depend on and is itself keyed on the nodes array, so an
- * ordinary drag frame is a hit), the custom sinks' ids and flags
+ * — once per subscriber a frame. The key is `outputBindingsKey` (which folds
+ * the node data these answers depend on and is itself keyed on the nodes
+ * array, so an ordinary drag frame is a hit), the custom sinks' ids and flags
  * (`customSinksKey`, the half of the active-sink election the first key does
- * not see), plus the identity of everything else read:
- * `edges` for the default-contributes walk, and the three preview fields
- * dormancy is judged on.
+ * not see), plus the identity of everything else read: `edges` for the
+ * default-contributes walk, and the three preview fields dormancy is judged on.
  */
 import { drivingCustomSink, hasActiveFlag, isCustomSink } from '@/utils/sdfPartition';
 import { previewWireTargets, type PreviewWireTarget } from '@/utils/outputMaterials';
@@ -50,6 +46,7 @@ let memo:
   | null = null;
 
 let sinksMemo: { nodes: readonly AppNode[]; key: string } | null = null;
+let keyMemo: { wires: PreviewWireTarget[]; key: string } | null = null;
 
 /**
  * The custom sinks' ids and active flags, in array order — the part of
@@ -122,13 +119,17 @@ export function resolveWireTargets(s: WireState): PreviewWireTarget[] {
  * `.fastshader` and may spell any separator.
  */
 export function wireTargetsKey(s: WireState): string {
-  let k = '';
-  for (const w of resolveWireTargets(s)) {
+  const wires = resolveWireTargets(s);
+  // Same memoized array, same key: two selectors ask this on every notify.
+  if (keyMemo && keyMemo.wires === wires) return keyMemo.key;
+  let key = '';
+  for (const w of wires) {
     const l = w.label;
     const label = l.kind === 'index' ? `i${l.gltfIndex}:${l.name}`
       : l.kind === 'named' ? `n${l.first}:${l.more ? 1 : 0}`
         : l.kind;
-    k += `${w.id.length}:${w.id};${label.length}:${label};`;
+    key += `${w.id.length}:${w.id};${label.length}:${label};`;
   }
-  return k;
+  keyMemo = { wires, key };
+  return key;
 }

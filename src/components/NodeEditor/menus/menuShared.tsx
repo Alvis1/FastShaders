@@ -41,7 +41,18 @@ export const checkLabelStyle = {
   gap: '4px',
 } as const;
 
-export const checkStyle = { width: '12px', height: '12px', margin: 0 } as const;
+/** No width/height: ContextMenu.css sizes every checkbox in a menu. */
+export const checkStyle = { margin: 0 } as const;
+
+/** The sink menus' (Raymarch / Splat Output) rows, labels and checkboxes. */
+export const sinkRowStyle = {
+  display: 'flex', alignItems: 'center', gap: 'var(--space-2)', padding: '2px var(--space-3)',
+  fontSize: 'var(--font-size-sm)', color: 'var(--text-primary)',
+} as const;
+export const sinkLabelStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-2)', cursor: 'pointer' } as const;
+/** A "Show socket" label: fixed width so the value editors line up. */
+export const sinkSocketLabelStyle = { ...sinkLabelStyle, minWidth: 120 } as const;
+export const sinkCheckStyle = { cursor: 'pointer', accentColor: 'var(--border-focus)', margin: 0 } as const;
 
 /**
  * A descriptive row: prose that explains a control rather than being one.

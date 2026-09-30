@@ -36,6 +36,7 @@ import { buildEvalPackageEntries, evalZipFileName } from './evalPackage';
 import { precheckEvalUpload, uploadEvalPackage, type EvalUploadResult } from './evalUpload';
 import { formatMiB } from '@/utils/formatSize';
 import { fillTemplate } from '@/utils/fillTemplate';
+import { downloadBlob } from '@/utils/downloadBlob';
 import {
   SUS_ANCHOR_HIGH_EN,
   SUS_ANCHOR_HIGH_LV,
@@ -84,13 +85,7 @@ interface DoneState {
 
 function downloadBytes(fileName: string, bytes: Uint8Array): void {
   const buf = new Uint8Array(bytes).buffer;
-  const blob = new Blob([buf], { type: 'application/zip' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fileName;
-  a.click();
-  URL.revokeObjectURL(url);
+  downloadBlob(new Blob([buf], { type: 'application/zip' }), fileName);
 }
 
 export function SusModal({ open, onClose }: Props) {
@@ -180,13 +175,7 @@ export function SusModal({ open, onClose }: Props) {
       shader = null;
     }
 
-    let timezone = '';
-    try {
-      timezone = Intl.DateTimeFormat().resolvedOptions().timeZone ?? '';
-    } catch {
-      /* keep '' */
-    }
-
+    const device = collectDevice();
     const env = collectEnv();
     const sus = {
       participant: trimmedParticipant,
@@ -215,7 +204,7 @@ export function SusModal({ open, onClose }: Props) {
           participant: trimmedParticipant,
           startedIso: session?.startedIso ?? '',
           submittedIso,
-          timezone,
+          timezone: device.timezone,
           idleThresholdMs: IDLE_THRESHOLD_MS,
           // Wall-clock ms of the event clock's zero: event t → calendar time
           // is clockOriginMs + t. Survives mid-session reloads (the journal
@@ -232,7 +221,7 @@ export function SusModal({ open, onClose }: Props) {
         // interpretable against the table that produced it, and the tables
         // move with each  calibration round.
         costTable: costTableProvenance(),
-        device: collectDevice(),
+        device,
         project: collectProject(),
       },
       sus,

@@ -1,7 +1,7 @@
 /**
- * Mic node settings: the values contract, and the ONE place they are coerced.
+ * Sound node settings: the values contract, and the ONE place they are coerced.
  *
- * The Mic node carries no payload — just three settings-only numbers, the same
+ * The Sound node carries no payload — just three settings-only numbers, the same
  * shape as the Time node's `speed`. So it follows the same rule that node uses
  * rather than growing a `sanitizeSoundNodes` store pass: values arrive from
  * `.fastshader` files and `localStorage` and are therefore adversarial, and
@@ -24,16 +24,16 @@
 import { valueNum } from './valueCoerce';
 
 /** Allowed FFT sizes. Larger = finer bands but more latency and CPU. */
-export const MIC_FFT_SIZES = [512, 1024, 2048] as const;
+export const SOUND_FFT_SIZES = [512, 1024, 2048] as const;
 
-export type MicFftSize = (typeof MIC_FFT_SIZES)[number];
+export type SoundFftSize = (typeof SOUND_FFT_SIZES)[number];
 
 export interface SoundSettings {
   /** AnalyserNode.smoothingTimeConstant — exponential averaging in the audio thread. */
   smoothing: number;
   /** Post-normalization multiplier applied to every band. */
   gain: number;
-  fftSize: MicFftSize;
+  fftSize: SoundFftSize;
 }
 
 /**
@@ -41,19 +41,19 @@ export interface SoundSettings {
  * average never admits new data and every band freezes at its initial value —
  * a "smoothing" slider whose top end silently means "off" reads as broken.
  */
-export const MIC_SMOOTHING_MIN = 0;
-export const MIC_SMOOTHING_MAX = 0.95;
-export const MIC_GAIN_MIN = 0.25;
-export const MIC_GAIN_MAX = 8;
+export const SOUND_SMOOTHING_MIN = 0;
+export const SOUND_SMOOTHING_MAX = 0.95;
+export const SOUND_GAIN_MIN = 0.25;
+export const SOUND_GAIN_MAX = 8;
 
-export const MIC_SETTINGS_DEFAULTS: SoundSettings = {
+export const SOUND_SETTINGS_DEFAULTS: SoundSettings = {
   smoothing: 0.8,
   gain: 1,
   fftSize: 1024,
 };
 
 /**
- * The `defaultValues` a Mic node is created with (registry + Node Settings).
+ * The `defaultValues` a Sound node is created with (registry + Node Settings).
  *
  * `fftSize` is deliberately NOT here. The generic NodeSettingsMenu loop renders
  * every numeric entry as a free-drag number widget, and fftSize accepts only
@@ -66,8 +66,8 @@ export const MIC_SETTINGS_DEFAULTS: SoundSettings = {
  * stored value from a hand-edited project can't reach the analyser unclamped.
  */
 export const SOUND_DEFAULT_VALUES: Record<string, number> = {
-  smoothing: MIC_SETTINGS_DEFAULTS.smoothing,
-  gain: MIC_SETTINGS_DEFAULTS.gain,
+  smoothing: SOUND_SETTINGS_DEFAULTS.smoothing,
+  gain: SOUND_SETTINGS_DEFAULTS.gain,
 };
 
 function clampNum(raw: unknown, min: number, max: number, fallback: number): number {
@@ -77,7 +77,7 @@ function clampNum(raw: unknown, min: number, max: number, fallback: number): num
 }
 
 /**
- * Coerce a Mic node's stored `values` into settings safe to hand to Web Audio.
+ * Coerce a Sound node's stored `values` into settings safe to hand to Web Audio.
  *
  * `fftSize` snaps to the nearest ALLOWED size rather than clamping, because a
  * clamp would turn a stored 600 into 512 while a stored 4096 became 2048 — both
@@ -86,17 +86,17 @@ function clampNum(raw: unknown, min: number, max: number, fallback: number): num
 export function readSoundSettings(values: Record<string, unknown> | undefined | null): SoundSettings {
   const v = values ?? {};
   const rawFft = valueNum(v.fftSize);
-  const fftSize: MicFftSize = MIC_FFT_SIZES.includes(rawFft as MicFftSize)
-    ? (rawFft as MicFftSize)
-    : MIC_SETTINGS_DEFAULTS.fftSize;
+  const fftSize: SoundFftSize = SOUND_FFT_SIZES.includes(rawFft as SoundFftSize)
+    ? (rawFft as SoundFftSize)
+    : SOUND_SETTINGS_DEFAULTS.fftSize;
   return {
     smoothing: clampNum(
       v.smoothing,
-      MIC_SMOOTHING_MIN,
-      MIC_SMOOTHING_MAX,
-      MIC_SETTINGS_DEFAULTS.smoothing,
+      SOUND_SMOOTHING_MIN,
+      SOUND_SMOOTHING_MAX,
+      SOUND_SETTINGS_DEFAULTS.smoothing,
     ),
-    gain: clampNum(v.gain, MIC_GAIN_MIN, MIC_GAIN_MAX, MIC_SETTINGS_DEFAULTS.gain),
+    gain: clampNum(v.gain, SOUND_GAIN_MIN, SOUND_GAIN_MAX, SOUND_SETTINGS_DEFAULTS.gain),
     fftSize,
   };
 }

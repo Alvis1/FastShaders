@@ -31,11 +31,11 @@ export const LEGACY_NODE_TYPES: ReadonlyMap<
   ['smoothUnion', { type: 'sdCombine', values: { mode: 'union' } }],
   ['sdSubtract', { type: 'sdCombine', values: { mode: 'subtract' } }],
   // The Audio Input node was folded into the Sound node (2026-09-08): one
-  // capture session, one analyser and one node, with the absorbed node's
-  // source picker moved onto it. The two defs were identical in ports and
-  // defaults, so every edge and every stored value survives the swap; only the
-  // emitted uniform base changes (`aud1_*` -> `mic1_*`), which is invisible
-  // because these nodes never parse back out of generated code.
+  // capture session, one analyser and one node, which kept the absorbed node's
+  // source picker. The two defs were identical in ports and defaults, so every
+  // edge and every stored value survives the swap; only the emitted uniform
+  // base changes (`aud1_*` -> `sound1_*`), which is invisible because these
+  // nodes never parse back out of generated code.
   ['audioInput', { type: 'soundNode', flow: 'sound' }],
 ]);
 
@@ -50,8 +50,8 @@ export function migrateLegacyNodeTypes(nodes: AppNode[]): AppNode[] {
     // every restore path, so it is one of the first things to touch a graph that
     // came out of a `.fastshader` / `fs:graph` / `fs:savedGroups`, and
     // `getNodeValues` is where the "values may be a tampered primitive" rule
-    // lives (see node.types.ts — `?? {}` guards nullish and nothing else). None
-    // none of the folded types was ever an output/group/note node, so the
+    // lives (see node.types.ts — `?? {}` guards nullish and nothing else).
+    // None of the folded types was ever an output/group/note node, so the
     // accessor's hard `{}` for those cannot bite here.
     const values = { ...getNodeValues(n), ...(to.values ?? {}) };
     const migrated = { ...n, data: { ...n.data, registryType: to.type, values } };

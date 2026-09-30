@@ -27,11 +27,19 @@ import {
   readGltfModel,
   type GltfModelReport,
 } from './gltfReader';
-import { encodeDataUri } from './glbContainer';
+import { encodeDataUri, pad4 } from './glbContainer';
 import { planTextureStrip, stripGltfTextures } from './gltfStrip';
 import { modelSignatureMatches } from '@/engine/materialPartsContract';
 import { safeJsonReviver } from './safeJson';
-import { TRIANGLE_POSITIONS, gltfPrimitiveDoc, jpegHeaderBytes, makeGlb, makeRealPng, webpHeaderBytes } from '../test-utils';
+import {
+  TRIANGLE_POSITIONS,
+  gltfPrimitiveDoc,
+  jpegHeaderBytes,
+  makeGlb,
+  makeRealPng,
+  triangleWithBlobs as withBlobs,
+  webpHeaderBytes,
+} from '../test-utils';
 
 const SEED = 0x5eed1234;
 const ROUNDS = 400;
@@ -45,26 +53,6 @@ function mulberry32(seed: number): () => number {
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
-}
-
-// Arithmetic, never `(n + 3) & ~3`: a bitwise operator coerces through ToInt32,
-// so that spelling returns a NEGATIVE length from 2**31 up. Harmless at fixture
-// sizes, but it is the shape that made the repacker u32 overflow guard dead code.
-const pad4 = (n: number) => Math.ceil(n / 4) * 4;
-
-/** bufferView 0 is the triangle, 1, 2, … the blobs. */
-function withBlobs(extra: Record<string, unknown>, blobs: Uint8Array[]) {
-  const views: Record<string, number>[] = [{ buffer: 0, byteOffset: 0, byteLength: 36 }];
-  let len = 36;
-  for (const b of blobs) {
-    const off = pad4(len);
-    views.push({ buffer: 0, byteOffset: off, byteLength: b.length });
-    len = off + b.length;
-  }
-  const bin = new Uint8Array(pad4(len));
-  bin.set(TRIANGLE_POSITIONS);
-  blobs.forEach((b, i) => bin.set(b, views[i + 1].byteOffset));
-  return { doc: gltfPrimitiveDoc({ buffers: [{ byteLength: bin.length }], bufferViews: views, ...extra }), bin };
 }
 
 interface Fixture {

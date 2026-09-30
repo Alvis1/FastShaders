@@ -20,28 +20,10 @@
   --fs-node-border-scale: 1;
 }
 
-/* The lift, both halves of it: the shadow steps out AND the node itself moves
-   the same distance toward the light, exactly as an asset tile does.
-
-   BOTH halves are published as inherited custom properties and applied by the
-   SHELLS (`.node-base` below, plus `.color-node`, `.output-node`, `.note-node`
-   and the collapsed group pill in their own files) — never on this wrapper.
-   That is the whole point: this wrapper is the hover TARGET, so moving it moves
-   the box that decides whether the pointer is still over the node. Sweeping
-   along a node's lower edge then produced a feedback loop — lift, the card
-   slides out from under the pointer, unhover, drop, hover again — MEASURED at
-   38 state flips across a 40-step creep along the bottom edge, i.e. a jitter on
-   almost every mouse move.
-   Applying the shift to the shells instead leaves this wrapper AND ShaderNode's
-   cost-scale wrapper (whose box is the painted card, larger than this one on
-   expensive nodes) exactly where they are, so the trigger area is the node's
-   RESTING footprint and cannot move out from under the pointer.
-
-   `translate` is the standalone CSS property, NOT `transform`: React Flow owns
-   the wrapper's `transform` (the node's x/y) and ShaderNode's inner wrapper
-   uses `transform: scale()` for the cost scale, and the used matrix is
-   translate → rotate → scale → transform, so `translate` composes with both
-   instead of destroying them. */
+/* The lift is a shadow swap plus a standalone `scale`, never a translate (see
+   the retirement note below). Both halves are inherited custom properties
+   applied by the SHELLS, never by this wrapper: it is the hover TARGET, and
+   changing its box made hover oscillate (38 flips measured along one edge). */
 /* THREE states raise a node, and they are deliberately the same raise:
    hovered, selected, and "its settings menu is open" (`fs-menu-active`, put on
    by NodeEditor for the life of the menu). Selection and the open menu differ
@@ -55,43 +37,35 @@
   --fs-node-scale: var(--fs-node-grow);
 }
 
-/* KEYBOARD FOCUS. React Flow already makes every node a tab stop and ships
-   `.react-flow__node.selectable:focus { outline: none }` on the assumption that
-   the app supplies its own ring — this app did not, and NodeEditor.css then
-   stripped the Output node's remaining one, so Tab moved an INVISIBLE cursor
-   around the graph. That is why "you can tab to a node" was true and useless at
-   the same time.
-
-   Focus gets the same lift as hover (above) so the node comes forward, PLUS a
-   ring — because the lift alone cannot distinguish "the cursor is here" from
-   "the pointer is here", and a keyboard user has no pointer to reason from. The
-   ring is SOLID, which is what separates it from the two other outline-style
-   indicators on this canvas: the marquee is dotted, and drag-connect's target
-   is `--type-*` coloured. `outline` rather than `border` so it costs no layout
-   and cannot disturb the card's own category border; offset outward so it
-   clears the 3px rise the lift applies.
-
-   `!important` for the same reason the marquee needs it: React Flow's own
-   `:focus { outline: none }` ships at equal specificity and would otherwise win
-   by source order, which is a silent failure that reads as the rule never
-   having matched. */
-.node-editor .react-flow__node:focus-visible,
-.node-editor .react-flow__node.selectable:focus-visible {
-  outline: 2px solid var(--border-focus) !important;
-  outline-offset: 4px;
+/* KEYBOARD FOCUS takes the SELECTION look — the lift above plus the thicker
+   frame below — and never a ring. React Flow makes every node a tab stop and
+   ships `.react-flow__node.selectable:focus { outline: none }`; a 2px
+   `--border-focus` outline once filled that gap, and it came back as a SECOND,
+   conflicting selection highlight (owner, 2026-09-29): Chrome matches
+   `:focus-visible` as soon as ANY key is pressed while a CLICKED node holds
+   focus (F, A, Delete, ⌘Z), so an ordinary click-then-shortcut drew a dark blue
+   box around a node that was already lifted — and the outline sits on the
+   unscaled WRAPPER, so it missed the grown, cost-scaled card it claimed to
+   frame. Selection on this canvas is size + shadow, one system; the only
+   outline-style node indicator left is drag-connect's `.fs-connect-target`.
+   `!important` for the reason React Flow's own rule needs overriding at all:
+   it ships at equal specificity and would otherwise win by source order. */
+.node-editor .react-flow__node:focus-visible {
+  outline: none !important;
 }
 
-/* CLICKING a node doubles its frame, on top of the lift — and hover pointedly
+/* CLICKING a node thickens its frame (1.5×), on top of the lift — and hover pointedly
    does NOT, which is the whole reason to have a second channel: the lift alone
    made "the pointer is over this" and "this is chosen" render identically, so
    moving the mouse across the canvas looked like it was selecting everything it
    passed. A committed state gets weight; a passing one only gets height.
-   A SCALE and not a width, so each shell doubles ITS OWN border rather than
+   A SCALE and not a width, so each shell thickens ITS OWN border rather than
    every node snapping to one number — the swatch is 1.5px, a note 1px, a group
    frame 2px, and they should all stay in proportion (nodeFrame.ts). */
 .react-flow__node.selected,
 .react-flow__node.fs-menu-active,
-.react-flow__node[data-fs-preview="src"] {
+.react-flow__node[data-fs-preview="src"],
+.react-flow__node:focus-visible {
   --fs-node-border-scale: 1.5;
 }
 
@@ -126,32 +100,29 @@
    committed states that have nothing to do with where the pointer happens to
    be — which is why the exclusions are here rather than the rule being written
    against `.react-flow__node:hover` alone: this rule is more specific than the
-   `.selected` one above and would otherwise flatten a selected node too.
-   NodeEditor keeps the JS half in step (it stops publishing `hoveredNodeId`
-   for the length of the drag); if these two ever disagree, the card lifts while
-   its wires stay put — the exact thing the lift-offset exists to prevent. */
+   `.selected` one above and would otherwise flatten a selected node too. */
 .node-editor__canvas.fs-connecting .react-flow__node:hover:not(.selected):not(.fs-menu-active):not([data-fs-preview="src"]) {
   --fs-node-lift: var(--shadow-node);
   --fs-node-scale: 1;
 }
 
-/* An EXPANDED group frame is the one node that must NOT move, in any of those
-   states: its members are separate nodes that stay put, so a frame sliding 3px
-   would visibly detach from the cluster it encloses. It still takes the shadow.
+/* An EXPANDED group frame is the one node that must NOT grow, in any of those
+   states: its members are separate nodes that stay put, so a frame changing
+   size would visibly detach from the cluster it encloses. It still takes the shadow.
    Written as one exclusion rather than per-state so a future fourth state
    cannot forget it; it sits AFTER the rule above and ties on specificity
    ((0,2,0) either way — `:not()`/`:has()` take their argument's), so source
    order is what decides, and it must stay below.
-   A COLLAPSED pill stands in for a node and travels like one.
+   A COLLAPSED pill stands in for a node and grows like one.
 
    It is BELT AND BRACES, and that is what makes the `:has()` safe: an engine
    without `:has()` (Chrome <105, Safari <15.4, Firefox <121) treats the whole
-   selector as invalid and drops the rule — and nothing moves anyway, because
-   `.group-node` declares no `translate` (only `.group-node--collapsed` does,
+   selector as invalid and drops the rule — and nothing grows anyway, because
+   `.group-node` declares no `scale` (only `.group-node--collapsed` does,
    GroupNode.css) and React Flow v12 renders child nodes FLAT as siblings in
    `.react-flow__nodes` rather than nested inside the parent's wrapper, so no
    member inherits this variable either. The rule exists for the day the
-   expanded frame grows a `translate` of its own. If that day comes, move the
+   expanded frame gains a `scale` of its own. If that day comes, move the
    test off `:has()` — a functional invariant must not depend on a selector
    feature with a support floor. */
 .react-flow__node-group:not(:has(.group-node--collapsed)) {
@@ -210,19 +181,6 @@
      becomes the card colour rather than anything bright. */
   :root[data-theme="dark"] .node-glyph [fill="#FFFFFF" i] { fill: var(--node-bg); }
   :root[data-theme="dark"] .node-glyph [stroke="#FFFFFF" i] { stroke: var(--node-bg); }
-
-  /* The dial face (built-in art): #F1F1F1 against a #F1F2F3 card is the
-     card, so it follows the card. */
-  :root[data-theme="dark"] .node-glyph [fill="#F1F1F1" i] { fill: var(--node-bg); }
-  :root[data-theme="dark"] .node-glyph [stroke="#F1F1F1" i] { stroke: var(--node-bg); }
-
-  /* The dial rim — one step off the face, in the direction the theme goes. */
-  :root[data-theme="dark"] .node-glyph [fill="#D5D5D5" i] { fill: #454a53; }
-  :root[data-theme="dark"] .node-glyph [stroke="#D5D5D5" i] { stroke: #454a53; }
-
-  /* Its ticks — one step further, still barely there by design. */
-  :root[data-theme="dark"] .node-glyph [fill="#C2C2C2" i] { fill: #545a65; }
-  :root[data-theme="dark"] .node-glyph [stroke="#C2C2C2" i] { stroke: #545a65; }
 
 /* ===== Shared node shell ===== */
 .node-base {
@@ -431,10 +389,6 @@
 }
 
 /* ===== Body (port rows) ===== */
-.node-base__body {
-  padding: 0;
-}
-
 .node-base__row {
   position: relative;
   display: flex;

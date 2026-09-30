@@ -203,6 +203,14 @@ export function pickPortalHost<T extends PortalHostLike>(
   return fullscreenEl.contains(anchor) ? fullscreenEl : body;
 }
 
+/** The element that is fullscreen, under either spelling — Safari still
+ *  exposes it only under the webkit-prefixed name. DOM access at CALL time. */
+export function fullscreenElement(): HTMLElement | null {
+  const d = document as Document & { webkitFullscreenElement?: Element | null };
+  const el = document.fullscreenElement ?? d.webkitFullscreenElement ?? null;
+  return el instanceof HTMLElement ? el : null;
+}
+
 /* ============================================================
  * Live-apply vs commit
  * ============================================================ */

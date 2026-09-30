@@ -19,12 +19,9 @@
  *     and losslessness are PROBED at runtime and the format is never assumed.
  *     An image with alpha never falls through to JPEG (see `chooseFormat`).
  *
- * Dimensions are snapped to a power of two where that is nearly free; see
- * `imageCodec.ts` for the rules and why they are so conservative. The
- * pre-snap encode is returned alongside as `original` so the Image node's
- * "Revert to original" can restore it, and the snap is SKIPPED whenever that
- * pre-snap encode can't be produced — a destructive step never ships without
- * its escape hatch.
+ * Under "convert" dimensions are ALWAYS snapped to a power of two (rules:
+ * `imageCodec.ts`). The pre-snap encode is returned as `original` so "Revert
+ * to original" can restore it; without it the snap is skipped.
  *
  * DOM-only module (Image/canvas/createImageBitmap) — keep it out of
  * node-environment test imports; the pure validation lives in `imageNode.ts`
@@ -205,17 +202,13 @@ async function decodeResized(file: File, size: { width: number; height: number }
  *  EXIF orientation applied; falls back to a plain bitmap, then to an
  *  HTMLImageElement via object URL. */
 async function decodeSource(file: File): Promise<DecodedSource | null> {
-  try {
-    const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
-    return { source: bmp, width: bmp.width, height: bmp.height, cleanup: () => bmp.close() };
-  } catch {
-    /* option unsupported or decode failed — try the simpler forms */
-  }
-  try {
-    const bmp = await createImageBitmap(file);
-    return { source: bmp, width: bmp.width, height: bmp.height, cleanup: () => bmp.close() };
-  } catch {
-    /* fall through to <img> */
+  for (const opts of [{ imageOrientation: 'from-image' } as const, undefined]) {
+    try {
+      const bmp = await createImageBitmap(file, opts);
+      return { source: bmp, width: bmp.width, height: bmp.height, cleanup: () => bmp.close() };
+    } catch {
+      /* option unsupported or decode failed — try the simpler form, then <img> */
+    }
   }
   const url = URL.createObjectURL(file);
   try {
@@ -234,12 +227,8 @@ async function decodeSource(file: File): Promise<DecodedSource | null> {
   }
 }
 
-/**
- * ONE pass over the decoded pixels, answering what the codec choice needs:
- * does the picture have alpha (it must then never become a JPEG). It also
- * counted colours and classified the alpha for the power-of-two skip rules
- * until the snap became unconditional (2026-09-10).
- */
+/** ONE pass over the decoded pixels: does the picture have alpha (it must
+ *  then never become a JPEG). */
 // Shared with glbFallbackEncode.ts (the single-GLB fallback copy), so the
 // alpha-never-JPEG rule has one copy.
 export function scanPixels(ctx: CanvasRenderingContext2D, w: number, h: number): PixelStats {
@@ -576,6 +565,28 @@ export async function encodeImageFile(
     const baseCanvas = document.createElement('canvas');
     const potCanvas = document.createElement('canvas');
 
+    /** The ok-result for the encode that ships. */
+    const done = (
+      enc: EncodedImage,
+      pot: { potApplied: boolean; original?: EncodedImage },
+    ): EncodeImageResult => ({
+      ok: true,
+      dataUrl: enc.dataUrl,
+      mime: enc.mime,
+      webpAvailable: caps.webp,
+      width: enc.width,
+      height: enc.height,
+      sourceWidth,
+      sourceHeight,
+      preferLossless,
+      lossless: enc.lossless,
+      budgetScaled,
+      losslessDropped: preferLossless && !enc.lossless,
+      budgetChars: budget,
+      decodeDownscaled,
+      ...pot,
+    });
+
     for (;;) {
       const w = Math.max(1, Math.round(decoded.width * scale));
       const h = Math.max(1, Math.round(decoded.height * scale));
@@ -627,44 +638,14 @@ export async function encodeImageFile(
           if (!drawWrappedResize(potCanvas, baseCanvas, pot.width, pot.height)) continue;
           const snapped = await encodeWithinBudget(potCanvas, potCandidates, budget);
           if (!snapped) continue;
-          return {
-            ok: true,
-            dataUrl: snapped.dataUrl,
-            mime: snapped.mime,
-            webpAvailable: caps.webp,
-            width: snapped.width,
-            height: snapped.height,
-            sourceWidth,
-            sourceHeight,
+          return done(snapped, {
             potApplied: true,
             original: base,
-            preferLossless,
-            lossless: snapped.lossless,
-            budgetScaled,
-            losslessDropped: preferLossless && !snapped.lossless,
-            budgetChars: budget,
-            decodeDownscaled,
-          };
+          });
         }
       }
 
-      return {
-        ok: true,
-        dataUrl: base.dataUrl,
-        mime: base.mime,
-        webpAvailable: caps.webp,
-        width: base.width,
-        height: base.height,
-        sourceWidth,
-        sourceHeight,
-        potApplied: false,
-        preferLossless,
-        lossless: base.lossless,
-        budgetScaled,
-        losslessDropped: preferLossless && !base.lossless,
-        budgetChars: budget,
-        decodeDownscaled,
-      };
+      return done(base, { potApplied: false });
     }
     return { ok: false, reason: 'too-large', width: sourceWidth, height: sourceHeight };
   } finally {
@@ -673,26 +654,10 @@ export async function encodeImageFile(
 }
 
 /**
- * Re-encode an already-stored payload at `width` x `height`.
- *
- * This is the Image node's "Resolution" control: the menu hands it the node's
- * ORIGINAL payload (`imageOriginCache`) and one rung of `resolutionLadder`,
- * and gets back a smaller encode of the same picture. Re-encoding always from
- * the ORIGINAL rather than from what is currently stored is the point — going
- * 2048 -> 1024 -> 512 through the current payload would stack three lossy
- * passes, and could never go back UP.
- *
- * It repeats `encodeImageFile`'s tail deliberately rather than calling it:
- * that function's entry point is a `File` and its job is the DROP decision
- * (source-pixel guard, EXIF orientation, device cap, the power-of-two snap and
- * the halving retry). None of those apply here — the size is the user's, the
- * source has already been through all of it once, and a halving retry would
- * silently hand back a resolution other than the one that was picked. What IS
- * shared is everything below the decision: the wrapped resample, the format
- * choice, the quality ladder and the payload budget.
- *
- * Returns null when the decode, the draw or every candidate encode fails — the
- * caller leaves the node exactly as it was.
+ * Re-encode a stored payload at `width` x `height` — the Image node's
+ * "Resolution" control, always fed the ORIGINAL. Repeats `encodeImageFile`'s
+ * tail on purpose (no drop decisions, no halving retry); null changes nothing.
+ * See docs/dev/images-and-textures.md § RESOLUTION.
  */
 export async function resizeEncodedImage(
   dataUrl: string,
@@ -738,16 +703,9 @@ export async function resizeEncodedImage(
   const baseCanvas = document.createElement('canvas');
   if (!drawInto(baseCanvas, img, sw, sh)) return null;
   const destCanvas = document.createElement('canvas');
-  // A large step down goes through a 2:1 PYRAMID first. The ladder reaches
-  // 8 px, and one `drawImage` from 2048 to 8 is a bilinear sample of a few
-  // dozen out of four million pixels — aliased noise, not an average of the
-  // picture. An exact halving averages each 2x2 block and never samples past
-  // the edge (every destination pixel maps between four source texels), so
-  // the pyramid is seam-safe for a tile and leaves the wrapped resample below
-  // only the final step of less than 2x. MEASURED 2026-09-10 on a period-3
-  // stripe pattern (true mean red 170): straight to 8 px, pixels anywhere from
-  // 128 to 255 in Chrome 152, WebKit 26.5 and Firefox 153; through the
-  // pyramid, 169-171 in all three.
+  // A large step down goes through a 2:1 PYRAMID first: one `drawImage` from
+  // 2048 to 8 is aliased noise, an exact halving is an average and seam-safe
+  // (measured in three engines — pinned by imageResolution.test.ts).
   let pyramid = baseCanvas;
   while (pyramid.width >= w * 2 && pyramid.height >= h * 2) {
     const half = document.createElement('canvas');

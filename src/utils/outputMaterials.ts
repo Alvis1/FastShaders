@@ -1,66 +1,21 @@
 /**
- * The Output node's MATERIALS — one node, several materials, one per sub-mesh.
+ * The Output nodes' MATERIALS — ONE Output node is ONE material.
  *
- * The first design gave each targeted mesh its own Output NODE. This one keeps
- * a single Output and stacks materials inside it, which is what the canvas
- * wanted to say all along: a shader has one output, and a multi-mesh model just
- * means that output resolves differently per mesh. It also removes a whole
- * class of failure by construction — with one node there is no "which Output is
- * THE output" question to get wrong at ten call sites, no way to paste a rival
- * Output, and no document that has targets but no default.
+ * Every node wears the BARE channel handles (`color`, `emissive`, …). Its
+ * binding is node-level: `meshTargets` (mesh names), or `gltfMaterialIndex`
+ * beside `modelSignature` for an import-built INDEX node; an UNTARGETED node
+ * is the DEFAULT material. Nodes are ordered by `emitRank`, never array order.
  *
- * STORAGE. Material 0 is the node's OWN `values` / `exposedPorts` /
- * `materialSettings`, exactly where they have always lived; only the ADDED
- * materials ride `data.materials`. That is not tidiness — it is what keeps
- * every saved graph, every built-in preset and every exported `.js` byte-
- * identical: a document with no added materials has no `materials` key and
- * emits precisely what it emitted before this file existed.
+ * `data.materials` and `m<n>:<channel>` handles are the FOLDED shape a saved
+ * `.fastshader` may still carry: every restore path retires it (sanitize →
+ * unfold → normalize), so `outputMaterials(node)` is a one-element list on
+ * live data.
  *
- * Material 0 is the default UNLESS it names a mesh of its own. Left alone it
- * shades every mesh no other material claims — the whole-model behaviour that
- * predates per-mesh shading, and what every single-material document does. Its
- * target lives in `data.meshTarget`, the field the earlier one-Output-per-mesh
- * shape already used for exactly this meaning, so a graph from that shape reads
- * correctly rather than losing it.
+ * An INDEX binding emits into `materialParts`, never `parts`, and is nameless
+ * (`materialTargetNames` returns []). Its DORMANCY is decided trusted-side
+ * (`indexSectionsAwake`) and changes visibility only, never emission.
  *
- * A targeted material 0 means the module has NO default, which emits and runs
- * correctly (loader 0.6 leaves unclaimed meshes on their authored materials) but
- * cannot be told apart in CODE from an empty default beside the same parts —
- * there is nowhere in a `parts` map to record which material was the default.
- * `codeToGraph` therefore resolves that shape the historical way, so a
- * code-panel Apply NORMALIZES a targeted material 0 back into "empty default +
- * that material". Nothing is lost — every wire is re-created from the code and
- * the module re-emits byte-identically — but the node grows the empty default
- * section back, and the document is stable from then on.
- *
- * INDEX SECTIONS (GLB Phase 5). An ADDED material may be bound to a glTF
- * MATERIAL INDEX instead of mesh names — `gltfMaterialIndex` on the entry,
- * plus the node-level `modelSignature: { materials }` (the model's glTF
- * material names in order, read by the trusted-side reader at import) and
- * `modelMeshes` (the source of the loader-0.6 mirror entries, module-only).
- * Such a section emits into `materialParts`, keyed by the index, not into
- * `parts`. Index and names are EXCLUSIVE: `materialTargetNames` returns [] for
- * an index section, so every name consumer (parts emission, the name dormancy
- * rule, the fold, the pickers) sees it as nameless. Material 0 is never one.
- * The signature exists only while an index section does, so a graph without
- * one gains no key and emits byte-identically. Canonical order is index
- * sections (ascending glTF index), then named ones: the builder writes it, the
- * parse restores it, and the sanitizer never REORDERS (handles are positional).
- *
- * Index-section DORMANCY is trusted-side and all-or-nothing per node: the
- * sections are awake iff the LOADED model's facts (`previewMesh.gltf`, read by
- * the trusted glTF reader in `createPreviewMesh`) carry exactly the node's
- * signature (`indexSectionsAwake`). It never reads the sandbox's inventory or
- * the loader's `shader-material-parts` event — both are forgeable — and, like
- * name dormancy, it changes visibility only, never emission.
- *
- * HANDLES. Material 0 keeps the BARE channel ids (`color`, `emissive`, …) —
- * every saved edge, every `generateEdgeId` string and every consumer that reads
- * `targetHandle === 'color'` was authored against them. Added materials
- * namespace theirs as `m<n>:<channel>`. Both directions go through
- * `channelHandle`/`parseChannelHandle` so no caller ever builds one by hand.
- *
- * Pure and import-light, so the vitest node env covers it.
+ * See docs/dev/outputs-and-materials.md. Pure, so the vitest node env covers it.
  */
 
 import type { AppNode, AppEdge, MaterialSettings, OutputMaterial } from '@/types';
@@ -79,63 +34,44 @@ import {
 } from '@/engine/materialPartsContract';
 import { generateEdgeId } from './idGenerator';
 import { growGroupFrames } from './groupFrame';
-// The Output def's real channel ids, for the unfold's handle validation. Read
-// LAZILY (see `isOutputChannel`) — this module sits inside the store's import
-// cycle, and `exposedPorts` below already reaches the registry, so this adds
-// no edge to the graph.
+// Read LAZILY (see `isOutputChannel`): this module sits inside the store's
+// import cycle, so nothing here is evaluated at module scope.
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { OUTPUT_DEFAULT_EXPOSED } from './exposedPorts';
 import { hasActiveFlag, isUntargetedOutput } from './sdfPartition';
 
 export type { OutputMaterial, MaterialPartsMirrorEntry };
-// The index-section caps live in the contract leaf (buildShaderModule reads
-// them too, and the engine may not import this store-coupled module); they are
-// re-exported so every editor surface keeps one import site for "the caps".
-// `emitRank` is there for the same reason — utils/sdfPartition.ts is a leaf and
-// must read the SAME accessor, never a second copy of it.
+// Defined in the contract LEAF (the engine and utils/sdfPartition.ts may not
+// import this store-coupled module) and re-exported, so every editor surface
+// keeps one import site — and one `emitRank`, never a second copy.
 export { MAX_INDEX_MATERIALS, MAX_MIRROR_ENTRIES, emitRank };
+/** The highest glTF material index a binding may name (the `materialParts` key range). */
+export { GLTF_MATERIAL_INDEX_MAX };
 
 /**
- * Most ADDED materials. Eight targeted meshes is already past what anyone
- * authors by hand, and each one is a whole generated material: N materials
- * compile to N pipelines and the preview recompiles ALL of them on every
- * 200 ms-debounced edit (measured ~55-62 ms each on desktop; Quest-class
- * hardware is slower).
+ * `MAX_PARTS` minus one — the named sections a FOLDED node carried beside its
+ * own material. Each material is a whole generated pipeline, and the preview
+ * recompiles ALL of them per debounced edit (measured ~55-62 ms each on desktop).
  */
 export const MAX_ADDED_MATERIALS = 8;
 
 /**
- * Most `parts` entries one module may carry. Material 0 can name a mesh too, so
- * a fully-loaded node is `MAX_ADDED_MATERIALS` added materials plus that one —
- * bounding emission at `MAX_ADDED_MATERIALS` would silently drop the last
- * material the UI still draws and still lets the user wire.
- *
- * It is a PER-NODE cap and NEVER a module budget: the names one material may
- * carry (`materialTargetNames` caps on read), the named sections one node may
- * keep (the sanitizer), the picker's refused tenth row. `MAX_PART_ENTRIES`
- * below is the module's. A reader that counts a WHOLE MODULE with this constant
- * is off by a factor of ten — `codeToGraph`'s `parts` parse did exactly that
- * until 2026-09, destroying every material past the ninth on the first Apply.
+ * A PER-NODE cap, NEVER a module budget: the names one material may carry
+ * (`materialTargetNames` caps on read) and the named sections one folded node
+ * may keep (the sanitizer). `MAX_PART_ENTRIES` is the module's — counting a
+ * whole module with this one destroyed every material past the ninth on Apply.
  */
 export const MAX_PARTS = MAX_ADDED_MATERIALS + 1;
 
 /**
  * Most name-keyed `parts` ENTRIES one module may carry: every name the
  * sanitizer can admit (`MAX_PARTS` sections × `MAX_PARTS` names each), so the
- * emission cap can never bite sanitized data and never drop a mesh the node
- * still shows. Until 2026-09 emission capped at `MAX_PARTS` entries IN TOTAL,
- * so two sections naming five meshes each silently lost the tenth.
+ * emission cap never bites sanitized data.
  */
 export const MAX_PART_ENTRIES = (MAX_PARTS + 1) * MAX_PARTS;
 
 /** Most `modelMeshes` entries (the loader-0.6 mirror source) one Output keeps. */
 export const MAX_MODEL_MESHES = 256;
-
-/** The highest glTF material index a section may name — the range of the
- *  module's `materialParts` key (MATERIAL_PART_KEY_RE, canonical decimal).
- *  Defined in the contract LEAF and re-exported here, so utils/sdfPartition.ts
- *  can ask the same question without importing this store-coupled module. */
-export { GLTF_MATERIAL_INDEX_MAX };
 
 /** The glTF material index an import-built INDEX section shades, else null.
  *  A number only — never coerced (`'1'` from a tampered file is not an index). */
@@ -145,37 +81,23 @@ export function gltfIndexOf(material: OutputMaterial | undefined): number | null
 }
 
 /** Is this an import-built INDEX section (bound to a glTF material, not to
- *  mesh names)? The value-level test; `planIndexParts` additionally requires
- *  the index to fall inside the node's signature. */
+ *  mesh names)? The value-level test; `planIndexPartsAcross` additionally
+ *  requires the index to fall inside the signature. */
 export function isIndexSection(material: OutputMaterial | undefined): boolean {
   return gltfIndexOf(material) !== null;
 }
 
+/** ONE answer per `data` OBJECT: node data is immutable and reused across drag
+ *  frames, and this is read per node per store notify. A WeakMap, because the
+ *  key is adversarial, unbounded input. */
+const signatureCache = new WeakMap<object, string[] | null>();
+
 /**
  * The node's model signature as a name list, or null when absent or invalid —
  * through THE sanitizer (engine/materialPartsContract), so emission, the
- * mirror plan and the node read exactly what a restore path would keep.
- * `data` is node data; plain property access.
+ * mirror plan and the node read exactly what a restore path would keep. The
+ * SAME array comes back for the same `data`, so callers may memoize on it.
  */
-/**
- * ONE answer per `data` OBJECT.
- *
- * Node data is REUSED across drag frames (`applyNodeChanges` hands back the
- * same `data` for a node that only moved) and is treated as IMMUTABLE
- * everywhere — every write is a fresh `{ ...data }` — so caching on it is
- * exact, and the entry dies with the node. A WeakMap and not a module-scope
- * Map, because this is keyed on adversarial, unbounded input.
- *
- * It pays on eight paths, most of them per NODE per store notify: the Output
- * card's bindings key, its index-claim labels, `moduleSignatureOf`, the node's
- * own signature read, ShaderSettingsMenu, CodeEditor's mirror key, the GLB
- * export plan, and `previewWireTargets` TWICE per contributing node.
- *
- * `sanitizeModelSignature` already returns the SAME array for a clean
- * `{ materials }`, so the cache preserves the identity callers memoize on.
- */
-const signatureCache = new WeakMap<object, string[] | null>();
-
 export function readModelSignature(data: unknown): string[] | null {
   if (!data || typeof data !== 'object') return null;
   // `!== undefined`, not a truthiness test: a cached `null` is a HIT.
@@ -213,23 +135,12 @@ function addedMaterials(node: AppNode): OutputMaterial[] {
 }
 
 /**
- * Every material on this node, material 0 first.
+ * Every material on this node, material 0 first — ONE element on live data;
+ * more only on a folded node a restore path has not unfolded yet.
  *
- * Material 0 is synthesized from the node's own fields, so callers never do the
- * off-by-one between `materials[k]` and material index `k + 1`.
- *
- * Its BINDING comes from whichever of the two node-level forms is present: a
- * `gltfMaterialIndex` makes it an INDEX section, otherwise the mesh-name list.
- * A section is ONE kind, so the index wins outright and any names beside it are
- * ignored — exactly what `sanitizeOutputMaterials` does to an index ENTRY that
- * also carried names.
- *
- * The index form is what `unfoldOutputMaterials` writes: once a node IS one
- * material, an import-built section's glTF binding has nowhere else to live.
- * No document that has not been through the unfold carries one (the builder
- * writes indices inside `materials`, and the sanitizer used to delete a
- * node-level copy outright), so every existing graph resolves through the name
- * branch exactly as before and emits byte-identically.
+ * Material 0 is the node's own fields. Its BINDING is ONE kind: a node-level
+ * `gltfMaterialIndex` makes it an INDEX section and any names beside it are
+ * ignored (the sanitizer's rule), otherwise the mesh-name list.
  */
 export function outputMaterials(node: AppNode): OutputMaterial[] {
   if (node.data.registryType !== 'output') return [];
@@ -260,23 +171,15 @@ export function materialCount(node: AppNode): number {
 }
 
 /**
- * Every mesh a material shades: de-duped, all usable, capped.
+ * Every mesh a material shades: de-duped, all usable, capped at `MAX_PARTS`.
+ * THE accessor — `meshTargets` is the field, and the older single
+ * `meshTarget: { name }` is still READ (never written) so an old graph or
+ * saved group keeps its target.
  *
- * ONE material may name SEVERAL meshes — the picker is a checkbox list — and
- * each named mesh becomes its own `parts` entry carrying that material's
- * channels. So this is the accessor; `meshTargets` is the field, and the older
- * single `meshTarget: { name }` is still READ (never written) so a graph or a
- * saved group from before the list existed keeps its target.
- *
- * Empty means THE DEFAULT: the material shades every mesh no other material
- * claims. Only material 0 may be in that state — an added material with no
- * usable name means nothing and is dropped by the sanitizer. So "is this the
- * default" is `materialTargetNames(m).length === 0`, always over the whole
- * list: a `[0]`-plus-null-check helper existed here until 2026-09-05, called by
- * nothing, and a first-name test is exactly the assumption-about-the-rest this
- * rule exists to forbid. A surface that shows ONE label for a section goes
- * through `sectionLabel` below (ShaderSettingsMenu's scope line);
- * MeshTargetPicker's closed label is the one remaining reader of `[0]`.
+ * Empty on a node's own material means THE DEFAULT (it shades every mesh no
+ * other material claims), so "is this the default" is always `.length === 0`
+ * over the whole list, never a first-name test. One LABEL for a material goes
+ * through `sectionLabel`.
  */
 export function materialTargetNames(material: OutputMaterial | undefined): string[] {
   // Index sections are nameless by construction: `parts` emission, the name
@@ -297,22 +200,15 @@ export function materialTargetNames(material: OutputMaterial | undefined): strin
  * THE total order the Output nodes emit in: `emitRank` first, node id as the
  * tie-break, duplicate ids dropped (first wins, the `byId` idiom).
  *
- * BOTH halves are load-bearing. The RANK exists because the nodes ARRAY is not
- * a usable order and never can be — `liftChildrenAfterParents` splices a node
- * into a new slot on an ordinary drag-into-a-group and `useSyncEngine` reorders
- * on every Apply, so deriving emitted order from it would rewrite the module on
- * a layout gesture (`previewCode` advances, the preview recompiles, the autosave
- * dirties, `__partPixel<n>` renumbers, first-claim-wins flips on a duplicate
- * mesh name) with `errors: []` and nothing on screen to explain it. The ID
- * tie-break exists because a rank is NOT unique: `unfoldOutputMaterials` seeds
- * every node it makes from its material index, so two folded Outputs unfolded
- * in one document each produce a node 0 carrying `emitOrder: 0` — and
- * `Array.prototype.sort` is stable, so without the tie-break those two would
- * fall back to array order, which is the very thing the rank replaces.
+ * THE home of the array-order rule. The nodes ARRAY is not a usable order:
+ * `liftChildrenAfterParents` splices a node into a new slot on an ordinary
+ * drag-into-a-group and `useSyncEngine` reorders on every Apply, so deriving
+ * emitted order from it would rewrite the module on a layout gesture, with
+ * `errors: []` and nothing on screen to explain it.
  *
- * Duplicate ids are dropped rather than planned twice: a plan keyed by node id
- * cannot say anything sensible about two nodes claiming one id, and React Flow
- * cannot render them either.
+ * The ID tie-break exists because a rank is NOT unique (two folded Outputs
+ * unfolded in one document each produce a node carrying `emitOrder: 0`), and a
+ * stable sort would otherwise fall back to array order.
  */
 export function outputsInEmitOrder(outputs: readonly AppNode[]): AppNode[] {
   const byId = new Map<string, AppNode>();
@@ -322,38 +218,24 @@ export function outputsInEmitOrder(outputs: readonly AppNode[]): AppNode[] {
   );
 }
 
-/** The name `parts` plan: which mesh name each section emits, first claim wins. */
-export interface NamedPartsPlan {
-  /** Emitted entries, in section order, each name once. */
-  entries: { name: string; section: number }[];
-  /** Sections that NAME a mesh but emit no entry: every name was claimed by
-   *  a section above (or, on data no sanitizer admitted, fell past the cap).
-   *  An EMPTY section is never shadowed — it is "No mesh", a different state. */
-  shadowed: Set<number>;
-  /** Names past `MAX_PART_ENTRIES`, dropped at emission. Empty for every
-   *  graph a restore path has sanitized (9 × 9 = 81 < 90). */
-  overCap: string[];
-}
-
-/** The same plan ACROSS several Output nodes: one claim set, one cap counter,
- *  one emitted order. Entries and shadowed sections carry the node they belong
- *  to, because a section INDEX stops being unique the moment materials live on
- *  more than one node. */
+/** The name `parts` plan ACROSS the Output nodes — which mesh name each
+ *  material emits, first claim wins: one claim set, one cap counter, one
+ *  emitted order. Entries carry their node, since a section index is not
+ *  unique across nodes. */
 export interface NamedPartsPlanAcross {
   /** Emitted entries, in (emitRank, id) node order then section order. */
   entries: { name: string; nodeId: string; section: number }[];
-  /** node id → that node's shadowed sections. A node with none is ABSENT, so a
-   *  reader wanting "is section i of node n shadowed" asks
-   *  `shadowed.get(n)?.has(i)`. */
+  /** node id → that node's shadowed sections: those that NAME a mesh but emit
+   *  no entry, every name being claimed earlier. An EMPTY section is never
+   *  shadowed ("No mesh" is a different state). A node with none is ABSENT. */
   shadowed: Map<string, Set<number>>;
   /** Names past `MAX_PART_ENTRIES` — a running total across every node, never
-   *  a per-node budget: the cap bounds ONE MODULE's `parts` map. */
+   *  a per-node budget. Empty for every graph a restore path has sanitized. */
   overCap: string[];
 }
 
-/** The first-claim state a whole plan shares: the claimed names and the ONE
- *  entry list whose length is the cap. Passing it from node to node is what
- *  makes the cap a running total and the claim set global. */
+/** The first-claim state a whole plan shares; passing it from node to node is
+ *  what makes the cap a running total and the claim set global. */
 interface NamedClaimState {
   entries: { name: string; nodeId: string; section: number }[];
   overCap: string[];
@@ -362,11 +244,9 @@ interface NamedClaimState {
 
 /**
  * THE one first-claim-wins loop over one node's named sections, into a shared
- * state. Returns THIS node's shadowed sections.
- *
- * Both entry points below run this same body, so the per-node form (the fold's
- * in-progress list, and `outputSectionCaps.test.ts`'s golden against
- * graphToCode's pre-Step-4 loop) and the cross-node form cannot drift.
+ * state; returns THIS node's shadowed sections. A `parts` map has one slot per
+ * mesh, so a duplicate name (a hand-edited file — the picker MOVES a mesh) goes
+ * to the first claim, and a name past the cap is reported, never claimed.
  */
 function claimNamedParts(
   st: NamedClaimState,
@@ -391,58 +271,10 @@ function claimNamedParts(
 }
 
 /**
- * THE one first-claim-wins loop over the named sections of ONE material list.
- * Emission (graphToCode's `parts`) and the node's shadowed mark both read it —
- * through `planNamedPartsAcross` since the plans went cross-node — so the two
- * can never disagree about which section a mesh belongs to.
- *
- * FIRST CLAIM WINS for a duplicate name: a `parts` map has one slot per mesh, and
- * a duplicate arrives only from a hand-edited or foreign file (the picker MOVES
- * a mesh rather than duplicating it). The cap is `MAX_PART_ENTRIES`; a name past
- * it is reported in `overCap` and NOT claimed. For every graph with at most
- * `MAX_PARTS` entries this is exactly the order emission has always used.
- *
- * THE MATERIALS-FORM PAIR, and why it survives with no production caller.
- * Since the plans went cross-node, emission reads `planNamedPartsAcross` and
- * this form is reached only from `outputSectionCaps.test.ts` — where it carries
- * the GOLDEN that pins this loop against graphToCode's own pre-Step-4 one, i.e.
- * against the loop every committed byte-stability snapshot came out of. That
- * golden is written over a material LIST and cannot be restated over a node set
- * without becoming a restatement of the new code instead of the old. Both forms
- * run the SAME `claimNamedParts` body, so the golden still covers what emission
- * executes, and `outputPlansAcross.test.ts` pins the one-node equivalence that
- * makes that transitive. The same reasoning keeps `planIndexParts`,
- * `indexSectionCoverage`, `pickFreeMesh`, `defaultSectionUnused` and
- * `materialPartsMirrorPlan` beside their `…Across` twins. None of them has a
- * production caller any more (`countSections`' last one went with
- * `foldExtraOutputs`).
- *
- * THEY ARE KEPT, deliberately, and step 6b decided so rather than deferring it
- * again. Retiring them means rewriting that golden over a node set, which turns
- * a proof against the OLD emission loop into a restatement of the new one — the
- * single thing tying today's plans to the code every committed snapshot came
- * out of. An untested-in-production primitive costs a few dozen lines; losing
- * that proof cannot be undone, because the loop it pins no longer exists to
- * re-derive it from.
- */
-export function planNamedParts(materials: readonly OutputMaterial[]): NamedPartsPlan {
-  const st: NamedClaimState = { entries: [], overCap: [], claimed: new Set() };
-  const shadowed = claimNamedParts(st, materials, '');
-  return {
-    entries: st.entries.map(({ name, section }) => ({ name, section })),
-    shadowed,
-    overCap: st.overCap,
-  };
-}
-
-/**
- * The name `parts` plan across a SET of Output nodes — what emission reads.
- *
- * ONE claim set and ONE cap counter for the whole call: `parts` is a single map
- * in a single module, so a mesh claimed by an earlier-ranked node must not be
- * re-claimed by a later one, and `MAX_PART_ENTRIES` bounds that map rather than
- * each node's share of it. Nodes are visited in `outputsInEmitOrder`, never in
- * the order the caller happened to hold them.
+ * The name `parts` plan across a SET of Output nodes — what emission AND the
+ * node's shadowed mark read, so the two cannot disagree. ONE claim set and ONE
+ * cap counter for the whole call (`parts` is a single map in a single module);
+ * nodes are visited in `outputsInEmitOrder`.
  */
 export function planNamedPartsAcross(outputs: readonly AppNode[]): NamedPartsPlanAcross {
   const st: NamedClaimState = { entries: [], overCap: [], claimed: new Set() };
@@ -454,32 +286,22 @@ export function planNamedPartsAcross(outputs: readonly AppNode[]): NamedPartsPla
   return { entries: st.entries, shadowed, overCap: st.overCap };
 }
 
-/** The index-section plan: which section emits each glTF index, first claim wins. */
-export interface IndexPartsPlan {
-  /** Emitted entries, ascending by glTF index, each index once. */
-  entries: { gltfIndex: number; section: number }[];
-  /** Sections whose glTF index an EARLIER section already claims: inert. */
-  duplicates: Set<number>;
-  /** Sections past `MAX_INDEX_MATERIALS`: dropped at emission. Empty for
-   *  every graph a restore path has sanitized. */
-  overCap: number[];
-}
-
-/** The same plan ACROSS several Output nodes: one claim set, one cap counter.
- *  No node tie-break is needed in `entries` — an index is claimed once, so
- *  ascending glTF index is already a total order (which is why B1 says
- *  `materialParts` needs no `emitOrder` of its own); the node order decides
- *  only WHICH section wins a duplicate index. */
+/** The `materialParts` plan ACROSS the Output nodes: which node emits each
+ *  glTF index, first claim wins. An index is claimed once, so ascending glTF
+ *  index is already a total order; the node order decides only WHICH section
+ *  wins a duplicate index. */
 export interface IndexPartsPlanAcross {
+  /** Emitted entries, ascending by glTF index, each index once. */
   entries: { gltfIndex: number; nodeId: string; section: number }[];
-  /** node id → that node's sections whose index an earlier one claims. Absent
-   *  for a node with none. */
+  /** node id → that node's sections whose index an earlier one claims (inert).
+   *  Absent for a node with none. */
   duplicates: Map<string, Set<number>>;
+  /** Sections past `MAX_INDEX_MATERIALS`, dropped at emission. Empty for every
+   *  graph a restore path has sanitized. */
   overCap: { nodeId: string; section: number }[];
 }
 
-/** The first-claim state an index plan shares — the index twin of
- *  `NamedClaimState`, and shared for the same reason. */
+/** The index twin of `NamedClaimState`. */
 interface IndexClaimState {
   entries: { gltfIndex: number; nodeId: string; section: number }[];
   overCap: { nodeId: string; section: number }[];
@@ -487,18 +309,14 @@ interface IndexClaimState {
 }
 
 /**
- * One node's index sections into a shared state; returns ITS duplicates.
+ * One node's index sections into a shared state; returns ITS duplicates. An
+ * index at or past the signature's length is skipped (the sanitizer detaches
+ * those), and a duplicate index is shadowed, as a duplicate NAME is.
  *
- * From `i = 0`, because material 0 CAN be an index section: once
- * `unfoldOutputMaterials` gives each material its own node, an import-built
- * section's glTF binding is the node's own (`outputMaterials` reads it from
- * `data.gltfMaterialIndex`). While every material lived on one node it never
- * could be — the builder writes indices into `materials` and the sanitizer
- * deleted a node-level copy — so this loop started at 1, and starting there
- * after the split dropped the WHOLE `materialParts` table of every GLB-built
- * shader: `return vec3(1, 0, 0);`, with `errors: []`. For a document that has
- * not been split, `gltfIndexOf(materials[0])` is null and the extra iteration
- * changes nothing (`unfoldEmissionParity.test.ts` pins that both ways).
+ * THE `i = 0` RULE, for every loop over a node's materials in this file: on a
+ * split node the binding IS material 0's. Starting at 1 dropped the WHOLE
+ * `materialParts` table of every GLB-built shader, with `errors: []`
+ * (pinned both ways by unfoldEmissionParity.test.ts).
  */
 function claimIndexParts(
   st: IndexClaimState,
@@ -519,37 +337,11 @@ function claimIndexParts(
 }
 
 /**
- * THE one first-claim-wins loop over ONE material list's INDEX sections (the
- * `planNamedParts` twin): emission's `materialParts`, the mirror plan and the
- * node's shadowed mark all read it, through `planIndexPartsAcross`. Nothing is
- * emitted without a valid signature, and an index at or past its length is
- * skipped (defensive: the sanitizer detaches those). A duplicate index cannot
- * be encoded — `materialParts` has one slot per material — so the later section
- * is shadowed, as a duplicate NAME is.
- */
-export function planIndexParts(
-  materials: readonly OutputMaterial[],
-  signature: readonly string[] | null,
-): IndexPartsPlan {
-  if (!signature) return { entries: [], duplicates: new Set(), overCap: [] };
-  const st: IndexClaimState = { entries: [], overCap: [], claimed: new Set() };
-  const duplicates = claimIndexParts(st, materials, signature, '');
-  const entries = st.entries.map(({ gltfIndex, section }) => ({ gltfIndex, section }));
-  entries.sort((a, b) => a.gltfIndex - b.gltfIndex);
-  return { entries, duplicates, overCap: st.overCap.map((e) => e.section) };
-}
-
-/**
  * The `materialParts` plan across a SET of Output nodes — what emission reads.
- *
- * ONE claim set and ONE `MAX_INDEX_MATERIALS` counter, for the same reason the
- * name plan shares its own: `materialParts` is a single map in a single module.
- *
- * ONE signature governs the whole call, which is the invariant the split keeps:
+ * ONE claim set and ONE `MAX_INDEX_MATERIALS` counter, and ONE signature:
  * `modelSignature` is REPLICATED onto every index node and the sanitizer
- * DETACHES any index node whose copy differs, so a document can never have two
- * live signatures to choose between (see `materialPartsMirrorPlanAcross`, which
- * reads the lowest-ranked index node's copy).
+ * DETACHES any node whose copy differs, so there is never a choice to make.
+ * Nothing is emitted without a valid signature.
  */
 export function planIndexPartsAcross(
   outputs: readonly AppNode[],
@@ -564,36 +356,6 @@ export function planIndexPartsAcross(
   }
   st.entries.sort((a, b) => a.gltfIndex - b.gltfIndex);
   return { entries: st.entries, duplicates, overCap: st.overCap };
-}
-
-/**
- * The ADDED sections by kind. The two caps are counted SEPARATELY everywhere
- * (`MAX_PARTS`/`MAX_ADDED_MATERIALS` for named ones, `MAX_INDEX_MATERIALS` for
- * index ones), so an import-built Output never blocks "+ Add output".
- */
-export function countSections(materials: readonly OutputMaterial[]): { named: number; index: number } {
-  let named = 0;
-  let index = 0;
-  for (let i = 1; i < materials.length; i++) {
-    if (isIndexSection(materials[i])) index++;
-    else named++;
-  }
-  return { named, index };
-}
-
-/**
- * The ADDED sections by kind across a SET of Output nodes — a RUNNING TOTAL,
- * not a per-node budget, because both caps bound what ONE MODULE may carry.
- */
-export function countSectionsAcross(outputs: readonly AppNode[]): { named: number; index: number } {
-  let named = 0;
-  let index = 0;
-  for (const n of outputsInEmitOrder(outputs)) {
-    const c = countSections(outputMaterials(n));
-    named += c.named;
-    index += c.index;
-  }
-  return { named, index };
 }
 
 /**
@@ -619,6 +381,7 @@ export function displayMaterialName(raw: string): string {
  * more; an added section with no mesh is `empty` ("No mesh", as on the node);
  * an INDEX section names its glTF material (`name` is display text, '' for an
  * unnamed material — the formatter then says "Material #<gltfIndex>").
+ * Asked at EVERY index, material 0 included (the `i = 0` rule, `claimIndexParts`).
  */
 export type SectionLabel =
   | { kind: 'default' }
@@ -631,14 +394,6 @@ export function sectionLabel(
   index: number,
   signature: readonly string[] | null = null,
 ): SectionLabel {
-  // Asked at EVERY index, material 0 included: once `unfoldOutputMaterials`
-  // gives each material its own node, an import-built section's glTF binding is
-  // the node's own (`outputMaterials` reads `data.gltfMaterialIndex` into
-  // material 0), so an `index > 0` guard labelled every split index node "All
-  // meshes (default)" — the node's chip and the settings menu's scope line both
-  // claiming it shades the whole model while emission gave it one glTF
-  // material. For an unsplit document `gltfIndexOf(materials[0])` is null and
-  // the extra read changes nothing (`claimIndexParts` documents the same fix).
   const g = gltfIndexOf(materials[index]);
   if (g !== null) return { kind: 'index', gltfIndex: g, name: displayMaterialName(signature?.[g] ?? '') };
   const names = materialTargetNames(materials[index]);
@@ -647,36 +402,19 @@ export function sectionLabel(
 }
 
 /**
- * Added materials whose EVERY named mesh is absent from the live inventory —
+ * Materials whose EVERY named mesh is absent from the live inventory —
  * DORMANT: the model on screen has no surface they could shade, so the Output
- * node hides their sections behind a one-line chip and shows them again,
- * wiring intact, the moment a model carrying their names is loaded.
+ * node renders header-plus-chip and returns, wiring intact, the moment a model
+ * carrying its names is loaded.
  *
- * A pure VISIBILITY rule, deliberately not a data rule: the materials, their
- * edges, the undo history and EMISSION are all untouched — emission may never
- * depend on the inventory, which is session-only (absent after every reload)
- * and forgeable by the sandboxed preview — and that untouched data is what
- * makes the "restore" perfect by construction. An EMPTY material never hides
- * (it names nothing to be missing — it is a state to resolve, shown as
- * "No mesh"), and a PARTIALLY missing material stays visible with its absent
- * names marked by the picker.
+ * A pure VISIBILITY rule: data, edges, history and EMISSION are untouched —
+ * emission may never depend on the inventory, which is session-only and
+ * forgeable by the sandboxed preview. An EMPTY material never hides, and a
+ * PARTIALLY missing one stays visible with its absent names marked. From
+ * `i = 0` (`claimIndexParts`); the DEFAULT names nothing, so it never sleeps.
  *
- * FROM `i = 0`, because material 0 CAN carry a binding of its own: once
- * `unfoldOutputMaterials` gives each material its own node, THE node's binding
- * is material 0's (`outputMaterials` reads `meshTargets` straight off the node
- * data), so a loop starting at 1 meant a split targeted node could never sleep
- * — dormancy was dead in the split shape, silently, with every consumer still
- * calling this. It is safe both ways: the DEFAULT material names nothing, so
- * the `targets.length > 0` gate already excludes it, which is what "material 0
- * never hides" really rested on. A legacy folded node whose material 0 names a
- * mesh now sleeps with it, which is the same answer the split gives that
- * document after one restore.
- *
- * Consumers must agree: OutputNode skips a dormant section — and, split, a
- * dormant NODE renders header-plus-chip — and folds this set into its
- * updateNodeInternals key (a hidden section UNMOUNTS real channel handles, and
- * the remount must be re-measured or restored wires never draw); PreviewLink
- * counts only visible materials for its wire paths.
+ * A dormant node UNMOUNTS its channel handles, so OutputNode folds this set
+ * into its updateNodeInternals key, or restored wires never draw.
  */
 export function dormantMaterialIndices(
   materials: readonly OutputMaterial[],
@@ -691,11 +429,10 @@ export function dormantMaterialIndices(
   return dormant;
 }
 
-/** Stored channel values graphToCode deliberately treats as no-ops and emits
- *  NOTHING for (zero discard/displacement, the identity normal texel — see
- *  the Output stored-value contract in CLAUDE.md). Lives here, not in
- *  OutputNode, so the node's red-fallback swatch and
- *  `outputDefaultContributes` share ONE notion of "this value emits". */
+/** Does a stored channel value EMIT? graphToCode emits NOTHING for zero
+ *  discard/displacement and the identity normal texel. Here, not in OutputNode,
+ *  so the node's red-fallback swatch and `outputDefaultContributes` share ONE
+ *  notion of "this value emits". */
 export function storedValueEmits(channel: string, v: unknown): boolean {
   if (v === undefined || v === null || v === '') return false;
   if (channel === 'discard' || channel === 'position') return Number(v) !== 0;
@@ -704,13 +441,12 @@ export function storedValueEmits(channel: string, v: unknown): boolean {
 }
 
 /**
- * Does MATERIAL 0 contribute anything to the emitted module? Mirrors
- * graphToCode's channelEntries test: a wire on a bare channel handle, or an
- * emitting stored value on an EXPOSED channel (emission is exposure-gated, so
- * a tampered value on a hidden channel must not count — the same guard the
- * node's red-fallback swatch applies). False means the module is PARTS-ONLY,
- * which is what arms the 0.6 loader's single-mesh fallback — see
- * `dormantIndicesForPreview`.
+ * Does this node's own material contribute anything to the emitted module?
+ * Mirrors graphToCode's channelEntries test: a wire on a bare channel handle,
+ * or an emitting stored value on an EXPOSED channel (emission is
+ * exposure-gated, so a tampered value on a hidden channel must not count).
+ * False for the default means the module is PARTS-ONLY, which arms the 0.6
+ * loader's single-mesh fallback — see `dormantIndicesForPreview`.
  */
 export function outputDefaultContributes(
   node: AppNode,
@@ -738,29 +474,16 @@ export function outputDefaultContributes(
 }
 
 /**
- * Does an ADDED material contribute a channel — i.e. does emission produce a
- * `parts` entry for it that `buildShaderModule` will KEEP?
+ * Does a TARGETED material contribute a channel — i.e. does emission produce a
+ * `parts` entry for it that `buildShaderModule` will KEEP? The
+ * `outputDefaultContributes` test over the material's own values and exposed
+ * list; `wired` is "any edge lands on its channel handles", passed in so this
+ * stays free of the edge list.
  *
- * The same test `outputDefaultContributes` makes for material 0, over the
- * material's own values and its own exposed list: a wire on one of its
- * handles, or an emitting stored value on an EXPOSED channel (emission is
- * exposure-gated, so a tampered value on a hidden channel must not count).
- *
- * False is the state the owner reported as "when I add a section and choose
- * the mesh to apply to, it does not assign the color, only after I change it"
- * (2026-09-18): `buildShaderModule` drops a part with no channels
- * (`props.length > 0`), so the meshes the section names keep exactly what they
- * had, while the node drew the section's unwired Color row at the CHANNEL
- * DEFAULT — a white the preview never paints. It is a normal, momentary state
- * (every "+ Add output" starts here), so it is MARKED rather than prevented:
- * seeding a value would repaint the claimed mesh the instant the section
- * appears, throwing away the authored/index material to announce an empty
- * block.
- *
- * `wired` is "any edge lands on this material's channel handles", which the
- * node already knows from its `wiredLabels` map — passing it keeps this
- * function free of the edge list and usable from a component that does not
- * subscribe to edges.
+ * False is a normal, momentary state (every new Output node pointed at a mesh
+ * starts here), so it is MARKED rather than prevented: seeding a value would
+ * repaint the claimed mesh the instant the node appears.
+ * See docs/dev/outputs-and-materials.md; pinned by outputSilentSection.test.ts.
  */
 export function addedMaterialContributes(
   material: OutputMaterial | undefined,
@@ -774,30 +497,19 @@ export function addedMaterialContributes(
 }
 
 /**
- * The dormant set every SURFACE actually uses — `dormantMaterialIndices` plus
- * the two context rules all consumers must share (OutputNode's render,
- * PreviewLink's wire count, NodeEditor's scoped onError):
+ * The dormant set every SURFACE uses — `dormantMaterialIndices` plus the
+ * context rules all consumers must share (OutputNode's render, the preview
+ * wires, NodeEditor's scoped onError):
  *
- * 1. UNKNOWN inventory hides NOTHING. A custom model that is loaded but has
- *    not reported yet (`previewMesh` set, inventory null — every model swap
- *    passes through this window) must not flash the chip claiming "for
- *    another model" about the very model that is loading.
- * 2. The 0.6 loader's single-mesh fallback is MIRRORED: a parts-only module
- *    (the DEFAULT material contributes nothing) on a ONE-mesh model paints the
- *    FIRST part — that material is actively shading the screen, and hiding it
- *    behind a chip that says "for another model" would be a lie. It stays
- *    visible with its missing names marked, the pre-dormancy honest state.
- *    `meshNames.length <= 1` covers both the one-mesh custom model (one
- *    reported name) and every primitive/built-in (no inventory, one unnamed
- *    mesh).
- *
- *    `firstNamedHere` is what keeps that rule about the MODULE rather than
- *    about one node. The exemption belongs to the module's first emitted named
- *    part; with every material on one node that is this list's own first named
- *    material, which is why it defaults to true and every existing caller is
- *    unchanged. Split per material, each node holds exactly one — so without
- *    the flag EVERY targeted node would exempt itself and none would ever
- *    sleep. The caller passes `firstNamedOutputId(outputs) === node.id`.
+ * 1. UNKNOWN inventory hides NOTHING: a model that is loaded but has not
+ *    reported yet must not flash "for another model" about itself.
+ * 2. The 0.6 loader's single-mesh fallback is MIRRORED: a parts-only module on
+ *    a ONE-mesh model paints the FIRST named part, so that material stays
+ *    visible. `firstNamedHere` keeps the exemption with the MODULE's first
+ *    named part (`firstNamedOutputId(outputs) === node.id`); without it every
+ *    targeted node would exempt itself and none would ever sleep.
+ * 3. INDEX sections sleep all-or-nothing on the trusted signature, never the
+ *    inventory, so rule 1's hold-off does not apply to them.
  */
 export function dormantIndicesForPreview(
   materials: readonly OutputMaterial[],
@@ -829,12 +541,7 @@ export function dormantIndicesForPreview(
       }
     }
   }
-  // Rule 3: INDEX sections sleep all-or-nothing when the loaded model's
-  // trusted signature differs — never from the inventory, so rule 1's
-  // hold-off does not apply to them (the facts exist the moment the model is
-  // dropped). From `i = 0` for `dormantMaterialIndices`' reason: split, the
-  // node's own binding IS material 0's, so starting at 1 left every
-  // import-built Output permanently awake on the wrong model.
+  // Rule 3, from `i = 0` (`claimIndexParts`).
   if (!opts.indexSectionsAwake) {
     for (let i = 0; i < materials.length; i++) {
       if (isIndexSection(materials[i])) dormant.add(i);
@@ -847,11 +554,7 @@ export function dormantIndicesForPreview(
  * The lowest-ranked Output node holding a NAMED binding — the node whose
  * material the 0.6 loader's single-mesh fallback would paint, i.e. the one
  * allowed to claim rule 2's exemption above (`firstNamedHere`). Null when no
- * Output names a mesh.
- *
- * `outputsInEmitOrder`, never array order: the module's first `parts` entry is
- * decided by `emitRank`, and the nodes array is reordered by an ordinary
- * drag-into-a-group.
+ * Output names a mesh. Emit order, never array order (see `outputsInEmitOrder`).
  */
 export function firstNamedOutputId(outputs: readonly AppNode[]): string | null {
   for (const n of outputsInEmitOrder(outputs)) {
@@ -942,7 +645,7 @@ export function indexSectionsAwake(nodeSig: readonly string[] | null, loaded: Lo
 /**
  * What ONE index section does on the loaded model:
  *  - `duplicate`: an earlier section claims the same glTF index (first claim
- *    wins, `planIndexParts`), so this one emits nothing;
+ *    wins, `planIndexPartsAcross`), so this one emits nothing;
  *  - `unknown`: the model's meshes are not known (no trusted facts, or the
  *    section is asleep);
  *  - `unused`: no mesh of the loaded model wears this material;
@@ -959,33 +662,11 @@ export interface IndexCoverage {
 }
 
 /**
- * The coverage of every index section on this node, keyed by section index
- * (a section outside its signature — which the sanitizer detaches — has no
- * entry). `namedPlan` is THE name plan (`planNamedParts`), so "overridden"
- * means exactly the names emission gives to a name section. Bounded:
- * sections × at most MAX_INVENTORY_MESHES names × each name's few indices.
- */
-export function indexSectionCoverage(
-  materials: readonly OutputMaterial[],
-  signature: readonly string[] | null,
-  loaded: LoadedModel,
-  namedPlan: NamedPartsPlan,
-): Map<number, IndexCoverage> {
-  if (!signature) return new Map();
-  return coverageOfMaterials(
-    materials,
-    signature,
-    loaded,
-    new Set(namedPlan.entries.map((e) => e.name)),
-    planIndexParts(materials, signature).duplicates,
-  );
-}
-
-/**
- * The coverage of every index section of ONE node, given the CROSS-NODE answers
- * to the two questions that are not this node's to decide: which names a name
- * section claims anywhere (`claimedByName`) and which of this node's sections a
- * higher-ranked one shadows (`duplicates`). Both entry points run this body.
+ * The coverage of every index section of ONE node, keyed by section index,
+ * given the CROSS-NODE answers to the two questions that are not this node's
+ * to decide: which names a name section claims anywhere (`claimedByName`) and
+ * which of this node's sections a higher-ranked one shadows (`duplicates`).
+ * Bounded: at most MAX_INVENTORY_MESHES names per section.
  */
 function coverageOfMaterials(
   materials: readonly OutputMaterial[],
@@ -996,13 +677,7 @@ function coverageOfMaterials(
 ): Map<number, IndexCoverage> {
   const out = new Map<number, IndexCoverage>();
   const known = loaded.kind === 'gltf' && indexSectionsAwake(signature, loaded);
-  // From `i = 0` — `claimIndexParts`' reason, and it has to match it exactly:
-  // split, material 0 IS the index section, so a loop from 1 left every
-  // import-built Output with an EMPTY coverage map while emission happily
-  // claimed its glTF index. The chip then showed `unknown` (just the material
-  // name, no meshes, no override mark), the picker rows lost their "also in
-  // material section X" hint and `defaultSectionUnusedAcross` counted no
-  // index-covered mesh, so the default never read as unused.
+  // From `i = 0`, matching `claimIndexParts` exactly.
   for (let i = 0; i < materials.length; i++) {
     const g = gltfIndexOf(materials[i]);
     if (g === null || g >= signature.length) continue;
@@ -1061,111 +736,18 @@ export function indexSectionCoverageAcross(
 const EMPTY_SECTIONS: ReadonlySet<number> = new Set<number>();
 
 /**
- * The mesh "+ Add output" seeds a new NAME section with: first one no name
- * section claims and no index section covers, else one no name section
- * claims — which then OVERRIDES its material's index section (the name claim
- * wins), the intended way to restyle one mesh of an imported material. Null
- * when every mesh is name-claimed. Never mints a duplicate NAME claim, which
- * would arrive inert.
- */
-export function pickFreeMesh(
-  meshNames: readonly string[],
-  materials: readonly OutputMaterial[],
-  coverage: ReadonlyMap<number, IndexCoverage>,
-): string | null {
-  const claimed = new Set(materials.flatMap((m) => materialTargetNames(m)));
-  const covered = new Set<string>();
-  for (const c of coverage.values()) for (const n of c.meshes) covered.add(n);
-  return pickFrom(meshNames, claimed, covered);
-}
-
-/** The same choice across a SET of Output nodes: a mesh is taken if ANY of them
- *  names it, and covered if any of their index sections covers it. Per node the
- *  answer would be wrong in the dangerous direction — it would hand back a mesh
- *  another Output already claims, and the new section would arrive inert. */
-export function pickFreeMeshAcross(
-  meshNames: readonly string[],
-  outputs: readonly AppNode[],
-  coverage: ReadonlyMap<string, ReadonlyMap<number, IndexCoverage>>,
-): string | null {
-  const claimed = new Set<string>();
-  for (const n of outputsInEmitOrder(outputs)) {
-    for (const m of outputMaterials(n)) for (const name of materialTargetNames(m)) claimed.add(name);
-  }
-  const covered = new Set<string>();
-  for (const byNode of coverage.values()) for (const c of byNode.values()) for (const n of c.meshes) covered.add(n);
-  return pickFrom(meshNames, claimed, covered);
-}
-
-/** The two-pass preference both forms share: an entirely free mesh first, then
- *  one only an index section covers (which the new NAME section overrides). */
-function pickFrom(
-  meshNames: readonly string[],
-  claimed: ReadonlySet<string>,
-  covered: ReadonlySet<string>,
-): string | null {
-  return meshNames.find((n) => !claimed.has(n) && !covered.has(n))
-    ?? meshNames.find((n) => !claimed.has(n))
-    ?? null;
-}
-
-/**
- * Does the DEFAULT section (material 0, untargeted) shade NOTHING of the model
- * on screen?
+ * Does the DEFAULT material shade NOTHING of the model on screen? After a GLB
+ * import that is the usual case — one index node per glTF material covers the
+ * whole model — so the default's channels change nothing when wired.
  *
- * Material 0 means "every mesh the sections below do not claim". After a GLB
- * import that is usually NONE — one index section per glTF material covers the
- * whole model — so the node opens with a block whose channels look exactly like
- * a fresh Output's and change nothing when wired. Reported from the canvas as
- * the Output "doubling with the PBR … like a dead part" (owner, 2026-09-18).
+ * It is MARKED, never removed or hidden: the default still shades any mesh
+ * with no material of its own, and EVERYTHING again once another model loads
+ * and the index nodes sleep (a sleeping one covers nothing).
  *
- * It is NOT dead, which is why the section is MARKED rather than removed or
- * hidden: it shades any mesh whose material has no section of its own (a model
- * past `MAX_INDEX_MATERIALS`), and it shades EVERYTHING again the moment a
- * model with other materials is loaded, when the index sections sleep. Marking
- * leaves every control where it was, changes no data and changes no emission.
- *
- * True only when the answer is KNOWN and negative: material 0 names nothing
- * (a TARGETED material 0 shades exactly its own meshes), there is at least one
- * section below it, the preview has reported meshes, and every one of them is
- * claimed by a name section or covered by an AWAKE index section — a sleeping
- * one covers nothing (`indexSectionCoverage`), so a different model puts the
- * default back to work and the mark disappears with it.
- */
-export function defaultSectionUnused(
-  meshNames: readonly string[],
-  materials: readonly OutputMaterial[],
-  namedPlan: NamedPartsPlan,
-  coverage: ReadonlyMap<number, IndexCoverage>,
-): boolean {
-  if (materials.length < 2 || meshNames.length === 0) return false;
-  if (materialTargetNames(materials[0]).length > 0) return false;
-  // The names emission really gives to a name section (first claim wins), plus
-  // every mesh an index section covers — `pickFreeMesh`'s two sets.
-  const taken = new Set(namedPlan.entries.map((e) => e.name));
-  for (const c of coverage.values()) for (const n of c.meshes) taken.add(n);
-  return meshNames.every((n) => taken.has(n));
-}
-
-/**
- * The same mark across a SET of Output nodes. The section judged is material 0
- * of `defaultOutput` — THE node that owns the module's top-level channels, and
- * the only one whose block the mark belongs on — while "is there a section
- * below it" and "is every mesh taken" are answered across every node handed in.
- *
- * `defaultOutput` and NOT the lowest-ranked node, which is what this asked
- * while every material still lived on one node: split per material, an
- * untargeted Output is not necessarily first (a PARKED whole-model variant is
- * untargeted too, and an import-built document's lowest-ranked node is a
- * TARGETED index node). Judging the lowest-ranked one would put the mark on a
- * node that is not the default at all — and would read its targeted binding as
- * "material 0 names a mesh" and bail, so the real default never got the mark.
- *
- * No default → false: there is no whole-model block to mark.
- *
- * "A section below" becomes "any OTHER section anywhere", which for a single
- * node is exactly today's `materials.length >= 2` and for several nodes also
- * counts the other nodes' materials.
+ * True only when the answer is KNOWN and negative: a default exists
+ * (`defaultOutput`, NOT the lowest-ranked node), there is any OTHER material,
+ * the preview has reported meshes, and every one is claimed by name or covered
+ * by an awake index section.
  */
 export function defaultSectionUnusedAcross(
   meshNames: readonly string[],
@@ -1179,14 +761,14 @@ export function defaultSectionUnusedAcross(
   if (!def) return false;
   let total = 0;
   for (const n of ordered) total += outputMaterials(n).length;
-  // "A section below" = any material at all besides the default's own one.
+  // Any material at all besides the default's own one.
   if (total < 2) return false;
   const taken = new Set(namedPlan.entries.map((e) => e.name));
   for (const byNode of coverage.values()) for (const c of byNode.values()) for (const n of c.meshes) taken.add(n);
   return meshNames.every((n) => taken.has(n));
 }
 
-/** The whole-store shape both derivations below read. */
+/** The whole-store shape the dormancy derivations read. */
 interface DormancyState {
   nodes: readonly AppNode[];
   edges: readonly AppEdge[];
@@ -1197,16 +779,12 @@ interface DormancyState {
 
 /**
  * The `dormantIndicesForPreview` opts for ONE Output node, derived from the
- * whole store — so both whole-store consumers ask identical questions.
+ * whole store — so every whole-store consumer asks identical questions.
  *
  * Two of the five are CROSS-NODE and cannot be read off `out`:
- *  - `defaultContributes` is about the MODULE's default material, which after
- *    the per-material split is usually a SIBLING of the node being judged.
- *    Reading it off `out` asked "does this targeted node contribute", which is
- *    a different question with a different answer.
- *  - `firstNamedHere` decides which node may claim the 0.6 single-mesh
- *    fallback exemption; split, every targeted node would otherwise claim it
- *    and none would ever sleep.
+ * `defaultContributes` is about the MODULE's default (usually a SIBLING of the
+ * node being judged), and `firstNamedHere` decides which single node may claim
+ * the 0.6 single-mesh exemption.
  */
 function dormancyOptsFor(state: DormancyState, out: AppNode) {
   const outs = outputNodes(state.nodes as AppNode[]);
@@ -1220,36 +798,6 @@ function dormancyOptsFor(state: DormancyState, out: AppNode) {
   };
 }
 
-/**
- * The whole-store dormancy derivation — and, since the per-material Output
- * split, one with NO PRODUCTION CALLER. Both consumers it was written for have
- * moved: PreviewLink's selector went to `previewWireTargets`, and NodeEditor's
- * scoped React Flow 008 suppression to `outputEdgeIsDormant`, which asks the
- * node a wire actually lands on rather than "is material n asleep anywhere".
- *
- * Kept, like the materials-form plan primitives above, because it is the
- * tested statement of the rule those two now restate in their own shapes, and
- * because its suites are the ones that pin what dormancy MEANS over a whole
- * store. Delete it only together with a replacement for that coverage — a
- * silently retired derivation is how the two live copies start to disagree.
- *
- * OutputNode derives the same opts from its granular subscriptions instead (a
- * whole-store selector there would re-render every Output per notify);
- * `outputTargetChip.test.ts` pins that both routes end in
- * `dormantIndicesForPreview`.
- */
-export function outputDormancyFromState(state: DormancyState): {
-  outputId: string | null;
-  dormant: Set<number>;
-  visibleCount: number;
-} {
-  const out = findDefaultOutput(state.nodes as AppNode[]);
-  if (!out) return { outputId: null, dormant: new Set(), visibleCount: 0 };
-  const materials = outputMaterials(out);
-  const dormant = dormantIndicesForPreview(materials, dormancyOptsFor(state, out));
-  return { outputId: out.id, dormant, visibleCount: materials.length - dormant.size };
-}
-
 /** One decorative Output→preview wire: the node it leaves, and what that node
  *  shades — as DATA, so the selector key that carries it is language-free and
  *  `linkLabelText` (nodes/sectionLabelText.ts) does the wording. */
@@ -1260,30 +808,19 @@ export interface PreviewWireTarget {
 
 /**
  * The Output nodes the decorative preview wires leave from, in EMIT ORDER —
- * ONE WIRE PER CONTRIBUTING OUTPUT NODE.
+ * ONE WIRE PER CONTRIBUTING OUTPUT NODE, the same set emission reads, so the
+ * canvas cannot show a wire from a node the module ignores (a PARKED Output).
  *
- * It was one wire per MATERIAL SECTION of the single Output; per-material
- * splitting turns that into one per node by construction, and `contributing
- * Outputs` is the same set emission reads, so the canvas cannot show a wire
- * from a node the module ignores (a PARKED untargeted Output) or miss one from
- * a node it emits.
+ * DORMANT nodes are left out: a dormant Output mounts NO preview socket, so
+ * its wire would have no anchor and the element cache would re-query every
+ * frame. The wire returns with the node.
  *
- * DORMANT nodes are left out, which is the same rule the retired per-section
- * count followed: a dormant Output renders header-plus-chip and mounts NO
- * preview socket, so its wire would have no anchor and PreviewLink's element
- * cache would re-query every frame for as long as the node sleeps. Its wiring
- * is untouched and the wire returns with the node.
+ * The CROSS-NODE dormancy opts are derived ONCE for the whole set, not through
+ * `dormancyOptsFor` per node: that helper re-walks the edge list on every call
+ * — one whole-graph walk per glTF material, per store notify, during a drag.
  *
- * The three CROSS-NODE dormancy opts are derived ONCE for the whole set rather
- * than through `dormancyOptsFor` per node: that helper re-walks the edge list
- * for `defaultContributes` on every call, which on an import-built document is
- * one whole-graph walk per glTF material, per store notify, during a drag.
- *
- * A DRIVING Raymarch Output is deliberately NOT consulted here — it silences
- * every plain Output, but `activeSink`'s fallbacks are array-order dependent
- * and its callers do not all hold the same array (`contributingOutputs`
- * documents the same rule). PreviewLink answers that question once, in its own
- * selector, and skips this entirely when a march drives.
+ * A DRIVING custom sink is deliberately NOT consulted here (see
+ * `contributingOutputs`); the caller skips this when one drives.
  */
 export function previewWireTargets(state: DormancyState): PreviewWireTarget[] {
   const nodes = state.nodes as AppNode[];
@@ -1305,9 +842,7 @@ export function previewWireTargets(state: DormancyState): PreviewWireTarget[] {
       indexSectionsAwake: indexAwakeFor(n, materials, shown),
       firstNamedHere: firstNamed === n.id,
     });
-    // Material 0 is the NODE — `OutputNode`'s own `nodeDormant = dormant.has(
-    // SELF)`, SELF being 0 — so this is the same question the card answers when
-    // it decides to render its socket at all.
+    // Material 0 is the NODE: the question the card asks (`nodeDormant`).
     if (dormant.has(0)) continue;
     wires.push({ id: n.id, label: sectionLabel(materials, 0, readModelSignature(n.data)) });
   }
@@ -1327,32 +862,18 @@ function indexAwakeFor(out: AppNode, materials: readonly OutputMaterial[], previ
 
 /**
  * Does this EDGE land on a legitimately-absent Output handle — i.e. is its
- * target a dormant material, whose unmounted handles are the visibility rule's
- * steady state rather than a bug?
+ * target a dormant node, whose unmounted handles are the visibility rule's
+ * steady state rather than a bug? THE question NodeEditor's scoped React Flow
+ * 008 swallow asks.
  *
- * THE question NodeEditor's scoped 008 swallow asks. It takes an edge ID and
- * not a handle because React Flow's message carries both, and only the edge id
- * identifies a NODE: several Outputs may coexist (one active) and they all
- * spell their handles the same way, so a handle-keyed test had to ask "is
- * material `n` dormant ANYWHERE" and would excuse a real 008 about an awake
- * section on a different node. Resolving the edge answers for the node the
- * wire actually ends on.
+ * Keyed on the EDGE ID, because only that identifies a NODE: every Output
+ * spells its handles the same way, so a handle-keyed test would excuse a real
+ * 008 about an awake node. The edge is LOOKED UP, never parsed out of its id
+ * (`generateEdgeId`'s composite has no unambiguous reverse).
  *
- * The edge is LOOKED UP rather than parsed out of its id: `generateEdgeId`
- * joins four fields with `-` and two of them come out of a `.fastshader` file,
- * so the composite has no unambiguous reverse. `state.edges` is the very array
- * React Flow renders (NodeEditor passes `s.edges` by reference), so the lookup
- * always finds an edge React Flow is complaining about.
- *
- * False for everything else — an unknown id, a non-Output target, a collapsed
- * group's boundary handle — so the warning is printed.
- *
- * A BARE channel handle is now excusable too, and must be: since the split a
- * dormant Output is a whole NODE, which renders header-plus-chip and unmounts
- * every one of its bare channel handles. It is still narrow — the node has to
- * be asleep, which the DEFAULT never is (it names nothing, so no dormancy rule
- * can reach it) — so an 008 about the node that owns the module's top-level
- * channels still reports as the missing-`useUpdateNodeInternals` bug it is.
+ * False for everything else, so the warning is printed. The DEFAULT never
+ * sleeps, so an 008 about it still reports the missing-`useUpdateNodeInternals`
+ * bug it is.
  */
 export function outputEdgeIsDormant(state: DormancyState, edgeId: string): boolean {
   const edge = state.edges.find((e) => e.id === edgeId);
@@ -1364,79 +885,19 @@ export function outputEdgeIsDormant(state: DormancyState, edgeId: string): boole
 }
 
 /**
- * Give material `index` exactly `names`, taking each of them away from every
- * OTHER material.
- *
- * A mesh belongs to ONE material. Ticking it somewhere else MOVES it rather
- * than duplicating it, which is what makes the checkbox list behave the way a
- * list of assignments should: no inert second claim, no first-wins tie for
- * emission to break, and no disabled rows — the earlier objection to locking
- * them was that swapping two materials' meshes became impossible, and moving
- * makes the swap the ordinary two clicks.
- *
- * A material stripped of its LAST mesh is KEPT, empty. That is the state a swap
- * passes through (two single-mesh materials cannot exchange meshes without one
- * of them being briefly empty), so the alternatives are both worse: deleting it
- * destroys a section and its wiring on a checkbox tick, and refusing the tick
- * makes the checkbox silently do nothing. Empty means "shades nothing yet" —
- * NOT a second default; only material 0's empty list means "everything else" —
- * and the node marks it, because a material contributing nothing must not look
- * like one that works.
- *
- * Pure: returns a fresh list, material 0 first, and never mutates its input.
- *
- * NO PRODUCTION CALLER since the per-material Output split — `assignMeshTargets
- * Across` below is what the node writes through, because "every OTHER material"
- * became "every other NODE". Kept on the materials-form plans' terms (see
- * `planNamedParts`): it is the tested statement of the move-not-duplicate rule
- * the cross-node form has to obey.
- */
-export function assignMeshTargets(
-  materials: readonly OutputMaterial[],
-  index: number,
-  names: readonly string[],
-): OutputMaterial[] {
-  // An index section is bound to a MATERIAL, not to names: targeting one is
-  // refused (a fresh list, per the purity contract), and every index section
-  // below keeps its object reference and gains no `meshTargets` key. A mesh
-  // ticked in a NAME section that an index section's material also covers is
-  // an OVERRIDE (the name claim wins, loader 0.8's precedence), not a move.
-  if (isIndexSection(materials[index])) return materials.map((m) => m);
-  const taken = new Set(names);
-  return materials.map((m, i) => {
-    if (isIndexSection(m)) return m;
-    // The legacy single-target key is dropped on any edit, so the two shapes
-    // can never disagree about what a material shades.
-    const { meshTarget: _legacy, ...rest } = m;
-    return {
-      ...rest,
-      meshTargets: i === index
-        ? [...names]
-        : materialTargetNames(m).filter((n) => !taken.has(n)),
-    };
-  });
-}
-
-/**
  * Give the Output NODE `nodeId` exactly `names`, taking each of them away from
- * every OTHER Output node.
+ * every OTHER Output node: a mesh belongs to exactly ONE material, so ticking
+ * MOVES it. A MULTI-NODE write — the caller wraps ONE `setNodes` in
+ * `asOneHistoryEntry`, or Cmd+Z steps through a half-assigned state.
  *
- * `assignMeshTargets`' rule, one level up: a mesh belongs to exactly ONE
- * material, and after the per-material split "another material" is another
- * NODE. So this is necessarily a MULTI-NODE write — `updateNodeData` cannot
- * express it, and doing it as two writes would make Cmd+Z step through a
- * half-assigned state where two Outputs briefly claim the same mesh. The caller
- * wraps ONE `setNodes` in `asOneHistoryEntry`.
+ * A node stripped of its LAST mesh is KEPT (the state a swap passes through)
+ * and loses the key outright, never `[]`. An INDEX-bound node is never
+ * re-targeted and never stripped; a mesh ticked here that its material also
+ * covers is an OVERRIDE (the name claim wins, loader 0.8's precedence).
  *
- * An INDEX-bound node is never re-targeted and never stripped: it is bound to a
- * glTF MATERIAL, has no names to take, and a mesh ticked here that its material
- * also covers is an OVERRIDE (the name claim wins, loader 0.8's precedence),
- * not a move.
- *
- * Pure, and returns the SAME array when nothing changed — the reference
- * contract every other graph-shaped helper here holds, because the autosave
- * subscriber and `selectionOnlyGraphChange` compare nodes by identity. Node
- * objects that do not change are returned by reference for the same reason.
+ * Pure, and returns the SAME array (and the same node objects) when nothing
+ * changed: the autosave subscriber and `selectionOnlyGraphChange` compare by
+ * identity.
  */
 export function assignMeshTargetsAcross(
   nodes: readonly AppNode[],
@@ -1475,19 +936,12 @@ export function assignMeshTargetsAcross(
 
 /**
  * THE model signature that governs a module's `materialParts` table: the one
- * carried by the lowest-ranked contributing Output that holds an index section.
- *
- * `graphToCode` and the Output node both ask it, so it lives here rather than
- * being spelled twice — the node's red-sentinel test has to agree with what
- * emission really writes, and two copies of "which signature governs" is
- * exactly the drift the cross-node plans were extracted to stop. Null when no
- * Output carries an index section, which is byte-neutral: `planIndexPartsAcross`
- * then yields no entries either way.
+ * carried by the lowest-ranked contributing Output that holds an index
+ * section, else null. `graphToCode` and the Output node both ask it, so the
+ * node's red-sentinel test agrees with what emission writes.
  *
  * `outputs` must already be in emit order (`contributingOutputs` returns them
- * that way) — the sanitizer REPLICATES one signature onto every index node and
- * detaches any whose copy differs, so there is never a choice to make, but the
- * order is what makes "lowest-ranked" true rather than accidental.
+ * that way).
  */
 export function moduleSignatureOf(outputs: readonly AppNode[]): string[] | null {
   return readModelSignature(outputs.find((n) => outputMaterials(n).some(isIndexSection))?.data);
@@ -1521,58 +975,34 @@ export function outputNodes(nodes: readonly AppNode[]): AppNode[] {
 }
 
 /**
- * "THE Output" is THREE questions, and they answer differently the moment a
+ * "THE Output" is FOUR questions, and they answer differently the moment a
  * TARGETED Output exists. Every call site picks one of these deliberately.
  *
  *   `defaultOutput`        — who owns the module's TOP-LEVEL channels.
+ *   `contributingOutputs`  — which nodes' materials reach the module.
  *   `moduleSettingsOutput` — whose `materialSettings` the module writes.
  *   `findDefaultOutput`    — where do I point the USER (the settings menu's
  *                            fallback node, and Preview mode's anchor).
  *
- * They were one function (`flagged ?? outputs[0]`), blind to whether the node
- * names a mesh of its own. That is safe only while ONE Output holds every
- * material: split per material, handing a TARGETED node the top-level channels
- * paints its material twice — once as its own `parts`/`materialParts` entry
- * and once at module level over every unclaimed mesh.
- *
- * `outputs[0]` is ARRAY order, which is what makes that reachable. MEASURED:
- * `gltfSectionBuilder` pushes the untargeted default first, so an import-built
- * document's first Output is in fact the DEFAULT — but the array does not STAY
- * that way (`liftChildrenAfterParents` splices a node into a new slot on a
- * drag-into-a-group, `useSyncEngine` reorders on every Apply), so what the
- * predicates test is the BINDING, never the position.
+ * The first three test the BINDING and the rank, never the array position.
+ * See docs/dev/outputs-and-materials.md (several output nodes).
  */
 
 /**
  * The DEFAULT material's Output — the node that owns the module's top-level
  * channels: the flagged-and-untargeted one when there is one, else the
- * LOWEST-RANKED untargeted one, else NULL.
+ * LOWEST-RANKED untargeted one, else NULL. Emit order, never array order (see
+ * `outputsInEmitOrder`): picking by array order silently dropped `color:` from
+ * the module on a drag-into-a-group (pinned by unfoldEmissionParity.test.ts's
+ * reversed case). Ties keep ARRAY order (strict `<`), so a document that has
+ * never been split elects the node it always did.
  *
- * Lowest-RANKED, not first-in-array, and that is not tidiness. After
- * `unfoldOutputMaterials` an EMPTY section — a material with no mesh names,
- * which "shades nothing" and is the state a mesh swap passes through — is its
- * own node, and its own node is untargeted. Position was what told it apart
- * from the default while every material lived on one node ("only material 0's
- * empty list means everything else"); once each is a node, `emitRank` is.
- * Picking by array order instead handed the module's top-level channels to
- * whichever of them came first, so an ordinary drag-into-a-group
- * (`liftChildrenAfterParents` splices a node into a new slot) could silently
- * drop `color:` from the module — MEASURED by reversing the Output nodes of a
- * split document, which is why the parity harness reverses them.
+ * Null is a real answer: a document whose every Output names a mesh emits
+ * `parts` alone, and the loader leaves unclaimed meshes on their authored
+ * materials.
  *
- * Ties keep ARRAY order (strict `<`), so a document that has never been split
- * — where every rank is the absent-key 0 — elects exactly the node it always
- * did, and emits byte-identically.
- *
- * Null is a real answer, not a gap: a document whose only Output names a mesh
- * of its own has no default TODAY either — graphToCode's `material0Target`
- * suppresses the top-level channels and emits `parts` alone, which is exactly
- * what loader 0.6/0.8 needs to leave every unclaimed mesh on its authored
- * material.
- *
- * "Untargeted" is `isUntargetedOutput` (utils/sdfPartition.ts), the same
- * predicate `activeSink` elects on, so the node that drives and the node that
- * owns the default can never be two different nodes.
+ * "Untargeted" is `isUntargetedOutput`, the predicate `activeSink` elects on,
+ * so the node that drives and the node that owns the default never differ.
  */
 export function defaultOutput(nodes: readonly AppNode[]): AppNode | null {
   let best: AppNode | null = null;
@@ -1588,22 +1018,10 @@ export function defaultOutput(nodes: readonly AppNode[]): AppNode | null {
  * The Output whose `materialSettings` become the MODULE's top-level
  * transparent / side / alphaTest / depthWrite (owner decision D1).
  *
- * `buildShaderModule` always writes those four keys at module level, so unlike
- * the channels this question must always have an answer while any Output
- * exists — hence the fallback past `defaultOutput`'s null: the LOWEST-RANKED
- * Output of any kind, targeted or not.
- *
- * That fallback is `emitRank`, never array order, and the difference is not
- * academic: these four keys are module TEXT, so an array-ordered answer would
- * rewrite the module when the array moved — and `liftChildrenAfterParents`
- * (NodeEditor.tsx) moves it on an ordinary drag-into-a-group, while
- * `useSyncEngine` reorders on every Apply. That is exactly the class the
- * `emitOrder` bullet in CLAUDE.md exists to close, and `defaultOutput` above
- * already ranks for the same reason; leaving one of the pair on array order
- * would have made the module's settings follow a layout gesture on any
- * document where EVERY Output names a mesh. Rare — the parse mints an
- * untargeted default for any module carrying top-level channels — but
- * reachable by hand and by an all-targeted import.
+ * `buildShaderModule` always writes those four keys, so unlike the channels
+ * this must have an answer while any Output exists — hence the fallback past
+ * `defaultOutput`'s null: the LOWEST-RANKED Output of any kind. Emit order,
+ * never array order (see `outputsInEmitOrder`): the keys are module TEXT.
  *
  * A Raymarch Output is deliberately not a candidate: its settings come from
  * `marchMaterialSettings`, which layers over this.
@@ -1613,31 +1031,17 @@ export function moduleSettingsOutput(nodes: readonly AppNode[]): AppNode | null 
 }
 
 /**
- * The Output carrying the ACTIVE flag when one does (several Outputs may
- * coexist since 2026-09-03, exactly one of them active — see `activeSink` in
- * utils/sdfPartition.ts), else the first in array order, which is what every
- * document without a flag has always meant. TARGETING is deliberately not
- * consulted here; that is what the two predicates above are for.
+ * "WHERE DO I POINT THE USER": the Output carrying the ACTIVE flag, else the
+ * first in array order. TARGETING is deliberately not consulted — the node
+ * must exist whether or not it owns the default, and be the SAME one for every
+ * surface naming it: `ShaderSettingsMenu`'s fallback and Preview mode's three
+ * (`previewGraph`'s anchor, `PreviewRoute`, NodeEditor's `previewDstId`), which
+ * MUST agree or the route line points at one node while the view renders
+ * another.
  *
- * What is left wanting exactly this is "WHERE DO I POINT THE USER" — a node
- * that must exist whether or not it owns the default, and must be the SAME one
- * for every surface that names it in the same breath. Its callers:
- * `ShaderSettingsMenu`'s fallback for the paths that open the menu with no node
- * id (a right-click on the canvas background), and Preview mode's three —
- * `previewGraph`'s anchor plus `PreviewRoute` and NodeEditor's `previewDstId`,
- * which draw the route line and mark its far end. Those three MUST agree, or
- * the line on screen points at one node while the 3D view renders another.
- *
- * Emission, the parse, the mirror plan, the export plan, dormancy and the
- * preview wires do NOT use it: since the split each reads the node SET
- * (`contributingOutputs`, the `…Across` plans), because no single node holds
- * every material any more.
- *
- * Consumers that must also honour an active RAYMARCH Output layer
- * `drivingMarchOutput` over this, as they always did. Kept as a shared
- * function because the alternative is ten call sites each writing their own
- * `find` and disagreeing the moment the rule changes again — which is exactly
- * what happened last time.
+ * Emission, the parse, the plans, dormancy and the preview wires do NOT use
+ * it; they read the node SET. Consumers that must also honour a driving
+ * Raymarch Output layer `drivingMarchOutput` over this.
  */
 export function findDefaultOutput(nodes: readonly AppNode[]): AppNode | null {
   const outputs = outputNodes(nodes);
@@ -1646,35 +1050,18 @@ export function findDefaultOutput(nodes: readonly AppNode[]): AppNode | null {
 
 /**
  * THE Output nodes whose materials reach the module — the ONE answer every
- * emission-side consumer reads (graphToCode, the single-GLB export plan, the
- * `.js` export, the code panel's tabs, the preview and its XR popup), so none of
- * them can disagree about which nodes contribute.
- *
- * It is `defaultOutput` — the node supplying the module's top-level channels —
- * plus EVERY TARGETED plain Output, which supplies its own `parts` /
- * `materialParts` entry. A dozen call sites each re-deriving "who contributes"
- * is how they drift, which is what B2 found; this is the `costSeeds` shape and
- * the same reasoning.
+ * emission-side consumer reads (graphToCode, both export plans, the code
+ * panel's tabs, the preview and its XR popup): `defaultOutput` plus EVERY
+ * TARGETED plain Output, returned in `outputsInEmitOrder`.
  *
  * **The active flag governs only the UNTARGETED half.** A targeted Output
- * shades the meshes it names and nothing else, so parking it behind another
- * node's flag would silently drop a material the canvas still shows — and
- * would make "which meshes does this shader paint" depend on a choice the user
- * made about a different node. Among UNTARGETED Outputs exactly one
- * contributes (the flagged one, else the first), which is what still lets a
- * whole-model variant be parked beside the one in use.
+ * always contributes; among UNTARGETED ones exactly one does (the flagged one,
+ * else the lowest-ranked), so a whole-model variant can be PARKED.
  *
- * Returned in `outputsInEmitOrder`, so a caller that walks the list is already
- * walking the module's own order and never has to sort again.
- *
- * A DRIVING Raymarch Output silences every plain Output, and that check is
- * deliberately NOT made here: `activeSink`'s fallbacks are ARRAY-ORDER
- * dependent, and its callers do not all hold the same array — graphToCode
- * resolves the march over the TOPOLOGICALLY SORTED nodes while reading the
- * Output off the raw list. Answering it here, over whichever array this
- * happened to be handed, could elect a different sink than the caller already
- * did. So each caller keeps its own march check, exactly where it has always
- * been.
+ * A DRIVING custom sink silences every plain Output, and that check is
+ * deliberately NOT made here: `activeSink`'s first-wired fallback reads array
+ * order and its callers do not all hold the same array (graphToCode resolves
+ * it over the TOPOLOGICALLY SORTED nodes). Each caller keeps its own check.
  */
 export function contributingOutputs(nodes: readonly AppNode[]): AppNode[] {
   const def = defaultOutput(nodes);
@@ -1722,62 +1109,31 @@ function cleanPorts(v: unknown): string[] | undefined {
 }
 
 /**
- * Validate the `materials` array arriving from any restore path.
+ * Validate every Output's binding — and a folded node's `materials` array —
+ * on any restore path. The mesh name reaches GENERATED CODE the XR popup runs
+ * at the app's real origin, so this is `sanitizeEdgeExtras`' trust level and
+ * contract: the SAME array comes back when nothing needed changing.
  *
- * Every field here rides `fs:graph`, the project embed, the saved-group library
- * and ~50 history clones, and the mesh name reaches GENERATED CODE that the XR
- * popup executes at the app's real origin — so this is the same trust level as
- * `sanitizeEdgeExtras`, and the same contract: return the SAME array when
- * nothing needed changing, so the autosave subscriber and
- * `selectionOnlyGraphChange` can keep comparing by reference.
+ *  - targets are NORMALIZED to a `meshTargets` list (de-duped, capped, every
+ *    name re-validated); the older `meshTarget: { name }` is rewritten, and a
+ *    node with no usable name loses both keys;
+ *  - a DUPLICATE name or index is KEPT (emission resolves it first-wins and
+ *    the node marks the shadowed one): dropping the loser would delete a
+ *    material, with its wiring, on the next reload;
+ *  - a folded entry with NO usable target is KEPT, empty — the state a swap
+ *    passes through. It shades nothing and is not a second default;
+ *  - an INDEX binding is kept only inside a valid `modelSignature`, and names
+ *    beside it are dropped; an invalid one is DETACHED into an empty named
+ *    material, wiring kept;
+ *  - `modelSignature` survives only beside a surviving index binding, and
+ *    `modelMeshes` only beside the signature;
+ *  - folded entries are capped (`MAX_PARTS` named, `MAX_INDEX_MATERIALS`
+ *    index, counted apart), stripped of unknown keys and never REORDERED
+ *    (their handles are positional, `m<k>:`).
  *
- * Rules, all silent-failure-proof by construction rather than by care:
- *  - targets are NORMALIZED to a `meshTargets` list — one material may shade
- *    several meshes — de-duped within the material, capped, every name
- *    re-validated. The older single `meshTarget: { name }` is read once here and
- *    rewritten, so the rest of the codebase has exactly one shape to handle;
- *  - a material whose every name is unusable is DROPPED, and material 0's own
- *    target keys go with them, so a hostile file cannot park an unbounded
- *    string there;
- *  - a DUPLICATE name is KEPT. Two materials may name one mesh, because the
- *    picker lets them: forbidding it made swapping two materials' meshes
- *    impossible without deleting one first, and dropping the loser here would
- *    silently delete a whole section — with its wiring — on the next reload.
- *    Emission resolves a duplicate first-wins, so a live graph and a reloaded
- *    one still render identically; the node marks the shadowed section;
- *  - a material with NO usable target is KEPT, empty. It is not a second
- *    default (only material 0's empty list means "everything else") — it shades
- *    nothing, emits nothing, and is the state a swap passes through when one
- *    material's last mesh moves to another. Dropping it here would delete a
- *    section, and its wiring, on the reload after an ordinary swap;
- *  - the list is capped at `MAX_PARTS`, one MORE than the "+ Add output" button
- *    offers: a code-panel Apply turns a targeted material 0 into an ADDED one,
- *    so a bound at `MAX_ADDED_MATERIALS` would delete a material the user can
- *    legitimately have authored;
- *  - unknown keys are stripped, so a tampered file cannot smuggle an unbounded
- *    payload past the caps by hanging it off a material;
- *  - an INDEX section (`gltfMaterialIndex`) is kept only when the node's
- *    `modelSignature` is valid and the index falls inside it; it carries no
- *    targets (any it held are dropped, and counted). Otherwise it is DETACHED
- *    into an empty named section — wiring kept, counted — the "keep, don't
- *    delete a section" rule. Duplicate indices are KEPT (first claim wins at
- *    emission, `planIndexParts`). Index sections are capped at
- *    `MAX_INDEX_MATERIALS`, named ones at `MAX_PARTS`, counted separately;
- *  - `modelSignature` survives only beside a surviving index section, and
- *    `modelMeshes` only beside a surviving signature (`sanitizeModelMeshes`);
- *    a node-level `gltfMaterialIndex` is deleted (material 0 never has one).
- *    The entries are never REORDERED: handles are positional (`m<k>:`).
- *
- * Every drop is COUNTED (`trimmed`) so a restore path can announce it (decision
- * 9: a cap that does not announce itself reads as data loss): sections past
- * `MAX_PARTS` / `MAX_INDEX_MATERIALS`, non-object entries, a non-array
- * `materials`, names that are unusable or past a section's `MAX_PARTS` cap —
- * material 0's own list included — index sections detached for an invalid
- * index or signature, and an index section that also carried names.
- * De-duplicating a name is NOT a loss and is not counted, and neither is a
- * dropped signature or mirror list with no index section to serve.
- * `sanitizeOutputMaterials` is the uncounted wrapper, for the paths that
- * re-sanitize data a restore already reported.
+ * Every drop is COUNTED (`trimmed`) so a restore path can announce it;
+ * de-duplicating a name is not a loss. `sanitizeOutputMaterials` is the
+ * uncounted wrapper, for paths re-sanitizing data a restore already reported.
  */
 export function sanitizeOutputMaterials(nodes: AppNode[]): AppNode[] {
   return sanitizeOutputMaterialsReport(nodes).nodes;
@@ -1826,18 +1182,9 @@ export function sanitizeOutputMaterialsReport(nodes: AppNode[]): { nodes: AppNod
     const rawSig = dn.modelSignature;
     const rawMeshes = dn.modelMeshes;
     const sig = rawSig === undefined ? null : sanitizeModelSignature(rawSig);
-    /**
-     * Is MATERIAL 0 ITSELF an index section? `unfoldOutputMaterials` gives each
-     * material its own node, and an import-built section's glTF binding then
-     * has nowhere to live but `data.gltfMaterialIndex` — so this key is now a
-     * real, kept shape rather than a stray to delete. Judged by the SAME rule
-     * as an entry's: only a signature the node carries can vouch for an index.
-     *
-     * Before the split this key was deleted unconditionally, which would have
-     * destroyed every unfolded index node on the load AFTER the one that split
-     * it — the sections and their signature gone, silently, leaving a document
-     * of blank untargeted Outputs.
-     */
+    // The node's OWN index binding (what the unfold writes) is a real, kept
+    // shape, judged by the rule an entry's is: only a signature the node
+    // carries can vouch for an index. Deleting it blanks every index node.
     const nodeIndex = dn.gltfMaterialIndex;
     const nodeIndexValid = isGltfMaterialIndex(nodeIndex) && sig !== null && nodeIndex < sig.materials.length;
 
@@ -1997,70 +1344,15 @@ export function sanitizeOutputMaterialsReport(nodes: AppNode[]): { nodes: AppNod
 }
 
 /**
- * Re-point the edges of every material AFTER `removedIndex` one slot down.
+ * Drop the edges whose `m<k>:` handle names a material an Output node does not
+ * have: React Flow keeps such an edge, never draws it, and reports error 008
+ * for it every frame. A DORMANT node's edges are untouched.
  *
- * Removing a material renumbers the ones below it, so their handles move with
- * them: without this, removing the first of three strands material 3's wiring
- * on an `m3:` handle that now belongs to nothing — React Flow keeps such an
- * edge in the store and still emits code for it while never DRAWING it.
+ * Every restore path runs `unfoldOutputMaterials` first, so what reaches here
+ * is an `m<k>:` handle on an Output with no `materials` key — only a
+ * hand-edited or foreign file carries one.
  *
- * The id is re-derived with the handle, because an edge id is built from its
- * endpoints: a moved edge carrying its old id collides with the next edge that
- * really does connect that pair, and anything keyed on it then names a handle
- * that no longer exists.
- *
- * Returns the SAME array when no edge moved.
- *
- * NO PRODUCTION CALLER since the per-material Output split: its only one was
- * the node's ✕, which removed a material out of a stack — a material is a NODE
- * now, so removing one deletes the node and there is no later section to
- * renumber. Kept as a tested primitive on the terms the materials-form plans
- * are kept on (see `planNamedParts`), because a folded `.fastshader` can still
- * carry `m<n>:` handles and any future code that renumbers them must not
- * re-derive this by hand.
- */
-export function shiftMaterialHandles(
-  edges: readonly AppEdge[],
-  nodeId: string,
-  removedIndex: number,
-): AppEdge[] {
-  let changed = false;
-  const out = edges.map((e) => {
-    if (e.target !== nodeId || typeof e.targetHandle !== 'string') return e;
-    const { index, channel } = parseChannelHandle(e.targetHandle);
-    if (index <= removedIndex) return e;
-    changed = true;
-    const targetHandle = channelHandle(index - 1, channel);
-    return {
-      ...e,
-      id: generateEdgeId(e.source, e.sourceHandle ?? 'out', nodeId, targetHandle),
-      targetHandle,
-    };
-  });
-  return changed ? out : (edges as AppEdge[]);
-}
-
-/**
- * Drop the edges whose `m<k>:` handle names a material an Output node no
- * longer has.
- *
- * A restore that dropped a section (a cap, an invalid entry) must not leave its
- * wires in the store: React Flow keeps such an edge, never draws it, emits
- * nothing for it, and reports error 008 for it every frame — unscoped, since
- * the section is not dormant, it is gone. A DORMANT section is untouched: its
- * material still exists, only its visibility sleeps. Edges into non-Output
- * nodes, or with no string handle, are never touched.
- *
- * Its JOB NARROWED with the Output split and did not disappear: every restore
- * path runs `unfoldOutputMaterials` first, which moves an in-range `m<k>:` edge
- * onto the k-th sibling's BARE handle and drops one whose material or channel
- * does not exist. What reaches here is an `m<k>:` handle on an Output the split
- * did not touch — a node with no `materials` key at all, so `materialCount` is
- * 1 and every `m<k>:` is orphaned. Only a hand-edited or foreign file can carry
- * one, which is exactly the input this exists for.
- *
- * Returns the SAME array when nothing was pruned (the autosave subscriber and
- * `selectionOnlyGraphChange` compare by reference).
+ * Returns the SAME array when nothing was pruned.
  */
 export function pruneOrphanMaterialEdges(
   nodes: readonly AppNode[],
@@ -2084,27 +1376,15 @@ export function pruneOrphanMaterialEdges(
 
 /**
  * Vertical pitch between an unfolded sibling and the one above it, in flow
- * units. A one-material Output measures ~137px tall (layoutEngine's own
- * estimate, measured in Chromium), so this leaves a visible gap without
- * inventing a layout: the siblings come out as a column in the order the
- * sections were stacked inside the node they replace. Where they REALLY
- * belong is a question only the canvas answers.
- *
- * Exported because the resync places a newly-parsed Output on the same pitch
- * (`placeParsedOutputs`, utils/resyncPairing.ts) — the column has to read as
- * one column whichever path produced its members, and a second literal is the
- * way the two drift.
+ * units (a one-material Output measures ~137px tall). Exported because the
+ * resync places a newly-parsed Output on the same pitch (`placeParsedOutputs`,
+ * utils/resyncPairing.ts), so a built and a restored column are one column.
  */
 export const UNFOLD_DY = 180;
 
-
-/** Lazily-read set of the Output def's real channel ids.
- *
- *  Read from the REGISTRY, so it cannot drift from the ports the node renders,
- *  and read LAZILY because this module sits inside the store's import cycle
- *  (`nodeCost → outputMaterials → exposedPorts → edgeUtils → useAppStore`) —
- *  a module-scope `new Set(NODE_REGISTRY…)` would be an evaluation across it
- *  during initialisation, which is the costTable TDZ class. */
+/** The Output def's real channel ids, from the REGISTRY so they cannot drift
+ *  from the ports the node renders. Read LAZILY: a module-scope read would
+ *  evaluate across the store's import cycle (the costTable TDZ class). */
 let outputChannelIds: Set<string> | null = null;
 function isOutputChannel(id: string): boolean {
   outputChannelIds ??= new Set((NODE_REGISTRY.get('output')?.inputs ?? []).map((p) => p.id));
@@ -2131,60 +1411,28 @@ function unfoldedId(outputId: string, index: number, taken: ReadonlySet<string>)
 }
 
 /**
- * The INVERSE of `foldExtraOutputs`: every Output carrying `data.materials`
- * becomes one Output NODE per material, all of them on the BARE channel
- * handles material 0 already uses.
+ * THE UNFOLD: every Output carrying `data.materials` becomes one Output NODE
+ * per material, all on the BARE channel handles. The permanent migration —
+ * every file saved before the split still carries the folded shape.
  *
- * PURE, and run by ALL FOUR restore paths — `loadGraph` and
- * `loadSavedGroupsReport` (store/useAppStore.ts), `instantiateSavedGroup` (on
- * the COMBINED live-graph + arriving list) and `applyProjectToStore`
- * (engine/projectImport.ts) — each of them AFTER `sanitizeOutputMaterials` and
- * `sanitizeEdgeExtras`, because it walks and re-points the edge list. It is the
- * permanent migration, not a transitional one: both producers
- * (`gltfSectionBuilder`, `codeToGraph`) build the split shape directly now, but
- * every `.fastshader`, `fs:graph` autosave and saved group written before the
- * split still carries a folded document, and always will.
+ * PURE, and run by every restore path AFTER `sanitizeOutputMaterials` and
+ * `sanitizeEdgeExtras` (it re-points the edge list) and before
+ * `normalizeActiveOutput`. See docs/dev/outputs-and-materials.md.
  *
- * What survives, and why each rule exists:
+ *  - Node 0 IS the original node (same id and position), minus `materials`.
+ *  - `emitOrder` is seeded from the old material index and read only through
+ *    `emitRank`: emit order, never array order (see `outputsInEmitOrder`).
+ *  - Sibling ids are DETERMINISTIC (`unfoldedId`).
+ *  - Every moved edge is re-derived with `generateEdgeId`, and its channel is
+ *    validated against the port list (a tampered `m1:zzz` is dropped). Edges
+ *    that parse to index 0 are not touched.
+ *  - `modelSignature` is REPLICATED onto every index node; `modelMeshes` stays
+ *    ONE WHOLE LIST on the lowest-ranked index node, never regrouped per
+ *    material (its stored order is module TEXT).
  *
- *  - **Node 0 IS the original node** — same id, same position, same values,
- *    ports, settings and mesh targets, minus `materials`. Minting a fresh node
- *    for material 0 would strand every edge on the bare handles that already
- *    spell its channels, and lose the node's place in the user's layout.
- *  - **`emitOrder`** is seeded from the old material index (node 0 → 0,
- *    `materials[k]` → k+1) and read only through `emitRank`. Emitted `parts`
- *    key order may NEVER be derived from the nodes array:
- *    `liftChildrenAfterParents` splices a node into a new slot on an ordinary
- *    drag-into-a-group and `useSyncEngine` reorders on every Apply, so the
- *    module text would change on a layout gesture — the preview recompiles,
- *    the autosave dirties and `__partPixel<n>` renumbers.
- *  - **Every moved edge is re-derived** with `generateEdgeId`. The id is a
- *    function of the endpoints, so a stale one collides with the next edge
- *    that really does connect that pair, and dedupe logic keyed on it drops
- *    one of them.
- *  - **The channel is validated against the port list.** `parseChannelHandle`
- *    returns `{ index: 0, channel: <the whole string> }` for anything it does
- *    not match, so without this a tampered `m1:zzz` would land on a sibling
- *    wearing a bare handle no port has — invisible, un-hit-testable, and a
- *    permanent 008. Nothing validates this today. Edges that parse to index 0
- *    (a bare channel, `m0:color`, junk) are NOT touched at all: they already
- *    sit on node 0 exactly as they will after the unfold, and pruning them is
- *    `pruneOrphanMaterialEdges`' job, not this one.
- *  - **`modelSignature` is REPLICATED** onto every index node (dormancy is
- *    per node and needs it there) and dropped from a node holding no index
- *    section, which is what `sanitizeOutputMaterialsReport` does too.
- *  - **`modelMeshes` stays ONE WHOLE LIST** on the lowest-`emitRank` index
- *    node, never split per material: `gltfSectionBuilder` fills it in
- *    first-scene-appearance order, which INTERLEAVES materials, and
- *    `materialPartsMirrorPlan` walks that stored order straight into module
- *    TEXT — regrouping it by material would silently reorder the mirror keys
- *    of every already-distributed single-GLB export.
- *
- * Returns the SAME arrays when no Output carries a `materials` key: the
- * autosave subscriber and `selectionOnlyGraphChange` compare by reference, so
- * a new array on a clean document rewrites `fs:graph` on every boot. An EMPTY
- * `materials: []` is not clean — the key itself is what the split shape
- * retires — so it costs one new array and has the key removed.
+ * Returns the SAME arrays when no Output carries a `materials` key (the
+ * autosave compares by reference). An EMPTY `materials: []` is not clean: the
+ * key itself is what the split retires.
  */
 export function unfoldOutputMaterials(
   nodes: AppNode[],
@@ -2306,18 +1554,9 @@ export function unfoldOutputMaterials(
     });
   }
 
-  // Grow any frame the new siblings hang out of. A sibling inherits `parentId`
-  // through the `{ ...out }` spread above and is stacked `i * UNFOLD_DY` BELOW
-  // its original in the parent's own space, while `extent: 'parent'` is stripped
-  // on load and never re-attached — so React Flow DRAWS it outside the frame
-  // rather than clamping it, and nothing in this app resizes a frame after
-  // nodes are added to it programmatically. A folded Output saved inside a
-  // group came back with its materials strewn below the frame, and the only
-  // repair was a collapse/expand round trip nobody would think to try.
-  //
-  // Scoped to the ids THIS call minted, and unpadded — see `growGroupFrames`.
-  // Returns the SAME array when nothing grew, which is every document whose
-  // folded Outputs sit at root.
+  // Grow any group frame the new siblings hang out of (they inherit
+  // `parentId`, and nothing else resizes a frame after a programmatic add).
+  // Scoped to the ids THIS call minted; the SAME array when nothing grew.
   return { nodes: growGroupFrames(nextNodes, minted, UNFOLD_DY), edges: nextEdges };
 }
 
@@ -2363,50 +1602,17 @@ export function sanitizeModelMeshes(
 }
 
 /**
- * The loader-0.6 MIRROR plan for an Output (materialPartsContract R2/R4): one
- * entry per `modelMeshes` name whose glTF material has an EMITTED index
- * section, minus every name a named section claims (a name claim wins, the
- * same precedence as 0.8) — in stored order, each name once, capped at
- * `MAX_MIRROR_ENTRIES`. [] unless the node is an Output with a valid signature.
+ * The loader-0.6 MIRROR plan across a SET of Output nodes (materialPartsContract
+ * R2/R4): one entry per `modelMeshes` name whose glTF material has an EMITTED
+ * index section, minus every name a NAME section claims anywhere (a name claim
+ * wins, as in 0.8) — in stored order, each name once, capped at
+ * `MAX_MIRROR_ENTRIES`. Module-only (R7).
  *
- * Emission must never read the session's `previewMesh` facts (they are absent
- * under a different model, and would make the module depend on what is
- * loaded) — that is why the names ride node data. Every module path passes
- * this plan to buildShaderModule, which writes the mirrors into the MODULE
- * only (R7).
- */
-export function materialPartsMirrorPlan(node: AppNode | null | undefined): MaterialPartsMirrorEntry[] {
-  if (!node || !isOutputNode(node)) return [];
-  const rawMeshes = (node.data as { modelMeshes?: unknown }).modelMeshes;
-  const sig = readModelSignature(node.data);
-  if (!sig) return [];
-  const materials = outputMaterials(node);
-  return mirrorEntries(
-    rawMeshes,
-    sig,
-    new Set(planIndexParts(materials, sig).entries.map((e) => e.gltfIndex)),
-    new Set(materials.flatMap((m) => materialTargetNames(m))),
-  );
-}
-
-/**
- * The same plan across a SET of Output nodes (B5).
- *
- * `modelMeshes` is read from the LOWEST-RANKED node carrying an index section
- * and is never regrouped per material: `gltfSectionBuilder` fills it in
- * FIRST-SCENE-APPEARANCE order, which interleaves materials, and this plan
- * walks that stored order straight into module TEXT (`materialPartsMirror` and
- * the mirror `parts` keys). Splitting it per node and concatenating would emit
- * an interleaved scene's A,B,C as B,A,C — silently reordering the mirror keys
- * of every already-distributed single-GLB export.
- *
- * `modelSignature` comes from that SAME node (the sanitizer detaches any index
- * node whose copy differs, so there is only ever one live signature), while the
- * two sets that decide what survives are CROSS-NODE: which glTF indices really
- * emit, and which names a NAME section claims anywhere. Per node the second
- * would be wrong in the direction that matters — a mirror would paint a mesh an
- * Output elsewhere has claimed by name, which loader 0.8's precedence says the
- * name wins.
+ * `modelMeshes` and `modelSignature` are read from the LOWEST-RANKED index
+ * node. The list is never regrouped per material: it is in
+ * FIRST-SCENE-APPEARANCE order, which interleaves materials, and that stored
+ * order is module TEXT. Emission never reads the session's `previewMesh`
+ * facts — that is why the names ride node data.
  */
 export function materialPartsMirrorPlanAcross(outputs: readonly AppNode[]): MaterialPartsMirrorEntry[] {
   const ordered = outputsInEmitOrder(outputs);
@@ -2467,4 +1673,249 @@ export function carryModelMeshes(merged: AppNode, old: AppNode): void {
   const b = readModelSignature(old.data);
   if (!a || !b || !modelSignatureMatches({ materials: a }, { materials: b })) return;
   (merged.data as Record<string, unknown>).modelMeshes = meshes;
+}
+
+/* ── List-form primitives: NO PRODUCTION CALLER, kept for their suites ─────
+ *
+ * Since one Output node became one material, every surface reads the
+ * `…Across` forms above. These are KEPT deliberately: the golden in
+ * `outputSectionCaps.test.ts` pins `claimNamedParts` against the emission
+ * loop every committed snapshot came out of, and it is written over a
+ * material LIST. The plans run the SAME bodies as their cross-node twins, and
+ * `outputPlansAcross.test.ts` pins the one-node equivalence.
+ * See docs/dev/outputs-and-materials.md.
+ */
+
+/** `NamedPartsPlanAcross` for ONE material list: sections, not nodes. */
+export interface NamedPartsPlan {
+  /** Emitted entries, in section order, each name once. */
+  entries: { name: string; section: number }[];
+  /** Sections that NAME a mesh but emit no entry: every name was claimed by
+   *  a section above (or, on data no sanitizer admitted, fell past the cap).
+   *  An EMPTY section is never shadowed — it is "No mesh", a different state. */
+  shadowed: Set<number>;
+  /** Names past `MAX_PART_ENTRIES`, dropped at emission. Empty for every
+   *  graph a restore path has sanitized (9 × 9 = 81 < 90). */
+  overCap: string[];
+}
+
+/** The name plan of ONE material list: `claimNamedParts` with no node. It
+ *  carries `outputSectionCaps.test.ts`'s golden. */
+export function planNamedParts(materials: readonly OutputMaterial[]): NamedPartsPlan {
+  const st: NamedClaimState = { entries: [], overCap: [], claimed: new Set() };
+  const shadowed = claimNamedParts(st, materials, '');
+  return {
+    entries: st.entries.map(({ name, section }) => ({ name, section })),
+    shadowed,
+    overCap: st.overCap,
+  };
+}
+
+/** `IndexPartsPlanAcross` for ONE material list. */
+export interface IndexPartsPlan {
+  /** Emitted entries, ascending by glTF index, each index once. */
+  entries: { gltfIndex: number; section: number }[];
+  /** Sections whose glTF index an EARLIER section already claims: inert. */
+  duplicates: Set<number>;
+  /** Sections past `MAX_INDEX_MATERIALS`: dropped at emission. Empty for
+   *  every graph a restore path has sanitized. */
+  overCap: number[];
+}
+
+/** The index plan of ONE material list: `claimIndexParts` with no node. */
+export function planIndexParts(
+  materials: readonly OutputMaterial[],
+  signature: readonly string[] | null,
+): IndexPartsPlan {
+  if (!signature) return { entries: [], duplicates: new Set(), overCap: [] };
+  const st: IndexClaimState = { entries: [], overCap: [], claimed: new Set() };
+  const duplicates = claimIndexParts(st, materials, signature, '');
+  const entries = st.entries.map(({ gltfIndex, section }) => ({ gltfIndex, section }));
+  entries.sort((a, b) => a.gltfIndex - b.gltfIndex);
+  return { entries, duplicates, overCap: st.overCap.map((e) => e.section) };
+}
+
+/** The ADDED sections of one folded node by kind; the two caps are counted
+ *  apart (`MAX_PARTS` named, `MAX_INDEX_MATERIALS` index). */
+export function countSections(materials: readonly OutputMaterial[]): { named: number; index: number } {
+  let named = 0;
+  let index = 0;
+  for (let i = 1; i < materials.length; i++) {
+    if (isIndexSection(materials[i])) index++;
+    else named++;
+  }
+  return { named, index };
+}
+
+/** The same count across a SET of Output nodes — a RUNNING TOTAL. */
+export function countSectionsAcross(outputs: readonly AppNode[]): { named: number; index: number } {
+  let named = 0;
+  let index = 0;
+  for (const n of outputsInEmitOrder(outputs)) {
+    const c = countSections(outputMaterials(n));
+    named += c.named;
+    index += c.index;
+  }
+  return { named, index };
+}
+
+/** The coverage of ONE node's index sections; `namedPlan` is its name plan. */
+export function indexSectionCoverage(
+  materials: readonly OutputMaterial[],
+  signature: readonly string[] | null,
+  loaded: LoadedModel,
+  namedPlan: NamedPartsPlan,
+): Map<number, IndexCoverage> {
+  if (!signature) return new Map();
+  return coverageOfMaterials(
+    materials,
+    signature,
+    loaded,
+    new Set(namedPlan.entries.map((e) => e.name)),
+    planIndexParts(materials, signature).duplicates,
+  );
+}
+
+/** The mesh a new NAME section is seeded with: first one no name section
+ *  claims and no index section covers, else one no name section claims (it
+ *  then OVERRIDES its material's index section). Null when every mesh is
+ *  name-claimed; never mints a duplicate NAME claim. */
+export function pickFreeMesh(
+  meshNames: readonly string[],
+  materials: readonly OutputMaterial[],
+  coverage: ReadonlyMap<number, IndexCoverage>,
+): string | null {
+  const claimed = new Set(materials.flatMap((m) => materialTargetNames(m)));
+  const covered = new Set<string>();
+  for (const c of coverage.values()) for (const n of c.meshes) covered.add(n);
+  return pickFrom(meshNames, claimed, covered);
+}
+
+/** The same choice across a SET of Output nodes: a mesh is taken if ANY of
+ *  them names it. */
+export function pickFreeMeshAcross(
+  meshNames: readonly string[],
+  outputs: readonly AppNode[],
+  coverage: ReadonlyMap<string, ReadonlyMap<number, IndexCoverage>>,
+): string | null {
+  const claimed = new Set<string>();
+  for (const n of outputsInEmitOrder(outputs)) {
+    for (const m of outputMaterials(n)) for (const name of materialTargetNames(m)) claimed.add(name);
+  }
+  const covered = new Set<string>();
+  for (const byNode of coverage.values()) for (const c of byNode.values()) for (const n of c.meshes) covered.add(n);
+  return pickFrom(meshNames, claimed, covered);
+}
+
+/** The two-pass preference both forms share: an entirely free mesh first,
+ *  then one only an index section covers. */
+function pickFrom(
+  meshNames: readonly string[],
+  claimed: ReadonlySet<string>,
+  covered: ReadonlySet<string>,
+): string | null {
+  return meshNames.find((n) => !claimed.has(n) && !covered.has(n))
+    ?? meshNames.find((n) => !claimed.has(n))
+    ?? null;
+}
+
+/** `defaultSectionUnusedAcross` for ONE material list, material 0 being the
+ *  default. */
+export function defaultSectionUnused(
+  meshNames: readonly string[],
+  materials: readonly OutputMaterial[],
+  namedPlan: NamedPartsPlan,
+  coverage: ReadonlyMap<number, IndexCoverage>,
+): boolean {
+  if (materials.length < 2 || meshNames.length === 0) return false;
+  if (materialTargetNames(materials[0]).length > 0) return false;
+  // The names emission really gives to a name section (first claim wins), plus
+  // every mesh an index section covers — `pickFreeMesh`'s two sets.
+  const taken = new Set(namedPlan.entries.map((e) => e.name));
+  for (const c of coverage.values()) for (const n of c.meshes) taken.add(n);
+  return meshNames.every((n) => taken.has(n));
+}
+
+/** The dormant set of `findDefaultOutput`'s node, derived from the whole
+ *  store through `dormancyOptsFor` — the builder `outputEdgeIsDormant` uses. */
+export function outputDormancyFromState(state: DormancyState): {
+  outputId: string | null;
+  dormant: Set<number>;
+  visibleCount: number;
+} {
+  const out = findDefaultOutput(state.nodes as AppNode[]);
+  if (!out) return { outputId: null, dormant: new Set(), visibleCount: 0 };
+  const materials = outputMaterials(out);
+  const dormant = dormantIndicesForPreview(materials, dormancyOptsFor(state, out));
+  return { outputId: out.id, dormant, visibleCount: materials.length - dormant.size };
+}
+
+/** `assignMeshTargetsAcross` over ONE material list: material `index` gets
+ *  exactly `names` and every OTHER material loses them. A material stripped
+ *  of its last mesh is KEPT, empty. Pure: a fresh list, never a mutation. */
+export function assignMeshTargets(
+  materials: readonly OutputMaterial[],
+  index: number,
+  names: readonly string[],
+): OutputMaterial[] {
+  // An index section is bound to a MATERIAL, not to names: targeting one is
+  // refused (a fresh list, per the purity contract), and every index section
+  // below keeps its object reference and gains no `meshTargets` key. A mesh
+  // ticked in a NAME section that an index section's material also covers is
+  // an OVERRIDE (the name claim wins, loader 0.8's precedence), not a move.
+  if (isIndexSection(materials[index])) return materials.map((m) => m);
+  const taken = new Set(names);
+  return materials.map((m, i) => {
+    if (isIndexSection(m)) return m;
+    // The legacy single-target key is dropped on any edit, so the two shapes
+    // can never disagree about what a material shades.
+    const { meshTarget: _legacy, ...rest } = m;
+    return {
+      ...rest,
+      meshTargets: i === index
+        ? [...names]
+        : materialTargetNames(m).filter((n) => !taken.has(n)),
+    };
+  });
+}
+
+/** Re-point the edges of every material AFTER `removedIndex` one slot down,
+ *  re-deriving each edge id with its handle; the SAME array when no edge
+ *  moved. A folded file can still carry `m<n>:` handles, and code that
+ *  renumbers them must not re-derive this by hand. */
+export function shiftMaterialHandles(
+  edges: readonly AppEdge[],
+  nodeId: string,
+  removedIndex: number,
+): AppEdge[] {
+  let changed = false;
+  const out = edges.map((e) => {
+    if (e.target !== nodeId || typeof e.targetHandle !== 'string') return e;
+    const { index, channel } = parseChannelHandle(e.targetHandle);
+    if (index <= removedIndex) return e;
+    changed = true;
+    const targetHandle = channelHandle(index - 1, channel);
+    return {
+      ...e,
+      id: generateEdgeId(e.source, e.sourceHandle ?? 'out', nodeId, targetHandle),
+      targetHandle,
+    };
+  });
+  return changed ? out : (edges as AppEdge[]);
+}
+
+/** `materialPartsMirrorPlanAcross` for ONE node: [] unless it is an Output
+ *  with a valid signature. */
+export function materialPartsMirrorPlan(node: AppNode | null | undefined): MaterialPartsMirrorEntry[] {
+  if (!node || !isOutputNode(node)) return [];
+  const rawMeshes = (node.data as { modelMeshes?: unknown }).modelMeshes;
+  const sig = readModelSignature(node.data);
+  if (!sig) return [];
+  const materials = outputMaterials(node);
+  return mirrorEntries(
+    rawMeshes,
+    sig,
+    new Set(planIndexParts(materials, sig).entries.map((e) => e.gltfIndex)),
+    new Set(materials.flatMap((m) => materialTargetNames(m))),
+  );
 }

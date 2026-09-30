@@ -21,8 +21,7 @@
 // The storage keys all live in evalMode.ts, so the writer (the redirector),
 // this reader and clearEvalMode's eraser cannot drift apart. Importing the
 // key rather than defining it here also keeps the dependency one-way.
-export { EVAL_TASK_KEY } from './evalMode';
-import { EVAL_TASK_KEY as TASK_KEY, isEvalMode } from './evalMode';
+import { EVAL_TASK_KEY, isEvalMode } from './evalMode';
 
 export interface EvalTask {
   /** Task identifier from `?task=` — null when the session is unlabelled. */
@@ -131,7 +130,7 @@ const TASK: EvalTask = (() => {
   if (!isEvalMode()) return { ...DEFAULT_EVAL_TASK };
   let raw: string | null = null;
   try {
-    raw = sessionStorage.getItem(TASK_KEY);
+    raw = sessionStorage.getItem(EVAL_TASK_KEY);
   } catch {
     return { ...DEFAULT_EVAL_TASK };
   }

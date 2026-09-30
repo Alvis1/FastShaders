@@ -1,33 +1,12 @@
 import type { NodeCategory } from '@/types';
 
 /**
- * The palette's OPTIONAL categories — the ready-made Textures library and the
- * Distance fields family — which are OFF by default and switched on from the
- * toolbar's right-click list (the row beside "Trackpad scrolling").
- *
- * Off means "the editor never OFFERS them": no content-browser tab, no texture
- * cards or distance-field nodes in a live search, no rows in the Add-node
- * menu, none floated into its Recent list. It is an ADD-SURFACE filter, the
- * `editorVisibility` rule verbatim — `NODE_REGISTRY`, `getAllDefinitions()` and
- * `getBuiltinTextures()` keep every entry, so a saved `.fastshader`, a saved
- * group or a built-in preset holding one still loads, renders, compiles and
- * exports byte-identically whether the switch is on or off. Nothing under
- * `engine/` may import this module (`optionalCategories.test.ts` greps for it).
- *
- * Two layers, deliberately, and this is the SECOND: `editorVisibility.json`
- * hides individual UNFINISHED nodes as project source (the same answer for
- * every user of a build); this hides whole FINISHED categories per browser, as
- * a preference the user flips. The registry applies them in that order —
- * `getEditorDefinitions()` is the file's answer, `getEditorDefinitions(hidden)`
- * narrows it by this preference — so the tests that pin ranking over "the
- * editor set" stay meaningful whatever the user has switched on.
- *
- * The flags live in the store (the `trackpadScroll` precedent: several
- * surfaces read them, so React state in any one of them is the wrong home) and
- * persist per key, because a switch you flip in a settings list is expected to
- * stay flipped — a toggle that reset on reload would read as broken. This
- * replaced the `/textures` one-load session unlock (2026-09-04), whose
- * consume-once mechanism only existed because there was no visible control.
+ * The palette's OPTIONAL categories (Textures, Distance fields): OFF by
+ * default, switched on per browser from the toolbar's right-click list. An
+ * ADD-SURFACE filter layered over `editorVisibility`, never a registry filter:
+ * a graph holding these nodes loads, compiles and exports identically either
+ * way, and nothing under engine/, utils/ or hooks/ may import this module
+ * (optionalCategories.test.ts). See docs/dev/discovery-and-i18n.md.
  */
 export const OPTIONAL_CATEGORIES = ['texture', 'sdf'] as const satisfies readonly NodeCategory[];
 
@@ -81,20 +60,8 @@ export function hiddenOptionalCategories(flags: OptionalCategoryFlags): Readonly
 
 /**
  * COMPANIONS: node types that live in ANOTHER category but exist for an
- * optional family, and are withheld from the add surfaces together with it.
- *
- * The Raymarch Output is the case. It is a sink, so it sits in `output` (a
- * sink belongs with the sinks — it moved out of `sdf` on 2026-09-09), but it
- * renders distance fields, and with the family switched off it kept turning
- * up: as the second tile on the Output tab, and in either search for "sd",
- * "distance" or "march" — a whole family hidden and one door into it still
- * open (owner, 2026-09-16: "do not show in the search disabled assets group
- * nodes"). Ray Direction went in with it: it is the view ray the marcher's
- * Background scope is built on, and was added for that.
- *
- * Same standing as the category filter — an ADD-SURFACE rule only. A graph
- * holding either node still loads, renders, compiles and exports; the family
- * switch changes what is OFFERED, never what exists.
+ * optional family, withheld from the add surfaces together with it (a family
+ * hidden with one door left open was the reported bug). Add-surface only.
  */
 export const OPTIONAL_CATEGORY_COMPANIONS: Readonly<Record<OptionalCategory, readonly string[]>> = {
   texture: [],

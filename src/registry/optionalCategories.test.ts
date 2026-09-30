@@ -19,6 +19,7 @@ import { formatCategoryLabel, t } from '@/i18n';
 import nodeI18n from '@/i18n/node-i18n.json';
 import { useAppStore } from '@/store/useAppStore';
 import type { NodeCategory } from '@/types';
+import { stubLocalStorage } from '@/test-utils';
 
 /**
  * The palette's optional categories — Textures and Distance fields, OFF by
@@ -213,13 +214,7 @@ describe('the registry narrows by the hidden set', () => {
 
 describe('the store', () => {
   beforeEach(() => {
-    const map = new Map<string, string>();
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => map.get(k) ?? null,
-      setItem: (k: string, v: string) => void map.set(k, v),
-      removeItem: (k: string) => void map.delete(k),
-      clear: () => map.clear(),
-    });
+    stubLocalStorage();
     useAppStore.setState({ optionalCategories: DEFAULT_OPTIONAL_CATEGORIES });
   });
   // vite.config.ts runs suites with `isolate: false`: the store instance AND

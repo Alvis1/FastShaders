@@ -1,23 +1,5 @@
 /**
- * The Data Range node's user-editable formula.
- *
- * The settings menu lets a user type an expression like `(v - lo) / (hi - lo)`
- * and have the shader evaluate it. That string travels inside a shared
- * `.fastshader`, and the module graphToCode builds is EXECUTED at the app's real
- * origin by the XR popup (and shipped inside every downloaded `.js`) — so the
- * string must never become code.
- *
- * The precedent in this codebase is `isSafeUnknownExpression`
- * (engine/graphToCode.ts) — a validate-then-pass-through design: Babel parses
- * the string, an allow-list walk approves it, and the ORIGINAL string is then
- * spliced into the module. That is defensible for `unknown` nodes, whose string
- * came out of this app's own parser. It is the wrong shape here, because a
- * formula is *designed* to be typed by a human and *designed* to be shared.
- *
- * So this module is PARSE-THEN-RE-EMIT. The input is tokenized into a closed AST
- * that contains no free-form strings at all — identifiers resolve to members of
- * the `VarId` union at parse time, function names to members of `FuncId` — and
- * the emitter writes TSL from that AST using only its own literal tables.
+ * The Data Range node's user-editable formula — PARSE-THEN-RE-EMIT.
  *
  *   EMISSION CLOSURE (the security property). Every character emitted for a
  *   Data Range node is drawn from a finite, statically-known alphabet: the TSL
@@ -26,11 +8,8 @@
  *   reference `src` that graphToCode's own `scalarRefOf` produced. The user's
  *   string contributes ZERO characters.
  *
- * Injection is therefore not *blocked*, it is *unrepresentable*: there is no AST
- * node shape that can carry an attacker-chosen string to the emitter.
- *
- * Every rejection falls back to the built-in chain the node has always emitted,
- * so a hostile file still compiles — it just renders the mode it claims.
+ * Every rejection falls back to the built-in chain. See docs/dev/node-types.md
+ * § The Data Range formula box.
  */
 
 import type { AppNode } from '@/types';
@@ -844,15 +823,8 @@ export function sanitizeDataRangeNodes(nodes: AppNode[]): AppNode[] {
   const out = nodes.map((n) => {
     if ((n.data as { registryType?: string } | undefined)?.registryType !== 'dataRange') return n;
     const values = getNodeValues(n as Parameters<typeof getNodeValues>[0]);
-    // Plain property access, NEVER `'formula' in values` — `getNodeValues` is
-    // `data.values ?? {}`, which guards nullish and nothing else, so a tampered
-    // `values: 5` reaches here as a primitive and `in` THROWS on it. That throw
-    // lands inside `loadGraph`'s outer catch, which returns null and silently
-    // discards the user's ENTIRE saved graph on boot (the autosave then
-    // overwrites it, so it is destroyed rather than skipped); on the import path
-    // it escapes after pushHistory + setShaderName have already run, which is
-    // the mid-apply failure `extractProjectState`'s shape gate exists to
-    // prevent. `sanitizeDataNodes` gets this right and is the shape to copy.
+    // Plain property access, never `'formula' in values` — the values-map rule
+    // (`sanitizeDataNodes` has the shape).
     const f = (values as { formula?: unknown }).formula;
     if (f === undefined) return n;
     if (typeof f === 'string' && f.length <= MAX_FORMULA_CHARS) return n;

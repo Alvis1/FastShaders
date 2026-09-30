@@ -506,8 +506,11 @@ describe('PaletteColorPicker source guards', () => {
   });
 
   it('B6: the portal host is resolved, and fullscreen changes close the popover', () => {
-    expect(src).toMatch(/setHost\(pickPortalHost\(fsEl, anchor, document\.body\)\)/);
-    expect(src).toMatch(/webkitFullscreenElement/);
+    expect(src).toMatch(/setHost\(pickPortalHost\(fullscreenElement\(\), anchor, document\.body\)\)/);
+    // Both spellings live in the ONE reader every portal host goes through.
+    expect(readFileSync(path.join(__dirname, 'colorPickerModel.ts'), 'utf8')).toMatch(
+      /document\.fullscreenElement \?\? d\.webkitFullscreenElement/,
+    );
     expect(src).toContain("document.addEventListener('fullscreenchange', onFsChange)");
     expect(src).toContain("document.addEventListener('webkitfullscreenchange', onFsChange)");
     expect(src, 'the portal must mount into the resolved host, not document.body').toMatch(

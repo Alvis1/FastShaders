@@ -1,16 +1,20 @@
 /**
  * Shared builder for code-defined asset groups (built-in textures and presets).
  *
- * Each asset is TSL code parsed into a node graph via codeToGraph at startup,
+ * Each asset is TSL code parsed into a node graph via codeToGraph on first use,
  * then wrapped in a group container so it can be dragged onto the canvas like
  * a saved group. Extracted from builtinTextures.ts when the Presets library
  * arrived, so both libraries stay one implementation.
+ *
+ * The static `codeToGraph` import below is what makes this module (and the two
+ * libraries that import it) Babel-bearing: the main app reaches all three only
+ * through `import()`, which keeps `vendor-babel` off its entry wave.
  */
 
 import type { AppNode, AppEdge, GroupNodeData } from '@/types';
 import { codeToGraph } from '@/engine/codeToGraph';
 import { autoLayout, estimateNodeSize } from '@/engine/layoutEngine';
-import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 
 export interface CodeGroupEntry {
   id: string;
@@ -55,25 +59,10 @@ export function buildCodeGroup(entry: CodeGroupEntry, groupIdPrefix: string): Co
   }, 0);
 
   // Auto-layout with tight spacing for compact groups
-  const laid = autoLayout(nodes, edges, 'LR', { nodesep: 10, ranksep: 30 });
+  const laid = autoLayout(nodes, edges, { nodesep: 10, ranksep: 30 });
 
-  // Auto-expose input ports that have incoming edges (mirrors useSyncEngine logic)
-  for (const n of laid) {
-    const def = NODE_REGISTRY.get(n.data.registryType);
-    if (!def) continue;
-    const usesExposedPorts = def.category === 'noise' || def.type === 'output' || def.type === 'uv';
-    if (!usesExposedPorts) continue;
-
-    const connectedPorts = new Set<string>();
-    for (const e of edges) {
-      if (e.target === n.id && e.targetHandle) {
-        connectedPorts.add(e.targetHandle);
-      }
-    }
-    if (connectedPorts.size > 0) {
-      (n.data as Record<string, unknown>).exposedPorts = Array.from(connectedPorts);
-    }
-  }
+  // A wired param socket must be a visible one — the same hook every ingestion path runs.
+  autoExposeConnectedParamPorts(laid, edges);
 
   // Compute bounding box for the group container from each node's real
   // estimated footprint (a flat placeholder here would clip the tall noise

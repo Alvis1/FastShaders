@@ -6,7 +6,7 @@ import { contributingOutputs, materialPartsMirrorPlanAcross, moduleSettingsOutpu
 import { tslToShaderModule, type PropertyInfo, type ShaderModuleOptions } from './tslToShaderModule';
 import { embedProjectState, type FastShadersProject } from './fastShadersProject';
 import { planExportGraph, remapUniformKeys, type ExportGraph, type ExportScope } from './exportGraph';
-import { activeExportModel } from './exportModel';
+import { activeExportModel, exportFormatFor } from './exportModel';
 import { inlineImageAssetsFromNodes, imageAssetFor } from './imageAssets';
 import { EXPORT_IMAGE_REFS, referenceImagesInModule } from './projectImageRefs';
 import { getNodeValues } from '@/types';
@@ -24,7 +24,6 @@ import {
   type ExportPreflightChoice,
   type SingleGlbTooLarge,
 } from '@/utils/exportPreflight';
-import { effectiveExportFormat } from '@/utils/glbExportAvailability';
 import {
   glbExportRefusalText,
   glbExportReportNoteLines,
@@ -35,6 +34,7 @@ import { getKtx2Encoder } from '@/utils/ktx2Encoder';
 import type { SingleGlbBuildMode } from './exportSingleGlb';
 import type { ImportNoteLine } from '@/utils/importNote';
 import { safeJsonReviver } from '@/utils/safeJson';
+import { downloadBlob } from '@/utils/downloadBlob';
 
 /**
  * Shared "Download Shader" path. Lives outside any component so the toolbar
@@ -253,9 +253,10 @@ export function buildShaderBundle(opts: BuildShaderBundleOptions = {}): ExportBu
     shaderBaseName(state.shaderName),
     embedded,
     collectImageFiles(graph.nodes),
-    // The EXPORT button's right-click setting can exclude the loaded mesh (or
-    // add the shown built-in shape, `opts.model`) — and the export pre-flight
-    // can drop it for one build; see buildShaderBundleChecked.
+    // EXPORT passes the model it ships (`opts.model`: the shown dropped model,
+    // or a built-in shape's .obj for "Export with model"); a study session's
+    // checkbox can exclude the loaded mesh; and the export pre-flight can drop
+    // it for one build — see buildShaderBundleChecked.
     opts.includeMesh === false
       ? null
       : opts.model !== undefined
@@ -366,12 +367,24 @@ export interface ShaderExportAsks {
    */
   scope?: ExportScope;
   /**
-   * `'shown'`: ship the model the preview SHOWS, per the popover's "Export
-   * model" row, built-in shapes included (engine/exportModel.ts) — EXPORT
-   * only. Absent: a document save's rule, the dropped model per
-   * `exportIncludeMesh`.
+   * `'shown'`: EXPORT — the format and the model follow what the preview
+   * SHOWS (engine/exportModel.ts). Absent: a document save's rule, the dropped
+   * model per `exportIncludeMesh`, as a `.glb` whenever it can be packed.
    */
   model?: 'shown';
+  /**
+   * With `model: 'shown'` only: `'alternate'` is the EXPORT popover's smaller
+   * button — the other way out for this one export (`exportAlternate`): a
+   * built-in shape WITH its `.obj`, or a packable model as the `.zip` rather
+   * than the `.glb`. Absent = the EXPORT button itself.
+   */
+  variant?: 'alternate';
+  /**
+   * A document save that must stay the `.js`/`.zip` bundle: the Work folder
+   * writing back to a tracked `.js`/`.zip` (utils/workFolderFile.ts
+   * `keepsBundleFormat`), which a packable model would otherwise flip to `.glb`.
+   */
+  bundleOnly?: true;
 }
 
 /**
@@ -404,9 +417,9 @@ function withLeftOut<T extends ShaderExport>(out: T | null, graph: ExportGraph):
  * bundle format it delegates to `buildShaderBundleChecked` unchanged.
  *
  * A study session never reaches the GLB path: the check sits ABOVE the first
- * `prepareSingleGlb` call (the Format row is not rendered there either, but
- * the popover itself IS reachable by right-click), and the study package still
- * calls bare `buildShaderBundle()`.
+ * `prepareSingleGlb` call (the popover's smaller export button is not
+ * rendered there either, but the popover itself IS reachable by right-click),
+ * and the study package still calls bare `buildShaderBundle()`.
  *
  * TIMING. Building a `.glb` awaits the PNG/JPEG fallback encodes, so this path
  * cannot keep `buildShaderBundleChecked`'s microtask-only rule. `prepared.build`
@@ -423,10 +436,18 @@ export async function buildShaderExportChecked(asks: ShaderExportAsks): Promise<
   // Resolved ONCE too, like the graph: a built-in shape is written here, and
   // every bundle below (the pre-flight's rebuild, a .glb's .zip fallback)
   // carries this same file.
-  const model = asks.model === 'shown' ? activeExportModel(s, isEvalMode()) : undefined;
-  if (isEvalMode() || effectiveExportFormat(s.exportAsGlb, s.previewMesh, false) !== 'glb') {
+  const surface = asks.model !== 'shown' ? 'document' : asks.variant === 'alternate' ? 'alternate' : 'primary';
+  const model = surface === 'document' ? undefined : activeExportModel(s, isEvalMode(), surface);
+  // evalMode `false`: `isEvalMode()` is answered first, in this same test.
+  if (isEvalMode() || asks.bundleOnly === true || exportFormatFor(s, false, surface) !== 'glb') {
     return withLeftOut(await buildShaderBundleChecked(asks.preflight, graph, model), graph);
   }
+  /** The failed dialog, offering the bundle only when THAT reopens. */
+  const offerBundle = async (text: string): Promise<ShaderExport | null> => {
+    const alt = bundleIfReopens(graph, model);
+    const c = await asks.glb.failed(text, alt !== null);
+    return c === 'as-bundle' && alt ? withLeftOut(alt, graph) : null;
+  };
   const lang = s.language;
   const ctrl = new AbortController();
   asks.glb.begin(`${shaderBaseName(s.shaderName)}.glb`, () => ctrl.abort());
@@ -447,9 +468,7 @@ export async function buildShaderExportChecked(asks: ShaderExportAsks): Promise<
       if (r.reason === 'aborted') return null;
       const text = glbExportRefusalText(r.reason, lang, { name: r.name, detail: r.detail });
       if (text === null) return null; // `study` — unreachable above, never shown
-      const alt = bundleIfReopens(graph, model);
-      const c = await asks.glb.failed(text, alt !== null);
-      return c === 'as-bundle' && alt ? withLeftOut(alt, graph) : null;
+      return await offerBundle(text);
     }
     const prepared = r.prepared;
     let mode: SingleGlbBuildMode = 'fallback';
@@ -485,9 +504,7 @@ export async function buildShaderExportChecked(asks: ShaderExportAsks): Promise<
     } catch (e) {
       // A measured repack that refused: the invariant failure exportSingleGlb
       // documents. Offer the bundle rather than ending on a dead press.
-      const alt = bundleIfReopens(graph, model);
-      const c = await asks.glb.failed(e instanceof Error ? e.message : String(e), alt !== null);
-      return c === 'as-bundle' && alt ? withLeftOut(alt, graph) : null;
+      return await offerBundle(e instanceof Error ? e.message : String(e));
     }
   } finally {
     asks.glb.end();
@@ -502,17 +519,10 @@ export async function buildShaderExportChecked(asks: ShaderExportAsks): Promise<
  * N1's desktop-only line) is posted HERE, after the anchor click, so both
  * download surfaces announce it only once the file has been handed over.
  */
-export function downloadShader(bundle: ShaderExport = buildShaderBundle()): void {
+export function downloadShader(bundle: ShaderExport): void {
   // Eval telemetry only — a no-op outside a study session.
   evalLog('export', { kind: bundle.kind });
-  const blob = new Blob([bundle.bytes], { type: bundle.mime });
-
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = bundle.fileName;
-  a.click();
-  URL.revokeObjectURL(url);
+  downloadBlob(new Blob([bundle.bytes], { type: bundle.mime }), bundle.fileName);
   announceExportDelivered(bundle);
 }
 

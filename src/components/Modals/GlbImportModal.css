@@ -1,5 +1,5 @@
-/* The GLB import dialog's own three rules; everything else is CsvImportModal.css.
-   Token-only, square corners, no blur (the app-wide technical style). */
+/* The GLB import dialog's own rules; everything else (the file name and
+   "Import" heading included) is CsvImportModal.css. */
 
 .glb-import-modal__panel {
   max-width: 520px;
@@ -31,25 +31,9 @@
    below. The plates reuse `--yes` rather than minting a second green: the app
    has ONE affirmative plate (#cdeab0), shared with the canvas NEW button. */
 
-/* The file name, centred and allowed to wrap — a model's name can be long,
-   and truncating the one thing that says WHICH file this is would be the
-   wrong economy. */
-.glb-import-modal__name {
-  text-align: center;
-  font-size: var(--font-size-md);
-}
-
 .glb-import-modal__facts {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
   margin: var(--space-2) 0;
-}
-
-.glb-import-modal__heading {
-  text-align: center;
-  font-size: var(--font-size-sm);
-  font-weight: 700;
-  color: var(--text-primary);
-  margin: var(--space-3) 0 var(--space-2);
 }

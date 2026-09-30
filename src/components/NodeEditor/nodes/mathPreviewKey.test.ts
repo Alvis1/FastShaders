@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { makeNode, makeEdge } from '@/test-utils';
-import { getTargetEdges, getTimeUpstreamSet, evaluateNodeScalar } from '@/engine/cpuEvaluator';
+import { getTargetEdges, getTimeUpstreamSet, evaluateNodeOutput } from '@/engine/cpuEvaluator';
 import type { AppNode, AppEdge, BoundarySocket } from '@/types';
 
 /**
@@ -110,7 +110,7 @@ describe('MathPreviewNode xKey — the time-driven path is still detected', () =
     const s = xState(nodes, edges, 'sin1');
     expect(s).toMatchObject({ hasConnection: true, xSource: 'time1', hasTime: true });
     // ...and the rAF loop's evaluation target resolves to the real clock value.
-    expect(evaluateNodeScalar(s.xSource!, nodes, edges, 1.5)).toBe(1.5);
+    expect(evaluateNodeOutput(s.xSource!, nodes, edges, 1.5)?.[0]).toBe(1.5);
   });
 
   it('through a collapsed group: Time -> Multiply(collapsed) -> sin still animates', () => {
@@ -125,7 +125,7 @@ describe('MathPreviewNode xKey — the time-driven path is still detected', () =
 
     const s = xState(nodes, edges, 'sin1');
     expect(s).toMatchObject({ hasConnection: true, xSource: 'mul1', hasTime: true });
-    expect(evaluateNodeScalar(s.xSource!, nodes, edges, 1.5)).toBe(3);
+    expect(evaluateNodeOutput(s.xSource!, nodes, edges, 1.5)?.[0]).toBe(3);
   });
 
   it('a non-time feeder stays STATIC and keeps hiding the inline widget', () => {

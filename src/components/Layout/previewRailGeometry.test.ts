@@ -1,19 +1,21 @@
 /**
  * The preview rail's pure geometry.
  *
- * Both rails and PreviewLink's endpoint resolution ask these functions, so a
- * wire's far end and the socket the preview draws for it cannot land at two
- * different heights — which is the only thing making the pair read as one
- * connection across the seam.
+ * The rail and PreviewLink's endpoint resolution ask these functions, so a
+ * wire's far end and the socket the rail draws for it cannot land at two
+ * different heights.
  */
 import { describe, it, expect } from 'vitest';
 import {
   RAIL_MIN_STEP,
   RAIL_SPAN,
   railFraction,
-  railFractions,
   railY,
 } from './previewRailGeometry';
+
+/** Every fraction for a rail of `count` sockets, in order. */
+const railFractions = (count: number) =>
+  Array.from({ length: count }, (_, i) => railFraction(i, count));
 
 describe('railFraction', () => {
   it('puts a lone socket at the middle — the one-Output shader does not move', () => {

@@ -88,7 +88,7 @@ export function rotateTransform(original: string | null, deg: number, px: number
 
 /* -------------------------------------------------- Bézier evaluate & split */
 
-function lerp(a: Pt, b: Pt, t: number): Pt { return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }; }
+export function lerp(a: Pt, b: Pt, t: number): Pt { return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }; }
 
 export function evalCubic(p0: Pt, p1: Pt, p2: Pt, p3: Pt, t: number): Pt {
   const u = 1 - t, uu = u * u, tt = t * t;

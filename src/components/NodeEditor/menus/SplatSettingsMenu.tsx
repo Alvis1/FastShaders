@@ -12,7 +12,9 @@ import { isSplatReplaceColor, splatReplaceColorValues } from '@/utils/splatColor
 import { hasTrueFlag, withTrueFlag } from '@/utils/trueFlag';
 import { splatCountLine, SPLAT_COUNT_HINT_KEY } from '@/utils/splatCount';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
-import { NumberRow, NodeActions } from './menuShared';
+import {
+  NumberRow, NodeActions, sinkRowStyle, sinkLabelStyle, sinkSocketLabelStyle, sinkCheckStyle,
+} from './menuShared';
 import {
   SPLAT_NODE_CONFIG,
   SPLAT_OWN_COLOUR_KEY,
@@ -171,11 +173,6 @@ export function SplatSettingsMenu({ nodeId }: { nodeId: string }) {
     updateNodeData(nodeId, { values: splatReplaceColorValues(values, !replaceColor) } as unknown as Partial<ShaderNodeData>);
   };
 
-  const checkboxStyle: React.CSSProperties = { width: 14, height: 14, cursor: 'pointer', accentColor: 'var(--border-focus)', margin: 0 };
-  const rowStyle: React.CSSProperties = {
-    display: 'flex', alignItems: 'center', gap: 'var(--space-2)', padding: '2px var(--space-3)',
-    fontSize: 'var(--font-size-sm)', color: 'var(--text-primary)',
-  };
   const mutedStyle: React.CSSProperties = { fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' };
 
   const valueEditor = (portId: string) => {
@@ -245,13 +242,13 @@ export function SplatSettingsMenu({ nodeId }: { nodeId: string }) {
           <div className="context-menu__divider" />
           <div className="context-menu__category">{t(section.label, language)}</div>
           {section.label === 'Light' && (
-            <div style={rowStyle}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', cursor: 'pointer' }} title={t(SPLAT_LIT_HINT_KEY, language)}>
+            <div style={sinkRowStyle}>
+              <label style={sinkLabelStyle} title={t(SPLAT_LIT_HINT_KEY, language)}>
                 <input
                   type="checkbox"
                   checked={lit}
                   onChange={toggleLit}
-                  style={checkboxStyle}
+                  style={sinkCheckStyle}
                 />
                 {t(SPLAT_LIT_KEY, language)}
               </label>
@@ -264,13 +261,13 @@ export function SplatSettingsMenu({ nodeId }: { nodeId: string }) {
             // or while a wire reaches one (see `edges`).
             if (!lit && SPLAT_LIGHT_PORTS.includes(portId) && !edges.some((e) => e.target === nodeId && e.targetHandle === portId)) return null;
             return (
-              <div key={portId} style={rowStyle}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', cursor: 'pointer', minWidth: 120 }} title={t('Show socket', language)}>
+              <div key={portId} style={sinkRowStyle}>
+                <label style={sinkSocketLabelStyle} title={t('Show socket', language)}>
                   <input
                     type="checkbox"
                     checked={exposedSet.has(portId)}
                     onChange={() => handleTogglePort(portId)}
-                    style={checkboxStyle}
+                    style={sinkCheckStyle}
                   />
                   {portLabel(port.label, language)}
                 </label>
@@ -279,26 +276,26 @@ export function SplatSettingsMenu({ nodeId }: { nodeId: string }) {
             );
           })}
           {section.ports.includes('color') && (
-            <div style={rowStyle}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', cursor: 'pointer' }} title={t(SPLAT_REPLACE_COLOR_HINT_KEY, language)}>
+            <div style={sinkRowStyle}>
+              <label style={sinkLabelStyle} title={t(SPLAT_REPLACE_COLOR_HINT_KEY, language)}>
                 <input
                   type="checkbox"
                   checked={replaceColor}
                   onChange={toggleReplaceColor}
-                  style={checkboxStyle}
+                  style={sinkCheckStyle}
                 />
                 {t(SPLAT_REPLACE_COLOR_KEY, language)}
               </label>
             </div>
           )}
           {section.ports.includes('cut') && (
-            <div style={rowStyle}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', cursor: 'pointer' }} title={t(SPLAT_INVERT_HINT_KEY, language)}>
+            <div style={sinkRowStyle}>
+              <label style={sinkLabelStyle} title={t(SPLAT_INVERT_HINT_KEY, language)}>
                 <input
                   type="checkbox"
                   checked={inverted}
                   onChange={toggleInvert}
-                  style={checkboxStyle}
+                  style={sinkCheckStyle}
                 />
                 {t(SPLAT_INVERT_KEY, language)}
               </label>

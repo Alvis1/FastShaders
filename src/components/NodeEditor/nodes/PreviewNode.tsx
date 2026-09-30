@@ -4,7 +4,8 @@ import { makeConnectionRevealSelector, REVEAL_TEMP_OPACITY } from './connectionR
 import type { PreviewFlowNode, NodeCategory, AppNode, AppEdge, TSLDataType } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
-import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
+import { CAT_HEX } from '@/utils/colorUtils';
+import { useCostChrome } from './useCostChrome';
 import { appTime } from '@/utils/appClock';
 import { evaluateEdgeSource, getTargetEdges, getTimeUpstreamSet } from '@/engine/cpuEvaluator';
 import { TypedHandle } from '../handles/TypedHandle';
@@ -89,14 +90,8 @@ export const PreviewNode = memo(function PreviewNode({
   selected,
 }: NodeProps<PreviewFlowNode>) {
   const def = NODE_REGISTRY.get(data.registryType);
-  // Rules-of-Hooks note: this return sits ABOVE the hooks below. Safe because
-  // `def` cannot flip defined<->undefined on a MOUNTED instance: React Flow keys
-  // node components by node.id, every registryType the app writes is in
-  // NODE_REGISTRY (`unknown` included), and nothing mutates registryType in place
-  // to or from an unregistered value. A tampered .fastshader with an unknown
-  // registryType renders null for the whole life of that node. Moving the return
-  // below the hooks is NOT a mechanical edit here (ShaderNode/PreviewNode hooks
-  // dereference `def`) — see CLEAN-3.
+  // Early return above the hooks is safe: React Flow keys node components by id
+  // and registryType never changes on a mounted node.
   if (!def) return null;
   const headerTip = useHeaderTip(def);
 
@@ -112,12 +107,6 @@ export const PreviewNode = memo(function PreviewNode({
   // `hasAnyTime` — share the one allocation.
   const noiseBufRef = useRef<ImageData | null>(null);
   const varName = useAppStore((s) => s.nodeVarNames[id]);
-  const costColorLow = useAppStore((s) => s.costColorLow);
-  const costColorHigh = useAppStore((s) => s.costColorHigh);
-  // The header mixes into the card, and the card follows the theme
-  // (getCostColor). `codeEditorTheme` is the app-wide dark switch; the store
-  // field keeps its historical name.
-  const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
   const updateNodeInternals = useUpdateNodeInternals();
 
   // An approaching wire reveals ALL param sockets (names on their tooltips)
@@ -199,10 +188,7 @@ export const PreviewNode = memo(function PreviewNode({
   const hasAnyTime = Object.values(timeInputs).some(Boolean);
 
   const catHex = CAT_HEX[def.category as NodeCategory] ?? CAT_HEX.unknown;
-  const costColor = getCostColor(data.cost, costColorLow, costColorHigh, darkTheme);
-  const headerTextColor = getContrastColor(costColor);
-  const costTextColor = getCostTextColor(data.cost, costColorLow, costColorHigh);
-  const costScale = getCostScale(data.cost);
+  const { costColor, headerTextColor, costTextColor, costScale } = useCostChrome(data.cost);
 
   /**
    * Resolve each scalar input: connected edge → evaluate upstream, else →

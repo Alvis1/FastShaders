@@ -11,6 +11,15 @@ import { Position } from '@xyflow/react';
 /** React Flow's default bezier curvature (getBezierPath's `curvature`). */
 export const BEZIER_CURVATURE = 0.25;
 
+/** The multi-channel RIBBON, shared by the canvas wire (TypedEdge) and the
+ *  Node Designer's edge stubs: the gap between channel lines, the dash a
+ *  multi-channel line wears, and the stroke width per channel count. */
+export const RIBBON_GAP = 3.5 / 3;
+export const RIBBON_DASH = '4 0.5';
+export function ribbonStrokeWidth(count: number): number {
+  return count >= 4 ? 0.8 : count >= 3 ? 1 : count >= 2 ? 1.2 : 1.5;
+}
+
 /**
  * React Flow's control-handle length for one side of a bezier edge: half the
  * FORWARD distance along that side's exit axis, or a slow sqrt ramp when the

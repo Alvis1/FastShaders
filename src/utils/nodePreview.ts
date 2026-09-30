@@ -18,8 +18,8 @@ import { generateEdgeId } from '@/utils/idGenerator';
  * rerouting happens in a DERIVED graph that only the sync engine's
  * `previewCode` pass ever sees (`previewGraph`).
  *
- * The state itself lives in the store (`nodePreview`, session-only like
- * `hoveredNodeId`); this module is the pure half — what a node offers to
+ * The state itself lives in the store (`nodePreview`, session-only);
+ * this module is the pure half — what a node offers to
  * preview, whether a stored target is still valid, and the rerouted graph —
  * so it is node-testable and so the sync engine, the menus, the canvas and
  * the line overlay cannot each hold their own reading of the rules.

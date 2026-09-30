@@ -17,7 +17,7 @@ import {
   MAX_COLOR_NAME,
   type Palette,
 } from '@/utils/palettes';
-import { HISTORY_IDLE, makeNode } from '@/test-utils';
+import { HISTORY_IDLE, makeNode, stubLocalStorage } from '@/test-utils';
 import { getNodeValues } from '@/types';
 
 const ids = () => useAppStore.getState().shaderPalettes.map((p) => p.id);
@@ -47,12 +47,7 @@ describe('store palette slice', () => {
   beforeEach(() => {
     cancelPendingGraphSave();
     vi.useFakeTimers();
-    const mem: Record<string, string> = {};
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => mem[k] ?? null,
-      setItem: (k: string, v: string) => { mem[k] = v; },
-      removeItem: (k: string) => { delete mem[k]; },
-    });
+    stubLocalStorage();
     setGraphPersistence(true);
     // Full reset — a prior undo() leaves isUndoRedo true, and a prior gesture
     // could leave a bracket open.

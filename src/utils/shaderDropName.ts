@@ -9,7 +9,8 @@
  * or by Finder should not rewrite it. The stem is the FALLBACK, and it is what
  * this adds: a bare shaderloader script and a block that ships no name both
  * used to leave the PREVIOUS shader's name on a graph that has nothing to do
- * with it, which is what then misled the next export.
+ * with it, which is what then misled the next export. `engine/projectImport.ts`
+ * composes the rule from the two helpers below.
  *
  * (The desktop Work folder answers the same question differently and
  * deliberately — `utils/workFolderFile.ts`'s `adoptShaderName` lets the name on
@@ -47,15 +48,6 @@ export function sanitizeDroppedName(name: string): string {
   return flat.length > MAX_DROPPED_NAME_LENGTH
     ? flat.slice(0, MAX_DROPPED_NAME_LENGTH).trim()
     : flat;
-}
-
-/**
- * The name OPEN gives the document: the authored one when the file supplies
- * one, else the file's stem. '' when neither is usable — the caller then
- * leaves the current name alone rather than blanking it.
- */
-export function droppedShaderName(fileName: string, authoredName: string | null | undefined): string {
-  return sanitizeDroppedName(authoredName ?? '') || sanitizeDroppedName(shaderDropStem(fileName));
 }
 
 /**

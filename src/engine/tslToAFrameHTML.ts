@@ -19,7 +19,7 @@
  *     in it — so a page built from it cannot list a uniform the shader doesn't
  *     have, or miss one it does.
  *
- *  3. **A-Frame defaults, nothing else — with THREE exceptions.** No comments, no
+ *  3. **A-Frame defaults, nothing else — with FOUR exceptions.** No comments, no
  *     light rig, no background, no camera rig, no orbit-controls: the default
  *     camera (eye height, look/wasd controls), the default lighting and the
  *     default `vr-mode-ui` Enter-VR button are what the page is meant to use,
@@ -62,12 +62,37 @@
  *     model on its own materials, which is why the tab's label names the
  *     version. The Three.js tab stays on the primitive.
  *
- *     A GAUSSIAN SPLAT is deliberately NOT a fourth exception. With a splat
+ *     The FOURTH exception is the BUNDLE'S MODEL (`bundledModel`): when the
+ *     file the EXPORT button writes is a `.zip` carrying a model under
+ *     `models/` that no primitive reproduces — a dropped OBJ (or an
+ *     unpackable glTF) on screen, since EXPORT is contextual and a packable
+ *     glTF/GLB on screen makes it the `.glb` above — the page hangs the
+ *     sibling `.js` on `<a-entity obj-model="obj: url(models/<file>)">` (or
+ *     `gltf-model="url(…)"`), the pairing the README's `meshPairingSnippet`
+ *     spells. Before this the page put the shader on a sphere while the
+ *     `.zip` beside it held the model it was made for. The file named is the
+ *     one the EXPORT BUTTON writes (`bundledModelForPage` over
+ *     engine/exportModel.ts's `exportModelChoice(…, 'primary')`), so a
+ *     built-in shape — whose `.obj` only the popover's "Export with model"
+ *     ships — keeps the primitive page. The N1 pre-flight's "without the 3D
+ *     model" answer is the one way that download can still lack the file. No
+ *     segments and no radius, as for the `.glb`. Loader 0.8 hooks A-Frame's
+ *     own `gltf-model` (plugin + decoders), so material-index sections apply
+ *     on a glTF page too. What the page does NOT reproduce is the preview's
+ *     `fit-bounds` repair, which only the preview runs: the model shows at
+ *     its AUTHORED size; a bare OBJ keeps OBJLoader's flat per-face normals
+ *     and is never welded (the loader welds primitives only), so a
+ *     displacement tears it; a model with no UVs reads `uv()` as 0; a
+ *     clockwise OBJ renders inside-out. The `.glb` page and the README
+ *     snippet share every one of those.
+ *
+ *     A GAUSSIAN SPLAT is deliberately NOT a fifth exception. With a splat
  *     scene in the preview (or a Splat Output driving) this page still hangs
  *     the module on the sphere every model geometry falls back to, with the
  *     same two scripts — byte-identical to the page for that module on any
- *     other model (`primitiveOf` / `isModelGeometry` below, and no `kind` is
- *     read anywhere here). Describing a splat would add a THIRD
+ *     other model (`primitiveOf` / `isModelGeometry` below, and
+ *     `bundledModelForPage`, which returns null for every splat kind — the
+ *     ONE guard keeping a `.ply`/`.spz` out of `gltf-model="url(…)"`). Describing a splat would add a THIRD
  *     script (`fs-splat-0.1.js`, after the A-Frame bundle), a `splat-model`
  *     entity and a model file the page does not have beside it — a whole
  *     second setup, where this page is the defaults-only one. The splat
@@ -95,7 +120,9 @@
 
 import { isModelGeometry, escapeHtml, type GeometryType } from './tslToPreviewHTML';
 import { CDN_BASE, LOADER_FILE, RESERVED_ATTRIBUTE_KEYS } from './tslToShaderModule';
-import { GLB_ENTITY_POSITION, GLB_SRC_MODEL, safeGlbFileName } from './glbUsage';
+import { GLB_ENTITY_POSITION, safeGlbFileName } from './glbUsage';
+import { MODEL_SRC } from './glbShaderContract';
+import { HEX6 } from '@/utils/colorUtils';
 
 /** One row of the module's exported `schema` — i.e. one `shader` attribute. */
 export interface EmbedUniform {
@@ -120,6 +147,55 @@ export interface AFrameEmbedOptions {
    * byte for byte.
    */
   modelFile?: string;
+  /**
+   * The model the `.zip` export ships under `models/` (`bundledModelForPage`):
+   * hang the sibling `.js` on that model instead of a primitive. Ignored when
+   * `modelFile` is set. Absent = today's page, byte for byte.
+   */
+  bundledModel?: AFrameBundledModel | null;
+}
+
+/** A model file the bundle export ships under `models/`, as the page loads it. */
+export interface AFrameBundledModel {
+  /** The `models/` entry's file name (engine/exportModel.ts `exportModelFile`). */
+  file: string;
+  kind: 'glb' | 'gltf' | 'obj';
+}
+
+/**
+ * The shapes an A-Frame primitive reproduces. Their `.obj` may ship too
+ * ("Export with model"), but the page keeps the primitive: it is tessellated for a
+ * displacing shader and the loader WELDS a primitive, never a model — a
+ * displaced `cube.obj` would split at its edges where `<a-box>` does not.
+ */
+const PRIMITIVE_SHAPES: ReadonlySet<string> = new Set(['sphere', 'cube', 'plane', 'marchSphere']);
+
+/**
+ * The `models/` file the page loads instead of a primitive, or null for the
+ * primitive page. `file` is what EXPORT writes (`exportModelFile` over
+ * `exportModelChoice`, the decision the download itself builds from), so the
+ * page never names a file the `.zip` lacks; `builtinShape` is the built-in
+ * shape it was written from, null for a dropped model. A Gaussian splat is
+ * null on purpose: see the header.
+ */
+export function bundledModelForPage(
+  file: { name: string; kind: string } | null,
+  builtinShape: string | null,
+): AFrameBundledModel | null {
+  if (!file || (builtinShape !== null && PRIMITIVE_SHAPES.has(builtinShape))) return null;
+  const kind = file.kind;
+  return kind === 'glb' || kind === 'gltf' || kind === 'obj' ? { file: file.name, kind } : null;
+}
+
+/**
+ * The `models/` entry as written into `url(…)`. The name was sanitized when
+ * the model was dropped (previewMesh's `sanitizeMeshFileName`), but a restored
+ * session record is someone's data, so the `.js` name's whitelist is applied
+ * again — a no-op on every name the app itself mints.
+ */
+function safeModelFile(name: string, kind: AFrameBundledModel['kind']): string {
+  const cleaned = String(name ?? '').replace(/[^A-Za-z0-9._-]/g, '');
+  return cleaned && cleaned !== '.' && cleaned !== '..' ? cleaned : `model.${kind}`;
 }
 
 const SCHEMA_OPEN = 'export const schema = {';
@@ -150,7 +226,7 @@ export function parseShaderModuleSchema(moduleSource: string): EmbedUniform[] {
       out.push({
         name: c[1],
         type: 'color',
-        defaultValue: /^#[0-9a-fA-F]{6}$/.test(c[2]) ? c[2].toLowerCase() : '#000000',
+        defaultValue: HEX6.test(c[2]) ? c[2].toLowerCase() : '#000000',
       });
       continue;
     }
@@ -167,25 +243,25 @@ export function parseShaderModuleSchema(moduleSource: string): EmbedUniform[] {
  * The module file name as written into `src:`. Export names come from
  * `toKebabCase`, but this page is also the one artefact a user hand-edits, so
  * anything outside a plain file name is dropped rather than escaped — a `src`
- * with a quote or a path traversal in it is never what was meant.
+ * with a quote or a path traversal in it is never what was meant: only the
+ * last path segment is read. Shared with the Three.js page (threeEmbed.test.ts).
  */
-function safeShaderFile(name: string): string {
-  const cleaned = (name || '').replace(/[^A-Za-z0-9._-]/g, '');
+export function safeShaderFile(name: string): string {
+  const base = String(name || '').split(/[\\/]/).pop() ?? '';
+  const cleaned = base.replace(/[^A-Za-z0-9._-]/g, '');
   return cleaned && cleaned !== '.' && cleaned !== '..' ? cleaned : 'shader.js';
 }
 
 /**
- * The A-Frame primitive to hang the shader on. Model-backed previews have no
- * sibling model file, so they fall back to the sphere.
+ * The A-Frame primitive to hang the shader on. A model-backed preview whose
+ * model the export does not ship (`bundledModel` absent) has no sibling model
+ * file, so it falls back to the sphere.
  */
 function primitiveOf(geometry: GeometryType | undefined): 'a-sphere' | 'a-box' | 'a-plane' {
   if (geometry === 'cube') return 'a-box';
   if (geometry === 'plane') return 'a-plane';
   return 'a-sphere';
 }
-
-/** Eye height, three metres out — where a headset user is already looking. */
-const OBJECT_POSITION = '0 1.6 -3';
 
 /**
  * Segments per axis for a displacement shader. Matches the preview panel's own
@@ -194,8 +270,11 @@ const OBJECT_POSITION = '0 1.6 -3';
  */
 const DISPLACEMENT_SEGMENTS = 64;
 
-/** True when the module drives vertex positions — the preview's own predicate. */
-function hasDisplacement(moduleSource: string): boolean {
+/**
+ * True when the module drives vertex positions. Only the loader can answer it
+ * off the built material, so a page built from source text reads the text.
+ */
+export function hasDisplacement(moduleSource: string): boolean {
   return /positionNode\s*:/.test(moduleSource);
 }
 
@@ -235,8 +314,18 @@ export function buildAFrameEmbedHTML(
   // the README snippet use (engine/glbUsage.ts), so one hostile name cannot
   // spell one thing here and another there.
   const modelFile = options.modelFile === undefined ? null : safeGlbFileName(options.modelFile);
-  const src = modelFile ? GLB_SRC_MODEL : file;
-  const tag = modelFile
+  // The bundle's model: the sibling `.js` on the `models/` file the `.zip`
+  // carries. Its loader attribute is the one A-Frame's own component for that
+  // format takes (the same spelling as the README's `meshPairingSnippet`).
+  const bundled = modelFile || !options.bundledModel ? null : options.bundledModel;
+  const bundledAttr = bundled
+    ? bundled.kind === 'obj'
+      ? `obj-model="obj: url(models/${safeModelFile(bundled.file, 'obj')})"`
+      : `gltf-model="url(models/${safeModelFile(bundled.file, bundled.kind)})"`
+    : null;
+  const onModel = modelFile !== null || bundledAttr !== null;
+  const src = modelFile ? MODEL_SRC : file;
+  const tag = onModel
     ? 'a-entity'
     : primitiveOf(isModelGeometry(options.geometry ?? 'sphere') ? 'sphere' : options.geometry);
 
@@ -261,16 +350,18 @@ export function buildAFrameEmbedHTML(
   const valueCol = ' '.repeat(attrCol.length + 'shader="'.length);
   const leading = modelFile
     ? [`gltf-model="url(${modelFile})"`, `position="${GLB_ENTITY_POSITION}"`]
-    : [`position="${OBJECT_POSITION}"`];
-  // A model brings its own geometry: no segments (the loader welds what a
-  // displacement needs) and no window radius.
-  if (!modelFile) {
+    : bundledAttr
+      ? [bundledAttr, `position="${GLB_ENTITY_POSITION}"`]
+      : [`position="${GLB_ENTITY_POSITION}"`];
+  // A model brings its own geometry: no segments (a model is never
+  // tessellated) and no window radius.
+  if (!onModel) {
     // The march window: a sphere of the Raymarch Output's Window radius.
     if (options.geometry === 'marchSphere') leading.push(`radius="${Number.isFinite(options.marchWindow) && options.marchWindow! > 0 ? options.marchWindow : 1}"`);
     if (hasDisplacement(moduleSource)) leading.push(segmentAttributes(tag).join(' '));
   }
 
-  if (uniforms.length === 0 && (leading.length === 1 || modelFile)) {
+  if (uniforms.length === 0 && (leading.length === 1 || onModel)) {
     L.push(`    <${tag} ${leading.join(' ')} shader="src: ${src}"></${tag}>`);
   } else {
     L.push(`    <${tag} ${leading[0]}`);

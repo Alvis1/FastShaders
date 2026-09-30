@@ -1,12 +1,7 @@
 /**
- * THE BOOT HOLD: a reload with a dropped model must build ONE document.
- *
- * The bug this pins (owner, 2026-09-19): a dropped multi-mesh GLB came back as
- * a SPHERE after a reload while the Model dropdown still read "Model: <file>",
- * it never self-corrected, and picking another model and coming back cured it.
- * That state is only reachable while boot attaches a sphere document and then
- * rewrites `srcdoc` on the same, still-loading iframe — see bootMeshWait.ts for
- * the full ordering.
+ * THE BOOT HOLD: a reload with a dropped model must build ONE document. The
+ * bug this pins (owner, 2026-09-19: a dropped GLB came back as a SPHERE) and
+ * the full boot ordering are told in bootMeshWait.ts.
  *
  * Half of this is the pure rule; the other half are SOURCE pins, for the reason
  * previewRebuild.test.ts and previewGeometryPref.test.ts both state — the vitest

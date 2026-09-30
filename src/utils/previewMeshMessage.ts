@@ -108,17 +108,8 @@ export function decoderLoadMessage(err: unknown, needs: DecoderNeeds, lang: Lang
 
 /**
  * A model refusal as a sentence in `lang`: its key translated, then filled.
- *
- * `{limit}` — the cap that was APPLIED, on the one key that carries it — is
- * filled HERE and not in `fillMeshRefusal`, which fills `{name}`/`{ext}`/
- * `{size}` only. That is two passes, and the ORDER is what keeps fillTemplate's
- * single-pass promise: this one inserts a formatted NUMBER, which cannot spell a
- * placeholder, and the file name — the only value whoever made the file chose —
- * is inserted by the second pass and never rescanned.
- * The limit rounds to NEAREST rather than up: every cap is a whole number of MiB
- * so the two agree today, and rounding a CAP up would claim more room than is
- * actually enforced (the 'up' rule is for the measured size beside it, so one
- * byte over never prints equal to the limit).
+ * `{limit}` is pre-filled with a NUMBER (which cannot spell a placeholder);
+ * the rules are told once, at `fillMeshRefusal` (previewMesh.ts).
  */
 export function meshRefusalMessage(r: MeshRefusal, lang: Language): string {
   const template = t(r.key, lang);

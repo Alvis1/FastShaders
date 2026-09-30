@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
+import { LangSwitch } from './LangSwitch';
 import '@/components/Modals/CsvImportModal.css';
 import './eval.css';
 
@@ -43,7 +44,6 @@ interface Props {
 
 export function DataDisclosureModal({ onClose }: Props) {
   const language = useAppStore((s) => s.language);
-  const setLanguage = useAppStore((s) => s.setLanguage);
   const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -102,19 +102,7 @@ export function DataDisclosureModal({ onClose }: Props) {
           <div className="csv-import-modal__title" id="eval-disclosure-title">
             {t('What exactly is collected', language)}
           </div>
-          <button
-            type="button"
-            className="csv-import-modal__button eval-consent__lang"
-            onClick={() => setLanguage(language === 'lv' ? 'en' : 'lv')}
-            title={
-              language === 'lv'
-                ? 'Pārslēgt uz angļu valodu (Switch to English)'
-                : 'Pārslēgt uz latviešu valodu (Switch to Latvian)'
-            }
-            aria-label={language === 'lv' ? 'Switch to English' : 'Pārslēgt uz latviešu valodu'}
-          >
-            {language === 'lv' ? 'EN' : 'LV'}
-          </button>
+          <LangSwitch />
         </div>
 
         <div className="eval-consent__section">
@@ -127,7 +115,7 @@ export function DataDisclosureModal({ onClose }: Props) {
             {item(
               'What you did, step by step',
               'telemetry-events.json',
-              'a timestamped list of your actions: nodes added or removed (by type), connections made and broken, undo and redo, code applied, assets dropped, the app shown or hidden, and a periodic graph-size count. What you did, never what you typed: no keystrokes, text, file contents, clipboard or addresses.',
+              'a timestamped list of your actions: nodes added or removed (by type), connections made and broken, undo and redo, code applied, assets dropped, language switches, the app shown or hidden, and a periodic graph-size count. What you did, never what you typed: no keystrokes, text, file contents, clipboard or addresses.',
             )}
             {item(
               'Totals derived from those steps',

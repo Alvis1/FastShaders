@@ -32,11 +32,19 @@
  * podest, A-Frame pages and plain three run the MODULE.
  *
  * podest.html carries a hand-written vanilla TWIN (`fsReadGlb`,
- * `fsDropPayload`) that must agree with this module on the same fixtures; a
- * drift test runs both. Nothing here is called at runtime yet (Phase 7 Step
- * 2): the restore commit and the preview-mesh drop arrive in Step 6.
+ * `fsDropPayload`); podestGlbReader.test.ts runs both on the same fixtures.
  */
-import { GLB_MAGIC, buildGlbContainer, decodeDataUri, encodeDataUri, parseGlbContainer } from './glbContainer';
+import {
+  GLB_MAGIC,
+  IMAGE_MIME_FORMAT,
+  buildGlbContainer,
+  decodeDataUri,
+  encodeDataUri,
+  isIndex,
+  isSafeNonNeg,
+  parseGlbContainer,
+  sniffImageFormat,
+} from './glbContainer';
 import { GLB_READ_MAX_BYTES } from './gltfCompression';
 import { GLTF_READ_CAPS } from './gltfReader';
 import { safeJsonReviver } from './safeJson';
@@ -108,9 +116,6 @@ const NONE: FsExtrasRead = { state: 'none' };
 const refused = (reason: FsExtrasRefusal): FsExtrasRead => ({ state: 'refused', reason });
 
 type Obj = Record<string, unknown>;
-
-const isSafeNonNeg = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
-const isIndex = (v: unknown, length: number): v is number => isSafeNonNeg(v) && v < length;
 
 /* ── the file's own structure ────────────────────────────────────────────── */
 
@@ -190,33 +195,14 @@ function viewSlice(doc: Obj, bin: Uint8Array | null, index: number, max: number)
 
 /* ── assets ──────────────────────────────────────────────────────────────── */
 
-function hasBytes(b: Uint8Array, at: number, sig: readonly number[]): boolean {
-  if (b.length < at + sig.length) return false;
-  for (let i = 0; i < sig.length; i++) if (b[at + i] !== sig[i]) return false;
-  return true;
-}
-
-/** mimeType → the file signature its bytes must start with (the loader's EMBED_MIME table). */
-function magicMatches(mime: string, b: Uint8Array): boolean {
-  switch (mime) {
-    case 'image/png':
-      return hasBytes(b, 0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-    case 'image/jpeg':
-      return hasBytes(b, 0, [0xff, 0xd8, 0xff]);
-    case 'image/webp':
-      return hasBytes(b, 0, [0x52, 0x49, 0x46, 0x46]) && hasBytes(b, 8, [0x57, 0x45, 0x42, 0x50]);
-    default:
-      return false;
-  }
-}
-
 /** One `images[]` entry as an asset: its canonical `data:` URL and byte count, or null when refused. */
 function readAssetImage(doc: Obj, bin: Uint8Array | null, img: unknown): { src: string; length: number } | null {
   if (!isPlainObject(img) || typeof img.uri === 'string' || !isSafeNonNeg(img.bufferView)) return null;
   const mime = img.mimeType;
   if (typeof mime !== 'string' || !(FS_ASSET_MIMES as readonly string[]).includes(mime)) return null;
   const s = viewSlice(doc, bin, img.bufferView, FS_EMBED_ASSET_BYTES_MAX);
-  if (!s.ok || !magicMatches(mime, s.bytes)) return null;
+  // The bytes must carry their MIME's own magic (the loader's EMBED_MIME table).
+  if (!s.ok || sniffImageFormat(s.bytes) !== IMAGE_MIME_FORMAT.get(mime)) return null;
   return { src: encodeDataUri(mime, s.bytes), length: s.bytes.length };
 }
 

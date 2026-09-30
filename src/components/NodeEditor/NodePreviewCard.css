@@ -33,6 +33,7 @@
      than by their frames alone. */
   padding: 20px calc(8px + var(--fs-sock-r, 0px)) 6px calc(8px + var(--fs-sock-l, 0px));
   zoom: 0.67;
+  transition: scale var(--transition-fast);
 }
 
 /* Hover = the same LIFT a node gets on the canvas and a texture/preset tile
@@ -61,10 +62,6 @@
 .node-preview-card:hover {
   --fs-node-lift: var(--shadow-node-selected);
   scale: var(--fs-node-grow);
-}
-
-.node-preview-card {
-  transition: scale var(--transition-fast);
 }
 
 .node-preview-card:active {
@@ -97,23 +94,9 @@
    property (width/height/padding/margin/font-size/inset/transform) on a
    node-internal class — `.node-base*`, `.sound-node*`, `.clock-node*`,
    `.preview-node*`, `.math-preview-node*`, `.color-node*`, `.output-node*`.
-   `assetCardGeometry.test.ts` fails the build if that happens.
-
-   This block used to hold `min-width: 100px` plus header/badge/row overrides,
-   to draw the hand-built cards "larger". They were pure distortion once
-   FitNodeHeading started normalizing heading size — and on a FIXED-geometry
-   node they were actively wrong: the Mic node is 80px wide, so a 100px card
-   frame left its body 20px short of the right edge, floating all four output
-   sockets INSIDE the card and pushing the arm light off centre, while the
-   canvas node sat with its sockets on the border. Same class of bug for Time
-   and Sine, which the min-width also widened past their own content.
-
-   Fake socket dots have no rules here either: they carry the LIVE handle
-   classes (see CardSocket in NodePreviewCard.tsx) and sit in the live
-   wrapper, so each node's own stylesheet positions them. The retired
-   `--right-abs`/`--left-abs` twins hardcoded `top: 50%` of the whole card,
-   which is why the Time tile's socket missed the clock face the live node
-   centres it on. */
+   `assetCardGeometry.test.ts` fails the build if that happens. Socket dots
+   and canvases carry the node's LIVE classes, so they need no rules here.
+   Why: docs/dev/node-visuals-and-designer.md. */
 
 /* Wrapper that renders a REAL widget (DragNumberInput) on a card while
  * keeping it inert — a palette tile must not be another place to edit. */
@@ -121,19 +104,6 @@
   pointer-events: none;
   display: inline-flex;
 }
-
-/* (The canvas-variant twins lived here: `__canvas-wrap` and the --math/
-   --noise/--clock canvases, each a hand-copy of the live node's wrapper
-   padding and canvas size, plus a `__math-port-row` copy of
-   `.math-preview-node__port-row`. The cards render the REAL classes now —
-   `.preview-node__canvas`, `.math-preview-node__port-row`,
-   `.clock-node__canvas-wrap` — so those sizes have one definition, in the
-   node's own stylesheet, and the clock's socket inherits the face-centred
-   placement that the copy could not express.) */
-
-/* (The slider tile's hand-built track/fill/thumb/labels lived here. The tile
-   now renders the same `<input type="range">` the canvas does — see the note
-   where SliderCardContent used to be in NodePreviewCard.tsx.) */
 
 /* --- Color swatch variant ---
    The tile renders the REAL `.color-node` at the REAL COLOR_NODE_SIZE (see

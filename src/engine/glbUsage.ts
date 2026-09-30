@@ -15,10 +15,10 @@
  */
 import { MODEL_SRC } from './glbShaderContract';
 
-/** The `shader` src that runs the module inside the model. === glbShaderContract MODEL_SRC (loader-pinned). */
-export const GLB_SRC_MODEL: typeof MODEL_SRC = MODEL_SRC;
-
-/** Where the A-Frame snippet puts the model — the A-Frame tab's object position. */
+/**
+ * Eye height, three metres out — where a headset user is already looking. The
+ * A-Frame tab and every pairing snippet put the object here.
+ */
 export const GLB_ENTITY_POSITION = '0 1.6 -3';
 
 const FALLBACK_GLB_FILE = 'model.glb';
@@ -32,7 +32,7 @@ export function safeGlbFileName(name: string): string {
 /** The entity that runs a single-GLB export on an A-Frame page. */
 export function glbAFrameSnippet(glbFile: string): string {
   const file = safeGlbFileName(glbFile);
-  return `<a-entity gltf-model="url(${file})" shader="src: ${GLB_SRC_MODEL}" position="${GLB_ENTITY_POSITION}"></a-entity>`;
+  return `<a-entity gltf-model="url(${file})" shader="src: ${MODEL_SRC}" position="${GLB_ENTITY_POSITION}"></a-entity>`;
 }
 
 /** Module-header block, GLB mode only. Six `//` lines, ASCII, no brace, no comment closer, no `import`. */

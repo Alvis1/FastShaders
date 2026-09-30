@@ -656,6 +656,13 @@ ${props}  };
     expect(r.code).not.toContain('mergeVertices');
   });
 
+  it('recovers a top-level flatShading: true and strips it from the rebuilt return', () => {
+    // MATERIAL_KEYS is built FROM PART_SETTING_KEYS, so a key joining one joins both.
+    const r = scriptToTSLWithSettings(mod('    flatShading: true,\n'));
+    expect(r.materialSettings?.flatShading).toBe(true);
+    expect(r.code).not.toContain('flatShading');
+  });
+
   it('reads nothing from an absent or explicitly-true mergeVertices', () => {
     // Absent === weld, so a module that never carried the key must not be
     // read as an author having chosen anything.

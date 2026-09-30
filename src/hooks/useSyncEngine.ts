@@ -7,11 +7,10 @@ import { onUnknownExpressionValidated, loadUnknownExpressionValidator } from '@/
 // pulls it in on demand so the Babel front end stays off the boot wave.
 import { autoLayout } from '@/engine/layoutEngine';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import { computeReachableCost } from '@/utils/nodeCost';
+import { computeReachableCost, sinkCosts, sinkBadgesStale, stampSinkCosts } from '@/utils/nodeCost';
 import { activeSink, isSinkNode, hasActiveFlag, normalizeActiveOutput } from '@/utils/sdfPartition';
 import { carryModelMeshes, isOutputNode } from '@/utils/outputMaterials';
 import { carryMaterialSettings, pairResyncNodes, placeParsedOutputs } from '@/utils/resyncPairing';
-import { sinkCosts } from '@/utils/nodeCost';
 import { carryInactiveSinks } from '@/utils/sinkCarry';
 import { carryDormantLightEdges, carrySplatLightValues } from '@/utils/splatLight';
 import { carrySplatReplaceColor, splatStoredColor } from '@/utils/splatColor';
@@ -68,17 +67,10 @@ export function useSyncEngine() {
   const prevNodesRef = useRef(nodes);
   const prevEdgesRef = useRef(edges);
 
-  // Codegen validates an `unknown` node's stored `rawExpression` with Babel
-  // before emitting it verbatim, and that parser is loaded ON DEMAND so the
-  // ~200 KB gzip of @babel/* stays off the boot wave (engine/unknownExpression).
-  // A pass that runs before it lands FAILS CLOSED — the expression emits as the
-  // inert fallback — so the pass has to run again once the real verdict exists.
-  // Nothing else can trigger it: neither `nodes` nor `edges` changed, so both
-  // the identity guard and sameGraphSemantics below would (correctly) call the
-  // re-run inert. Hence the epoch, which is threaded through both of them.
-  //
-  // It fires at most once per session (the notifier fires once, when the chunk
-  // lands) and only when a graph actually held an unknown node.
+  // The `unknown`-expression validator loads ON DEMAND (engine/unknownExpression)
+  // and codegen FAILS CLOSED until it lands, so the pass must run once more
+  // when it does. Neither `nodes` nor `edges` changed then — hence the epoch,
+  // threaded through both guards below. It fires at most once per session.
   const [exprEpoch, setExprEpoch] = useState(0);
   useEffect(() => onUnknownExpressionValidated(() => setExprEpoch((n) => n + 1)), []);
   const prevExprEpochRef = useRef(exprEpoch);
@@ -198,40 +190,19 @@ export function useSyncEngine() {
         return;
       }
 
+      // Armed ABOVE the await below: a graph edit landing inside the chunk
+      // fetch must not regenerate the text this pass is about to parse.
       setSyncInProgress(true);
       try {
-        /**
-         * `codeToGraph` is the Babel front end (@babel/parser + /traverse +
-         * /types — one ~800 KB raw / ~200 KB gz `vendor-babel` chunk), and
-         * NOTHING calls it before first paint: a code→graph pass happens only
-         * on a code-panel Apply / Cmd+S or a project import, both of which are
-         * user-initiated moments where a chunk fetch is invisible. Importing it
-         * here rather than at module scope is what keeps it off the boot wave.
-         *
-         * `setSyncInProgress(true)` deliberately stays ABOVE the await. It is
-         * the flag that suppresses the graph→code effect, so arming it first
-         * means a graph edit landing inside the fetch window cannot regenerate
-         * the very code text this pass is about to parse — the same ordering
-         * the synchronous version had, just with a real gap in the middle. The
-         * `finally` below clears it on every exit, including a failed fetch.
-         *
-         * The import is caught SEPARATELY from the parse: a rejected chunk
-         * fetch (connection drop, or a redeploy swapping the hashed assets
-         * mid-session) is a new failure mode this function did not have while
-         * the import was static, and it would otherwise escape as an unhandled
-         * rejection with the Apply silently doing nothing. Reported as a code
-         * error instead, so the panel says why — and the graph is left exactly
-         * as it was, which is the safe direction.
-         */
+        // Dynamic on purpose: keeps the ~800 KB Babel chunk off the boot wave
+        // (engine/unknownExpression.ts). Caught apart from the parse, so a
+        // failed chunk fetch is reported in the panel and the graph is kept.
         let codeToGraph: typeof import('@/engine/codeToGraph').codeToGraph;
         try {
           ({ codeToGraph } = await import('@/engine/codeToGraph'));
-          // Warm the `unknown`-expression validator off the SAME chunk, since
-          // this pass can mint unknown nodes and the very next graph→code pass
-          // would otherwise emit their expressions as the fail-closed fallback
-          // and have to redo itself. Not awaited: it resolves from the module
-          // registry Babel now sits in, and a failure here is already handled
-          // (fail closed, retried on the next call).
+          // Warm the `unknown`-expression validator off the SAME chunk: this
+          // pass can mint unknown nodes, which the next graph→code pass would
+          // otherwise emit as the fail-closed fallback. Not awaited.
           void loadUnknownExpressionValidator();
         } catch {
           setCodeErrors([
@@ -448,7 +419,7 @@ export function useSyncEngine() {
           let finalNodes: AppNode[];
           if (unpositioned.length > 0) {
             // New or changed nodes — auto-layout ALL to maintain left-to-right flow
-            finalNodes = autoLayout([...positioned, ...unpositioned], remappedEdges, 'LR');
+            finalNodes = autoLayout([...positioned, ...unpositioned], remappedEdges);
           } else {
             finalNodes = positioned;
           }
@@ -540,7 +511,6 @@ export function useSyncEngine() {
           const oldGroups =
             unpositioned.length > 0 ? [] : oldNodes.filter((n) => n.type === 'group');
           if (oldGroups.length > 0) {
-            const survivingIds = new Set(finalNodes.map((n) => n.id));
             const oldById = new Map(oldNodes.map((n) => [n.id, n]));
 
             // Restore parentId/extent on surviving children whose old node had them.
@@ -579,8 +549,6 @@ export function useSyncEngine() {
             const withoutGroups = finalNodes.filter((n) => !groupIdSet.has(n.id));
             // Note: surviving group nodes from oldNodes carry their original
             // position/width/height/data — that's exactly what we want.
-            // Survival check above already accounts for `survivingIds`.
-            void survivingIds;
             finalNodes = [...groupsToKeep, ...withoutGroups];
           }
 
@@ -649,25 +617,17 @@ export function useSyncEngine() {
     if (total === lastCostRef.current) return;
     lastCostRef.current = total;
 
-    // Collapse the `setTotalCost` write and the output-node cost writes into a
+    // Collapse the `totalCost` write and the output-node cost writes into a
     // single setState so we don't re-enter this effect twice for one change.
     //
     // Every sink carries its OWN price (`sinkCosts`): an Output's badge is
     // what the shader would cost with it active — so two candidate outputs can
     // be compared before one is clicked.
     const perSink = sinkCosts(nodes, unwrapped);
-    const needsOutputUpdate = nodes.some((n) => perSink.has(n.id) && n.data.cost !== perSink.get(n.id));
+    const needsOutputUpdate = sinkBadgesStale(nodes, perSink);
     useAppStore.setState((state) => ({
       totalCost: total,
-      ...(needsOutputUpdate
-        ? {
-            nodes: state.nodes.map((n) =>
-              perSink.has(n.id) && n.data.cost !== perSink.get(n.id)
-                ? { ...n, data: { ...n.data, cost: perSink.get(n.id)! } }
-                : n
-            ) as AppNode[],
-          }
-        : {}),
+      ...(needsOutputUpdate ? { nodes: stampSinkCosts(state.nodes, perSink) } : {}),
     }));
 
     // The badge write mints a fresh `nodes` array AND a fresh `data` ref on

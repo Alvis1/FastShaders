@@ -1,29 +1,7 @@
 /**
- * The ONE writer path for `fs:graph` and `fs:savedGroups`: store them as pure
- * ASCII.
- *
- * WebKit (Safari, and the macOS desktop's WKWebView) charges localStorage by
- * the stored string's in-memory width: 1 byte per character while the string
- * is 8-bit, 2 once any character above U+00FF is in it. Every Latvian
- * diacritic is above U+00FF, so a single one in a note doubled the cost of a
- * multi-megabyte autosave. MEASURED in WebKit 26.5 (Playwright webkit-2336):
- *
- *   - the quota is 5,242,880 bytes per origin, counting key + value, so
- *     `fs:graph` (8 characters) holds at most 5,242,872 8-bit characters;
- *   - a 3.5M-character value containing one U+0101 throws QuotaExceededError;
- *   - the same value escaped by `String.prototype.replace` but NOT re-encoded
- *     ALSO throws (a replace() result on a 16-bit subject stays 16-bit);
- *   - escaped AND re-encoded through TextEncoder/TextDecoder, it saves and
- *     reads back identical.
- *
- * Chromium and Firefox charge by UTF-16 length regardless, so there each
- * escaped code unit costs 6 characters instead of 1 (an emoji 12). That is
- * negligible beside the base64 image payloads, the only term that reaches
- * megabytes.
- *
- * The readers need nothing: the parse decodes the escapes before the reviver
- * sees a key, and an older build reads the escaped text just as well.
- *
+ * The ONE writer path for `fs:graph` and `fs:savedGroups`: pure 8-bit ASCII.
+ * WebKit charges localStorage double once any character above U+00FF is stored
+ * (measured; docs/dev/storage-and-limits.md).
  * This file must stay pure ASCII itself and must not spell the parse call
  * (asciiStorage.test.ts and safeJson.test.ts both read its source).
  */

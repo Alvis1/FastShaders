@@ -39,7 +39,8 @@ import { previewableOutputs, PREVIEW_KEEP_SELECTOR } from '@/utils/nodePreview';
 import { nodeTypes, edgeTypes } from './flowTypes';
 import { CONNECTION_RADIUS } from './nodes/connectionReveal';
 import { clearSocketTapTooltip } from './handles/TypedHandle';
-import { cardinalControlPoint, radialControlPoint, distancePointToCubicBezier, distancePointToSpline, insertWaypointOrdered, splinePath } from './edges/bezierGeometry';
+import { cardinalControlPoint, radialControlPoint, distancePointToCubicBezier, distancePointToSpline, splinePath } from './edges/bezierGeometry';
+import { addEdgeWaypoint } from './edges/edgeWaypoints';
 import { DrawingLayer } from './DrawingLayer';
 import { DrawToolbar } from './DrawToolbar';
 import {
@@ -102,10 +103,12 @@ import { PreviewLink } from '@/components/Layout/PreviewLink';
 import { PreviewRail } from '@/components/Layout/PreviewRail';
 import { RAIL_ADD_OUTPUT_EVENT, RAIL_FOCUS_EVENT, focusRequestId } from '@/components/Layout/previewRailEvents';
 import { getCostScale, canvasInkColor } from '@/utils/colorUtils';
-import { nodeCostPoints, imageNodeCost, getCost } from '@/utils/nodeCost';
+import { nodeCostPoints, imageNodeCost, getCost, getBaseCosts } from '@/utils/nodeCost';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import { findSingletonNode } from './singletonNodes';
+import { nodeEl, handleEl } from './nodeElement';
+import { groupFrameSize } from '@/utils/groupFrame';
 import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { isTypingTarget } from '@/utils/isTypingTarget';
@@ -138,7 +141,6 @@ import type { AppNode, AppEdge, ShaderNodeData, OutputNodeData, NodeDefinition }
 import { getNodeValues } from '@/types';
 import { t } from '@/i18n';
 import { initialNodeValues } from '@/utils/newNodeValues';
-import complexityData from '@/registry/complexity.json';
 import './NodeEditor.css';
 
 // Constant ReactFlow prop objects, hoisted so their identities are stable —
@@ -152,21 +154,9 @@ const FIT_VIEW_OPTIONS = { maxZoom: 1.5 } as const;
 const VIEWPORT_SAVE_DEBOUNCE_MS = 300;
 
 /**
- * While a canvas gesture is in flight, take the 3D preview's IFRAME out of
- * hit-testing (`:root.fs-canvas-busy` — see ShaderPreview.css).
- *
- * A middle-button pan that wandered over the preview never ended: the iframe is
- * a SANDBOXED, opaque-origin document, so the moment the pointer crosses into it
- * the parent stops receiving mouse events entirely — including the `mouseup`
- * that d3-zoom listens for on the window. Release the button there and the pane
- * simply kept panning, because as far as the parent knew the button was still
- * down. Node drags and connection drags cross the same boundary and hang the
- * same way.
- *
- * Refcounted, because these gestures overlap: React Flow fires `onMoveStart`
- * for the pan under a selection drag, and a connect can start while a move is
- * still settling. A boolean would let whichever finished first re-arm the
- * iframe under the one still running.
+ * Takes the 3D preview's iframe out of hit-testing while a canvas gesture runs
+ * (`:root.fs-canvas-busy`). REFCOUNTED: pan, node drag and connect overlap.
+ * docs/dev/canvas-interaction.md, "A canvas gesture…"; canvasBusy.test.ts.
  */
 let canvasBusy = 0;
 function setCanvasBusy(busy: boolean): void {
@@ -175,24 +165,9 @@ function setCanvasBusy(busy: boolean): void {
 }
 
 /**
- * The same gesture ALSO suppresses the browser's own text selection, through
- * the app-wide `.fs-dragging` chrome the seam grips already use
- * (utils/dragChrome.ts). A connection drag is a pointer sweep across the whole
- * window, and the engines disagree about whether the pressed element's
- * `user-select: none` stops a selection being seeded there: MEASURED
- * 2026-09-18 against this build, one wire dragged off a socket painted 38
- * selection rectangles over the nodes and chrome in WebKit 26.5 and none in
- * Chrome 152, while a grip drag — which arms this — painted none in either.
- * That was the owner's report, from macOS.
- *
- * Cursor-less (`beginDragChrome(null)`): React Flow owns the pointer's look
- * during a connect, and pinning `move` over it would fight the connection line.
- *
- * Module scope beside `canvasBusy`, and for the same reason: the end call has
- * to be reachable from the pointer reaper below AND from unmount, neither of
- * which can see a component ref. One connection drag runs at a time (React Flow
- * captures the pointer), so one token is enough; `beginDragChrome` refcounts
- * across gestures anyway, so an overlapping grip drag keeps its own.
+ * A CONNECTION drag also arms `.fs-dragging` (no browser text selection),
+ * cursor-less because React Flow owns the pointer's look. Module scope so the
+ * reaper and unmount can release it — connectionDragChrome.test.ts.
  */
 let endConnectChrome: (() => void) | null = null;
 function setConnectChrome(on: boolean): void {
@@ -206,28 +181,9 @@ function setConnectChrome(on: boolean): void {
 }
 
 /**
- * "No pointer is down, so nothing can be mid-gesture" — the reaper that makes
- * the refcount above self-healing.
- *
- * Every arm/release pair here brackets a POINTER gesture (pan, node drag,
- * connection drag), and each release depends on React Flow delivering the
- * matching stop callback. It usually does. When it does not — a node deleted
- * out from under a drag, a connection cancelled, a gesture interrupted by a
- * mid-drag mutation — the count never returns to 0, and because
- * `:root.fs-canvas-busy .shader-preview__iframe { pointer-events: none }` the
- * 3D view is then INERT FOR THE REST OF THE SESSION: dragging it selects the
- * chrome behind it instead of orbiting, which reads as the preview being
- * broken rather than as a stuck flag. Reported from the canvas, 2026-09-09.
- *
- * Rather than chase each way a stop can go missing, this closes the class: the
- * flag protects a gesture that might wander over the iframe, a gesture needs a
- * held pointer, so once every pointer has lifted there is nothing left to
- * protect. Tracked by ID because a touch gesture has several and lifting one
- * finger does not end a two-finger pan.
- *
- * The reset runs in a rAF so React Flow's own stop handlers — which also fire
- * on pointerup — go first and the ordinary path stays exactly as it was; this
- * only ever collects a residue they left behind.
+ * The reaper: once EVERY pointer has lifted nothing can be mid-gesture, so a
+ * count stranded by a missing React Flow stop callback is cleared. By pointer
+ * id (touch holds several), in a rAF so the ordinary stop handlers run first.
  */
 const activePointers = new Set<number>();
 let busyReapFrame = 0;
@@ -247,10 +203,7 @@ function trackPointerUp(e: PointerEvent): void {
     busyReapFrame = 0;
     if (activePointers.size > 0) return;
     // ABOVE the `canvasBusy === 0` return: the two flags are released by
-    // different handlers, so a connect whose `onConnectEnd` went missing can
-    // leave this one set while the count is already back at 0 — and a stranded
-    // `.fs-dragging` makes the whole app unselectable. Idempotent, so the
-    // ordinary path (where onConnectEnd already ran) costs nothing.
+    // different handlers, and a stranded `.fs-dragging` is app-wide.
     setConnectChrome(false);
     if (canvasBusy === 0) return;
     canvasBusy = 0;
@@ -261,13 +214,7 @@ function trackPointerUp(e: PointerEvent): void {
 const PRO_OPTIONS = { hideAttribution: true } as const;
 const DESKTOP_PAN_ON_DRAG = [1, 2];
 
-/**
- * How long an armed import-fit waits for the imported graph to render before
- * giving up. Generous enough for the code→graph pass a bare script needs, short
- * enough that an import which never produces a graph (parse errors, an
- * identical re-import) can't leave a fit primed to hijack a later unrelated
- * edit. See the import-fit effect.
- */
+/** Disarms an import-fit whose import never yields a graph, so it cannot hijack a later edit. */
 const IMPORT_FIT_TIMEOUT_MS = 3000;
 
 /**
@@ -285,16 +232,9 @@ const NODE_MENU_TYPES: Record<string, ContextMenuType> = {
   dataRange: 'dataRange',
 };
 /**
- * Modifiers that make a click ADD to the selection instead of replacing it.
- * Shift ONLY. Cmd/Ctrl (React Flow's platform default) were in this list until
- * 2026-09-10, when ⌘/Ctrl+click became PREVIEW MODE (see onNodeClick): one
- * modifier cannot both extend the selection and route a node to the 3D view,
- * and Shift+click still adds to the selection, so nothing is lost. An ARRAY
- * means "any of these", not a combination — a '+' inside one entry would be
- * the combination form. Module-scope so the array identity is stable:
- * useKeyPress memoizes on it, so a fresh array per render would re-bind its
- * key listeners every frame of a drag (the same reason the objects above are
- * hoisted).
+ * Shift ONLY adds to the selection — ⌘/Ctrl+click is Preview mode. An array is
+ * "any of these"; module scope because useKeyPress memoizes on its identity.
+ * docs/dev/canvas-interaction.md, "Selection".
  */
 const MULTI_SELECT_KEYS = ['Shift'];
 
@@ -638,16 +578,6 @@ function findNearestEdge(
   return bestId;
 }
 
-function groupSize(g: AppNode) {
-  const m = (g as Measured).measured;
-  const sz = g as AppNode & { width?: number; height?: number };
-  const dataSz = g.data as { width?: number; height?: number };
-  return {
-    w: m?.width ?? sz.width ?? dataSz.width ?? 200,
-    h: m?.height ?? sz.height ?? dataSz.height ?? 120,
-  };
-}
-
 /**
  * Given a node's absolute drop position, find the first non-collapsed group
  * whose bounds contain its center, skipping the node itself. Returns the
@@ -666,7 +596,7 @@ function findContainingGroup(
     if (other.type !== 'group' || other.id === draggedId) continue;
     if ((other.data as { collapsed?: boolean }).collapsed) continue;
     const oAbs = nodeAbsolutePos(other, allNodes);
-    const { w: ow, h: oh } = groupSize(other);
+    const { w: ow, h: oh } = groupFrameSize(other);
     if (cx >= oAbs.x && cx <= oAbs.x + ow && cy >= oAbs.y && cy <= oAbs.y + oh) {
       return { id: other.id, absX: oAbs.x, absY: oAbs.y };
     }
@@ -787,22 +717,15 @@ export function NodeEditor() {
   // and a second right-click MOVING the menu to another node — that last one
   // only re-renders the same menu, so the id change is the only signal, and
   // running cleanup first is what stops the previous node keeping the class.
-  // `CSS.escape` is load-bearing: node ids arrive from `.fastshader` files, so
-  // an unescaped id could throw out of querySelector during an effect.
   const menuNodeId = contextMenu.open ? contextMenu.nodeId : undefined;
   useEffect(() => {
     if (!menuNodeId) return;
-    let el: Element | null = null;
-    try {
-      el = document.querySelector(`.react-flow__node[data-id="${CSS.escape(menuNodeId)}"]`);
-    } catch {
-      return;
-    }
+    const el = nodeEl(menuNodeId);
     if (!el) return;
     el.classList.add('fs-menu-active');
     // Safe even if the node was deleted while its menu was open: the element is
     // detached by then and removing a class from it is a no-op.
-    return () => el?.classList.remove('fs-menu-active');
+    return () => el.classList.remove('fs-menu-active');
   }, [menuNodeId]);
 
   /**
@@ -840,14 +763,7 @@ export function NodeEditor() {
     if (!previewSrcId) return;
     const mark = (id: string | null, role: 'src' | 'dst'): (() => void) => {
       if (!id) return () => {};
-      let el: Element | null = null;
-      try {
-        // Node ids come out of .fastshader files — escaped for the reason the
-        // menu-active effect gives.
-        el = document.querySelector(`.react-flow__node[data-id="${CSS.escape(id)}"]`);
-      } catch {
-        return () => {};
-      }
+      const el = nodeEl(id);
       el?.setAttribute('data-fs-preview', role);
       return () => el?.removeAttribute('data-fs-preview');
     };
@@ -876,13 +792,7 @@ export function NodeEditor() {
       const target = e.target as Element | null;
       if (!target) return;
       if (target.closest?.(PREVIEW_KEEP_SELECTOR)) return;
-      let srcEl: Element | null = null;
-      try {
-        srcEl = document.querySelector(`.react-flow__node[data-id="${CSS.escape(previewSrcId)}"]`);
-      } catch {
-        srcEl = null;
-      }
-      if (srcEl?.contains(target)) return;
+      if (nodeEl(previewSrcId)?.contains(target)) return;
       useAppStore.getState().setNodePreview(null);
     };
     document.addEventListener('pointerdown', onPointerDown, true);
@@ -921,17 +831,10 @@ export function NodeEditor() {
   const lastActivationRef = useRef<Activation>(null);
   useEffect(() => {
     if (!peekNodeId) return;
-    let el: Element | null = null;
-    try {
-      // Node ids come out of .fastshader files — the same reason the
-      // menu-active effect escapes them.
-      el = document.querySelector(`.react-flow__node[data-id="${CSS.escape(peekNodeId)}"]`);
-    } catch {
-      return;
-    }
+    const el = nodeEl(peekNodeId);
     if (!el) return;
     el.setAttribute('data-fs-labels-shown', '');
-    return () => el?.removeAttribute('data-fs-labels-shown');
+    return () => el.removeAttribute('data-fs-labels-shown');
   }, [peekNodeId]);
 
   /**
@@ -1078,15 +981,8 @@ export function NodeEditor() {
     if (event) zoomGlideRef.current = null;
     setCanvasBusy(true);
   }, []);
-  // A gesture interrupted by unmount must not leave the preview inert. The
-  // COUNTER has to be reset with the class: `canvasBusy` is module scope, so it
-  // outlives the component, and a residual ≥1 left by an interrupted gesture
-  // would make the next mount's first `setCanvasBusy(true)` push it to 2 —
-  // after which no gesture end could bring it back to 0 and
-  // `:root.fs-canvas-busy .shader-preview__iframe { pointer-events: none }`
-  // would pin the 3D preview permanently unclickable. Unreachable while
-  // AppLayout mounts this component unconditionally (it only unmounts with the
-  // page); this keeps the guarantee true for any layout that stops doing that.
+  // Unmount resets the module-scope COUNTER with the class: a residue would
+  // push the next mount's first arm to 2 and nothing could bring it back to 0.
   useEffect(() => () => {
     canvasBusy = 0;
     document.documentElement.classList.remove('fs-canvas-busy');
@@ -1553,17 +1449,10 @@ export function NodeEditor() {
     const plan = connectPreviewRef.current;
     if (!plan) return;
     const hoverId = plan.mode === 'feed-hover' ? plan.target : plan.source;
-    document
-      .querySelector(`.react-flow__node[data-id="${CSS.escape(hoverId)}"]`)
-      ?.classList.remove('fs-connect-target');
-    document
-      .querySelector(
-        `.react-flow__node[data-id="${CSS.escape(plan.target)}"] .react-flow__handle.target[data-handleid="${CSS.escape(plan.targetHandle)}"]`,
-      )
-      ?.classList.remove('fs-connect-socket');
-    document
-      .querySelector(`.react-flow__node[data-id="${CSS.escape(plan.target)}"]`)
-      ?.classList.remove('fs-connect-front');
+    const target = nodeEl(plan.target);
+    nodeEl(hoverId)?.classList.remove('fs-connect-target');
+    handleEl(target, 'target', plan.targetHandle)?.classList.remove('fs-connect-socket');
+    target?.classList.remove('fs-connect-front');
     connectPreviewRef.current = null;
   }, []);
 
@@ -1588,21 +1477,14 @@ export function NodeEditor() {
       // under simultaneous pen+touch input) would otherwise wipe the ring for
       // the rest of the hover while the drop still commits the plan.
       const hoverId = plan.mode === 'feed-hover' ? plan.target : plan.source;
-      document
-        .querySelector(`.react-flow__node[data-id="${CSS.escape(hoverId)}"]`)
-        ?.classList.add('fs-connect-target');
-      document
-        .querySelector(
-          `.react-flow__node[data-id="${CSS.escape(plan.target)}"] .react-flow__handle.target[data-handleid="${CSS.escape(plan.targetHandle)}"]`,
-        )
-        ?.classList.add('fs-connect-socket');
+      const target = nodeEl(plan.target);
+      nodeEl(hoverId)?.classList.add('fs-connect-target');
+      handleEl(target, 'target', plan.targetHandle)?.classList.add('fs-connect-socket');
       // Lift the node that OWNS the target socket above the other, so the ringed
       // socket + its tooltip are never hidden: feed-hover raises the hovered
       // node (dragged node slides underneath); feed-dragged raises the dragged
       // node (its own input is the target).
-      document
-        .querySelector(`.react-flow__node[data-id="${CSS.escape(plan.target)}"]`)
-        ?.classList.add('fs-connect-front');
+      target?.classList.add('fs-connect-front');
       connectPreviewRef.current = plan;
     },
     [clearConnectPreview],
@@ -2165,31 +2047,10 @@ export function NodeEditor() {
     [],
   );
 
-  /**
-   * Which node the pointer is over — published to the store so the WIRES on a
-   * lifted node can move with its sockets (see TypedEdge). React Flow's own
-   * mouse-enter/leave are used rather than CSS, because CSS `:hover` is not
-   * readable from the edge components.
-   *
-   * Suppressed for the whole of a connection drag: dragging a wire sweeps the
-   * pointer across every node between the socket and the target, and lifting
-   * each one in turn is noise on top of a gesture that already has its own
-   * target affordance (the revealed sockets). `fs-connecting` on the canvas
-   * root does the same for the CSS half; the two MUST agree, or the card lifts
-   * while its wires do not — the exact defect this whole mechanism exists to
-   * prevent.
-   */
-  const setHoveredNode = useAppStore((s) => s.setHoveredNode);
-  const connectingRef = useRef(false);
+  // True for the whole of a connection drag: `fs-connecting` on the canvas
+  // root switches the hover lift off while a wire sweeps across the nodes
+  // (NodeBase.css).
   const [connecting, setConnecting] = useState(false);
-  const onNodeMouseEnter = useCallback(
-    (_e: React.MouseEvent, node: AppNode) => {
-      if (connectingRef.current) return;
-      setHoveredNode(node.id);
-    },
-    [setHoveredNode],
-  );
-  const onNodeMouseLeave = useCallback(() => setHoveredNode(null), [setHoveredNode]);
 
   // Track whether a connection attempt succeeded; if not, open add-node menu
   const connectSucceeded = useRef(false);
@@ -2202,12 +2063,7 @@ export function NodeEditor() {
       // setConnectChrome for what WebKit paints without this.
       setConnectChrome(true);
       connectSucceeded.current = false;
-      // A node already lifted under the pointer must drop back BEFORE the wire
-      // starts moving, or it stays raised for the whole drag with no pointer on
-      // it (mouse-leave is swallowed once React Flow captures the pointer).
-      connectingRef.current = true;
       setConnecting(true);
-      setHoveredNode(null);
       // NB: deliberately NO clearSocketTapTooltip() here — a bare touch tap on
       // a socket ALSO starts a connection (every handle is isConnectableStart),
       // so clearing on connect-start would dismiss the tooltip the tap itself
@@ -2239,7 +2095,6 @@ export function NodeEditor() {
       // (the chrome) the whole app unselectable.
       setCanvasBusy(false);
       setConnectChrome(false);
-      connectingRef.current = false;
       setConnecting(false);
       const pending = pendingSourceRef.current;
       pendingSourceRef.current = null;
@@ -2288,6 +2143,7 @@ export function NodeEditor() {
     [applyConnection],
   );
 
+  // Also the selection rectangle's menu: a right-click on it is a canvas one.
   const onPaneContextMenu = useCallback(
     (event: MouseEvent | React.MouseEvent) => {
       event.preventDefault();
@@ -2350,37 +2206,19 @@ export function NodeEditor() {
     [openContextMenu]
   );
 
-  // Double-click an edge → drop a routing waypoint at the click point. Ordered
-  // by minimum detour so it lands on the right part of the wire regardless of
-  // click order (see insertWaypointOrdered). Node centers approximate the wire
-  // endpoints well enough for ordering. Double-clicking a waypoint dot removes
-  // it (handled in EdgeWaypointHandles, which stops propagation).
+  // Double-click an edge → drop a routing waypoint at the click point
+  // (addEdgeWaypoint orders it along the wire). Double-clicking a waypoint dot
+  // removes it (handled in EdgeWaypointHandles, which stops propagation).
   const onEdgeDoubleClick = useCallback(
     (event: React.MouseEvent, edge: Edge) => {
       event.stopPropagation();
-      const src = getInternalNode(edge.source);
-      const tgt = getInternalNode(edge.target);
-      if (!src || !tgt) return;
-      const p = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      const center = (n: InternalNode) => ({
-        x: n.internals.positionAbsolute.x + (n.measured?.width ?? 120) / 2,
-        y: n.internals.positionAbsolute.y + (n.measured?.height ?? 40) / 2,
-      });
-      const store = useAppStore.getState();
-      const current = store.edges.find((e) => e.id === edge.id);
-      const wps = (current?.data?.waypoints ?? []) as { x: number; y: number }[];
-      const next = insertWaypointOrdered(center(src), center(tgt), wps, p);
-      store.setEdgeWaypoints(edge.id, next, { history: true });
+      addEdgeWaypoint(
+        edge.id,
+        screenToFlowPosition({ x: event.clientX, y: event.clientY }),
+        getInternalNode,
+      );
     },
     [screenToFlowPosition, getInternalNode]
-  );
-
-  const onSelectionContextMenu = useCallback(
-    (event: React.MouseEvent) => {
-      event.preventDefault();
-      openContextMenu(event.clientX, event.clientY, 'canvas');
-    },
-    [openContextMenu]
   );
 
   // Drag-to-delete: track reconnect start + save history
@@ -2424,35 +2262,31 @@ export function NodeEditor() {
     [removeEdge]
   );
 
-  // Content browser drag-and-drop: allow drop on canvas
+  // What a drag shows at a screen point, for HTML5 dragover and the touch
+  // tile drag alike: the drag-connect plan, else the nearest edge the drop
+  // would splice — never both, and no edge for a tile that cannot splice.
+  const previewTileAt = useCallback(
+    (payload: TilePayload | null, clientX: number, clientY: number) => {
+      if (payload && (previewTileConnect(payload, clientX, clientY) || !tileCanSplice(payload))) {
+        clearEdgeHighlight();
+        return;
+      }
+      const pos = screenToFlowPosition({ x: clientX, y: clientY });
+      const radius = DROP_ON_EDGE_RADIUS / getViewport().zoom;
+      updateEdgeHighlight(
+        findNearestEdge(pos.x, pos.y, useAppStore.getState().edges, getInternalNode, radius),
+      );
+    },
+    [previewTileConnect, clearEdgeHighlight, screenToFlowPosition, updateEdgeHighlight, getInternalNode, getViewport],
+  );
+
+  // Content browser drag-and-drop: allow drop on canvas. The tile comes from
+  // tileDrag's module record — dataTransfer is unreadable during dragover.
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
-
-    // Drag-connect preview for a node tile in flight (payload comes from
-    // tileDrag's module record — dataTransfer is unreadable during dragover).
-    // Over a node body the drop-on-edge preview is suppressed, same
-    // never-both rule as node drags.
-    const tile = getHtml5TileDrag();
-    if (tile) {
-      if (previewTileConnect(tile, event.clientX, event.clientY)) {
-        clearEdgeHighlight();
-        return;
-      }
-      // A tile that can't splice (value/source nodes: no inputs) must not
-      // get the edge highlight either — the drop won't insert it.
-      if (!tileCanSplice(tile)) {
-        clearEdgeHighlight();
-        return;
-      }
-    }
-
-    // Highlight the nearest edge for drop-on-edge insertion preview (asset browser drags).
-    const pos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    const store = useAppStore.getState();
-    const radius = DROP_ON_EDGE_RADIUS / getViewport().zoom;
-    updateEdgeHighlight(findNearestEdge(pos.x, pos.y, store.edges, getInternalNode, radius));
-  }, [previewTileConnect, clearEdgeHighlight, screenToFlowPosition, updateEdgeHighlight, getInternalNode, getViewport]);
+    previewTileAt(getHtml5TileDrag(), event.clientX, event.clientY);
+  }, [previewTileAt]);
 
   // Place a node/group/texture at the given screen point. Shared by both the
   // HTML5 onDrop path (desktop) and the touch tileDrag path (iPad/phone).
@@ -2496,8 +2330,7 @@ export function NodeEditor() {
 
       const def = NODE_REGISTRY.get(payload.nodeType);
       if (!def) return;
-      const costs = complexityData.costs as Record<string, number>;
-      const cost = costs[def.type] ?? 0;
+      const cost = getBaseCosts()[def.type] ?? 0;
       const currentNodes = useAppStore.getState().nodes;
 
       // A singleton type that is already on the canvas is not added twice —
@@ -2623,7 +2456,7 @@ export function NodeEditor() {
           });
           return;
         }
-        const cost = (complexityData.costs as Record<string, number>).dataNode ?? 2;
+        const cost = getBaseCosts().dataNode ?? 2;
         addNode({
           id: generateId(),
           type: 'shader',
@@ -2639,16 +2472,6 @@ export function NodeEditor() {
     [screenToFlowPosition, addNode],
   );
 
-  // Re-encode a dropped image on the host and place an Image node at the drop
-  // point. The canvas round-trip strips metadata and bounds the payload; limit
-  // hits surface the LimitModal (with an override) instead of failing silently.
-  /**
-   * Decode + re-encode one dropped image and place its node.
-   *
-   * `ghostId` is the in-flight indicator already on screen for this file (the
-   * multi-drop path raises all of them up front); it is removed here whatever
-   * happens. Awaitable so a multi-file drop can queue the encodes.
-   */
   /**
    * The drop's convert-or-keep decision, asked ONCE per drop (not per file).
    * A remembered answer skips the dialog entirely.
@@ -2677,6 +2500,12 @@ export function NodeEditor() {
     resolver?.(choice);
   }, []);
 
+  /**
+   * Re-encode one dropped image on the host (strips metadata, bounds the
+   * payload) and place its Image node; a limit hit raises the LimitModal.
+   * Removes the file's in-flight `ghostId` whatever happens. Awaitable, so a
+   * multi-file drop can queue the encodes.
+   */
   const placeImageFile = useCallback(
     async (
       file: File,
@@ -3044,29 +2873,9 @@ export function NodeEditor() {
   // Flow root. Publishing it as a var invited chrome (the asset bar) to tint
   // itself with the user's canvas pick, which it must not do.
   /**
-   * How far the SELECTED nodes' visible cards overhang React Flow's own
-   * selection rectangle, on the right and the bottom, in flow px.
-   *
-   * React Flow builds that rectangle from each node's MEASURED layout box, but
-   * the expensive node types paint up to 1.35x larger than it — `getCostScale`
-   * as a `transform: scale()` with `transform-origin: top left`, and a
-   * transform does not affect layout (the same fact `nodeVisualSize` above
-   * exists for). So the rectangle is correct along the top and left edges and
-   * falls SHORT along the other two, by a different amount per node: a marquee
-   * around two 35-point noise nodes drew its line straight through both cards.
-   *
-   * Only two numbers are needed because the shortfall is one-sided. They are
-   * published as CSS variables and consumed by the boundary's `inset`
-   * (NodeEditor.css) — the rectangle's own geometry is React Flow's and is left
-   * exactly as it is, so the element the user drags to move a selection keeps
-   * the size and hit area React Flow gave it. The 5px standoff is folded in
-   * there too, in CSS, so no px literal from tokens.css has to be duplicated
-   * here. (It used to add the selected nodes' uniform rise as well; nodes stop
-   * moving when lifted as of 2026-09-09, so that term is gone.)
-   *
-   * Computed as a difference of UNIONS, never as the largest per-node
-   * difference: the node with the right-most measured edge need not be the one
-   * whose card reaches furthest right.
+   * How far the SELECTED cards overhang React Flow's selection rectangle on the
+   * right and bottom, in flow px — cost-scaled nodes paint larger than the box
+   * it measures. A difference of UNIONS, never a per-node max; NodeEditor.css.
    */
   const selectionOverflow = useMemo(() => {
     let measuredR = -Infinity, measuredB = -Infinity;
@@ -3095,14 +2904,6 @@ export function NodeEditor() {
     '--fs-sel-db': `${selectionOverflow.db}px`,
   } as React.CSSProperties;
 
-  // Let middle/right-click pan through the selection overlay.
-  // React Flow's d3-zoom filter blocks panning when the event target is inside
-  // an element with the `nopan` class. The nodesselection wrapper carries this
-  // class to prevent left-drag panning (so the selection can be dragged
-  // instead). But it also blocks middle-click panning, which is unwanted.
-  // Fix: on middle/right mousedown, temporarily strip the `nopan` class from
-  // the nodesselection wrapper so d3-zoom's filter lets the event through,
-  // then restore it on the next frame.
   const canvasRef = useRef<HTMLDivElement>(null);
 
   // Keyboard navigation: Tab cycles nodes (canvas-scoped), arrows move the
@@ -3112,63 +2913,15 @@ export function NodeEditor() {
   useKeyboardNav({ drawToolActive });
 
 
-  // Keyboard entry point for adding a node. The graph was otherwise pointer-only
-  // — the Add-Node menu could be reached ONLY by right-click or by dropping a
-  // wire, so a keyboard user had no way to author a node at all. Shift+A mirrors
-  // Blender's Add shortcut and opens the menu at the canvas centre; the menu
-  // already autofocuses its search box and handles Arrow/Enter from there.
-  //
-  // F frames the SELECTION — the "view selected" key of every node editor
-  // (Unreal, Unity ShaderGraph, Blender's numpad-period): the same animated,
-  // zoom-capped glide the Output tile and the cost pill use (`focusNodes`), so
-  // every "take me there" gesture lands identically. A selected member of a
-  // collapsed group frames the pill standing in for it. With NOTHING selected
-  // it frames the whole graph — the canvas bar's fit button — because a key
-  // that silently does nothing reads as broken. A bare key, so it must never
-  // fire while the user types: the shared utils/isTypingTarget predicate skips
-  // text-taking INPUTs, TEXTAREA (Monaco's input is one), SELECT (the Audio
-  // node's picker lives on the canvas) and contentEditable, and any modifier
-  // bails so Cmd/Ctrl+F stays the browser's find.
-  //
-  // A selects every visible node (see selectAll.ts — Blender's key; pressed
-  // again with everything selected it deselects all), dispatched as React
-  // Flow `select` changes through the store's onNodesChange — the marquee's
-  // own path, so it is a selection change and not a graph edit: no history
-  // entry, no autosave, no resync.
-  //
-  // SPACE opens the same Add-node menu as Shift+A, i.e. it opens the SEARCH
-  // BOX: the menu autofocuses its search field, so one unmodified key takes
-  // you from an empty canvas to typing a node name. Shift+A stays (it is the
-  // Blender muscle memory), this is the discoverable one.
-  //
-  // Space needs a guard the letter keys do not: it is the platform's "activate
-  // the focused control" key, so it is already spoken for wherever focus
-  // happens to be. A palette tile is a real <button> that adds its node on
-  // Enter/Space (tileDrag.ts), React Flow makes every node a tab stop that
-  // takes Space as select, and the canvas bar is a row of buttons — in all
-  // three the press belongs to the focused thing, and stealing it would make
-  // Tab-then-Space open a menu instead of doing what the control says. So the
-  // binding fires only when the press landed on the PANE itself, which is what
-  // "pressed space on the canvas" means. `isTypingTarget` still covers the
-  // text surfaces, and it runs first.
+  // The bare canvas keys: Shift+A and Space open the Add-node menu at the
+  // centre, F frames the SELECTION (nothing selected: the whole graph), A
+  // selects every visible node. docs/dev/canvas-interaction.md, "F frames…".
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return;
-      // …and the press must have landed ON THE CANVAS, or nowhere in
-      // particular. `isTypingTarget` alone is NOT enough, which is what made
-      // typing in the code panel open the Add-node menu: Monaco holds the
-      // caret in a `<textarea>` but its keydown surfaces from a div in the
-      // same subtree, a SIBLING of that textarea — so the ancestor walk finds
-      // no text control and reports "not typing". Every bare key here then
-      // leaked into the canvas while the user typed code: Space visibly, and
-      // `a`/`f` invisibly (select-all and frame-selection, unnoticed because
-      // you are looking at the other pane).
-      //
-      // An ALLOW-list rather than another entry on the deny-list below,
-      // because the deny-list is the shape that let this through: it can only
-      // exclude surfaces someone thought of, and the app keeps growing them.
-      // The body/documentElement case is what keeps the feature working when a
-      // click on empty canvas leaves focus nowhere.
+      // An ALLOW-list: the press must land on the canvas or nowhere (body).
+      // Monaco's keydown surfaces from a sibling of its textarea, so the typing
+      // guard alone let these keys leak out of the code panel.
       const target = e.target instanceof Element ? e.target : null;
       const onCanvas = target ? canvasRef.current?.contains(target) === true : true;
       const unfocused = target === document.body || target === document.documentElement;
@@ -3197,8 +2950,8 @@ export function NodeEditor() {
           .openContextMenu(rect.left + rect.width / 2, rect.top + rect.height / 2, 'canvas');
       };
       if (key === ' ' && !e.shiftKey) {
-        // Only from the canvas itself — never out from under a control whose
-        // own job Space already is (see the note above).
+        // Space is "activate the focused control": never steal it from a
+        // button, a link or a focused node (outputFocus.test.ts).
         const el = e.target instanceof Element ? e.target : null;
         if (el?.closest('button, [role="button"], a[href], summary, .react-flow__node')) return;
         openAddMenuAtCentre();
@@ -3243,21 +2996,7 @@ export function NodeEditor() {
     };
     const onMoveEvt = (event: Event) => {
       const detail = (event as CustomEvent<TileDropEventDetail>).detail;
-      if (previewTileConnect(detail.payload, detail.clientX, detail.clientY)) {
-        clearEdgeHighlight();
-        return;
-      }
-      // Only payloads the drop can actually splice get the edge highlight
-      // (saved groups / textures / input-only nodes never splice).
-      if (!tileCanSplice(detail.payload)) {
-        clearEdgeHighlight();
-        return;
-      }
-      const pos = screenToFlowPosition({ x: detail.clientX, y: detail.clientY });
-      const radius = DROP_ON_EDGE_RADIUS / getViewport().zoom;
-      updateEdgeHighlight(
-        findNearestEdge(pos.x, pos.y, useAppStore.getState().edges, getInternalNode, radius),
-      );
+      previewTileAt(detail.payload, detail.clientX, detail.clientY);
     };
     const onEndEvt = () => {
       clearConnectPreview();
@@ -3271,16 +3010,10 @@ export function NodeEditor() {
       el.removeEventListener(TILE_DRAG_MOVE_EVENT, onMoveEvt);
       el.removeEventListener(TILE_DRAG_END_EVENT, onEndEvt);
     };
-  }, [
-    placeTilePayload,
-    previewTileConnect,
-    clearConnectPreview,
-    clearEdgeHighlight,
-    updateEdgeHighlight,
-    screenToFlowPosition,
-    getInternalNode,
-    getViewport,
-  ]);
+  }, [placeTilePayload, previewTileAt, clearConnectPreview, clearEdgeHighlight]);
+  // React Flow's d3-zoom filter refuses panning inside `.nopan`, which the
+  // selection wrapper carries; drop it for the length of a middle/right press
+  // so that press can still pan.
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
@@ -3296,42 +3029,20 @@ export function NodeEditor() {
     return () => el.removeEventListener('mousedown', handler, true);
   }, []);
 
-  // Wheel handling. A HORIZONTAL wheel always pans — a mouse tilt-wheel and a
-  // trackpad sideways swipe both emit `deltaX` on its own, which is unambiguous
-  // whatever the device. What a VERTICAL wheel does is the user's `trackpadScroll`
-  // setting: OFF (default) it falls through to React Flow's `zoomOnScroll`, ON it
-  // pans.
-  //
-  // A SETTING rather than a device sniff, and that is the design. The two
-  // gestures arrive as the SAME event, so separating them needs a heuristic —
-  // one was built (`wheelKind.ts`: pixel-vs-line delta mode, then the legacy
-  // `wheelDelta` detent of 120), shipped, and REVERTED, because it read a real
-  // macOS mouse as a trackpad and removed that user's zoom. Almost certainly
-  // because macOS accelerates mouse wheels too, so `wheelDelta` is rarely a
-  // clean multiple of 120. Two properties make the class unsafe to guess at:
-  // the failure is ASYMMETRIC (misreading a trackpad costs a pan you repeat,
-  // misreading a mouse removes a primary control), and it is UNTESTABLE from
-  // here — CDP's `Input.dispatchMouseEvent` hardcodes `wheelDeltaY` to ±120
-  // whatever delta you ask for, and a constructed `WheelEvent` leaves it at 0.
-  // Don't reintroduce a sniff; the toolbar's right-click menu owns this now.
-  //
-  // Zooming stays reachable in BOTH modes: pinch and Ctrl/Cmd+wheel pass
-  // straight through to React Flow, which is also the trackpad's native zoom.
+  // Wheel: horizontal always pans; vertical zooms (React Flow) or, with
+  // `trackpadScroll` on, pans. A SETTING, never a device sniff —
+  // docs/dev/canvas-interaction.md, "Canvas navigation".
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
 
     const onWheel = (e: WheelEvent) => {
       if (e.ctrlKey || e.metaKey) return; // pinch-to-zoom / explicit zoom
-      // React Flow's own opt-out, honoured here too: the canvas bar and the
-      // cost overlay are scrollable chrome sitting inside this element, and a
-      // capture-phase listener would otherwise pan the graph out from under a
-      // wheel aimed at them.
+      // Floating chrome inside the canvas opts out, or this capture-phase
+      // listener pans the graph under a wheel aimed at it (canvasWheel.test.ts).
       if ((e.target as Element | null)?.closest?.('.nowheel')) return;
-      // Read the flag off the store at EVENT time rather than closing over it:
-      // this listener is bound once (its deps are the stable viewport helpers),
-      // so a captured value would freeze whatever the setting was at mount and
-      // the toggle would only take effect after a remount.
+      // Read at EVENT time: the listener is bound once, so a closed-over value
+      // would freeze the setting at mount.
       const panVertically = useAppStore.getState().trackpadScroll;
       if (!panVertically && e.deltaX === 0) return; // → React Flow zooms
       e.preventDefault();
@@ -3650,18 +3361,9 @@ export function NodeEditor() {
     return () => window.clearTimeout(timer);
   }, [importNote]);
 
-  // Frame the graph an import just dropped in. An import replaces the nodes but
-  // NOT the viewport, so a shader dropped onto a panned/zoomed canvas lands
-  // off-screen and reads as a failed import — the same problem the New button
-  // solves for its lone Output node.
-  //
-  // The fit can't run on the event itself. A project block writes its nodes in
-  // the same tick the event fires (React hasn't rendered them yet), and a bare
-  // script has no graph at all until useSyncEngine's code→graph pass finishes a
-  // commit or two later. So the event ARMS a fit and the effect below fires it
-  // on the next graph the editor actually renders, with the double-rAF
-  // measurement guard startNewShader uses: fitView frames the MEASURED box, and
-  // unmeasured nodes fit as zero-size points at maxZoom.
+  // ARMS a fit on fs:graph-imported / fs:graph-new / fs:graph-merged and fires
+  // it from the [nodes] effect, once the new graph has rendered and measured
+  // (docs/dev/graph-and-store.md, "An import auto-frames the canvas").
   const importFitArmedRef = useRef(false);
   const importFitTimerRef = useRef(0);
   const importFitRafRef = useRef(0);
@@ -3674,26 +3376,11 @@ export function NodeEditor() {
       }, IMPORT_FIT_TIMEOUT_MS);
     };
     window.addEventListener('fs:graph-imported', arm);
-    // `newGraph()` is the same "nodes replaced, viewport not" case and fires its
-    // OWN event, so it needs arming here too. The toolbar's NEW button has
-    // always framed the fresh document itself (startNewShader schedules its own
-    // fit, which is why this listener was originally only for imports) — but
-    // that is the BUTTON's path, and EvalGate's `cleanSlateForStudy` calls
-    // `newGraph()` on the store directly. Nothing framed the blank document
-    // there; it merely happened to stay on screen because the boot fit had run
-    // over the previous graph, whose box contains the flow origin the new
-    // Output sits at. Remembering the viewport removed that accident, so a
-    // study session could open on the PREVIOUS participant's pan with the
-    // blank document metres off-screen. The two events stay distinct — the
-    // Work folder's `fs:graph-new` tracking is untouched — and arming twice on
-    // the NEW button is two fits to the same box, i.e. free.
+    // `newGraph()` called on the store directly (EvalGate's
+    // `cleanSlateForStudy`) has no NEW button to frame it, so it arms here too.
     window.addEventListener('fs:graph-new', arm);
-    // A model's materials built into the graph (`commitGlbImport`) and a
-    // shader ADDED beside it (`addDroppedShader`) are the same "nodes
-    // appeared, viewport did not move" case: without a fit the arrivals can be
-    // off-screen and the import reads as nothing having happened. It is its
-    // own event because the DOCUMENT did not change — the Work folder must
-    // not forget the file the user opened.
+    // Nodes arrived but the DOCUMENT did not change (`commitGlbImport`,
+    // `addDroppedShader`).
     window.addEventListener(GRAPH_MERGED_EVENT, arm);
     return () => {
       window.removeEventListener('fs:graph-imported', arm);
@@ -3708,11 +3395,8 @@ export function NodeEditor() {
     if (!importFitArmedRef.current) return;
     importFitArmedRef.current = false;
     window.clearTimeout(importFitTimerRef.current);
-    // The pending frames are held in a ref and torn down only on unmount, NOT
-    // by this effect's cleanup: the cost pass writes the Output node's new
-    // total straight back into `nodes`, so an imported graph re-renders once
-    // more inside the two-frame window — a cleanup-owned rAF would be
-    // cancelled by exactly the change that proves the import landed.
+    // Held in a ref and torn down only on unmount, NOT by this effect's
+    // cleanup: the cost pass re-renders `nodes` inside the two-frame window.
     importFitRafRef.current = requestAnimationFrame(() => {
       importFitRafRef.current = requestAnimationFrame(() => fitView(FIT_VIEW_OPTIONS));
     });
@@ -3827,8 +3511,6 @@ export function NodeEditor() {
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
-          onNodeMouseEnter={onNodeMouseEnter}
-          onNodeMouseLeave={onNodeMouseLeave}
           onConnectStart={onConnectStart}
           onConnectEnd={onConnectEnd}
           onNodeDragStart={onNodeDragStart}
@@ -3839,7 +3521,7 @@ export function NodeEditor() {
           onNodeContextMenu={onNodeContextMenu}
           onEdgeContextMenu={onEdgeContextMenu}
           onEdgeDoubleClick={onEdgeDoubleClick}
-          onSelectionContextMenu={onSelectionContextMenu}
+          onSelectionContextMenu={onPaneContextMenu}
           onNodeClick={onNodeClick}
           onPaneClick={onPaneClick}
           onReconnectStart={onReconnectStart}
@@ -4021,14 +3703,16 @@ export function NodeEditor() {
                   `setNodeEditorBgColor` writes localStorage (per theme) and the
                   store, never pushHistory — so bracketing would push an undo
                   entry that restores nothing and clear the redo stack. */}
-              <ColorPickerPopover
-                anchor={bgBtnRef.current}
-                open={bgPickerOpen}
-                onClose={closeBgPicker}
-                value={nodeEditorBgColor}
-                onPick={setNodeEditorBgColor}
-                history="none"
-              />
+              {bgPickerOpen && (
+                <ColorPickerPopover
+                  anchor={bgBtnRef.current}
+                  open={bgPickerOpen}
+                  onClose={closeBgPicker}
+                  value={nodeEditorBgColor}
+                  onPick={setNodeEditorBgColor}
+                  history="none"
+                />
+              )}
             </div>
           </Panel>
         </ReactFlow>

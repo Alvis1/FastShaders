@@ -9,17 +9,15 @@
  * namespace, and DRACOLoader/GLTFLoader exist only on `AFRAME.THREE`.
  *
  * DRACOLoader decodes in a Worker built from a blob: URL of the wrapper text.
- * Node has no Worker, so `InProcessWorker` runs that exact source in a fresh
- * `vm` context and structured-clones messages both ways, as a real worker's
- * postMessage does. Worker, `self`, `createImageBitmap` and `ProgressEvent`
+ * Node has no Worker, so test-utils' `installInProcessWorker` runs that exact
+ * source in a fresh `vm` context and structured-clones messages both ways, as a
+ * real worker's postMessage does. Worker, `self`, `createImageBitmap` and `ProgressEvent`
  * are stubbed per test and undone in afterEach (`isolate: false`), as is the
  * DefaultLoadingManager modifier test (b) installs.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { resolveObjectURL } from 'node:buffer';
 import path from 'node:path';
-import vm from 'node:vm';
 import * as THREE from 'three/webgpu';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
@@ -36,6 +34,7 @@ import {
   type FastShadersApi,
 } from './shaderloaderHarness';
 import { GLTF_NODE_GLOBALS, glbBytes, packGlb } from './gltfTestFixtures';
+import { installInProcessWorker, type InProcessWorkerStats } from './test-utils';
 
 const V = '0.8';
 const DECODERS = path.join(REPO, 'public/js/decoders');
@@ -51,52 +50,6 @@ const INSTALLED = Symbol.for('fastshaders.decoders');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
-
-/* ── a Worker for node: the real worker source, in its own realm ─────────── */
-
-class InProcessWorker {
-  static created = 0;
-  onmessage: ((e: { data: unknown }) => void) | null = null;
-  private dead = false;
-  private scope: Promise<Record<string, Any>>;
-
-  constructor(url: string) {
-    InProcessWorker.created++;
-    const blob = resolveObjectURL(String(url));
-    this.scope = (blob ? blob.text() : Promise.reject(new Error(`no blob at ${url}`))).then((src) => {
-      const scope: Record<string, Any> = {
-        console: { log() {}, warn() {}, error() {} },
-        importScripts() {},
-        location: { href: String(url) },
-        setTimeout,
-        clearTimeout,
-        postMessage: (data: unknown) => {
-          const copy = structuredClone(data);
-          setTimeout(() => {
-            if (!this.dead) this.onmessage?.({ data: copy });
-          }, 0);
-        },
-      };
-      vm.createContext(scope);
-      // `self` must be the context's GLOBAL (it carries the builtins the
-      // worker reads as self.Float32Array), not the sandbox object.
-      vm.runInContext('this.self = this;', scope);
-      vm.runInContext(src, scope, { filename: 'draco-worker.js' });
-      return scope;
-    });
-  }
-
-  postMessage(data: unknown): void {
-    const copy = structuredClone(data);
-    void this.scope.then((s) => {
-      if (!this.dead) s.onmessage({ data: copy });
-    });
-  }
-
-  terminate(): void {
-    this.dead = true;
-  }
-}
 
 /* ── the sandbox ────────────────────────────────────────────────────────── */
 
@@ -219,10 +172,12 @@ function splitGlb(buf: ArrayBuffer): { json: Any; bin: Uint8Array } {
   return { json, bin: new Uint8Array(buf.slice(binAt + 8, binAt + 8 + binLen)) };
 }
 
+/** The Workers this test has constructed (a fresh count per test). */
+let workers: InProcessWorkerStats;
+
 beforeEach(() => {
   for (const [k, v] of Object.entries(GLTF_NODE_GLOBALS)) vi.stubGlobal(k, v);
-  vi.stubGlobal('Worker', InProcessWorker);
-  InProcessWorker.created = 0;
+  workers = installInProcessWorker();
 });
 afterEach(() => {
   // configure(null) disposes each document's shared DRACOLoader (its worker
@@ -248,7 +203,7 @@ describe.skipIf(!loaderAvailable(V))('shaderloader 0.8 decoders — Draco', () =
     expect(g.getAttribute('position').count).toBe(4);
     expect(g.index?.count).toBe(6);
     expect([...new Set(g.getAttribute('position').array)].sort()).toEqual([0, 1]);
-    expect(InProcessWorker.created).toBe(1);
+    expect(workers.created).toBe(1);
     expect(D.lastError).toBe('');
   });
 
@@ -317,7 +272,7 @@ describe.skipIf(!loaderAvailable(V))('shaderloader 0.8 decoders — Draco', () =
       const { gltf, error } = await aframeParse(loader, fixture('tri-draco.glb'));
       expect(gltf).toBeUndefined();
       expect(error).toBeTruthy();
-      expect(InProcessWorker.created).toBe(0);
+      expect(workers.created).toBe(0);
     }
     // No longer answered: the manager maps it to the unfetchable MISSING URL.
     {

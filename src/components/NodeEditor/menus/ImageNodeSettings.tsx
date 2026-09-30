@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useAppStore, resolveDeviceTextureDim, resolveDeviceBudget } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { getNodeValues } from '@/types';
-import { rowStyle, labelStyle, wideFieldStyle } from './menuShared';
+import { rowStyle, labelStyle, checkLabelStyle, checkStyle, wideFieldStyle } from './menuShared';
 import { imageCharsReplacing, MAX_TOTAL_IMAGE_CHARS, displayImageFileName, resolveImageDrop } from '@/utils/imageNode';
 import { resolutionLadder } from '@/utils/imageCodec';
 import { resizeEncodedImage, encodeImageFile, isSvgFile, type ImageConvertMode } from '@/utils/imageImport';
@@ -19,8 +19,6 @@ import { loadImageOrigin, stashImageOrigin, canStashPayload, type ImageOriginPay
 import { deriveOriginView, type LoadedOrigin } from './imageOriginView';
 import { generateId } from '@/utils/idGenerator';
 
-const checkLabelStyle = { ...labelStyle, display: 'flex', alignItems: 'center', gap: '4px' } as const;
-const checkStyle = { width: '12px', height: '12px', margin: 0 } as const;
 const valueStyle = {
   fontSize: 'var(--font-size-xs)',
   color: 'var(--text-primary)',
@@ -305,19 +303,9 @@ async function materialiseModelTextureInner(targetId: string, src: ModelTextureS
   }
 }
 
-/** Image-node section of the right-click settings menu.
- *
- *  Its own component (rather than an inline block in NodeSettingsMenu)
- *  because it needs hooks: the pre-snap "original" lives in IndexedDB, and it
- *  is read when the menu opens — and again whenever the node's `originId`
- *  changes, which includes a second right-click MOVING the menu to another
- *  node without remounting it (imageOriginView.ts says what the read means
- *  for the node on screen, and why it is keyed by id). That prefetch is what
- *  lets both the Revert button and the Data-map checkbox apply their change
- *  synchronously, as a SINGLE undo entry — `updateNodeData` pushes history
- *  the moment it is called, so a handler that awaited the read mid-click
- *  would split one click into two undo steps, with the intermediate one
- *  leaving the node half changed. */
+/** Image-node section of the right-click settings menu. Its own component
+ *  because it needs hooks: the origin read is PREFETCHED (keyed by originId,
+ *  see imageOriginView.ts) so Revert and Data-map each write ONE updateNodeData. */
 export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const language = useAppStore((s) => s.language);
@@ -389,7 +377,6 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
   const url = typeof vals.imageB64 === 'string' ? vals.imageB64 : '';
   /** Study session (eval): sampled once per page, so every render agrees. */
   const study = isEvalMode();
-  const mimeMatch = /^data:image\/(png|jpeg|webp);base64,/.exec(url);
   const fmt = (u: string) => {
     const m = /^data:image\/(png|jpeg|webp);base64,/.exec(u);
     return m ? (m[1] === 'jpeg' ? 'JPEG' : m[1].toUpperCase()) : '—';
@@ -398,7 +385,7 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
   const w = Number(vals.width) || 0;
   const h = Number(vals.height) || 0;
   const resolution = w && h ? `${w} × ${h}` : '—';
-  const bytes = mimeMatch ? Math.round((url.length - url.indexOf(',') - 1) * 0.75) : 0;
+  const bytes = format !== '—' ? Math.round((url.length - url.indexOf(',') - 1) * 0.75) : 0;
   const size =
     bytes <= 0 ? '—'
       : bytes < 1024 ? `${bytes} B`
@@ -839,7 +826,7 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
       {checkboxRow(t('Flip X', language), 'flipX', false, t('Mirror the image left–right', language))}
       {checkboxRow(t('Flip Y', language), 'flipY', false, t('Mirror the image top–bottom', language))}
       {/* colorSpace keeps its string contract ('color' | 'data') — the
-          emission branch and makeImageNodeData both read it that way. */}
+          emission branch and makeImageNodeFromEncode both read it that way. */}
       <div style={rowStyle}>
         <label style={checkLabelStyle}>
           <input

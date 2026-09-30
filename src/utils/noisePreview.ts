@@ -76,7 +76,8 @@ export function cellNoise2D(x: number, y: number): number {
 export function voronoi2D(x: number, y: number): number {
   const ix = Math.floor(x);
   const iy = Math.floor(y);
-  let minDist = 1e10;
+  // Squared distances in the loop, ONE sqrt at the end (sqrt is monotone).
+  let minD2 = Infinity;
 
   for (let dy = -1; dy <= 1; dy++) {
     for (let dx = -1; dx <= 1; dx++) {
@@ -86,11 +87,11 @@ export function voronoi2D(x: number, y: number): number {
       const h = PERM[(PERM[(cx & 255)] + (cy & 255)) & 255];
       const px = cx + (h / 255);
       const py = cy + (PERM[(h + 37) & 255] / 255);
-      const dist = Math.sqrt((x - px) * (x - px) + (y - py) * (y - py));
-      if (dist < minDist) minDist = dist;
+      const d2 = (x - px) * (x - px) + (y - py) * (y - py);
+      if (d2 < minD2) minD2 = d2;
     }
   }
-  return Math.min(minDist, 1);
+  return Math.min(Math.sqrt(minD2), 1);
 }
 
 export type NoiseType =

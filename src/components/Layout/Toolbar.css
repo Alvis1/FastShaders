@@ -59,12 +59,12 @@
   outline-offset: 2px;
 }
 
-.toolbar__contact-popover {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
+/* The shell every toolbar popover shares; each adds only its anchor and width. */
+.toolbar__contact-popover,
+.toolbar__local-popover,
+.toolbar__overflow-menu,
+.toolbar__prefs-popover {
   z-index: 100;
-  min-width: 264px;
   padding: var(--space-3);
   display: flex;
   flex-direction: column;
@@ -73,6 +73,13 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
   box-shadow: var(--shadow-lg);
+}
+
+.toolbar__contact-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 264px;
 }
 
 .toolbar__contact-label {
@@ -157,7 +164,6 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-sizing: border-box;
   height: var(--ctl-size);
   font-family: var(--font-sans);
   font-size: var(--font-size-sm);
@@ -215,7 +221,6 @@
    background are the editable affordance: with a transparent border this looked
    like static text until you happened to hover it. */
 .toolbar__name-input {
-  box-sizing: border-box;
   height: var(--ctl-size);
   font-family: var(--font-sans);
   font-size: var(--font-size-sm);
@@ -254,7 +259,6 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-sizing: border-box;
   height: var(--ctl-size);
   font-family: var(--font-sans);
   font-size: var(--font-size-sm);
@@ -322,23 +326,45 @@
   cursor: default;
 }
 
-/* The EXPORT popover's Format radio group — its rows ARE .toolbar__export-check,
-   so only the group's own spacing and heading live here. Two-class
-   selectors where a rule could tie with .toolbar__local-note (this file's own
-   trap), --text-* tokens so dark mode follows, and no z-index: the popover
-   stays in the toolbar's own stacking context. */
-.toolbar__export-popover .toolbar__export-format {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  margin-bottom: var(--space-2);
-}
-
-.toolbar__export-popover .toolbar__export-format-label {
+/* The EXPORT popover's smaller button — the OTHER way out for one export
+   ("Export with model" beside a built-in shape, "Export .zip" beside a
+   packable model; engine/exportModel.ts `exportAlternate`). EXPORT's own
+   accent as an OUTLINE, so it reads as the secondary action: same colour, no
+   fill, shorter than --ctl-size. Two-class selectors, the popover's own
+   specificity trap; --text-* tokens so dark mode follows. */
+.toolbar__export-popover .toolbar__export-alt {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  min-height: calc(var(--ctl-size) - 6px);
+  padding: 4px 10px;
   font-family: var(--font-sans);
   font-size: var(--font-size-sm);
   font-weight: 600;
-  color: var(--text-primary);
+  line-height: 1.2;
+  text-align: left;
+  color: var(--text-accent);
+  background: var(--bg-surface);
+  border: 1px solid var(--text-accent);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  margin-bottom: var(--space-1);
+  transition: background var(--transition-fast);
+}
+
+.toolbar__export-popover .toolbar__export-alt:hover {
+  background: var(--bg-panel);
+}
+
+.toolbar__export-popover .toolbar__export-alt:focus-visible {
+  outline: 1px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+.toolbar__export-popover .toolbar__export-alt[aria-busy='true'] {
+  cursor: progress;
+  color: var(--text-secondary);
+  border-color: var(--text-secondary);
 }
 
 /* Work-folder control (desktop builds) — a split button beside EXPORT:
@@ -442,8 +468,7 @@ button.toolbar__local-row.toolbar__wf-row--current {
 }
 
 /* Dark/light glyph toggle — chip-sized like its neighbours, glyph enlarged.
-   Double-class selector: must out-rank both the later .toolbar__sc-link rule
-   and the button.toolbar__sc-link reset, or these declarations are dead. */
+   Double-class to out-rank the later .toolbar__sc-link rule. */
 .toolbar__sc-link.toolbar__theme-toggle {
   font-size: 16px;
   line-height: 1;
@@ -485,8 +510,7 @@ button.toolbar__local-row.toolbar__wf-row--current {
 
 /* Feedback "!" — the only red element in the chrome, so it stays findable when
    someone has hit a problem and is scanning for help. Same double-class
-   specificity note as the two rules above: it must out-rank both the later
-   .toolbar__sc-link rule and the button.toolbar__sc-link reset.
+   specificity note as the two rules above.
 
    The red is a literal, not a token: no danger colour exists in tokens.css, and
    this plate is filled white-on-red in BOTH themes (a red that reads as an
@@ -526,7 +550,6 @@ button.toolbar__local-row.toolbar__wf-row--current {
 .toolbar__eval-badge {
   display: inline-flex;
   align-items: center;
-  box-sizing: border-box;
   height: var(--ctl-size);
   padding: 0 7px;
   font-size: 10px;
@@ -560,16 +583,7 @@ button.toolbar__local-row.toolbar__wf-row--current {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  z-index: 100;
   min-width: 236px;
-  padding: var(--space-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--border-radius-sm);
-  box-shadow: var(--shadow-lg);
 }
 
 .toolbar__local-header {
@@ -628,7 +642,6 @@ button.toolbar__local-row.toolbar__wf-row--current {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-sizing: border-box;
   height: var(--ctl-size);
   font-family: var(--font-sans);
   font-size: var(--font-size-sm);
@@ -654,17 +667,6 @@ button.toolbar__local-row.toolbar__wf-row--current {
 .toolbar__sc-link:focus-visible {
   outline: 1px solid var(--border-focus);
   outline-offset: 2px;
-}
-
-/* Language toggle in its active (Latvian) state — a filled chip so the current
-   language reads at a glance. Button variant shares the .toolbar__sc-link look;
-   these resets keep it identical to the neighbouring anchor chips. */
-button.toolbar__sc-link {
-  font: inherit;
-  font-family: var(--font-sans);
-  font-size: var(--font-size-sm);
-  font-weight: 700;
-  line-height: 1;
 }
 
 /* Language switch. Compact — it is two letters — with a fixed min-width so
@@ -701,7 +703,6 @@ button.toolbar__sc-link {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-sizing: border-box;
   height: var(--ctl-size);
   font-family: var(--font-sans);
   font-size: var(--font-size-sm);
@@ -779,8 +780,7 @@ button.toolbar__sc-link {
    hardcoded values don't: the popover drop shadows vanish against a dark
    backdrop, and the status green/red are tuned for a light surface. */
 :root[data-theme="dark"] .toolbar__contact-popover,
-:root[data-theme="dark"] .toolbar__local-popover,
-:root[data-theme="dark"] .toolbar__vr-popover {
+:root[data-theme="dark"] .toolbar__local-popover {
   box-shadow: var(--shadow-lg), 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 
@@ -809,6 +809,15 @@ button.toolbar__sc-link {
 
 :root[data-theme="dark"] .toolbar__vr-error {
   color: #ff7b72;
+}
+
+/* The EXPORT popover's smaller button: --text-accent (#3366CC) as TEXT on the
+   dark popover surface is ~1.9:1. Same hue, lifted (the feedback plate's
+   precedent): #9dbdff is ~5.5:1 on the surface, ~4.7:1 on its hover fill. The
+   token itself stays unchanged — it is light-tuned on purpose. */
+:root[data-theme="dark"] .toolbar__export-popover .toolbar__export-alt {
+  color: #9dbdff;
+  border-color: #9dbdff;
 }
 
 /* The work-folder status colors are tuned for a light surface too — the
@@ -853,17 +862,8 @@ button.toolbar__sc-link {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  z-index: 100;
-  display: flex;
-  flex-direction: column;
   align-items: stretch;
-  gap: var(--space-2);
   min-width: 168px;
-  padding: var(--space-3);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--border-radius-sm);
-  box-shadow: var(--shadow-lg);
 }
 
 /* The two chips that own a nested popover ("Download app", "VR") are wrappers,
@@ -929,19 +929,9 @@ button.toolbar__local-row.toolbar__reload-row {
    popup on screen — keep the two in step. */
 .toolbar__prefs-popover {
   position: fixed;
-  z-index: 100;
   /* Sized for the rows themselves: the explanation that used to sit under the
      checkbox is the row's `title` now, so nothing here needs paragraph width. */
   width: 200px;
-  box-sizing: border-box;
-  padding: var(--space-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--border-radius-sm);
-  box-shadow: var(--shadow-lg);
 }
 
 .toolbar__prefs-row {

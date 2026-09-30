@@ -1,18 +1,8 @@
 /**
  * The Time node's clock face — ONE geometry model, shared by the live node
  * (ClockFaceSvg with an animated hand) and the static asset-browser /
- * overview tile (phase 0).
- *
- * The two surfaces used to hold byte-identical copies of ~50 lines of canvas
- * code, which had already drifted: the tile seeded its hand from `Date.now()`,
- * so a Time tile pointed somewhere arbitrary while a Time node dropped on the
- * canvas starts at 12 o'clock. Same drift class `micGeometry.ts` was created
- * to close for the Mic node. The canvas itself is gone now too — the face is
- * an SVG (`nodes/ClockFaceSvg.tsx`), so it stays crisp under the viewport
- * zoom where the fixed 56px bitmap blurred, and the per-frame work is one
- * rotate-transform write instead of a full face repaint.
- *
- * Pure math, no DOM — node-env testable.
+ * overview tile (phase 0). Pure math, no DOM — node-env testable.
+ * Why one model and an SVG: docs/dev/node-visuals-and-designer.md.
  */
 
 /** Face edge length in CSS px. The dial is inscribed in it. */

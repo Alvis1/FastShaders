@@ -7,10 +7,8 @@
  * source through the dev-only `/__nd` endpoints; outside `npm run dev` those
  * 404 and Save is disabled (see the DEV NOTE banner).
  *
- * SAFETY: this page shares its origin with the real app. src/nodeEditor.tsx calls
- * `setGraphPersistence(false)` before this component can mount — that is what
- * makes GraphModal's store writes safe. Never write the store from a path that
- * could run before it.
+ * SAFETY: store writes here are safe only because the entry's first import,
+ * `nodeEditorBootstrap`, disables graph autosave — see that file.
  */
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { getAllDefinitions, getFlowNodeType } from '@/registry/nodeRegistry';
@@ -585,79 +583,23 @@ export function GraphsPage() {
   }, [sorted, query, activeCats, hiddenOnly, edits]);
 
   // ── Scroll memory ─────────────────────────────────────────────────────────
-  // The page's single scrollport is `.gp__tablewrap` (GraphsPage.css), and the
-  // normal way to leave this page is a RELOAD: Save writes nodeRegistry.ts /
-  // citations.json / editorVisibility.json through /__nd, all of which are in
-  // this page's own module graph, so HMR reloads it. Landing back at row 1
-  // after every save is what made editing anything past the fold tedious.
-  //
-  // Placed AFTER the filter memo on purpose: the restore has to know which row
-  // set it was armed for (see `rowSetKey`), and that is derived from `visible`.
+  // Save reloads this page through HMR, so the scrollport's offset is remembered
+  // (docs/dev/storage-and-limits.md, `fs:nodeEditorScroll`). Placed AFTER the
+  // filter memo: the restore is armed for a row set derived from `visible`.
   const tableWrapRef = useRef<HTMLDivElement>(null);
   /** Latest offset, refreshed per scroll event and flushed on a trailing
    *  debounce. A REF, not state: this must never re-render 82 rows. */
   const scrollPosRef = useRef({ top: 0, left: 0 });
-  /**
-   * The chase is no longer driving the scrollport — it landed, it was aborted by
-   * a gesture, it ran out of frame budget, or the row set changed under it. This
-   * says NOTHING about whether the offset it reached is worth keeping; that is
-   * `canSaveRef`, and keeping the two apart is the whole point (see
-   * `shouldOpenSaveGate`). Most of the ways the chase ends leave the port on a
-   * clamp taken while the table was still growing.
-   */
+  /** The chase stopped driving the port. Says NOTHING about whether the offset
+   *  it reached is worth keeping — that is `canSaveRef`. */
   const restoreDoneRef = useRef(false);
-  /**
-   * May `flush()` write? Shut until there is EVIDENCE that `scrollPosRef` holds
-   * a position worth storing, which is exactly what `shouldOpenSaveGate` decides
-   * — restated here because a reader who assumes the simpler rule will delete
-   * the carve-out that makes it work:
-   *
-   *  - nothing was stored at mount → nothing to lose, open immediately (this is
-   *    the branch that lets a first visit record anything at all);
-   *  - otherwise the chase must be over, and then either it never wrote a
-   *    position at all, or the port has since moved somewhere that is neither
-   *    the restore's own write NOR a browser-forced clamp.
-   *
-   * That last carve-out is `isForcedClamp`, and it is why the gate is not just
-   * "the port moved somewhere the restore did not put it": when the table gets
-   * SHORTER than the offset parked in it the browser clamps the port, with no
-   * input of any kind, and a bare mismatch reads that as the user scrolling and
-   * writes the clamp over the good offset. Until the gate opens the stored
-   * offset is left ALONE rather than being replaced by a clamp taken while the
-   * table was still growing (or shrinking under a landed restore).
-   */
+  /** May `flush()` write? Opened only by `shouldOpenSaveGate`. */
   const canSaveRef = useRef(false);
-  /**
-   * The fingerprint every `scroll` event is measured against. Written by the
-   * restore as the offset it last wrote, READ BACK from the element so it is the
-   * clamped value the port actually took — which is what makes the comparison
-   * exact whichever frame the event lands in, since `el.scrollTop` always
-   * reflects the most recent write and so does this. An event reporting exactly
-   * this was produced by us.
-   *
-   * "Anything else" is NOT automatically the user. The browser moves the port on
-   * its own when the content shrinks under the parked offset: MEASURED with no
-   * input at all, the late webfont swap re-measures every row and the port is
-   * clamped 10992 → 6143. `isForcedClamp` is what separates that from a real
-   * scroll — and when it fires, the save handler below RE-WRITES this ref to the
-   * clamped position. So after a shrink this holds where the port really IS, not
-   * what the restore wrote; without that follow, the user's own next scroll would
-   * be measured against an offset the port can no longer hold and would be
-   * suppressed as yet another clamp.
-   */
+  /** The fingerprint every `scroll` event is measured against: the restore's last
+   *  write, READ BACK — or the clamped position once a forced clamp was followed. */
   const restoreWroteRef = useRef<ScrollPos | null>(null);
-  /**
-   * The offset the restore is chasing, read ONCE per component instance.
-   * `undefined` = not read yet; `null` = nothing valid stored.
-   *
-   * A ref rather than a plain read inside the effect because StrictMode runs
-   * mount → cleanup → mount in dev: re-reading the key on the second mount
-   * would pick up whatever the first pass had time to write, and a restore that
-   * had only reached a CLAMP (the table is still growing — the whole reason the
-   * loop below retries) would be re-targeted at that truncated value. It
-   * currently happens to land correctly because the first frame is already tall
-   * enough, which is exactly the assumption this loop exists not to make.
-   */
+  /** The offset the restore chases, read ONCE per instance (`undefined` = not read,
+   *  `null` = nothing stored): StrictMode's second mount must not re-read a clamp. */
   const wantScrollRef = useRef<ScrollPos | null | undefined>(undefined);
 
   const visibleCount = visible.length;
@@ -705,37 +647,19 @@ export function GraphsPage() {
       return;
     }
 
-    /**
-     * The row set this restore was computed for. A stored offset only means
-     * anything against the table that PRODUCED it: if a filter lands mid-chase
-     * (82 rows → 8, the browser clamps the offset to ~0 and the user starts
-     * reading), re-applying it against the new extent is not a restore, it is a
-     * yank to the bottom of a list they never scrolled — which the save gate,
-     * open by then, would go on to persist over the good offset.
-     */
+    /** The row set this restore was computed for; a filter landing mid-chase
+     *  abandons it (see `rowSetKey`). */
     const armedRowKey = rowKeyRef.current;
 
     let cancelled = false;
     let raf = 0;
     let frames = 0;
-    /**
-     * True once the deferred font pass is the one running — or once we know no
-     * such pass is coming. Until then, running out of frame budget must not
-     * give up: the table is still growing (the case this loop exists for, and
-     * there is MORE of it to settle now that the tiles are 1.5x taller), so the
-     * offset reached so far is a clamp rather than a position and the font pass
-     * still has a real chance of reaching the target.
-     */
+    /** True once the deferred font pass is running, or none is coming. Until
+     *  then running out of frame budget pauses the chase rather than ending it. */
     let finalPass = false;
 
-    /**
-     * Stop driving the scrollport — the restore landed, the user took over, or
-     * the table it was aiming at is gone. Deliberately does NOT decide that the
-     * offset reached is worth SAVING: at four of its five call sites the port is
-     * on a clamp taken mid-growth, and persisting that is the ratchet toward
-     * row 1 this whole module exists to prevent. `canSaveRef` is opened by
-     * observed movement instead — see `shouldOpenSaveGate`.
-     */
+    /** Stop driving the scrollport. Never opens the save gate: most call sites
+     *  leave the port on a clamp taken mid-growth. */
     function endChase() {
       cancelled = true;
       cancelAnimationFrame(raf);
@@ -766,22 +690,13 @@ export function GraphsPage() {
       );
       el.scrollTop = target.top;
       el.scrollLeft = target.left;
-      // Read BACK, not `target`: the browser clamps the write, and this pair is
-      // what later tells our own scroll events apart from the user's. Both refs
-      // hold the one object because both are only ever REPLACED, never mutated
-      // — a mutation would move the restore's own fingerprint under it.
+      // Read BACK, not `target`: the browser clamps the write. Both refs hold the
+      // one object because both are only ever REPLACED, never mutated.
       const wrote = { top: el.scrollTop, left: el.scrollLeft };
       restoreWroteRef.current = wrote;
       scrollPosRef.current = wrote;
-      // Landed on the real target rather than merely on a clamp → done. The
-      // 1px slack absorbs fractional layout. This does not open the save gate:
-      // the port is now at exactly the stored value, so there is nothing to
-      // write back. What happens NEXT is the part that had to be got right —
-      // the table keeps settling after this, and two browser-initiated moves
-      // used to be read as the user scrolling: scroll anchoring nudging the
-      // offset down the page as the tiles are measured (turned off in CSS,
-      // `overflow-anchor: none` on `.gp__tablewrap`) and the clamp that follows
-      // the table getting SHORTER (`isForcedClamp`, in the save handler below).
+      // Landed on the real target, not merely a clamp (1px slack for fractional
+      // layout). Does not open the save gate: the port is at the stored value.
       if (target.top >= want.top - 1) {
         endChase();
         return;
@@ -823,11 +738,8 @@ export function GraphsPage() {
         .catch(() => {});
     }
 
-    // Cancel and detach only. An unsettled restore has learned nothing better
-    // than what is already stored, and it does not touch `canSaveRef`, so the
-    // save effect's own cleanup-flush stays a no-op: a teardown mid-chase
-    // (StrictMode's dev remount, or a real unmount) can never persist the
-    // clamped-short position over the offset it was reaching for.
+    // Cancel and detach only: `canSaveRef` is untouched, so a teardown mid-chase
+    // can never persist a clamped-short position.
     return () => {
       cancelled = true;
       cancelAnimationFrame(raf);
@@ -847,10 +759,7 @@ export function GraphsPage() {
       window.clearTimeout(timer);
       timer = 0;
       // NOT `restoreDoneRef`: the chase ending is not evidence that where it
-      // ended is worth keeping. Writing on that alone is what let a reload
-      // whose table had not finished growing persist its own clamp — 600 over
-      // a 4000 — so the next restore aimed lower again and the remembered row
-      // walked to the top over a few save-edit-reload cycles.
+      // ended is worth keeping.
       if (!canSaveRef.current) return;
       try {
         localStorage.setItem(SCROLL_KEY, serializeScrollPos(scrollPosRef.current));
@@ -862,11 +771,8 @@ export function GraphsPage() {
       // Reading scrollTop inside a scroll handler is free: the value is already
       // computed for that event, so this forces no reflow.
       const now = { top: el.scrollTop, left: el.scrollLeft };
-      // The port moved somewhere neither the restore nor a browser clamp put it
-      // → someone else did, and from here on this page's offset is the user's
-      // own. The extents are read only while the gate is still shut, so the
-      // steady state after it opens is the two cheap scroll reads above and
-      // never a `scrollHeight` (which CAN force layout if the DOM is dirty).
+      // The extents are read only while the gate is still shut: afterwards a
+      // scroll event never touches `scrollHeight` (which can force layout).
       if (!canSaveRef.current) {
         const wrote = restoreWroteRef.current;
         const max = {
@@ -884,12 +790,9 @@ export function GraphsPage() {
         ) {
           canSaveRef.current = true;
         } else if (wrote && restoreDoneRef.current && isForcedClamp(wrote, now, max)) {
-          // The table got shorter than the offset we put there, so the browser
-          // moved the port because that offset stopped existing. FOLLOW it: the
-          // fingerprint has to describe where the port really is, or the user's
-          // own next scroll would be measured against an offset the port can no
-          // longer hold and would be suppressed as another clamp. Only after the
-          // chase (`restoreDoneRef`) — while it runs, the chase owns this ref.
+          // FOLLOW a forced clamp, or the user's next scroll would be measured
+          // against an offset the port can no longer hold. Only after the chase:
+          // while it runs, the chase owns this ref.
           restoreWroteRef.current = now;
         }
       }

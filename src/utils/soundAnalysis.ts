@@ -1,20 +1,12 @@
 /**
- * Microphone → shader values: the PURE half.
+ * Sound → shader values: the PURE, node-testable half (arithmetic over a
+ * frequency-magnitude array). The DOM half is `audioCaptureCore.ts`.
  *
- * Everything here is arithmetic over a frequency-magnitude array, so it is
- * node-testable. The DOM half (`getUserMedia`, `AudioContext`, `AnalyserNode`)
- * lives in `micCapture.ts` — the same `imageCodec.ts` / `imageImport.ts` split,
- * and for the same reason: the vitest env is `node` with no jsdom, so anything
- * touching an AudioContext is untestable by construction. The band maths must
- * not be trapped on that side of the line.
- *
- * NB `smoothing` is deliberately NOT applied here. `AnalyserNode` already owns
- * a `smoothingTimeConstant` that does exponential smoothing in the audio
- * thread; re-implementing it on the main thread would double-smooth and add a
- * frame of latency for nothing.
+ * `smoothing` is deliberately NOT applied here: the `AnalyserNode` already
+ * smooths in the audio thread, so a second pass would double-smooth.
  */
 
-/** The four values a Mic node exposes, in socket order. */
+/** The four values a Sound node exposes, in socket order. */
 export const SOUND_CHANNELS = ['level', 'bass', 'mid', 'treble'] as const;
 
 export type SoundChannel = (typeof SOUND_CHANNELS)[number];
@@ -24,13 +16,13 @@ export type SoundLevels = Record<SoundChannel, number>;
 /**
  * Band crossovers in Hz. Convention, not tuned against material — 200 Hz is
  * roughly where a kick/bass guitar sits below and vocals above; 2 kHz is the
- * usual presence/brilliance split. Exported so the settings menu can print
- * them rather than the user guessing what "bass" means.
+ * usual presence/brilliance split. Exported for the test, which holds
+ * podest's hand-written twin to them.
  */
 export const SOUND_BAND_LO_HZ = 200;
 export const SOUND_BAND_HI_HZ = 2000;
 
-/** All four channels at rest — the value a disarmed mic reports. */
+/** All four channels at rest — the value a disarmed session reports. */
 export const SOUND_LEVELS_ZERO: SoundLevels = { level: 0, bass: 0, mid: 0, treble: 0 };
 
 function clamp01(v: number): number {
@@ -93,12 +85,9 @@ function meanNorm(bytes: ArrayLike<number>, start: number, end: number): number 
  * on" tracks spectral mean closely enough. It is not an SPL measurement and
  * must not be presented as one.
  *
- * There is deliberately NO gain parameter: the Mic node's `gain` is applied
- * SHADER-side, as a separate `const _mic1_bass = mic1_bass.mul(g);` statement
- * graphToCode emits (see the live-microphone convention). Applying it here too
- * would scale twice — which is exactly what the one caller
- * (`audioCaptureCore.readLevels`) was avoiding by never passing the option.
- * The clamps stay: they guard hostile ArrayLike input, not the gain.
+ * There is deliberately NO gain parameter: the Sound node's `gain` is applied
+ * SHADER-side (`const _sound1_bass = sound1_bass.mul(g);`), so applying it here
+ * too would scale twice. The clamps guard hostile ArrayLike input, not gain.
  */
 export function analyseSound(opts: {
   freqBytes: ArrayLike<number>;
@@ -120,25 +109,14 @@ export function analyseSound(opts: {
   };
 }
 
-/** The emitted uniform name for one channel of a live-audio node, e.g. `mic1_bass`. */
+/** The emitted uniform name for one channel of a live-audio node, e.g. `sound1_bass`. */
 export function soundUniformName(varName: string, channel: SoundChannel): string {
   return `${varName}_${channel}`;
 }
 
 /**
- * The emitted variable BASE of the Sound node.
- *
- * `claimName` turns it into `mic1`, `mic2`, … and reserves every
- * `<var>_<channel>` as an alias, so a user property can never take one of these
- * names out from under the emitter.
- *
- * It stays `mic` although the node is now called "Sound" (and hears the system
- * as well as a microphone): this string is inside every module the app has ever
- * exported and inside podest's own `SOUND_RE`, so it is a persisted contract, not
- * a label. The Audio Input node that used to emit `aud` was folded into this
- * node on 2026-09-08 — `registry/legacyNodeTypes.ts` migrates the type, and
- * since live-audio nodes are one-way through `codeToGraph` (an Apply demotes
- * them to plain property nodes) no graph can emit `aud` any more.
+ * The emitted variable base (`sound1_bass`, …). A persisted contract inside
+ * every exported module; podest's `SOUND_RE` must match it, so never rename.
  */
 export const SOUND_VAR_BASE = 'sound';
 
@@ -152,10 +130,9 @@ const SOUND_BASES = [SOUND_VAR_BASE] as const;
  * read it here, so a second audio node cannot be added with a base that
  * disagrees with what the pump routes on.
  *
- * A `Map`, not a plain object — a bare-object lookup resolves `constructor` /
- * `__proto__` / `toString` to truthy values, and `registryType` arrives from
- * `.fastshader` files this app treats as adversarial (the VALID_SWIZZLE /
- * TOHSL_* class documented in CLAUDE.md).
+ * A `Map`, not a plain object: `registryType` arrives from adversarial
+ * `.fastshader` files, and a bare-object lookup resolves `constructor` /
+ * `__proto__` to truthy values.
  */
 const SOUND_NODE_BASES = new Map<string, SoundVarBase>([['soundNode', SOUND_VAR_BASE]]);
 
@@ -167,11 +144,10 @@ export function isSoundNodeType(type: string | undefined | null): boolean {
 /**
  * The emitted variable base for a live-audio node type.
  *
- * Falls back to the mic base for anything unknown, which is unreachable from
- * the call sites (all guarded by `isSoundNodeType`) and keeps the return
- * type non-nullable for the `claimName` call. There is one base today; the
- * indirection stays because codegen, the pump and podest must never disagree
- * about it, which a bare literal at three sites cannot guarantee.
+ * Falls back to the one base for anything unknown — unreachable from the call
+ * sites (all guarded by `isSoundNodeType`), and it keeps the return type
+ * non-nullable for `claimName`. The indirection stays so codegen, the pump and
+ * podest cannot disagree about the string (docs/dev/node-types.md → Sound).
  */
 export function soundVarBase(type: string): SoundVarBase {
   return SOUND_NODE_BASES.get(type) ?? SOUND_VAR_BASE;
@@ -184,7 +160,7 @@ export function soundVarBase(type: string): SoundVarBase {
  * code-panel Apply the node ids are fresh and `nodeVarNames` misses every
  * lookup — but the names in the code are still the names in the code.
  *
- * A user property named `mic1_bass` in a graph with NO live-audio node would
+ * A user property named `sound1_bass` in a graph with NO live-audio node would
  * still match this pattern, so callers that use it to HIDE things must intersect
  * it with the names actually emitted — see `soundUniformNamesIn`. The pump
  * itself is safe either way: it only runs once the user has armed a graph that
@@ -202,18 +178,6 @@ export function isSoundUniformName(name: string): boolean {
 export function soundChannelOf(name: string): SoundChannel | null {
   const m = SOUND_UNIFORM_RE.exec(name);
   return m ? (m[2] as SoundChannel) : null;
-}
-
-/**
- * The base a live-audio uniform name carries, or null if it is not one.
- *
- * This was the routing key that kept two capture sessions apart in the pump
- * loop. There is one session now, so it survives as a recogniser rather than a
- * router — the pump still needs to know which uniforms it owns.
- */
-export function soundVarBaseOf(name: string): SoundVarBase | null {
-  const m = SOUND_UNIFORM_RE.exec(name);
-  return m ? (m[1] as SoundVarBase) : null;
 }
 
 /**
@@ -249,7 +213,7 @@ export function soundUniformNamesIn(code: string): string[] {
  * `ReferenceError` at module load, i.e. a blank preview with no useful message.
  * A `.fastshader` can carry any string here, so there is no "impossible" input.
  */
-export function micChannelForHandle(handle: string | null | undefined): SoundChannel {
+export function soundChannelForHandle(handle: string | null | undefined): SoundChannel {
   return (SOUND_CHANNELS as readonly string[]).includes(handle ?? '')
     ? (handle as SoundChannel)
     : 'level';
