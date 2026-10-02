@@ -5,6 +5,7 @@ exports[`the unwired emission of every node is pinned > matches the recorded per
   "abs": "const abs1 = abs(0);",
   "add": "const add1 = add(0, 0);",
   "append": "const append1 = vec2(0, 0);",
+  "brightContrast": "const brightContrast1 = brightContrast(1, 0, 0);",
   "clamp": "const clamp1 = clamp(0, 0, 1);",
   "cos": "const cos1 = cos(0);",
   "cross": "const cross1 = cross(0, 0);",

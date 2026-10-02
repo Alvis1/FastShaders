@@ -459,6 +459,134 @@ const shader = Fn(() => {
 });
 export default shader;`;
 
+// ── LED Display ─────────────────────────────────────────────────────────────
+// A display seen up close: every display pixel is three emitters — R and G side
+// by side, B centred beneath them — on a dark board, and the picture is MADE of
+// them: each emitter shines with its own channel of the picture, nothing more.
+// The emitters are round in UV space, so they are round on the Plane and ovals
+// on the default Sphere, whose UV is stretched about twice as wide as it is tall
+// (the description sends the user to the Plane, as the Circle preset's does).
+// The only texture here that is a FILTER over a swappable picture rather than a
+// pattern of its own, which is why it lives in UV space (an Image node samples
+// by UV) and not in positionGeometry like most of its neighbours.
+//
+// Seven things are load-bearing (ledDisplayTexture.test.ts pins each):
+//
+//  - THE GRID IS A WHOLE NUMBER: floor(diodeScale + 0.5), then max(…, 1). The
+//    Uniforms slider moves in steps of 0.4, and a fractional grid ends in a
+//    partial column — a seam of cut emitters where the UV wraps round a sphere,
+//    and a last cell whose centre lies past u = 1, where a repeating image
+//    shows its OPPOSITE edge. floor(+0.5), not round(): round() breaks .5 ties
+//    half-to-even on WGSL and away from zero on GLSL, so a tuned 40.5 drew 40
+//    columns in the WebGPU preview and 41 in WebGL2 (Safari, the VR popup).
+//    The max is the scrub-to-zero guard: the slider starts at 0, and a zero
+//    grid would divide by zero (at 0 the surface shows one giant pixel).
+//  - THE HAND-OFF. `floor` picks the display pixel, `+ 0.5` moves to its
+//    centre, and the ONE Divide turns that back into ordinary 0-1 UV. That wire
+//    feeds the picture source, so the source is sampled once per display pixel
+//    and every emitter is lit evenly: the noise today, an Image node's UV
+//    socket when the user wants a picture. The centre, not the corner: a corner
+//    sample sits exactly on u = 0 for the first column, where a repeating,
+//    linearly filtered image blends its two opposite edges.
+//  - LINEAR DRIVE. Light out = the emitter's own channel × a fixed disc ×
+//    diodeBrightness (1), so a dim channel is a dim emitter and a deep blue area
+//    lights only its blue ones — which is all it takes for the diodes to
+//    REPRODUCE the picture rather than sit on top of it. The first version
+//    over-drove a squared dome ×8 and let the display clip it: every emitter
+//    over about an eighth looked fully lit on an unlit surface (and from about
+//    0.4 on Color, sooner on a sphere's lit side), a blue sky lit its green
+//    emitters almost fully and read cyan, and the picture showed mainly as dot
+//    size — an RGB pattern laid over the image, as the owner put it. Against a
+//    photo, per display pixel, as each version was meant to be wired (v1 on
+//    Color, this one as below): hue error 6.8° → 3.4°, tone correlation
+//    0.952 → 0.991.
+//  - THE EMITTED LIGHT IS THE ONLY LIGHT. A screen makes its own light, so the
+//    group ends in TWO nodes: the diodes, for the Output's Emissive, and
+//    `board`, a black Color for its Color — the description names both wires.
+//    Both are needed. With Color left unwired, loader 0.8 copies the emission
+//    into the base colour and the scene lights it too: ×1.4 on the lit Plane,
+//    ×1.9 on a sphere's key side, so every channel over about 0.7 clipped (the
+//    over-drive again, milder). With Color still wired to an older graph (the
+//    boot demo), that material stayed under the diodes — the overlay itself.
+//    On Color alone the scene lights the diodes like paint, about half as
+//    bright and dark on the shaded side.
+//  - A COLOUR PICTURE BY DEFAULT. mx_noise_vec3 gives three independent
+//    channels, so neighbouring areas light different emitters and the diodes
+//    are seen making the colours. The first version's grey cell noise lit all
+//    three emitters of every pixel equally, which reads as the same overlay.
+//    max(·, 0) keeps the noise's negative half dark (abs() folded it back and
+//    lit all three in most pixels — a busy RGB carpet), and it is the identity
+//    on an image, which is 0-1: nothing between the source and the drive may
+//    assume the source is a noise. It is also the price: 68 of the 94 points,
+//    against 5-10 for an Image in its place.
+//  - BINARY ARITHMETIC ONLY. A three-operand Multiply is priced base x (N - 1)
+//    by the CostBar and 1 by the tile badge, so the tile would print less than
+//    the graph costs.
+//  - THE IMAGE SWAP IS TWO GESTURES, never a hunt for a socket. An Image node
+//    shows no input sockets at rest, so "wire Divide into its UV" was the step
+//    users missed — and an image sampled at its own uv() shows its detail
+//    inside every emitter, the overlay again. Deleting the noise bridges its
+//    input to its reader (bridgeEdgesAcrossDeletedNodes), and a node dropped
+//    on a wire is spliced in at its FIRST input (pickSpliceInputPort) — for an
+//    Image that is UV, with Color out — so Divide → UV and Color → max. DELETE
+//    FIRST, as the note says: the wire it leaves runs across the frame, clear
+//    of the others. The wire INTO the noise is short and crossed by the
+//    emitter wires, and a drop aimed at it caught one of those.
+//
+// The emitter maths runs in units of the emitter's own radius: the cell is 4.4
+// wide, so the centres sit at 1.1 / 3.3 / 2.2 and `1 - distance²` reaches zero
+// exactly at the rim; ×4 and a clamp make it a flat disc (radius 0.87) with a
+// soft rim, so an emitter is evenly lit, as a real one is. 4.4 rather than 4
+// leaves a strip of bare board round every emitter — they read as separate
+// lamps, and it keeps them off the cell border, where an Image shows a
+// one-pixel seam (the cell-centre UV jumps there, so the sampler picks a
+// blurrier mip level). The seam is fainter for it, not gone. All three channels
+// are done in one node each: emitterX / emitterY hold one centre per colour, so
+// every Subtract, Multiply and Clamp below them is a vec3.
+//
+// LIMIT: an emitter needs a few screen pixels. In the default-size preview a
+// display pixel is ~5 px at 40 and ~2.7 px at 80 (the slider's top), where the
+// emitters alias into bands and swirls that have nothing to do with the picture.
+// Real displays blend into the picture at a distance; this needs derivatives to
+// fade to the cell average, and the registry has no such node.
+const LED_DISPLAY_CODE = `import { add, clamp, color, div, floor, Fn, fract, max, mul, mx_noise_vec3, oneMinus, sub, uniform, uv, vec3 } from "three/tsl";
+
+const shader = Fn(() => {
+  const diodeScale = uniform(40);
+  const diodeBrightness = uniform(1);
+  const u = uv();
+
+  const nearest = add(diodeScale, 0.5);
+  const whole = floor(nearest);
+  const grid = max(whole, 1);
+  const cell = mul(u, grid);
+  const corner = floor(cell);
+  const centre = add(corner, 0.5);
+  const cellUV = div(centre, grid);
+
+  const noise = mx_noise_vec3(cellUV.mul(3));
+  const picture = max(noise, 0);
+
+  const inCell = fract(cell);
+  const q = mul(inCell, 4.4);
+  const emitterX = vec3(1.1, 3.3, 2.2);
+  const emitterY = vec3(3.3, 3.3, 1.1);
+  const dx = sub(emitterX, q.x);
+  const dy = sub(emitterY, q.y);
+  const dx2 = mul(dx, dx);
+  const dy2 = mul(dy, dy);
+  const d2 = add(dx2, dy2);
+  const dome = oneMinus(d2);
+  const edge = mul(dome, 4);
+  const disc = clamp(edge, 0, 1);
+  const lit = mul(picture, disc);
+  const result = mul(lit, diodeBrightness);
+
+  const board = color(0x000000);
+  return { color: board, emissive: result };
+});
+export default shader;`;
+
 const TEXTURE_ENTRIES: CodeGroupEntry[] = [
   { id: 'polka-dots', name: 'Polka Dots', color: '#3949AB', code: POLKA_DOTS_CODE,
     description: 'A repeating lattice of soft-edged dots — adjustable scale, size and blur.' },
@@ -476,6 +604,14 @@ const TEXTURE_ENTRIES: CodeGroupEntry[] = [
     description: 'Pale stone run through with sharp noise-driven veins.' },
   { id: 'wood', name: 'Wood', color: '#8D6E63', code: WOOD_CODE, titleSize: 2,
     description: 'Concentric growth rings warped by noise, in warm timber tones.' },
+  // The one texture that pins a note: its picture source is meant to be
+  // swapped, and how is not obvious from the graph alone.
+  { id: 'led-display', name: 'LED Display', color: '#1E88E5', code: LED_DISPLAY_CODE,
+    description: 'An LED screen seen up close: each pixel is three diodes, red, green and blue, each lit by only its own color of the picture. Wire the black Color node into the Output node\'s Color and the last Multiply into its Emissive (right-click the Output and tick Emissive): the board stays dark and the diodes make their own light. diodeScale sets how many pixels fit across; the note in the frame says how to show a picture. Switch the preview Model to Plane to see the diodes round; the sphere stretches UV twice as wide as it is tall, so there they are ovals.',
+    note: {
+      heading: 'Swap Noise for an Image',
+      text: 'To show a picture: drop it on the canvas, delete the noise node, then drag the new Image node over the wire that is left until the wire lights up. Divide feeds it each pixel\'s center UV.',
+    } },
 ];
 
 /**

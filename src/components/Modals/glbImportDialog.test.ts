@@ -174,17 +174,19 @@ describe('ShaderPreview.loadMeshFile', () => {
 
   it('a busy dialog refuses EVERY model drop (offered or not); a declined offer falls through to today\'s model drop', () => {
     const body = codeOnly(load);
-    expect(body).toContain('if (glbFlow.busy())');
+    // Either model dialog (the GLB import, the splat's clear-the-graph question).
+    expect(body).toContain('if (glbFlow.busy() || splatAsk.busy())');
     expect(body).not.toContain('offer && glbFlow.busy()');
     // Refused before anything is read or applied.
-    expect(body.indexOf('if (glbFlow.busy())')).toBeLessThan(body.indexOf('file.arrayBuffer()'));
+    expect(body.indexOf('if (glbFlow.busy() || splatAsk.busy())')).toBeLessThan(body.indexOf('file.arrayBuffer()'));
     expect(load).toContain("glbFlow.offer(file.name, bytes, kind, opts?.source ?? 'dom') !== 'declined') return;");
-    expect(load).toContain('applyModelBytes(file.name, bytes);');
+    // A paired model (offerBuild: false) never asks the splat question.
+    expect(load).toContain('applyModelBytes(file.name, bytes, opts?.offerBuild !== false);');
   });
 
   it('a busy dialog refuses a dropped shader or model in handleDroppedFiles, before the iframe confirm', () => {
     const drop = codeOnly(callbackBody(PREVIEW, 'handleDroppedFiles'));
-    const guard = drop.indexOf('if (glbFlow.busy() && (model || zip || script))');
+    const guard = drop.indexOf('if ((glbFlow.busy() || splatAsk.busy()) && (model || zip || script))');
     expect(guard).toBeGreaterThan(-1);
     expect(drop.slice(guard, guard + 160)).toContain('showDropNotice(t(GLB_IMPORT_KEYS.busy, language))');
     expect(guard).toBeLessThan(drop.indexOf('window.confirm('));

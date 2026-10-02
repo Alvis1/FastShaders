@@ -9,10 +9,11 @@ import { fileURLToPath } from 'node:url';
 
 /**
  * The built-in library in Latvian: every preset's name, description and
- * explainer note, every texture's name and description, and every built-in
- * palette and swatch name. All keyed by the ENGLISH text (see `assetText`), so
- * rewording a preset in builtinPresets.ts without moving its Latvian fails
- * HERE — the app itself would just quietly show that one string in English.
+ * explainer note, every texture's name and description (and its note, for a
+ * texture that pins one), and every built-in palette and swatch name. All
+ * keyed by the ENGLISH text (see `assetText`), so rewording a preset in
+ * builtinPresets.ts without moving its Latvian fails HERE — the app itself
+ * would just quietly show that one string in English.
  */
 
 interface NoteData {
@@ -21,7 +22,10 @@ interface NoteData {
 }
 
 const presets = getBuiltinPresets();
-const noteOf = (p: (typeof presets)[number]) => p.nodes.find((n) => n.type === 'note');
+const noteOf = (asset: { nodes: (typeof presets)[number]['nodes'] }) => asset.nodes.find((n) => n.type === 'note');
+/** A note is optional on a texture (every preset has one), so the texture
+ *  checks below run over the ones that carry it. */
+const notedTextures = () => getBuiltinTextures().filter((x) => noteOf(x));
 
 const expectLatvian = (en: string, lvText: string) => {
   expect(lvText, `no Latvian for “${en}”`).not.toBe(en);
@@ -44,12 +48,26 @@ describe('built-in presets and textures carry Latvian text', () => {
     expectLatvian(x.description, assetText(x.description, 'lv'));
   });
 
+  it('a texture that pins a note has it in Latvian too', () => {
+    // The same NoteNode draws it, through the same overlay — so an untranslated
+    // texture note would be the one English caption on a Latvian canvas.
+    const noted = notedTextures();
+    expect(noted.map((x) => x.id)).toContain('led-display');
+    for (const x of noted) {
+      const note = noteOf(x)!.data as NoteData;
+      expect(note.heading, `${x.id}: a note needs a heading`).toBeTruthy();
+      expect(note.text, `${x.id}: a note needs a body`).toBeTruthy();
+      expectLatvian(note.heading!, assetText(note.heading!, 'lv'));
+      expectLatvian(note.text!, assetText(note.text!, 'lv'));
+    }
+  });
+
   it('the Latvian note still fits its box without scrolling', () => {
     // codeGroupBuilder sizes the note for a 200-char English caption at ~6.1 px
     // per 11px character over 5 lines, at the note's own width. Latvian runs
     // longer than English, so hold the translation to the same budget — a note
     // that scrolls is no longer a caption read at a glance.
-    for (const p of presets) {
+    for (const p of [...presets, ...notedTextures()]) {
       const note = noteOf(p)!;
       const lvText = assetText((note.data as NoteData).text!, 'lv');
       const perLine = Math.floor(((note.width ?? 260) - 16) / 6.1);
@@ -71,6 +89,9 @@ describe('built-in presets and textures carry Latvian text', () => {
     for (const x of getBuiltinTextures()) {
       live.add(x.name);
       live.add(x.description);
+      const note = noteOf(x)?.data as NoteData | undefined;
+      if (note?.heading) live.add(note.heading);
+      if (note?.text) live.add(note.text);
     }
     expect(Object.keys(lv.assets).filter((k) => !live.has(k))).toEqual([]);
   });

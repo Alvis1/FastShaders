@@ -57,6 +57,8 @@ import { PREVIEW_MODEL_FILE_EVENT, previewModelDropOf } from '@/utils/previewMod
 import { isEvalMode } from '@/eval/evalMode';
 import { GLB_IMPORT_KEYS } from '@/utils/glbImportCopy';
 import { useGlbImport } from './useGlbImport';
+import { useSplatGraphAsk } from './useSplatGraphAsk';
+import { asksToClearForSplat } from '@/utils/splatGraphStart';
 import { marchWindowRadius } from '@/utils/sdfPartition';
 import { sinkModelIssue } from '@/utils/sinkModelFit';
 import { litSplatCount } from '@/utils/splatLight';
@@ -907,6 +909,28 @@ export function ShaderPreview() {
   // fs:preview-error (failure), with a timeout below so it can never stick.
   const [compiling, setCompiling] = useState(true);
 
+  // The iframe's own red `#error` text is `pointer-events: none` (so an orbit
+  // drag over it still reaches the canvas underneath) and lives in a
+  // sandboxed, opaque-origin document the parent cannot read the DOM of — so
+  // it can never be selected or copied in place. `fs:preview-error` already
+  // carries the same string across postMessage; mirroring it here gives the
+  // user a real, selectable, copyable DOM node. Cleared on `fs:preview-ready`
+  // (the shader applied) and on a cold rebuild (a fresh document starts with
+  // no error of its own).
+  const [previewErrorMessage, setPreviewErrorMessage] = useState<string | null>(null);
+  const [errorCopied, setErrorCopied] = useState(false);
+  const handleCopyError = useCallback(async () => {
+    if (!previewErrorMessage) return;
+    try {
+      await navigator.clipboard.writeText(previewErrorMessage);
+      setErrorCopied(true);
+      window.setTimeout(() => setErrorCopied(false), 1500);
+    } catch {
+      // Clipboard API can fail in insecure contexts; the text is still
+      // selectable by hand, so this fails silently like Toolbar's handleCopy.
+    }
+  }, [previewErrorMessage]);
+
   // ── Shader hot-swap bookkeeping ────────────────────────────────────────
   /**
    * Monotonic id of the swap currently in flight. Every `fs:shader` post
@@ -1112,13 +1136,19 @@ export function ShaderPreview() {
     if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
   }, []);
 
+  // A splat dropped on a graph with no Splat Output asks whether to clear the
+  // graph first (useSplatGraphAsk, utils/splatGraphStart.ts).
+  const splatAsk = useSplatGraphAsk(rootRef);
+
   /**
    * Today's model drop, over bytes already read: the ONE constructor, the
    * translated refusal, the geometry switch and the KTX2 info line. The GLB
    * import's "Model only" answer comes back here, and so does every model the
-   * dialog is not offered for.
+   * dialog is not offered for. `askSplat` (a standalone drop outside a study
+   * session) lets a VALID splat wait for the clear-the-graph question — asked
+   * only after the constructor accepted it, so a refused file never asks.
    */
-  const applyModelBytes = useCallback((fileName: string, bytes: Uint8Array<ArrayBuffer>) => {
+  const applyModelBytes = useCallback((fileName: string, bytes: Uint8Array<ArrayBuffer>, askSplat = false) => {
     // createPreviewMesh sanitizes the name at the store boundary — every
     // consumer (zip export entry, README text, option label) reads the
     // stored value, never the raw file name.
@@ -1129,18 +1159,25 @@ export function ShaderPreview() {
       showDropNotice(meshRefusalMessage(result.refusal, language));
       return;
     }
-    setPreviewMesh(result.mesh);
-    setGeometry('custom');
-    if (result.ktx2Fallback) showDropNotice(t(MESH_KTX2_FALLBACK_KEY, language), 'info');
-    // A splat whose header states its count gets the headset advisory NOW; a
-    // gzip .spz (count null until the sandbox inflates it) gets it from the
-    // fs:model-splat report instead, which also says whether it was shown.
-    const headset = splatHeadsetMessage(result.mesh.splat, language);
-    if (headset) {
-      splatAdvisedRef.current.add(result.mesh.id);
-      showDropNotice(headset, 'info');
+    const show = () => {
+      setPreviewMesh(result.mesh);
+      setGeometry('custom');
+      if (result.ktx2Fallback) showDropNotice(t(MESH_KTX2_FALLBACK_KEY, language), 'info');
+      // A splat whose header states its count gets the headset advisory NOW; a
+      // gzip .spz (count null until the sandbox inflates it) gets it from the
+      // fs:model-splat report instead, which also says whether it was shown.
+      const headset = splatHeadsetMessage(result.mesh.splat, language);
+      if (headset) {
+        splatAdvisedRef.current.add(result.mesh.id);
+        showDropNotice(headset, 'info');
+      }
+    };
+    if (askSplat && isSplatKind(result.mesh.kind) && asksToClearForSplat(useAppStore.getState().nodes)) {
+      if (!splatAsk.offer(result.mesh.name, show)) showDropNotice(t(GLB_IMPORT_KEYS.busy, language));
+      return;
     }
-  }, [setPreviewMesh, setGeometry, showDropNotice, language]);
+    show();
+  }, [setPreviewMesh, setGeometry, showDropNotice, splatAsk, language]);
 
   // The GLB import flow (useGlbImport): the dialog, the build, the commit.
   const glbFlow = useGlbImport({ applyModelBytes, showDropNotice, anchorRef: rootRef });
@@ -1163,10 +1200,10 @@ export function ShaderPreview() {
         showDropNotice(meshRefusalMessage(splatEvalRefusal(), language));
         return;
       }
-      // EVERY model drop is refused while the dialog is open — an .obj or a
-      // paired model is not offerable, but it would still swap the mesh
-      // under the dialog that is asking about another one.
-      if (glbFlow.busy()) {
+      // EVERY model drop is refused while either model dialog is open — an
+      // .obj or a paired model is not offerable, but it would still swap the
+      // mesh under the dialog that is asking about another one.
+      if (glbFlow.busy() || splatAsk.busy()) {
         showDropNotice(t(GLB_IMPORT_KEYS.busy, language));
         return;
       }
@@ -1184,11 +1221,13 @@ export function ShaderPreview() {
       }
       const bytes = new Uint8Array(await file.arrayBuffer());
       if (offer && (kind === 'glb' || kind === 'gltf') && glbFlow.offer(file.name, bytes, kind, opts?.source ?? 'dom') !== 'declined') return;
-      applyModelBytes(file.name, bytes);
+      // A splat dropped on its own may ask to clear the graph; one paired
+      // with a shader belongs to that shader and never asks.
+      applyModelBytes(file.name, bytes, opts?.offerBuild !== false);
     } catch (e) {
       showDropNotice(`${t('Could not read the model file', language)}: ${e instanceof Error ? e.message : String(e)}`);
     }
-  }, [applyModelBytes, glbFlow, showDropNotice, language]);
+  }, [applyModelBytes, glbFlow, splatAsk, showDropNotice, language]);
 
   // One dispatch for every preview drop, wherever it landed. A model file
   // becomes the custom preview mesh; a shader .js/.zip routes through the
@@ -1200,10 +1239,11 @@ export function ShaderPreview() {
     const zip = files.find((f) => isZipFile(f));
     const script = zip ? null : files.find((f) => /\.(js|mjs|tsl|txt)$/i.test(f.name)) ?? null;
 
-    // The GLB import dialog is open: it is asking about ONE model and "the
-    // current shader", so neither may change under it — a model or a shader
-    // dropped now is refused with the busy notice, before the iframe confirm.
-    if (glbFlow.busy() && (model || zip || script)) {
+    // A model dialog is open (the GLB import, or the splat's clear-the-graph
+    // question): it is asking about ONE model and "the current shader", so
+    // neither may change under it — a model or a shader dropped now is
+    // refused with the busy notice, before the iframe confirm.
+    if ((glbFlow.busy() || splatAsk.busy()) && (model || zip || script)) {
       showDropNotice(t(GLB_IMPORT_KEYS.busy, language));
       return;
     }
@@ -1276,7 +1316,7 @@ export function ShaderPreview() {
     if (!model && !zip && !script) {
       showDropNotice(t(MESH_DROP_HINT_KEY, language));
     }
-  }, [loadMeshFile, glbFlow, showDropNotice, language]);
+  }, [loadMeshFile, glbFlow, splatAsk, showDropNotice, language]);
 
   // Ref mirror so the mount-once message handler below sees the latest
   // dispatch without re-binding (same pattern as uniformValuesRef).
@@ -1510,6 +1550,7 @@ export function ShaderPreview() {
         name?: unknown; clip?: number; clips?: unknown; time?: number;
         backend?: unknown; geometry?: unknown; meshes?: unknown; hot?: unknown;
         fallbacks?: unknown; missing?: unknown; count?: unknown; shDropped?: unknown;
+        message?: unknown;
       } | null;
       if (!data || typeof data.type !== 'string') return;
       // A gen-tagged reply is the ONLY acknowledgement of a hot shader swap.
@@ -1711,10 +1752,14 @@ export function ShaderPreview() {
         // The shader failed: no fs:preview-ready is coming. Drop the overlay so
         // the iframe's error message is readable.
         setCompiling(false);
+        if (typeof data.message === 'string') setPreviewErrorMessage(data.message);
         return;
       }
       if (data.type === 'fs:preview-ready') {
         setCompiling(false);
+        // A fresh success clears whatever error the last apply left showing —
+        // same condition the iframe's own __fsClearError uses.
+        setPreviewErrorMessage(null);
         const win = iframeRef.current?.contentWindow;
         if (!win) return;
         // Re-arm the stats reporter. Every shader edit swaps srcDoc, so the
@@ -2206,6 +2251,9 @@ export function ShaderPreview() {
     clearHotSwapWait();
     hotGenRef.current += 1;
     setCompiling(true);
+    // A fresh document starts with no error of its own — don't show the
+    // outgoing document's message over the incoming one's blank slate.
+    setPreviewErrorMessage(null);
     const id = setTimeout(() => setCompiling(false), COMPILE_OVERLAY_TIMEOUT_MS);
     return () => clearTimeout(id);
   }, [previewHtml, bakedModule, bootAssetKeys, containerReady, waitingForBootMesh, clearHotSwapWait]);
@@ -2816,11 +2864,33 @@ export function ShaderPreview() {
             second string would ship untranslated English in a Latvian-first
             app. A hot swap that FAILS to compile needs no pill of its own —
             the loader puts the mesh back on its stored grey original and the
-            iframe's own red error text is what the user reads. */}
+            error notice below is what the user reads. */}
         {(compiling || hotSwapSlow) && (
           <div className="shader-preview__compiling" role="status" aria-live="polite">
             <span className="shader-preview__compiling-dot" />
             {t('Compiling shader…', language)}
+          </div>
+        )}
+        {/* Mirrors the iframe's own red `#error` text (tslToPreviewHTML.ts) as
+            a real, selectable DOM node in the parent — the iframe's copy is
+            `pointer-events: none` (an orbit drag must still reach the canvas
+            through it) inside a sandboxed, opaque-origin document the parent
+            can't read, so neither selection nor copy is possible there. This
+            box sits above the iframe (z-index) with an opaque background, so
+            it visually REPLACES the iframe's red text rather than doubling
+            it. */}
+        {previewErrorMessage && (
+          <div className="shader-preview__error-notice" role="alert">
+            <span className="shader-preview__error-notice-text">{previewErrorMessage}</span>
+            <button
+              type="button"
+              className="shader-preview__error-notice-copy"
+              onClick={handleCopyError}
+              title={t(errorCopied ? 'Copied' : 'Copy', language)}
+              aria-label={t(errorCopied ? 'Copied' : 'Copy', language)}
+            >
+              {errorCopied ? '✓' : t('Copy', language)}
+            </button>
           </div>
         )}
         {dropVeil && (
@@ -3275,9 +3345,11 @@ export function ShaderPreview() {
           </div>
         )}
       </div>
-      {/* The GLB import dialog (useGlbImport) — portalled, so it renders
-          nothing here until a model is offered. */}
+      {/* The GLB import dialog (useGlbImport) and the splat's clear-the-graph
+          question (useSplatGraphAsk) — portalled, so they render nothing here
+          until a model is offered. */}
       {glbFlow.modal}
+      {splatAsk.modal}
     </div>
   );
 }

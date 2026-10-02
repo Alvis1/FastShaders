@@ -34,7 +34,7 @@ regenerate the PNG at 2×:
 ```
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless \
   --blink-settings=preferredColorScheme=1 --force-device-scale-factor=2 \
-  --window-size=711,661 --screenshot=out.png file://$PWD/fastshaders-function-diagram.svg
+  --window-size=784,449 --screenshot=out.png file://$PWD/fastshaders-function-diagram.svg
 magick out.png -strip -colors 256 fastshaders-function-diagram.png
 ```
 

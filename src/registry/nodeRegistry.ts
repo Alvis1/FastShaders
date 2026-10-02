@@ -1547,6 +1547,38 @@ const definitions: NodeDefinition[] = [
     ],
     description: 'Convert an RGB color into Hue/Saturation/Lightness components.',
   },
+  // Blender's Brightness/Contrast, maths and defaults verbatim (Cycles
+  // `svm_brightness_contrast`, kernel/svm/color_util.h): a = 1 + contrast,
+  // b = brightness − contrast·0.5, out = max(a·color + b, 0) per channel.
+  // Contrast pivots on mid-grey 0.5, and only the BOTTOM is clamped — a bright
+  // input may leave 0…1, as it does in Blender. Not a three/tsl export, so it
+  // ships a module-scope helper (engine/moduleHelpers.ts).
+  //
+  // `color` is vec3 and its unwired default is a BARE NUMBER the helper
+  // broadcasts (`vec3(color)`), Blender's white; that same `vec3()` drops a
+  // wired vec4's alpha, which is right here — alpha comes only from the
+  // Output's opacity channel. Brightness 0 / Contrast 0 is the identity.
+  {
+    type: 'brightContrast',
+    label: 'Brightness/Contrast',
+    category: 'type',
+    tslFunction: 'brightContrast',
+    tslImportModule: '',
+    inputs: [
+      { id: 'color', label: 'Color', dataType: 'vec3' },
+      { id: 'bright', label: 'Brightness', dataType: 'float' },
+      { id: 'contrast', label: 'Contrast', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Color', dataType: 'vec3' }],
+    defaultValues: { color: 1, bright: 0, contrast: 0 },
+    description:
+      'Brighten or darken a color and push its contrast, exactly as in Blender: Brightness shifts every channel, Contrast stretches it around mid-grey 0.5, and anything below 0 is cut to 0. Also: bright contrast exposure lift levels adjust grade blender',
+    // The formula, not the helper's TSL: the helper is the code panel's to
+    // show, and this line is what a user tuning the two numbers needs.
+    // brightContrast.test.ts pins every operation in it against the emitted
+    // helper and the CPU evaluator.
+    construction: 'out = max(color * (1 + contrast) + bright - contrast * 0.5, 0)',
+  },
 
   // ===== DATA VISUALIZATION =====
   // Renders a 1-D data signal (wire a Data node column into `signal`) as

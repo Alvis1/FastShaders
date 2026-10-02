@@ -227,16 +227,18 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
           ranges here the user is tuning against numbers they cannot see. */}
       {node.data.registryType === 'dataNode' && <DataNodeStats nodeId={nodeId} />}
 
-      {/* The TSL a hand-emitted node expands to, read-only and unlabelled.
-          Only the hand-emitted nodes declare `construction`: everything else
-          emits a call to the function its own label already names, so a line
-          there would restate the title. Here the whole construction lives in a
-          graphToCode branch, and the only other way to see it is to wire the
+      {/* The TSL (or, for Brightness/Contrast, the formula) a node expands
+          to, read-only and unlabelled. Only nodes whose maths is out of sight
+          declare `construction` — the hand-emitted ones and a helper whose name
+          does not state its formula: everything else emits a call to the
+          function its own label already names, so a line there would restate
+          the title. For these the construction lives in a graphToCode branch or
+          a module-scope helper, and the only other way to see it is to wire the
           node up and read the code panel — which is after the decision it
           informs. No heading: the divider above already separates it, and a
           monospace block under a settings list does not need to be announced
-          as code. Left untranslated for the same reason — it is TSL, not
-          prose. */}
+          as code. Left untranslated for the same reason — it is code or
+          maths, not prose. */}
       {def?.construction && (
         <>
           <div className="context-menu__divider" />

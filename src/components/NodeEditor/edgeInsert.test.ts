@@ -108,6 +108,46 @@ describe('the two surfaces that splice (source pins)', () => {
     // The old inline body would drift: same two edges, its own port choice.
     expect(editor).not.toContain('const newEdge1 = makeTypedEdge(');
   });
+
+  it('the drag path builds its final node write on the SPLICED node, not the pre-drop one', () => {
+    // A drop that splices AND reparents (an Image dragged onto a wire inside a
+    // group frame — LED Display's picture swap) used to write back the node
+    // array it read BEFORE the splice, reverting the splice's socket exposure:
+    // the Divide → UV wire stayed in the store and the code but never drew.
+    const editor = read('./NodeEditor.tsx');
+    const drop = editor.slice(editor.indexOf('const onNodeDragStop = useCallback('), editor.indexOf('const onSelectionDragStop'));
+    const splice = drop.indexOf('if (tryInsertOnEdge(freshDragged.id, def, cx, cy, getInternalNode, radius)) {');
+    expect(splice).toBeGreaterThan(-1);
+    const reread = drop.indexOf('allNodes = useAppStore.getState().nodes;', splice);
+    expect(reread, 'no re-read after the splice').toBeGreaterThan(splice);
+    expect(drop.indexOf('freshDragged = allNodes.find((n) => n.id === draggedNode.id)', reread)).toBeGreaterThan(reread);
+    // …and the write that follows is built from those re-read bindings.
+    expect(drop.indexOf('reparentedNode(freshDragged, allNodes, finalPosX, finalPosY)')).toBeGreaterThan(reread);
+    expect(drop.indexOf('const updated: AppNode[] = allNodes.map(')).toBeGreaterThan(reread);
+  });
+});
+
+describe('a splice that exposes a hidden socket survives the drop that made it', () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      nodes: [makeNode('d', 'div'), makeNode('mx', 'max'), makeNode('img', 'imageNode')],
+      edges: [makeEdge('d', 'out', 'mx', 'a')],
+    });
+  });
+
+  it('writes the exposure onto the store node — the write the drop must not revert', () => {
+    const before = useAppStore.getState().nodes.find((n) => n.id === 'img')!;
+    expect(effectiveExposedPorts(before as never)).not.toContain('uv');
+    const edgeId = useAppStore.getState().edges[0].id;
+    expect(spliceNodeIntoEdge('img', def('imageNode'), edgeId)).toBe(true);
+    const after = useAppStore.getState().nodes.find((n) => n.id === 'img')!;
+    // The Image's UV is its FIRST input: the wire lands there, exposed.
+    expect(useAppStore.getState().edges.find((e) => e.target === 'img')?.targetHandle).toBe('uv');
+    expect(effectiveExposedPorts(after as never)).toContain('uv');
+    // The node OBJECT changed: a caller still holding `before` and writing it
+    // back (the reparent/nudge setNodes) would drop the exposure.
+    expect(after).not.toBe(before);
+  });
 });
 
 describe('connectNodes — the one connect rule', () => {

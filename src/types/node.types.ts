@@ -50,12 +50,15 @@ export interface NodeDefinition {
    * the node's settings menu — unlabelled, since a monospace block under a
    * divider does not need announcing as code.
    *
-   * Only meaningful for the hand-emitted nodes (empty `tslFunction`): everything
-   * else emits a call to the function its own name already states, so a sketch
-   * there would restate the label. A hand-emitted node is the opposite — the
-   * whole construction lives in a graphToCode branch the user can only see by
-   * wiring the node and reading the code panel, which is exactly the moment
-   * they are trying to decide whether they need the node at all.
+   * Only meaningful where the maths is out of sight: a hand-emitted node
+   * (empty `tslFunction`), or a module-helper node whose name does not state
+   * its formula (Brightness/Contrast, which shows the FORMULA rather than the
+   * helper's TSL — that is what tuning its two numbers needs). Everything else
+   * emits a call to the function its own name already states, so a sketch
+   * there would restate the label. For the others the whole construction lives
+   * in a graphToCode branch or a helper the user can only see by wiring the
+   * node and reading the code panel, which is exactly the moment they are
+   * trying to decide whether they need the node at all.
    *
    * Deliberately NOT part of the search corpus (`nodeMatchRank` reads
    * `description`): it is full of TSL identifiers — `fract`, `mix`, `max` — that

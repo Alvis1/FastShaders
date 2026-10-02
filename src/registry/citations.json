@@ -39,6 +39,10 @@
     "toHsl": {
       "ref": "Joblove, G. H., & Greenberg, D. (1978). Color Spaces for Computer Graphics. SIGGRAPH '78, 20–25 — origin of the HSL (double-hexcone) color model; this node is the inverse (RGB→HSL) transform.",
       "url": "https://doi.org/10.1145/800248.807362"
+    },
+    "brightContrast": {
+      "ref": "Blender Foundation. Blender, Brightness/Contrast shader node — Cycles svm_brightness_contrast (intern/cycles/kernel/svm/color_util.h): a = 1 + contrast, b = brightness − 0.5·contrast, max(a·color + b, 0) per channel. Reproduced exactly, with Blender's defaults.",
+      "url": "https://projects.blender.org/blender/blender/src/branch/main/intern/cycles/kernel/svm/color_util.h"
     }
   },
   "textures": {

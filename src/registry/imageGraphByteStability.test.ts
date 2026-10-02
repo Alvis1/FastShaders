@@ -7,7 +7,7 @@ import type { AppNode, AppEdge } from '@/types';
  * Image graphs, re-emitted — pinned byte for byte, beside the built-ins'.
  *
  * builtinByteStability.test.ts cannot see any of this: codeToGraph never
- * produces an Image node (they are one-way), so none of the 32 built-ins holds
+ * produces an Image node (they are one-way), so none of the 33 built-ins holds
  * one. This file is the image branch's standing byte check, taken BEFORE the
  * Phase 2 texture-sharing work touches it.
  *

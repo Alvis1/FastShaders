@@ -20,9 +20,15 @@ describe('splitTitle — one break opportunity, at the most balanced seam', () =
     expect(splitTitle('Position World Direction')).toEqual({ head: 'Position World', tail: 'Direction', space: true });
   });
 
-  it('breaks after an underscore or hyphen', () => {
+  it('breaks after an underscore, hyphen or slash', () => {
     expect(splitTitle('my_prop')).toEqual({ head: 'my_', tail: 'prop', space: false });
     expect(splitTitle('edge-glow')).toEqual({ head: 'edge-', tail: 'glow', space: false });
+    // Blender's name, in both languages — without the slash seam the asset
+    // tile widened to fit the whole label on one line.
+    expect(splitTitle('Brightness/Contrast')).toEqual({ head: 'Brightness/', tail: 'Contrast', space: false });
+    expect(splitTitle('Spilgtums/kontrasts')).toEqual({ head: 'Spilgtums/', tail: 'kontrasts', space: false });
+    // A space seam still wins where it is more balanced.
+    expect(splitTitle('Voronoi (F1/F2/F3)')).toEqual({ head: 'Voronoi', tail: '(F1/F2/F3)', space: true });
   });
 
   it('is Unicode-aware (Latvian labels and camelCase)', () => {

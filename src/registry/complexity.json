@@ -83,6 +83,7 @@
 
     "hsl": 15,
     "toHsl": 15,
+    "brightContrast": 4,
 
     "dataNode": 2,
     "stripes": 18,

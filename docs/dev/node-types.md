@@ -16,6 +16,7 @@
 - The Data Range formula box is PARSE-THEN-RE-EMIT, and that is the whole design
 - `isolines` reuses the Stripes AA construction, and the ordering is the whole trick
 - Wireframe is Isolines' construction run on a VECTOR
+- Brightness/Contrast is Blender's node, verbatim
 - Sound (`soundNode`) — live audio driving a shader, from a microphone, another input device, or the machine's o…
 - Time node's `speed`
 - Time node speed
@@ -57,6 +58,10 @@
 ### Wireframe is Isolines' construction run on a VECTOR
 
 - **Wireframe is Isolines' construction run on a VECTOR** (graphToCode's `def.type === 'wireframe'` branch, `utils/wireframeMode.ts`, `engine/wireframeNode.test.ts`). The two modes differ ONLY in the distance vector: grid is `0.5 - |fract(uv * density) - 0.5|` per uv axis (vec2), edges is the barycentric coordinate, 0 exactly on an edge (vec3, the `bary` attribute the loader injects when the module returns `barycentric: true`). `max` combines the axes, so two crossing lines read as ONE line rather than a double-bright junction. **The barycentric SUM guard makes a missing `bary` attribute draw nothing**: real barycentrics sum to exactly 1, while the const three generates for an absent attribute is `vec3(0)`, which reads as "on all three edges" and floods the whole surface — multiplying by the clamped sum is 1 or 0 with no extra import and no branch. The mode is `values.edges`, read EXACTLY (`=== 1 || === '1'`, the noise range flag's rule), and an ABSENT key means grid, so every older graph emits byte-identically.
+
+### Brightness/Contrast is Blender's node, verbatim
+
+- **Brightness/Contrast is Blender's node, verbatim** (`brightContrast`, category `type` beside the HSL pair — the colour family's home since the standalone `color` category was retired; a module helper in `engine/moduleHelpers.ts`; `engine/brightContrast.test.ts`). It is Cycles' `svm_brightness_contrast` (`intern/cycles/kernel/svm/color_util.h`): a = 1 + contrast, b = brightness − 0.5·contrast, `max(a·color + b, 0)` per channel. Contrast pivots on mid-grey 0.5 and ONLY the bottom is clamped, so a bright input leaves 0…1 exactly as it does in Blender — clamping the top as well would be a different node. Blender's defaults (white, 0, 0) make a freshly dropped node the identity. `color` is a vec3 socket whose unwired default is the bare number 1, broadcast by the helper's `vec3(col)` (the SDF rule); the same conversion pads a vec2 with 0 and drops a vec4's alpha, which is right, since alpha comes only from `opacity`, and `cpuEvaluator` mirrors that conversion for both the sample and the range. The helper's parameter is `col`, not `color`: `color` is a `three/tsl` export, and `buildShaderModule` completes the module's import from every identifier it finds. The settings menu shows the FORMULA through `construction`, not the helper's TSL — the field now also covers a helper whose name does not state its maths. The test EXECUTES all three copies (the helper's text, through a numeric stand-in for the six TSL functions it calls; the CPU twin; the formula line, as the expression it spells) against Blender's reference, because a string comparison of any one of them only proves it agrees with itself. Its cost of 4 is authored, not measured.
 
 ### Sound (`soundNode`) — live audio driving a shader, from a microphone, another input device, or the machine's o…
 

@@ -186,7 +186,7 @@ describe('builtinPresets', () => {
 
   it('keeps the built-in textures building through the shared group builder', () => {
     const textures = getBuiltinTextures();
-    expect(textures.length).toBe(8);
+    expect(textures.length).toBe(9);
     for (const tex of textures) {
       const [group, ...members] = tex.nodes;
       expect(group.id).toBe(`builtin-texture-${tex.id}`);

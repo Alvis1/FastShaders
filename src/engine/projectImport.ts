@@ -60,6 +60,7 @@ import { extractProjectState, type FastShadersProject } from './fastShadersProje
 import { moduleImageLiterals, resolveProjectImageRefs, splitImageLosses } from './projectImageRefs';
 import { droppedGroupLabel, sanitizeDroppedName, shaderDropStem } from '@/utils/shaderDropName';
 import { planShaderGroup } from './shaderGroupImport';
+import { splatStarterNode } from '@/utils/splatGraphStart';
 import type { AppEdge, AppNode, MaterialSettings } from '@/types';
 
 /** Queue a counted limit notice; a zero count queues nothing. */
@@ -289,13 +290,34 @@ export function commitGlbImport(
 }
 
 /**
+ * "Clear graph" on a dropped Gaussian splat (`SplatGraphModal`): the nodes,
+ * wires and board drawings are replaced by ONE active Splat Output
+ * (`utils/splatGraphStart.ts`), and the DOCUMENT stays — name, palettes, tuned
+ * uniforms, the Work-folder file — so, like `commitGlbImport`, it fires
+ * `fs:graph-merged`, never `fs:graph-imported`. One undo entry. The preview
+ * model is not touched: the caller loads the splat right after, in the same
+ * tick, so the pane never sees the cleared graph without it.
+ */
+export function startSplatGraph(): void {
+  useAppStore.getState().pushHistory();
+  useAppStore.setState({
+    nodes: [splatStarterNode()],
+    edges: [],
+    drawings: [],
+    syncSource: 'graph',
+    isUndoRedo: false,
+  });
+  announceGraphMerged();
+}
+
+/**
  * "The graph was replaced, but the DOCUMENT was not." The canvas frames the
  * result and ends Preview mode; the Work folder and the study telemetry,
  * which answer `fs:graph-imported`, deliberately do not hear this one.
  */
 export const GRAPH_MERGED_EVENT = 'fs:graph-merged';
 
-/** Announce `GRAPH_MERGED_EVENT`: `commitGlbImport` and `addDroppedShader`. */
+/** Announce `GRAPH_MERGED_EVENT`: `commitGlbImport`, `startSplatGraph` and `addDroppedShader`. */
 function announceGraphMerged(): void {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent(GRAPH_MERGED_EVENT));

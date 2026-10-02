@@ -722,9 +722,10 @@ export const ContentBrowser = memo(function ContentBrowser() {
 
   const filteredTextures = useMemo(() => {
     // Lazily built, same rule as the presets memo below: the first
-    // getBuiltinTextures() call parses 8 TSL snippets through codeToGraph and
-    // lays them out (tens of ms of synchronous Babel + dagre work — measured at
-    // 84 ms when it runs first; whichever of the two getters runs first eats the
+    // getBuiltinTextures() call parses every texture's TSL snippet through
+    // codeToGraph and lays it out (tens of ms of synchronous Babel + dagre work —
+    // measured at 84 ms, with eight textures, when it runs first; whichever of the
+    // two getters runs first eats the
     // module warm-up), so don't pay it at first render for a tab that may never
     // open. A live search needs them too — matching textures surface in the
     // generic strip (see `items` below).

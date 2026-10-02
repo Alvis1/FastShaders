@@ -664,6 +664,70 @@
   outline-offset: 1px;
 }
 
+/* Mirrors the iframe's own red #error text as a real, selectable DOM node —
+   see the component for why. OPAQUE (unlike drop-notice) so it fully covers
+   the iframe's copy underneath instead of doubling it, and sits one z-index
+   above drop-notice since both read as "something is wrong" but should never
+   show at once in practice. */
+.shader-preview__error-notice {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  max-height: 40%;
+  overflow-y: auto;
+  z-index: 4;
+  padding: 6px 10px;
+  background: #1c1c1c;
+  color: #ff6b6b;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.4;
+  /* Click-through on the plate itself (an orbit drag over empty padding
+     should still reach the canvas); the text and button opt back in. */
+  pointer-events: none;
+  white-space: pre-wrap;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.shader-preview__error-notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  pointer-events: auto;
+  user-select: text;
+}
+
+.shader-preview__error-notice-copy {
+  pointer-events: auto;
+  flex: none;
+  position: sticky;
+  top: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  padding: 0 6px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1;
+  color: #fff;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.shader-preview__error-notice-copy:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.shader-preview__error-notice-copy:focus-visible {
+  outline: 1px solid #fff;
+  outline-offset: 1px;
+}
+
 /* The right-hand toggle group (WGSL/GLSL + FPS + Uniforms). The auto margin lives HERE
    rather than on the buttons: two auto-margined flex siblings divide the free
    space between them instead of both being pushed right, so putting it on each

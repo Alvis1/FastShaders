@@ -627,6 +627,19 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
       "out": 20
     }
   },
+  "brightContrast": {
+    "svg": "<g transform=\"translate(28 28)\"><line x1=\"-20\" y1=\"14\" x2=\"20\" y2=\"14\" stroke=\"#B4B7C0\" stroke-width=\"0.6\"/><line x1=\"-14\" y1=\"14\" x2=\"14\" y2=\"-14\" stroke=\"#8A8F9C\" stroke-width=\"0.8\" stroke-dasharray=\"1.4 1.4\"/><path d=\"M-14 14 L-7 14 L8.5 -17\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><circle cx=\"0\" cy=\"0\" r=\"1.8\" fill=\"#2B2B2B\"/></g>",
+    "scale": 1.6,
+    "dy": -1,
+    "width": 50,
+    "height": 77,
+    "sockets": {
+      "color": -28,
+      "bright": 12,
+      "contrast": 28,
+      "out": 0
+    }
+  },
   "sdCircle": {
     "svg": "<g transform=\"translate(28 28)\">\n\n\n\n<circle cx=\"0\" cy=\"0\" r=\"10.13\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.8\"></circle>\n\n<circle cx=\"0\" cy=\"0\" r=\"18.72\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.8\"></circle>\n\n<circle cx=\"0\" cy=\"0\" r=\"23.4\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.8\"></circle>\n\n<circle cx=\"0\" cy=\"0\" r=\"5.86\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.8\"></circle>\n\n<circle cx=\"0\" cy=\"0\" r=\"1.6\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.8\"></circle>\n\n<circle cx=\"0\" cy=\"0\" r=\"14\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.8\"></circle>\n\n<circle cx=\"0\" cy=\"0\" r=\"1.6\" fill=\"#2B2B2B\"></circle><line x1=\"0\" y1=\"0\" x2=\"12\" y2=\"-7.5\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"12\" cy=\"-7.5\" r=\"2.4\" fill=\"#F57C00\"></circle>\n\n\n</g>",
     "scale": 1.1,

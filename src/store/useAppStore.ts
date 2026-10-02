@@ -329,24 +329,40 @@ export function persistSavedGroups(groups: SavedGroup[]) {
 }
 
 /**
+ * Which corner of a dropped group's frame lands on the drop point.
+ *
+ * A DRAG from the asset bar puts the TOP-RIGHT corner under the pointer
+ * (owner, 2026-10-01): the frame hangs left and down from where the finger or
+ * pointer let go, so the group never lands under the bar it came from. A
+ * click/Enter add keeps the top-left corner at its scattered canvas-centre
+ * point — nothing was aimed there.
+ */
+export type GroupDropAnchor = 'top-left' | 'top-right';
+
+/**
  * Clone a group snapshot (container + members + internal edges) with fresh ids,
- * anchored at `position`. First node in `snapshot.nodes` must be the group
- * container; the rest are its members.
+ * with the frame's `anchor` corner at `position`. First node in
+ * `snapshot.nodes` must be the group container; the rest are its members
+ * (parent-relative, so they follow the frame).
  */
 function cloneGroupSnapshot(
   snapshot: { nodes: AppNode[]; edges: AppEdge[] },
   position: { x: number; y: number },
+  anchor: GroupDropAnchor = 'top-left',
 ): { group: AppNode; members: AppNode[]; edges: AppEdge[] } {
   const idMap = new Map<string, string>();
   for (const n of snapshot.nodes) idMap.set(n.id, generateId());
 
   const [originalGroup, ...originalMembers] = snapshot.nodes;
   const newGroupId = idMap.get(originalGroup.id)!;
+  // The frame as it will be DRAWN (a collapsed group is its pill), read through
+  // the one size reader — a built-in preset carries `style` only.
+  const dx = anchor === 'top-right' ? groupFrameSize(originalGroup).w : 0;
 
   const group: AppNode = {
     ...cloneNodeSharingPayloads(originalGroup),
     id: newGroupId,
-    position: { x: position.x, y: position.y },
+    position: { x: position.x - dx, y: position.y },
     parentId: undefined,
     selected: false,
   } as AppNode;
@@ -395,9 +411,10 @@ function cloneGroupSnapshot(
 function placeLibraryGroup(
   snapshot: { nodes: AppNode[]; edges: AppEdge[] } | undefined,
   position: { x: number; y: number },
+  anchor?: GroupDropAnchor,
 ): void {
   if (!snapshot || snapshot.nodes.length === 0) return;
-  const { group, members, edges } = cloneGroupSnapshot(snapshot, position);
+  const { group, members, edges } = cloneGroupSnapshot(snapshot, position, anchor);
   useAppStore.getState().pushHistory();
   useAppStore.setState((state) => ({
     nodes: [group, ...state.nodes, ...members] as AppNode[],
@@ -1856,18 +1873,19 @@ interface AppState {
   saveGroupToLibrary: (groupId: string, opts?: { overBudgetOk?: boolean }) => void;
   /** Remove a saved group from the library by id. */
   deleteSavedGroup: (savedId: string) => void;
-  /** Drop a copy of a saved group onto the canvas at `position` (flow coords).
+  /** Drop a copy of a saved group onto the canvas with its frame's `anchor`
+   *  corner (default top-left) at `position` (flow coords).
    *  Refused with an `image-total-cap` notice when its images would cross the
    *  project budget; `overBudgetOk` is that notice's override. */
   instantiateSavedGroup: (
     savedId: string,
     position: { x: number; y: number },
-    opts?: { overBudgetOk?: boolean },
+    opts?: { overBudgetOk?: boolean; anchor?: GroupDropAnchor },
   ) => void;
-  /** Drop a built-in texture group onto the canvas at `position` (flow coords). */
-  instantiateBuiltinTexture: (textureId: string, position: { x: number; y: number }) => void;
-  /** Drop a built-in preset group onto the canvas at `position` (flow coords). */
-  instantiateBuiltinPreset: (presetId: string, position: { x: number; y: number }) => void;
+  /** Drop a built-in texture group onto the canvas, its `anchor` corner at `position` (flow coords). */
+  instantiateBuiltinTexture: (textureId: string, position: { x: number; y: number }, anchor?: GroupDropAnchor) => void;
+  /** Drop a built-in preset group onto the canvas, its `anchor` corner at `position` (flow coords). */
+  instantiateBuiltinPreset: (presetId: string, position: { x: number; y: number }, anchor?: GroupDropAnchor) => void;
 }
 
 export const useAppStore = create<AppState>()((set, get) => ({
@@ -3769,18 +3787,18 @@ export const useAppStore = create<AppState>()((set, get) => ({
   // Both libraries share ONE placement path (placeLibraryGroup) and load ON
   // DEMAND: building either runs `codeToGraph`, so a static import would pin
   // the Babel chunk into every page's boot (engine/unknownExpression.ts).
-  instantiateBuiltinTexture: (textureId, position) => {
+  instantiateBuiltinTexture: (textureId, position, anchor) => {
     import('@/registry/builtinTextures')
       .then(({ getBuiltinTextures }) => {
-        placeLibraryGroup(getBuiltinTextures().find((t) => t.id === textureId), position);
+        placeLibraryGroup(getBuiltinTextures().find((t) => t.id === textureId), position, anchor);
       })
       .catch(() => console.warn('[fs] the built-in texture library failed to load'));
   },
 
-  instantiateBuiltinPreset: (presetId, position) => {
+  instantiateBuiltinPreset: (presetId, position, anchor) => {
     import('@/registry/builtinPresets')
       .then(({ getBuiltinPresets }) => {
-        placeLibraryGroup(getBuiltinPresets().find((p) => p.id === presetId), position);
+        placeLibraryGroup(getBuiltinPresets().find((p) => p.id === presetId), position, anchor);
       })
       .catch(() => console.warn('[fs] the built-in preset library failed to load'));
   },
@@ -3798,11 +3816,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
         id: generateId(),
         kind: 'image-total-cap',
         fileName: saved.name,
-        proceed: () => get().instantiateSavedGroup(savedId, position, { overBudgetOk: true }),
+        proceed: () => get().instantiateSavedGroup(savedId, position, { ...opts, overBudgetOk: true }),
       });
       return;
     }
-    const { group, members, edges } = cloneGroupSnapshot(saved, position);
+    const { group, members, edges } = cloneGroupSnapshot(saved, position, opts?.anchor);
     get().pushHistory();
     // Re-run the target repairs against the COMBINED list, not just the
     // group's own nodes: a group may contain an Output (groupSelection filters

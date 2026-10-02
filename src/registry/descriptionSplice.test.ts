@@ -40,11 +40,12 @@ describe('locateRegistryDescriptions', () => {
     // (2026-09-03); 98 with the Wireframe node (2026-09-06); back to 97 when
     // the Audio Input node was folded into the Sound node (2026-09-08 — one
     // def, one capture session, one analyser); 98 when the Image node joined
-    // `definitions` (GLB Phase 4); 99 with the Splat Output (2026-09-25).
+    // `definitions` (GLB Phase 4); 99 with the Splat Output (2026-09-25);
+    // 100 with Brightness/Contrast (2026-10-01).
     // The tally is a breadcrumb, not a spec — `getAllDefinitions()` is what
     // the assertion below actually compares against.
-    expect(slots).toHaveLength(99);
-    expect(defs).toHaveLength(99);
+    expect(slots).toHaveLength(100);
+    expect(defs).toHaveLength(100);
     expect(new Set(slots.map(s => s.key))).toEqual(new Set(defs.map(d => d.type)));
   });
 
@@ -73,8 +74,8 @@ describe('locateRegistryDescriptions', () => {
 describe('locateTextureDescriptions', () => {
   const slots = locateTextureDescriptions(texturesSource);
 
-  it('finds all 8 textures, keyed by id, with values matching the live entries', () => {
-    expect(slots).toHaveLength(8);
+  it('finds all 9 textures, keyed by id, with values matching the live entries', () => {
+    expect(slots).toHaveLength(9);
     const textures = getBuiltinTextures();
     expect(new Set(slots.map(s => s.key))).toEqual(new Set(textures.map(t => t.id)));
 
@@ -210,10 +211,11 @@ describe('splitAliases / joinAliases', () => {
     // joined `definitions` (GLB Phase 4), whose tail carries 'texture',
     // 'sampler', 'picture' and 'bitmap' — the words people search for a node
     // its label calls Image; 59 with the Splat Output (2026-09-25: 'gaussian
-    // splat', 'point cloud', '3dgs'). Worth pinning as a count
+    // splat', 'point cloud', '3dgs'); 60 with Brightness/Contrast
+    // (2026-10-01: 'exposure', 'levels', 'blender'). Worth pinning as a count
     // because a description edit that drops a tail changes search ranking and
     // nothing else — it fails no other test and shows on no screen.
-    expect(tailed).toHaveLength(59);
+    expect(tailed).toHaveLength(60);
   });
 
   it('round-trips every tailed description byte-exactly', () => {
@@ -286,7 +288,7 @@ describe('escaped-apostrophe safety', () => {
     // ...and must decode back to exactly the value we asked for.
     const relocated = locateRegistryDescriptions(out);
     expect(relocated.find(s => s.key === 'tangentLocal')!.value).toBe(nasty);
-    expect(relocated).toHaveLength(99);
+    expect(relocated).toHaveLength(100);
 
     // Still a single-line edit.
     const changed = registrySource

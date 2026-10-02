@@ -814,6 +814,42 @@ const shader = Fn(() => {
 
 export default shader;
 ",
+  "led-display": "import { Fn, add, clamp, color, div, floor, fract, max, mul, mx_noise_vec3, oneMinus, sub, uniform, uv, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const diodeScale = uniform(40);
+  const diodeBrightness = uniform(1);
+  const uv1 = uv();
+  const vec31 = vec3(1.1, 3.3, 2.2);
+  const vec32 = vec3(3.3, 3.3, 1.1);
+  const color1 = color(0x000000);
+  const add1 = add(diodeScale, 0.5);
+  const floor1 = floor(add1);
+  const max1 = max(floor1, 1);
+  const mul1 = mul(uv1, max1);
+  const floor2 = floor(mul1);
+  const fract1 = fract(mul1);
+  const add2 = add(floor2, 0.5);
+  const mul2 = mul(fract1, 4.4);
+  const div1 = div(add2, max1);
+  const noise1 = mx_noise_vec3(div1.mul(3));
+  const sub1 = sub(vec31, mul2.x);
+  const sub2 = sub(vec32, mul2.y);
+  const max2 = max(noise1, 0);
+  const mul3 = mul(sub1, sub1);
+  const mul4 = mul(sub2, sub2);
+  const add3 = add(mul3, mul4);
+  const oneMinus1 = oneMinus(add3);
+  const mul5 = mul(oneMinus1, 4);
+  const clamp1 = clamp(mul5, 0, 1);
+  const mul6 = mul(max2, clamp1);
+  const mul7 = mul(mul6, diodeBrightness);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
   "marble": "import { Fn, abs, add, color, mix, mul, mx_noise_float, oneMinus, positionGeometry, pow, uniform, vec3 } from 'three/tsl';
 
 const shader = Fn(() => {

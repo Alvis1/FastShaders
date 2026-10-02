@@ -1,7 +1,8 @@
 /**
  * Module-scope helper `Fn`s that graphToCode emits ABOVE the shader when the
  * graph uses the node — for functions that are not `three/tsl` exports (hsl,
- * toHsl, the distance-field family). ONE table, read by both engines:
+ * toHsl, Brightness/Contrast, the distance-field family). ONE table, read by
+ * both engines:
  *
  *   - graphToCode emits `lines` for every used type (in table order) and
  *     force-imports `imports`, the free-function names only the helper BODY
@@ -84,6 +85,24 @@ const TO_HSL_HELPER_LINES = [
   '  const hueSeg = select(equal(maxC, rgb.x), hR, select(equal(maxC, rgb.y), hG, hB));',
   '  const H = select(greaterThan(d, float(0)), mul(hueSeg, float(1 / 6)), float(0));',
   '  return vec3(H, S, L);',
+  '});',
+];
+
+/**
+ * Brightness/Contrast — Blender's formula verbatim (Cycles
+ * `svm_brightness_contrast`): a = 1 + contrast, b = brightness − contrast·0.5,
+ * max(a·color + b, 0) per channel. `vec3(col)` broadcasts the bare-number
+ * unwired default and drops a wired vec4's alpha, so the result is always the
+ * vec3 the def declares. The node's `construction` line restates this body as
+ * a formula and brightContrast.test.ts holds the two together. The parameter
+ * is `col`, not `color`: `color` is a three/tsl export, and buildShaderModule
+ * completes the module's import from every identifier it finds.
+ */
+const BRIGHT_CONTRAST_LINES = [
+  'const brightContrast = Fn(([col, bright, contrast]) => {',
+  '  const a = add(float(1), contrast);',
+  '  const b = sub(bright, mul(contrast, float(0.5)));',
+  '  return max(add(mul(vec3(col), a), b), float(0));',
   '});',
 ];
 
@@ -388,6 +407,7 @@ const SDF_MASK_LINES = [
 export const MODULE_HELPERS: ReadonlyMap<string, ModuleHelper> = new Map<string, ModuleHelper>([
   ['hsl', { lines: HSL_HELPER_LINES, imports: ['mul', 'add', 'sub', 'abs', 'mod', 'clamp', 'float', 'vec3'] }],
   ['toHsl', { lines: TO_HSL_HELPER_LINES, imports: ['max', 'min', 'sub', 'add', 'mul', 'abs', 'select', 'greaterThan', 'lessThan', 'equal', 'div', 'float', 'vec3'] }],
+  ['brightContrast', { lines: BRIGHT_CONTRAST_LINES, imports: ['add', 'sub', 'mul', 'max', 'float', 'vec3'] }],
   ['sdCircle', { lines: SD_CIRCLE_LINES, imports: ['sub', 'length'] }],
   ['sdBox3', { lines: SD_BOX3_LINES, imports: ['add', 'sub', 'abs', 'vec3', 'length', 'max', 'min', 'float'], alias: { type: 'sdBox', ports: ['p', 'b', 'round'] } }],
   ['sdBox2', { lines: SD_BOX2_LINES, imports: ['add', 'sub', 'abs', 'vec2', 'vec3', 'length', 'max', 'min', 'float'], alias: { type: 'sdBox', ports: ['p', 'b', 'round'] } }],

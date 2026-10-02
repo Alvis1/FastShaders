@@ -935,6 +935,18 @@ function evaluate(
       result = [H, S, L];
       break;
     }
+    // Brightness/Contrast — Blender's formula, read exactly as the helper reads
+    // it (engine/moduleHelpers.ts): `vec3(col)` broadcasts a scalar, pads a
+    // vec2 with 0 and drops a fourth channel; only the bottom is clamped.
+    case 'brightContrast': {
+      const c = channelInput('color', 1);
+      if (!c || c.length === 0) { result = null; break; }
+      const contrast = scalarInput('contrast', 0);
+      const a = 1 + contrast;
+      const b = scalarInput('bright', 0) - contrast * 0.5;
+      result = brightContrastRgb(c).map((v) => Math.max(a * v + b, 0));
+      break;
+    }
 
     // ===== DISTANCE FIELDS (engine/moduleHelpers.ts carries the GPU twin) =====
     case 'sdCircle': {
@@ -1164,6 +1176,13 @@ function evaluate(
 
   cache.set(nodeId, result);
   return result;
+}
+
+/** Three channels of `v` the way TSL's `vec3(v)` converts it: a scalar
+ *  broadcasts, a vec2 pads with 0, a vec4 drops its fourth component. Shared by
+ *  Brightness/Contrast's sample and its range, so the two read one shape. */
+function brightContrastRgb(v: readonly number[]): [number, number, number] {
+  return v.length === 1 ? [v[0], v[0], v[0]] : [v[0], v[1] ?? 0, v[2] ?? 0];
 }
 
 /** Standard HSL hue-to-RGB channel helper. */
@@ -1529,6 +1548,24 @@ function computeRange(
       // hsl() builds an RGB triple, toHsl() a normalized (h, s, l).
       result = { min: [0, 0, 0], max: [1, 1, 1] };
       break;
+    case 'brightContrast': {
+      // Per channel out = c + k·(c − 0.5) + bright: bilinear in (c, k) and
+      // linear in bright, so the extremes sit on the box's corners; then the
+      // helper's bottom clamp. An unbounded or NaN corner reports `0…∞`.
+      const c = portRange('color', 1);
+      const k = portRange('contrast', 0);
+      const br = portRange('bright', 0);
+      const lo = brightContrastRgb(c.min), hi = brightContrastRgb(c.max);
+      const min: number[] = [], max: number[] = [];
+      for (let i = 0; i < 3; i++) {
+        const corners = [lo[i], hi[i]].flatMap((cv) => [k.min[0], k.max[0]].map((kv) => (1 + kv) * cv - kv * 0.5));
+        const finite = corners.every(Number.isFinite);
+        min.push(finite ? Math.max(Math.min(...corners) + br.min[0], 0) : 0);
+        max.push(finite ? Math.max(Math.max(...corners) + br.max[0], 0) : Infinity);
+      }
+      result = { min, max };
+      break;
+    }
     case 'floor':
     case 'round': {
       const x = portRange('x', 0);

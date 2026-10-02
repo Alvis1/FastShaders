@@ -5,6 +5,7 @@ import { assetText, t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { perlin2D } from '@/utils/noisePreview';
 import { AssetTile } from './AssetTile';
+import { ledDisplayShade } from './ledDisplayTile';
 import { clamp01, lerp3, smoothstep, renderPixels } from './tilePreview';
 // This tile's `.saved-group-card*` classes are defined in ContentBrowser.css,
 // which until now was imported by ContentBrowser.tsx and NOTHING else — so on
@@ -197,6 +198,12 @@ function renderWoodPreview(ctx: CanvasRenderingContext2D) {
   });
 }
 
+// The shade is a pure module of its own (ledDisplayTile.ts), so the suite can
+// test what the tile DRAWS against the texture's graph.
+function renderLedDisplayPreview(ctx: CanvasRenderingContext2D) {
+  renderPixels(ctx, ledDisplayShade);
+}
+
 // Map texture id → renderer
 const PREVIEW_RENDERERS: Record<string, (ctx: CanvasRenderingContext2D) => void> = {
   'polka-dots': renderPolkaDotsPreview,
@@ -207,13 +214,18 @@ const PREVIEW_RENDERERS: Record<string, (ctx: CanvasRenderingContext2D) => void>
   'gas-giant': renderGasGiantPreview,
   'marble': renderMarblePreview,
   'wood': renderWoodPreview,
+  'led-display': renderLedDisplayPreview,
 };
 
 export const TextureCard = memo(function TextureCard({ texture }: TextureCardProps) {
   const language = useAppStore((s) => s.language);
 
-  // Member count = total nodes minus the group container itself.
-  const memberCount = Math.max(0, texture.nodes.length - 1);
+  // Counts SHADER nodes, as PresetCard does: drop the group container and the
+  // explainer note (a texture may pin one), so the number is what the user
+  // will actually be reading in the graph.
+  const memberCount = texture.nodes.filter(
+    (n) => n.type !== 'group' && n.type !== 'note',
+  ).length;
   // The NUMBER stays outside the key: Latvian inflects the noun with it
   // ("1 mezgls" / "5 mezgli"), so singular and plural are two lv.json entries.
   const countLabel = `${memberCount} ${t(memberCount === 1 ? 'node' : 'nodes', language)}`;

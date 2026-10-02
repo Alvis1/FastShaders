@@ -1,7 +1,7 @@
 /**
  * The built-in texture ids, WITHOUT the library behind them.
  *
- * A LEAF: this module imports nothing. `builtinTextures.ts` holds the eight TSL
+ * A LEAF: this module imports nothing. `builtinTextures.ts` holds the nine TSL
  * snippets and builds them through `codeGroupBuilder` → `codeToGraph` →
  * @babel/*, so a static import of it puts the whole Babel front end on the
  * boot wave — and the content browser needs the ids at MODULE SCOPE (whether
@@ -23,6 +23,7 @@ const BUILTIN_TEXTURE_IDS: readonly string[] = [
   'gas-giant',
   'marble',
   'wood',
+  'led-display',
 ];
 
 /** A fresh array per call, as the accessor in `builtinTextures.ts` always returned. */

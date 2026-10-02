@@ -23,7 +23,7 @@ describe('citations — key drift guards', () => {
   // DRIFT GUARD: same for built-in texture ids.
   it('every `textures` key is a real texture id', () => {
     const realIds = new Set(getBuiltinTextures().map((t) => t.id));
-    expect(realIds.size).toBe(8);
+    expect(realIds.size).toBe(9);
     const orphans = textureKeys.filter((k) => !realIds.has(k));
     expect(orphans, `citations.json cites texture ids that no longer exist: ${orphans.join(', ')}`).toEqual([]);
   });
@@ -31,7 +31,7 @@ describe('citations — key drift guards', () => {
   it('has no duplicate keys and is sparse by design', () => {
     // Coverage is deliberately partial — standard ops carry no citation.
     expect(nodeKeys.length).toBeLessThan(getAllDefinitions().length);
-    expect(textureKeys.length).toBeLessThanOrEqual(8);
+    expect(textureKeys.length).toBeLessThanOrEqual(9);
   });
 });
 

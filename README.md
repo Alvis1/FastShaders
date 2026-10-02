@@ -1,11 +1,11 @@
 # FastShaders
 
-FastShaders is a visual 3D graphics editor for web-based virtual reality content, built to be an accessible and convenient shader programming experience for both beginners and experienced content creators. Shaders are authored in [TSL (Three.js Shading Language)](https://github.com/mrdoob/three.js/wiki/Three.js-Shading-Language) — edit the node graph or the code, and changes round-trip in both directions.
+FastShaders is a visual 3D graphics editor for web-based virtual reality content, built to be an accessible and convenient shader programming experience for both beginners and experienced content creators.
 
 Main features:
 
-- shader's impact on performance visualization
-- node-function and real-time data visualizations
+- [TSL (Three.js Shading Language)](https://github.com/mrdoob/three.js/wiki/Three.js-Shading-Language)
+- simple shader's impact on performance metric for specified device
 - visual-effect templates
 
 **[Open](https://alvismisjuns.lv/fastshaders/)** · [GitHub Pages build](https://alvis1.github.io/FastShaders/)
@@ -47,7 +47,7 @@ A **single-GLB** export carries the shader inside the model. Load the `.glb` and
 <a-entity gltf-model="url(my-shader.glb)" shader="src: model" position="0 1.6 -3"></a-entity>
 ```
 
-Never use `src: model` on a page that loads models other people supply: the shader inside runs with the page's privileges, exactly like a script tag. On plain Three.js the same module runs through `FastShaders.applyFromGltf` (see the loader's own README, *Shader inside the model*).
+Never use `src: model` on a page that loads models other people supply: the shader inside runs with the page's privileges, exactly like a script tag. On plain Three.js the same module runs through `FastShaders.applyFromGltf` (see the loader's own README, _Shader inside the model_).
 
 `renderer="backend: webgl"` is what makes the page enter VR: Three.js r184 picks its WebGPU backend whenever `navigator.gpu` exists, and that backend refuses a WebXR session outright. The attribute forces the WebGL2 path, which compiles the same TSL and can present to a headset. Drop it for a flat page if you would rather have WebGPU.
 
@@ -57,21 +57,21 @@ Loader 0.8 is a plain Three.js loader too: without A-Frame on the page it instal
 
 ```html
 <script type="importmap">
-{
-  "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.webgpu.min.js",
-    "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.webgpu.min.js",
-    "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.tsl.min.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/"
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.webgpu.min.js",
+      "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.webgpu.min.js",
+      "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.tsl.min.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/"
+    }
   }
-}
 </script>
 <script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/a-frame-shaderloader-0.8.js"></script>
 <script type="module">
   import * as THREE from 'three/webgpu';
 
-  FastShaders.use(THREE);                                  // the three/webgpu namespace
-  const shader = await FastShaders.load('./myshader.js');  // fetch, the loader's transforms, import
+  FastShaders.use(THREE); // the three/webgpu namespace
+  const shader = await FastShaders.load('./myshader.js'); // fetch, the loader's transforms, import
 
   const renderer = new THREE.WebGPURenderer({ antialias: true });
   renderer.setSize(innerWidth, innerHeight);
@@ -79,7 +79,12 @@ Loader 0.8 is a plain Three.js loader too: without A-Frame on the page it instal
   await renderer.init();
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 100);
+  const camera = new THREE.PerspectiveCamera(
+    50,
+    innerWidth / innerHeight,
+    0.1,
+    100,
+  );
   camera.position.set(0, 0, 3);
   scene.add(new THREE.AmbientLight(0xffffff, 0.6));
   const key = new THREE.DirectionalLight(0xffffff, 2);
@@ -115,7 +120,7 @@ Tessellation stays your job: a shader with `positionNode` needs vertices to move
 
 ## Single-GLB export
 
-One `.glb` can carry the whole thing: the 3D model you dropped on the preview, the textures the shader uses, the shader module and the editor project. **EXPORT follows the preview**: while a dropped `.glb` (or a `.gltf` whose data is embedded) is SHOWN, EXPORT writes that one `.glb`; right-click **EXPORT** → *Export .zip* gives the shader file with the model under `models/` instead. With a built-in shape shown, EXPORT writes the shader file alone (`.js`, or `.zip` when the graph holds images), and right-click → *Export with model* adds the shape as an `.obj`. An `.obj`, a Gaussian splat, or a `.gltf` that keeps its buffers and images in separate files exports as the `.zip` with the model. Never a `.glb` in a study session. What neither file keeps: a material that *Mesh with Materials* turned into a shader keeps only the four slots its Texture nodes fill (base colour, metal/rough, normal, emissive) — its occlusion and extension textures (clearcoat and the like) are dropped at import, so they are gone from the loaded model itself.
+One `.glb` can carry the whole thing: the 3D model you dropped on the preview, the textures the shader uses, the shader module and the editor project. **EXPORT follows the preview**: while a dropped `.glb` (or a `.gltf` whose data is embedded) is SHOWN, EXPORT writes that one `.glb`; right-click **EXPORT** → _Export .zip_ gives the shader file with the model under `models/` instead. With a built-in shape shown, EXPORT writes the shader file alone (`.js`, or `.zip` when the graph holds images), and right-click → _Export with model_ adds the shape as an `.obj`. An `.obj`, a Gaussian splat, or a `.gltf` that keeps its buffers and images in separate files exports as the `.zip` with the model. Never a `.glb` in a study session. What neither file keeps: a material that _Mesh with Materials_ turned into a shader keeps only the four slots its Texture nodes fill (base colour, metal/rough, normal, emissive) — its occlusion and extension textures (clearcoat and the like) are dropped at import, so they are gone from the loaded model itself.
 
 The page that runs it is the code panel's **A-Frame** tab, which always shows the page for what EXPORT writes — for the `.glb`:
 
@@ -158,7 +163,11 @@ An exported splat shader needs the splat runtime after the two scripts above, an
 ```html
 <script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/fs-splat-0.1.js"></script>
 
-<a-entity splat-model="src: url(scene.splat); kind: splat" shader="src: myshader.js" position="0 1.6 -3"></a-entity>
+<a-entity
+  splat-model="src: url(scene.splat); kind: splat"
+  shader="src: myshader.js"
+  position="0 1.6 -3"
+></a-entity>
 ```
 
 `splat-model` scales the scene to a longest side of 1.6 units, the frame the shader was authored in; `size: 0` keeps the file's own units, and every pattern the shader drives from position or UV (a Checker, a noise, an image on Color) then follows those units instead of the ones you previewed.
@@ -195,11 +204,11 @@ Builds target `esnext` with no polyfills and nothing transpiled down, so the flo
 newest feature actually used demands. That feature differs per engine, and so does the damage below it
 — only Safari's is a hard break, which is exactly why the single number is not the whole story:
 
-| Engine | Floor | Set by | What an older version does |
-| --- | --- | --- | --- |
-| Chrome | 111 | `color-mix()` (`CostBar.css`) | Everything works; the benchmark drop-target loses a tint (a literal `rgba()` fallback runs first). |
-| Safari | 16.4 | ES2022 class static blocks, shipped by `monaco-editor` 0.55 | The app boots and the node editor works; the **code panel** fails when opened, because Monaco is a lazily-loaded chunk. |
-| Firefox | 126 | the non-standard `zoom` property (`NodePreviewCard.css`) | The app works, but every asset-browser tile renders ~1.49× and is clipped by the strip. |
+| Engine  | Floor | Set by                                                      | What an older version does                                                                                              |
+| ------- | ----- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Chrome  | 111   | `color-mix()` (`CostBar.css`)                               | Everything works; the benchmark drop-target loses a tint (a literal `rgba()` fallback runs first).                      |
+| Safari  | 16.4  | ES2022 class static blocks, shipped by `monaco-editor` 0.55 | The app boots and the node editor works; the **code panel** fails when opened, because Monaco is a lazily-loaded chunk. |
+| Firefox | 126   | the non-standard `zoom` property (`NodePreviewCard.css`)    | The app works, but every asset-browser tile renders ~1.49× and is clipped by the strip.                                 |
 
 A browser too old to start the app at all lands on a bilingual note in `index.html` rather than a blank
 page. That watchdog fires only when React never mounts, so it does **not** catch the Safari case above —

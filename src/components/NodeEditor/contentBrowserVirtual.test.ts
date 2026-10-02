@@ -96,19 +96,20 @@ describe('content browser — the boot cost, stated', () => {
     // switch is off, which is the default here. `img` is the Texture node,
     // which the GLB work unhid (registry/editorVisibility.json), so this count
     // follows the FILE rather than a literal. 77 with the Splat Output
-    // (2026-09-25), which is always offered — not a Distance-fields companion.
-    expect(booted.length).toBe(77 + img);
+    // (2026-09-25), which is always offered — not a Distance-fields companion;
+    // 78 with Brightness/Contrast (2026-10-01).
+    expect(booted.length).toBe(78 + img);
   });
 
-  it(`observes ${75 + img} elements through ONE shared ResizeObserver`, () => {
+  it(`observes ${76 + img} elements through ONE shared ResizeObserver`, () => {
     // NodePreviewCard wraps every branch except `color` in FitNodeHeading; the
     // colour cards need no heading normalization (they have no header), so they
     // escape it. The count of OBSERVED ELEMENTS is unchanged — what changed
     // (2026-09-09) is that they share a single observer instead of registering
     // one per card in the browser's observation loop for the whole session
-    // (75: the boot set minus the two colour cards).
+    // (76: the boot set minus the two colour cards).
     const observed = booted.filter((d) => getFlowNodeType(d) !== 'color');
-    expect(observed.length).toBe(75 + img);
+    expect(observed.length).toBe(76 + img);
     const card = readFileSync(join(__dirname, 'NodePreviewCard.tsx'), 'utf8');
     expect((card.match(/new ResizeObserver\(/g) ?? []).length).toBe(1);
     expect(card).toContain('return observeCardSize(el, measure);');
@@ -126,7 +127,8 @@ describe('content browser — the boot cost, stated', () => {
     // 61: Ray Direction is a ShaderNode-rendered def withheld with Distance
     // fields (its companion, off by default) — 62 before 2026-09-16. The
     // Texture node (`img`) is ShaderNode-rendered too, so it lands here.
-    expect(byFlow('shader')).toBe(61 + img);
+    // 62 with Brightness/Contrast (2026-10-01).
+    expect(byFlow('shader')).toBe(62 + img);
   });
 });
 

@@ -10,7 +10,7 @@
  * `Position` / `1` on three rows, taller than the body.
  *
  * So the title gets exactly ONE break opportunity, at its most balanced seam:
- * a space, the character after `_`/`-`, or a camelCase boundary (a lower-case
+ * a space, the character after `_`/`-`/`/`, or a camelCase boundary (a lower-case
  * letter or digit followed by an upper-case letter — Unicode-aware, so
  * `vektoriālaisReizinājums` seams too). One opportunity means two lines at
  * most by construction, and the min-content floor becomes the longer HALF, so
@@ -49,7 +49,7 @@ export function splitTitle(text: string): TitleSplit | null {
     const prev = text[i - 1];
     const ch = text[i];
     if (ch === ' ') consider(text.slice(0, i), text.slice(i + 1), true);
-    else if (prev === '_' || prev === '-') consider(text.slice(0, i), text.slice(i), false);
+    else if (prev === '_' || prev === '-' || prev === '/') consider(text.slice(0, i), text.slice(i), false);
     else if (LOWER_OR_DIGIT.test(prev) && UPPER.test(ch)) consider(text.slice(0, i), text.slice(i), false);
   }
   return best;

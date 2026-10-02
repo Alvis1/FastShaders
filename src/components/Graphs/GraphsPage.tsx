@@ -315,7 +315,9 @@ const RegistryRow = memo(function RegistryRow({
   openDesigner: (row: Row) => void;
 }) {
   const id = rowId(r);
-  const childCount = r.nodes.filter((n) => n.type !== 'group').length;
+  // Shader nodes only, like the tile drawn in this same row: a texture may pin
+  // an explainer note, and a note is not a node of the graph.
+  const childCount = r.nodes.filter((n) => n.type !== 'group' && n.type !== 'note').length;
   // Output has no tile and no menu row of its own to remove — the
   // palette already excludes it and the Add-node menu reaches it
   // through a hardcoded row — so a checkbox here would look like a
@@ -880,8 +882,9 @@ export function GraphsPage() {
     // Visibility: the endpoint rewrites the whole file, so send the COMPLETE
     // hidden lists. Unlike citations these are built from the rows ALONE, never
     // seeded from the current file: the rows are exactly the key space the
-    // endpoint accepts (all 74 registry defs + all 8 textures), so seeding could
-    // only carry a key left behind by a since-renamed node — which the endpoint
+    // endpoint accepts (every registry def and every built-in texture), so
+    // seeding could only carry a key left behind by a since-renamed node — which
+    // the endpoint
     // would reject as unknown, blocking every later save. Rebuilding drops it.
     const hiddenNodes: string[] = [];
     const hiddenTextures: string[] = [];

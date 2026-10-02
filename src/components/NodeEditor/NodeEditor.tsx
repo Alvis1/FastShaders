@@ -25,7 +25,7 @@ import {
   cloneNodeSharingPayloads,
   cloneNodesSharingPayloads,
 } from '@/store/useAppStore';
-import type { ContextMenuType } from '@/store/useAppStore';
+import type { ContextMenuType, GroupDropAnchor } from '@/store/useAppStore';
 import {
   isDoubleActivation,
   togglePeek,
@@ -1355,8 +1355,12 @@ export function NodeEditor() {
         pasteNodes(selected);
       }
 
-      // Delete / Backspace — remove selected nodes and/or edges
-      if (e.key === 'Delete' || e.key === 'Backspace') {
+      // Delete / Backspace / X — remove selected nodes and/or edges (X mimics Blender's delete)
+      if (
+        e.key === 'Delete' ||
+        e.key === 'Backspace' ||
+        (key === 'x' && !mod && !e.altKey)
+      ) {
         const store = useAppStore.getState();
         const selectedNodes = store.nodes.filter((n) => n.selected);
         const selectedEdges = store.edges.filter((edge) => edge.selected);
@@ -1871,8 +1875,8 @@ export function NodeEditor() {
       // colorSpace flip), so re-read state and work from the FRESH dragged
       // node — building the final setNodes from the stale array would
       // silently revert those changes.
-      const allNodes = useAppStore.getState().nodes;
-      const freshDragged = allNodes.find((n) => n.id === draggedNode.id) ?? draggedNode;
+      let allNodes = useAppStore.getState().nodes;
+      let freshDragged = allNodes.find((n) => n.id === draggedNode.id) ?? draggedNode;
 
       const { w: nw, h: nh } = getNodeSize(freshDragged);
       // Use absolute position for edge-proximity so grouped nodes compare correctly,
@@ -1895,7 +1899,18 @@ export function NodeEditor() {
       // stated explicitly so the rule survives one ever gaining one.)
       if (!isNote && !overNodeBody && def && def.inputs.length > 0 && def.outputs.length > 0) {
         const radius = DROP_ON_EDGE_RADIUS / getViewport().zoom;
-        tryInsertOnEdge(freshDragged.id, def, cx, cy, getInternalNode, radius);
+        if (tryInsertOnEdge(freshDragged.id, def, cx, cy, getInternalNode, radius)) {
+          // The splice WRITES the dragged node when its port was a hidden
+          // param socket (exposeConnectedTarget — an Image's UV). The same
+          // re-read as after applyConnection above: the reparent/nudge
+          // setNodes below would otherwise put the pre-splice node back, and
+          // the spliced wire would stay in the store and in the code but never
+          // DRAW (its handle never mounts) until a reload. LED Display's note
+          // routes every picture swap through exactly this drop — onto a wire
+          // inside the group's frame, which also reparents the Image.
+          allNodes = useAppStore.getState().nodes;
+          freshDragged = allNodes.find((n) => n.id === draggedNode.id) ?? freshDragged;
+        }
       }
 
       // --- Placement clean-up ---
@@ -2315,16 +2330,20 @@ export function NodeEditor() {
         id: payload.kind === 'node' ? payload.nodeType : payload.id,
       });
 
+      // A DRAGGED group lands with its frame's top-right corner on the pointer
+      // or finger; a click/Enter add keeps the top-left at its scattered
+      // centre point (`GroupDropAnchor`, store/useAppStore.ts).
+      const anchor: GroupDropAnchor = activate ? 'top-left' : 'top-right';
       if (payload.kind === 'savedGroup') {
-        useAppStore.getState().instantiateSavedGroup(payload.id, position);
+        useAppStore.getState().instantiateSavedGroup(payload.id, position, { anchor });
         return;
       }
       if (payload.kind === 'texture') {
-        useAppStore.getState().instantiateBuiltinTexture(payload.id, position);
+        useAppStore.getState().instantiateBuiltinTexture(payload.id, position, anchor);
         return;
       }
       if (payload.kind === 'preset') {
-        useAppStore.getState().instantiateBuiltinPreset(payload.id, position);
+        useAppStore.getState().instantiateBuiltinPreset(payload.id, position, anchor);
         return;
       }
 

@@ -69,6 +69,7 @@
     "voronoiVec3": "Voronoja troksnis (F1/F2/F3)",
     "hsl": "HSL uz RGB",
     "toHsl": "RGB uz HSL",
+    "brightContrast": "Spilgtums/kontrasts",
     "sdCircle": "Riņķis",
     "sdBox": "Kaste",
     "sdTorus": "Tors",
