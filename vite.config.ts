@@ -95,6 +95,11 @@ const versionHtmlPlugin = (): Plugin => ({
 //   FS_BASE           — path the app is served under (default keeps the GitHub Pages build identical)
 //   FS_PREVIEW_ORIGIN — extra origin(s) the sandboxed preview iframe may fetch from at the deploy domain
 //                       (space-separated; the iframe's opaque origin means each must be listed explicitly)
+//   FS_EVAL_UPLOAD_URL — where a finished study package is POSTed, overriding evalUpload.ts's RELATIVE
+//                       default (`/fastshaders-eval/upload.php`, which only alvismisjuns.lv serves). An
+//                       absolute URL's origin joins connect-src. The fs.sferas.lv build sets it
+//                       (scripts/deploy-sferas.sh): that host is static nginx with no endpoint, so the
+//                       relative default 404ed there, and alvismisjuns's endpoint answers its CORS preflight.
 //   FS_DESKTOP=1      — desktop (Tauri) build profile: base defaults to '/', the CSP meta is
 //                       suppressed (the wrapper's own CSP config governs; WebKit handles
 //                       custom-scheme origins in meta CSPs unreliably), and the WebGPU-only
@@ -115,13 +120,48 @@ const FS_DESKTOP = process.env.FS_DESKTOP === '1' || !!process.env.TAURI_ENV_PLA
 const FS_BASE = process.env.FS_BASE ?? (FS_DESKTOP ? '/' : '/FastShaders/');
 const FS_PREVIEW_ORIGIN = process.env.FS_PREVIEW_ORIGIN ?? '';
 
+/**
+ * FS_EVAL_UPLOAD_URL, checked when the config loads, so a typo fails the BUILD
+ * instead of every participant's upload. Empty = no override (evalUpload.ts
+ * keeps its relative default). A path must be root-relative; a URL must be
+ * https, since an http endpoint is mixed content on an https host and the
+ * browser blocks it (http is accepted for localhost/127.0.0.1 only, for local
+ * testing against a stand-in endpoint).
+ */
+function checkedEvalUploadUrl(raw: string): string {
+  const v = raw.trim();
+  if (!v) return '';
+  if (v.startsWith('/') && !v.startsWith('//')) return v;
+  let u: URL;
+  try {
+    u = new URL(v);
+  } catch {
+    throw new Error(`FS_EVAL_UPLOAD_URL is neither a root-relative path nor a URL: ${v}`);
+  }
+  const local = u.hostname === 'localhost' || u.hostname === '127.0.0.1';
+  if (u.protocol !== 'https:' && !(local && u.protocol === 'http:')) {
+    throw new Error(`FS_EVAL_UPLOAD_URL must be https: ${v}`);
+  }
+  return u.href;
+}
+const FS_EVAL_UPLOAD_URL = checkedEvalUploadUrl(process.env.FS_EVAL_UPLOAD_URL ?? '');
+/** The endpoint's origin when it lives on ANOTHER host — it must join connect-src. */
+const EVAL_UPLOAD_ORIGIN = /^https?:\/\//.test(FS_EVAL_UPLOAD_URL) ? new URL(FS_EVAL_UPLOAD_URL).origin : '';
+
+/** 'self' plus every extra origin, each listed once (the preview's may already name the endpoint's host). */
+const CONNECT_SRC = [
+  ...new Set(["'self'", 'blob:', 'https://alvis1.github.io', ...FS_PREVIEW_ORIGIN.split(/\s+/), EVAL_UPLOAD_ORIGIN]),
+]
+  .filter(Boolean)
+  .join(' ');
+
 const CSP_DIRECTIVES = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:",
   "style-src 'self' 'unsafe-inline'",
   "font-src 'self' data:",
   "img-src 'self' data: blob:",
-  `connect-src 'self' blob: https://alvis1.github.io${FS_PREVIEW_ORIGIN ? ' ' + FS_PREVIEW_ORIGIN : ''}`,
+  `connect-src ${CONNECT_SRC}`,
   "frame-src 'self' blob:",
   "worker-src 'self' blob:",
   "object-src 'none'",
@@ -937,6 +977,7 @@ export default defineConfig({
     'process.env': { NODE_ENV: JSON.stringify('production') },
     __APP_VERSION__: JSON.stringify(pkg.version),
     __FS_DESKTOP__: JSON.stringify(FS_DESKTOP),
+    __FS_EVAL_UPLOAD_URL__: JSON.stringify(FS_EVAL_UPLOAD_URL),
   },
   server: {
     port: 5173,

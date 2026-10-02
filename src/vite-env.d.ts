@@ -6,6 +6,9 @@ declare const __APP_VERSION__: string;
 /** True in the desktop (Tauri) build profile — FS_DESKTOP=1 (see vite.config.ts `define`). */
 declare const __FS_DESKTOP__: boolean;
 
+/** The study-package endpoint override, FS_EVAL_UPLOAD_URL ('' = none; see vite.config.ts `define`). */
+declare const __FS_EVAL_UPLOAD_URL__: string;
+
 /**
  * Tauri v2 IPC bridge, injected by the desktop wrapper when
  * `app.withGlobalTauri` is true in tauri.conf.json. Only ever present (and

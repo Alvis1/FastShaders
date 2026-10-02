@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { LangSwitch } from './LangSwitch';
+import { useStudyDialog } from './studyDialog';
 import '@/components/Modals/CsvImportModal.css';
 import './eval.css';
 
@@ -28,10 +29,20 @@ import './eval.css';
  *
  * DISMISSIBLE, unlike its parent. The consent screen is deliberately not
  * escapable — consent must be an affirmative act. This one is informational, so
- * Escape and the backdrop both close it, and it restores focus to the ? button
- * that opened it. Its Escape listener is CAPTURE-phase and stops propagation:
- * without that the key would also reach whatever else is listening and the
- * participant would find themselves somewhere they did not ask to be.
+ * Escape closes it as well as its Close button. A click OUTSIDE it does
+ * nothing, as on every study dialog: the list is long and scrolls, and a
+ * scrollbar drag released past the panel's edge lands on the backdrop. Its
+ * keys go through `useStudyDialog` like every study dialog's: WINDOW capture,
+ * every key but Tab stopped. It must be window capture, not document: the
+ * consent behind it swallows keys there, and a later listener on the same
+ * target still runs, while one further down the path never would. The
+ * consent makes its own panel inert while this one is open, so Shift+Tab
+ * cannot walk onto its hidden "I agree".
+ *
+ * Focus goes to Close ONCE, on open. It used to sit in an effect keyed on
+ * `onClose`, which the consent passes inline — so every language switch re-ran
+ * it, moved focus from the LV/EN button to Close (a second Enter then closed
+ * the dialog) and scrolled the panel to its end.
  *
  * It carries its own language switch for the same reason the consent screen
  * does — it is modal, so the toolbar's is unreachable, and a disclosure nobody
@@ -47,18 +58,10 @@ export function DataDisclosureModal({ onClose }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    closeRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      // Capture + stop: the consent screen sits behind this one and other
-      // global Escape handlers are live underneath both.
-      e.stopPropagation();
-      e.preventDefault();
-      onClose();
-    };
-    document.addEventListener('keydown', onKey, true);
-    return () => document.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+    closeRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  useStudyDialog(true, onClose);
 
   /**
    * One disclosed item: a plain-language LINE anyone can read at a glance,
@@ -87,10 +90,7 @@ export function DataDisclosureModal({ onClose }: Props) {
   );
 
   return createPortal(
-    <div
-      className="csv-import-modal__backdrop eval-disclosure__backdrop"
-      onClick={onClose}
-    >
+    <div className="csv-import-modal__backdrop eval-disclosure__backdrop">
       <div
         className="csv-import-modal__panel eval-modal__panel"
         role="dialog"
@@ -125,7 +125,7 @@ export function DataDisclosureModal({ onClose }: Props) {
             {item(
               'Your questionnaire answers',
               'sus.json',
-              'the four experience answers and any software you name; in a professional session also your role, years, platforms and the other work questions; the ten statements, the score computed from them, and your free-text comment. Text you type in those boxes is stored word for word.',
+              'the three experience answers; in a professional session also your role, years, platforms and the other work questions; the ten statements, the score computed from them, and your free-text comment. Text you type in those boxes is stored word for word.',
             )}
             {item(
               'The main numbers as one spreadsheet row',

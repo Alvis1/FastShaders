@@ -78,7 +78,11 @@ version meta with curl. Requires `psftp` (`brew install putty`) and the gitignor
 npm run deploy:sferas
 ```
 Base `/`, target `/var/www/fs/src`. NEVER use `/var/www/sferas/src`, which is shared with a dozen unrelated
-projects. The script checks the version meta AND that `/evalp/` returns 200. If the user
+projects. BEFORE building, the script checks that the live upload endpoint passes this host's CORS preflight
+the way a browser judges it (2xx, the origin echoed, every upload header allowed) and stops with NOTHING
+uploaded if not — the endpoint is behind the template (no CORS block, or a header the client now sends): run
+`bash scripts/deploy-eval-endpoint.sh`, then `npm run deploy:sferas` again. After the upload it checks the
+version meta, that `/evalp/` returns 200, and that the served CSP names `https://alvismisjuns.lv`. If the user
 has said a study cohort is currently running, HOLD this step: a participant's preview would
 change loader mid-study. Say that you held it.
 

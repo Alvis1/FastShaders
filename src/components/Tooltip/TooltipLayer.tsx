@@ -63,10 +63,14 @@ export function TooltipLayer() {
       }
     };
 
-    // Put the native title back on the element we borrowed it from.
+    // Put the native title back on the element we borrowed it from — unless
+    // React has written a NEWER one meanwhile (a title that changed while its
+    // tooltip showed, e.g. the study dialogs' EN/LV button after a keyboard
+    // switch): writing the stash back over it left that button's hint naming
+    // the language it had just switched away from.
     const restore = () => {
       const host = hostRef.current;
-      if (host && stashedTitleRef.current !== null && host.isConnected) {
+      if (host && stashedTitleRef.current !== null && host.isConnected && !host.hasAttribute('title')) {
         host.setAttribute('title', stashedTitleRef.current);
       }
       hostRef.current = null;
@@ -163,7 +167,10 @@ export function TooltipLayer() {
     document.addEventListener('mousedown', dismiss, true);
     document.addEventListener('wheel', dismiss, true);
     document.addEventListener('scroll', dismiss, true);
-    document.addEventListener('keydown', onKeyDown, true);
+    // WINDOW capture, registered at app boot: it runs before the study
+    // dialogs' window-capture key swallow (registered later, when they open),
+    // so Escape still dismisses a tooltip on the consent screen.
+    window.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('blur', dismiss);
 
     return () => {
@@ -175,7 +182,7 @@ export function TooltipLayer() {
       document.removeEventListener('mousedown', dismiss, true);
       document.removeEventListener('wheel', dismiss, true);
       document.removeEventListener('scroll', dismiss, true);
-      document.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('blur', dismiss);
     };
   }, []);

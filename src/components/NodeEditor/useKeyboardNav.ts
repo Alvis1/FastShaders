@@ -51,7 +51,13 @@ import { nodeEl } from './nodeElement';
  *   · The target is inside a MODAL. Every dialog in the app already swallows
  *     stray keys on a window capture listener, but this hook's own listener is
  *     also a capture one, so it can run first — and moving the canvas cursor
- *     or the pane focus out from under an open dialog is never wanted.
+ *     or the pane focus out from under an open dialog is never wanted. The
+ *     listener ALSO stands down while any modal is open at all (checked there,
+ *     not here: it is a document query, and this predicate is node-tested):
+ *     after a click outside a study dialog, which no longer closes it, focus
+ *     sits on the page — not inside the dialog — and Alt+Arrow walked it to a
+ *     pane, Tab to a node, and the arrows moved that node behind the open
+ *     questionnaire, failing its no-edits-after-sus-open check.
  *   · The target is inside a settings/context MENU (`.context-menu`, the ONE
  *     shared shell every menu renders). The menu is drawn INSIDE
  *     `.node-editor__canvas`, so without this the canvas-scoped Tab branch
@@ -159,6 +165,8 @@ export function useKeyboardNav({ drawToolActive }: Options): void {
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTyping(e.target)) return;
+      // Every aria-modal dialog in the app renders only while open.
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
 
       const active = document.activeElement as HTMLElement | null;
 

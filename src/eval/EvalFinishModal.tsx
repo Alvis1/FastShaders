@@ -1,7 +1,8 @@
-import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
+import { LangSwitch } from './LangSwitch';
+import { useStudyDialog } from './studyDialog';
 import '@/components/Modals/CsvImportModal.css';
 import './eval.css';
 
@@ -17,8 +18,17 @@ import './eval.css';
  * with two near-identical files per participant — which `eval-analysis.mjs`
  * would then count twice. The body text promises exactly that sequence.
  *
- * Escape and the backdrop mean CONTINUE — the non-destructive choice, and the
- * same "a dismissal is the safe answer" rule the image-import dialog follows.
+ * Escape means CONTINUE — the non-destructive choice, and the same "a
+ * dismissal is the safe answer" rule the image-import dialog follows. A click
+ * OUTSIDE the panel does nothing: no study dialog hides on a stray click (the
+ * questionnaire this opens explains why), so the participant answers with one
+ * of the two buttons. Like every study dialog it makes the app behind it
+ * inert and swallows every other key but Tab (studyDialog.ts): the canvas's
+ * window shortcuts (Delete, X, A, ⌘Z) would otherwise edit the graph behind
+ * it, and Tab would walk out of the panel into the canvas.
+ *
+ * It carries its own EN/LV switch, as every study dialog does: it is modal, so
+ * the toolbar's button is out of reach behind the backdrop.
  */
 
 interface Props {
@@ -30,19 +40,12 @@ interface Props {
 export function EvalFinishModal({ open, onContinue, onFinish }: Props) {
   const language = useAppStore((s) => s.language);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onContinue();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onContinue]);
+  useStudyDialog(open, onContinue);
 
   if (!open) return null;
 
   return createPortal(
-    <div className="csv-import-modal__backdrop" onClick={onContinue}>
+    <div className="csv-import-modal__backdrop">
       <div
         className="csv-import-modal__panel eval-modal__panel eval-finish__panel"
         role="dialog"
@@ -50,8 +53,11 @@ export function EvalFinishModal({ open, onContinue, onFinish }: Props) {
         aria-labelledby="eval-finish-title"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="csv-import-modal__title" id="eval-finish-title">
-          {t('Are you finished?', language)}
+        <div className="eval-consent__head">
+          <div className="csv-import-modal__title" id="eval-finish-title">
+            {t('Are you finished?', language)}
+          </div>
+          <LangSwitch />
         </div>
         <div className="csv-import-modal__message">
           {t('Submit opens a short questionnaire. Your shader and the session data are then packed into one file and uploaded to the study server.', language)}

@@ -109,11 +109,11 @@ describe('the consent and disclosure are fully translated', () => {
     expect(missing, `untranslated: ${missing.join(' | ')}`).toEqual([]);
   });
 
-  it('every questionnaire question, option label and follow-up is translated', () => {
+  it('every questionnaire question and option label is translated', () => {
     // These reach the screen as t(it.question) / t(label) — data, not literals,
     // so the t('…') sweep above cannot see them.
     const keys = [
-      ...BACKGROUND_ITEMS.flatMap((it) => [it.question, it.followUp ?? '']),
+      ...BACKGROUND_ITEMS.map((it) => it.question),
       ...EXPERIENCE_LEVELS,
       ...PRO_ITEMS.flatMap((q) => [q.question, ...(q.kind === 'scale' ? q.levels : [])]),
     ].filter(Boolean);

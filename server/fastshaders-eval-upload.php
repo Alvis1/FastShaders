@@ -3,12 +3,13 @@
  * FastShaders eval-package upload endpoint (delivery option B).
  * Companion of src/eval/evalUpload.ts — see EVAL_MODE_PLAN.md §4 Phase 5.
  *
- * DEPLOY (alvismisjuns.lv):
+ * DEPLOY (alvismisjuns.lv): `bash scripts/deploy-eval-endpoint.sh` renders
+ * the secrets in and uploads this file. The first-time recipe was:
  *   1. Pick a real secret; set $SECRET below AND EVAL_UPLOAD_KEY in
  *      src/eval/evalUpload.ts to the same value.
  *   2. Upload this file to /fastshaders-eval/upload.php (i.e. a sibling of
- *      the /fastshaders/ app dir — same origin, so the app's CSP already
- *      permits the POST; no server config change needed).
+ *      the /fastshaders/ app dir — same origin for that deploy, so its CSP
+ *      already permits the POST; other hosts go through $ALLOWED_ORIGINS).
  *   3. Set EVAL_UPLOAD_URL in src/eval/evalUpload.ts to
  *      '/fastshaders-eval/upload.php' and redeploy the app.
  *   4. Optionally set $NOTIFY to get a mail per received package (the file
@@ -24,7 +25,10 @@
  * (exactly what evalZipFileName() emits), size cap, zip magic check,
  * never-overwrite storage, and an inbox directory denied to the web (0700 +
  * a deny-all .htaccess written on first use). The client-visible key stops
- * drive-by spam only; these checks are the actual controls.
+ * drive-by spam only; these checks are the actual controls. CORS is an
+ * exact-origin allowlist, never `*`: it decides which PAGES may read the
+ * answer, not who may send — a non-browser client ignores it anyway, so the
+ * checks above stay the controls.
  */
 
 $SECRET    = 'CHANGE-ME';
@@ -37,11 +41,30 @@ $MAX_BYTES = 64 * 1024 * 1024;
 $INBOX     = __DIR__ . '/eval-inbox';   // ← set an ABSOLUTE path outside the web root
 $NOTIFY    = ''; // e.g. 'alvis.misjuns@va.lv' — empty disables the notification mail
 
-// Same-origin deployments need no CORS. If the endpoint must ever accept the
-// GitHub Pages origin, uncomment (and widen the app's connect-src):
-// header('Access-Control-Allow-Origin: https://alvis1.github.io');
-// header('Access-Control-Allow-Headers: Content-Type, X-FS-Eval-Name, X-FS-Eval-Key');
-// if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { http_response_code(204); exit; }
+// Pages on OTHER origins that may post here, by exact origin. The app posts
+// SAME-origin from alvismisjuns.lv/fastshaders/ (no CORS involved), and
+// CROSS-origin from the study host fs.sferas.lv: a static nginx container with
+// no endpoint of its own, whose build names this URL absolutely
+// (FS_EVAL_UPLOAD_URL in scripts/deploy-sferas.sh). The POST is not a "simple"
+// request (the X-FS-Eval-* headers, an application/zip body), so the browser
+// first sends an OPTIONS preflight — and the POST's own response needs the
+// Allow-Origin too: without it the browser hides the answer from fetch(), so
+// the package is STORED while the participant is told the upload failed.
+// No cookies are involved, so no Allow-Credentials.
+$ALLOWED_ORIGINS = ['https://fs.sferas.lv'];
+
+$origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+header('Vary: Origin');
+if (in_array($origin, $ALLOWED_ORIGINS, true)) {
+  header('Access-Control-Allow-Origin: ' . $origin);
+  header('Access-Control-Allow-Methods: POST');
+  // Every header uploadEvalPackage() sets (evalUpload.test.ts pins the match).
+  header('Access-Control-Allow-Headers: Content-Type, X-FS-Eval-Name, X-FS-Eval-Key');
+  header('Access-Control-Max-Age: 600');
+}
+// A preflight carries no body and no key: answer it and stop. A foreign origin
+// gets the same 204 WITHOUT an Allow-Origin, and that absence is the refusal.
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { http_response_code(204); exit; }
 
 header('Content-Type: text/plain; charset=utf-8');
 

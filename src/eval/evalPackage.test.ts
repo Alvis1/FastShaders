@@ -8,6 +8,7 @@ import {
   type EvalPackageInput,
 } from './evalPackage';
 import { deriveSummary, runQualityChecks, type EvalEvent } from './telemetryModel';
+import { BACKGROUND_ITEMS } from './background';
 
 function fixtureInput(withShader: boolean): EvalPackageInput {
   const events: EvalEvent[] = [
@@ -117,6 +118,29 @@ describe('summary.csv + README', () => {
     expect(header.split(',')).toHaveLength(row.split(',').length);
     expect(header).toContain('sus_score');
     expect(row).toContain('77.5');
+  });
+
+  it('carries one exp_ column per experience question, read from the sus block', () => {
+    // The columns follow BACKGROUND_ITEMS: the retired "other node editors"
+    // item (removed on 2026-10-02) must not linger as an always-empty column.
+    const input = fixtureInput(true);
+    const csv = buildSummaryCsv('P01', 77.5, input.summary, {
+      susBlock: {
+        background: {
+          items: [
+            { id: 'blender', level: 3 },
+            { id: 'unreal', level: 0 },
+            { id: 'shaderCode', level: 4 },
+          ],
+        },
+      },
+    });
+    const [header, row] = csv.split('\n');
+    const cells = Object.fromEntries(header.split(',').map((h, i) => [h, row.split(',')[i]]));
+    const expCols = header.split(',').filter((h) => h.startsWith('exp_'));
+    expect(expCols).toEqual(BACKGROUND_ITEMS.map((it) => `exp_${it.id}`));
+    expect(expCols).toEqual(['exp_blender', 'exp_unreal', 'exp_shaderCode']);
+    expect([cells.exp_blender, cells.exp_unreal, cells.exp_shaderCode]).toEqual(['3', '0', '4']);
   });
 
   it('README declares the idle threshold and the schema', () => {

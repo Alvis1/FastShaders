@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { EVAL_DPO_CONTACT, EVAL_RETENTION_PERIOD, warnIfConsentIncomplete } from './evalMode';
 import { DataDisclosureModal } from './DataDisclosureModal';
 import { LangSwitch } from './LangSwitch';
+import { useStudyDialog } from './studyDialog';
 import '@/components/Modals/CsvImportModal.css';
 import './eval.css';
 
@@ -48,12 +49,29 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
   const language = useAppStore((s) => s.language);
   const [participant, setParticipant] = useState('');
   const [showDisclosure, setShowDisclosure] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(warnIfConsentIncomplete, []);
+
+  // Not dismissible by Escape either, so it only swallows (studyDialog.ts):
+  // the app behind it is inert — Tab from here used to walk out to EXPORT, and
+  // Enter there opened the questionnaire before Agree, so a package with no
+  // consent record was downloaded and uploaded — and every key but Tab stops
+  // before the canvas's window shortcuts. The Details dialog registers its own
+  // listener later on the same target, so it still sees Escape.
+  useStudyDialog(true);
+
+  // While Details is open, this panel is inert as well: Details is a separate
+  // portal AFTER it, so Shift+Tab from Details' first control landed on the
+  // hidden "I agree", and Enter recorded consent on a button nobody could see.
+  useEffect(() => {
+    if (panelRef.current) panelRef.current.inert = showDisclosure;
+  }, [showDisclosure]);
 
   return createPortal(
     <div className="csv-import-modal__backdrop">
       <div
+        ref={panelRef}
         className="csv-import-modal__panel eval-modal__panel"
         role="dialog"
         aria-modal="true"

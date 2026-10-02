@@ -19,6 +19,7 @@
 import type { ZipEntry } from '@/utils/zipWriter';
 import { toKebabCase } from '@/utils/nameUtils';
 import type { EvalEvent, EvalSummary, QualityCheck } from './telemetryModel';
+import { BACKGROUND_ITEMS } from './background';
 
 export interface EvalPackageInput {
   schema: string;
@@ -84,9 +85,10 @@ export function buildSummaryCsv(
     ['sus_score', susScore],
     // Experience levels 0-4 (none..expert) — the covariate a usability score
     // is read against; `readPath` pulls them out of the sus block the caller
-    // assembled, so this file keeps knowing nothing about the questions.
-    ...(['blender', 'unreal', 'otherNodeEditors', 'shaderCode'] as const).map(
-      (id): [string, unknown] => [
+    // assembled. The column list is the questionnaire's own id list, so a
+    // question added or retired there cannot leave a stale or missing column.
+    ...BACKGROUND_ITEMS.map(
+      ({ id }): [string, unknown] => [
         `exp_${id}`,
         (readPath<{ id: string; level: number | null }[]>(
           extra.susBlock ?? {}, ['background', 'items'],

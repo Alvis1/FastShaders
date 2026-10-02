@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
-import { t } from '@/i18n';
+import { t, type Language } from '@/i18n';
 import { buildZip } from '@/utils/zipWriter';
 import { buildMailtoUrl } from '@/utils/feedbackReport';
 import { buildShaderBundle } from '@/engine/exportShader';
@@ -19,6 +19,7 @@ import {
   getEvalEvents,
   getEvalClockOriginMs,
   clearEvalJournal,
+  isEvalSessionActive,
 } from './telemetry';
 import { deriveSummary, runQualityChecks, type QualityCheck } from './telemetryModel';
 import { evalTask } from './evalTask';
@@ -30,6 +31,9 @@ import {
   type BackgroundAnswers,
 } from './background';
 import { PRO_ITEMS, buildProRecord, proComplete, type ProAnswers } from './proQuestions';
+import { LangSwitch } from './LangSwitch';
+import { summarizeAnswerLanguages } from './answerLanguage';
+import { useStudyDialog } from './studyDialog';
 import { collectDevice, costTableProvenance } from './evalContext';
 import { capturePreviewShot } from './previewShot';
 import { buildEvalPackageEntries, evalZipFileName } from './evalPackage';
@@ -65,8 +69,28 @@ import './eval.css';
  * cannot carry attachments, so the body names the downloaded file. The
  * researcher can always collect the downloaded zip from the machine instead.
  *
- * Cancel (Close/Escape/backdrop) returns to the session — nothing ends until
- * Submit.
+ * Cancel ("Back to the editor" or Escape) returns to the session — nothing ends
+ * until Submit. From Submit to the thank-you screen the form is frozen (busy):
+ * neither works, and every answer control is disabled, so what is on screen is
+ * what gets packed. A click OUTSIDE the panel does nothing, on both screens:
+ * the form is long and scrolls, so a scrollbar drag or a text selection
+ * released past the panel's edge used to land on the backdrop and hide it,
+ * and on the thank-you screen that hid the Download and email buttons with
+ * it. While open, the app behind it is inert and every key but Tab is
+ * swallowed (studyDialog.ts, shared by every study dialog). Submit also
+ * refuses outright without a consented session, so no path can produce a
+ * package without a consent record.
+ *
+ * Both screens carry their own EN/LV switch (`LangSwitch`), as the consent
+ * does: the dialog is modal, so the toolbar's button is out of reach. Answers
+ * are kept by index, so a switch mid-questionnaire keeps them. Because that
+ * makes a form answered partly in each language one click away, the language
+ * of every SUS answer is noted as it is given and `sus.json.language` is the
+ * language the SUS was ANSWERED in — 'mixed' when its answers span both
+ * (answerLanguage.ts) — with `languageAtSubmit` beside it. A switch on the form
+ * is a `lang-switch` event; one on the thank-you screen is not recorded, since
+ * Submit has already ended the session. The email draft is built at render,
+ * so its one line for the participant follows the switch.
  */
 
 interface Props {
@@ -77,7 +101,10 @@ interface Props {
 interface DoneState {
   fileName: string;
   zipBytes: Uint8Array;
-  mailto: string;
+  /** The email draft's subject and its researcher summary (English); the
+   *  participant's line is added at render, in the current language. */
+  mailSubject: string;
+  mailSummary: string[];
   failedChecks: QualityCheck[];
   /** Delivery option B: 'pending' while in flight; 'disabled' = not configured; 'too-large' = over MAX_UPLOAD_BYTES, never sent (the size shown is zipBytes.length). */
   upload: EvalUploadResult | 'pending';
@@ -99,10 +126,14 @@ export function SusModal({ open, onClose }: Props) {
   // knowing whose it is, and answering them first keeps thinking about one's
   // own expertise from colouring the SUS items.
   const [background, setBackground] = useState<BackgroundAnswers>({});
-  const [otherEditors, setOtherEditors] = useState('');
   // The professional block — only in the /evalpro arm.
   const [pro, setPro] = useState<ProAnswers>({});
   const submittingRef = useRef(false);
+  // Submit → thank-you screen. See handleSubmit.
+  const [busy, setBusy] = useState(false);
+  // The UI language each SUS answer was GIVEN in, noted at the radio's
+  // onChange (answerLanguage.ts says why the language at Submit is not enough).
+  const susAnswerLangRef = useRef<(Language | undefined)[]>(Array(SUS_ITEM_COUNT).fill(undefined));
   const [participant, setParticipant] = useState(() => readEvalSession()?.participant ?? '');
   const [done, setDone] = useState<DoneState | null>(null);
 
@@ -118,14 +149,11 @@ export function SusModal({ open, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  // Inert app behind, every key but Tab swallowed (studyDialog.ts says what
+  // used to leak through). Escape is Cancel, except while Submit is packing.
+  useStudyDialog(open, () => {
+    if (!busy) onClose();
+  });
 
   const items = language === 'lv' ? SUS_ITEMS_LV : SUS_ITEMS_EN;
   const anchorLow = language === 'lv' ? SUS_ANCHOR_LOW_LV : SUS_ANCHOR_LOW_EN;
@@ -145,8 +173,32 @@ export function SusModal({ open, onClose }: Props) {
     // session id. State cannot close that window because React has not
     // re-rendered yet; a ref is set synchronously.
     if (!complete || done || submittingRef.current) return;
+    // Fail closed: without a consented session (Agree, or a session resumed
+    // after a reload) there is nothing to package. The inert app root makes
+    // this unreachable from the consent screen; this keeps it so if a new
+    // path to the questionnaire ever appears.
+    if (!isEvalSessionActive()) return;
     submittingRef.current = true;
+    // Busy until the thank-you screen replaces the form: the capture below
+    // shows nothing for up to 4 s, and Escape or "Back to the editor" in that
+    // window hid the dialog while the submission finished unseen — no
+    // thank-you screen, no upload status, no Email button.
+    setBusy(true);
+    try {
+      await submitPackage();
+    } catch (err) {
+      // An unexpected throw must not strand the participant behind disabled
+      // buttons. The ref stays set, so no second, partial submission starts.
+      setBusy(false);
+      throw err;
+    }
+  };
+
+  const submitPackage = async () => {
     const filled = responses.map((r) => r ?? 3);
+    // Taken with `filled`, before the await below: both must describe the
+    // same moment, the click.
+    const answerLangs = susAnswerLangRef.current.slice();
     const score = computeSusScore(filled);
     const submittedIso = new Date().toISOString();
     const session = readEvalSession();
@@ -177,13 +229,22 @@ export function SusModal({ open, onClose }: Props) {
 
     const device = collectDevice();
     const env = collectEnv();
+    // Which language version of the SUS was answered — per item, and 'mixed'
+    // for the form when its answers span both (answerLanguage.ts). Each item's
+    // statement is recorded in the language it was answered in.
+    const answeredIn = summarizeAnswerLanguages(answerLangs, language);
     const sus = {
       participant: trimmedParticipant,
-      language,
-      background: buildBackgroundRecord(background, otherEditors),
+      language: answeredIn.language,
+      languageAtSubmit: language,
+      background: buildBackgroundRecord(background),
       ...(proAsked ? { professional: buildProRecord(pro) } : {}),
       itemsVersion: 'brooke-1996-item8-awkward',
-      items: items.map((text, i) => ({ n: i + 1, item: text, response: filled[i] })),
+      items: filled.map((response, i) => {
+        const itemLanguage = answeredIn.perItem[i];
+        const statements = itemLanguage === 'lv' ? SUS_ITEMS_LV : SUS_ITEMS_EN;
+        return { n: i + 1, item: statements[i], language: itemLanguage, response };
+      }),
       score,
       ...(comment.trim() ? { comment: comment.trim() } : {}),
       submittedIso,
@@ -246,19 +307,18 @@ export function SusModal({ open, onClose }: Props) {
     // The SUS score deliberately does NOT appear here: the participant reads
     // this draft while attaching the zip, and showing them their score before
     // the debrief is exactly the anchoring the hidden-score rule prevents.
-    const subject = `FastShaders eval — ${trimmedParticipant || 'participant'} — ${submittedIso.slice(0, 10)}`;
-    const bodyLines = [
+    // The researcher's summary stays English; the one line addressed to the
+    // PARTICIPANT is added at render (see the thank-you screen), so it follows
+    // a language switch made there.
+    const mailSubject = `FastShaders eval — ${trimmedParticipant || 'participant'} — ${submittedIso.slice(0, 10)}`;
+    const mailSummary = [
       `FastShaders evaluation session — ${trimmedParticipant || 'participant'}`,
       '',
       `Active time: ${(summary.activeMs / 60_000).toFixed(1)} min of ${(summary.wallMs / 60_000).toFixed(1)} min`,
       `Nodes added: ${Object.values(summary.nodeAddsByType).reduce((a, b) => a + b, 0)} · connections made: ${summary.counts['edge-connect'] ?? 0}`,
       `Events recorded: ${summary.eventCount}`,
       '',
-      // The one line addressed to the PARTICIPANT, so it follows their language;
-      // everything above is the researcher's summary and stays English.
-      fillTemplate(t('Please attach the file "{file}" (in your Downloads folder) to this email, then press Send.', language), { file: fileName }),
     ];
-    const mailto = buildMailtoUrl(EVAL_STUDY_EMAIL, subject, bodyLines.join('\n'));
 
     // Delivery option B (fire-and-forget): the download above already happened
     // — the upload is IN ADDITION, and every failure mode degrades to the
@@ -270,10 +330,13 @@ export function SusModal({ open, onClose }: Props) {
     setDone({
       fileName,
       zipBytes,
-      mailto,
+      mailSubject,
+      mailSummary,
       failedChecks: quality.filter((q) => !q.ok),
       upload: precheck ?? 'pending',
     });
+    // The thank-you screen is up (same render), so Escape closes it again.
+    setBusy(false);
     if (precheck === null) {
       void uploadEvalPackage(fileName, zipBytes).then((result) => {
         setDone((d) => (d && d.fileName === fileName ? { ...d, upload: result } : d));
@@ -293,8 +356,16 @@ export function SusModal({ open, onClose }: Props) {
 
   if (done) {
     const uploadWarn = done.upload === 'failed' || done.upload === 'too-large';
+    const mailto = buildMailtoUrl(
+      EVAL_STUDY_EMAIL,
+      done.mailSubject,
+      [
+        ...done.mailSummary,
+        fillTemplate(t('Please attach the file "{file}" (in your Downloads folder) to this email, then press Send.', language), { file: done.fileName }),
+      ].join('\n'),
+    );
     return createPortal(
-      <div className="csv-import-modal__backdrop" onClick={onClose}>
+      <div className="csv-import-modal__backdrop">
         <div
           className="csv-import-modal__panel eval-modal__panel"
           role="dialog"
@@ -302,8 +373,11 @@ export function SusModal({ open, onClose }: Props) {
           aria-labelledby="eval-done-title"
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="csv-import-modal__title" id="eval-done-title">
-            {t('Thank you!', language)}
+          <div className="eval-consent__head">
+            <div className="csv-import-modal__title" id="eval-done-title">
+              {t('Thank you!', language)}
+            </div>
+            <LangSwitch />
           </div>
           <div className="csv-import-modal__message">
             {t('Your answers, your shader and the session data are packed into one file, saved in your Downloads folder:', language)}
@@ -356,7 +430,7 @@ export function SusModal({ open, onClose }: Props) {
             <button type="button" className="csv-import-modal__button" onClick={onClose}>
               {t('Close', language)}
             </button>
-            <a className="csv-import-modal__button csv-import-modal__button--primary" href={done.mailto}>
+            <a className="csv-import-modal__button csv-import-modal__button--primary" href={mailto}>
               {t('Email to researcher', language)}
             </a>
           </div>
@@ -367,7 +441,7 @@ export function SusModal({ open, onClose }: Props) {
   }
 
   return createPortal(
-    <div className="csv-import-modal__backdrop" onClick={onClose}>
+    <div className="csv-import-modal__backdrop">
       <div
         className="csv-import-modal__panel eval-modal__panel"
         role="dialog"
@@ -375,8 +449,11 @@ export function SusModal({ open, onClose }: Props) {
         aria-labelledby="sus-modal-title"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="csv-import-modal__title" id="sus-modal-title">
-          {t('Before you finish: a short questionnaire', language)}
+        <div className="eval-consent__head">
+          <div className="csv-import-modal__title" id="sus-modal-title">
+            {t('Before you finish: a short questionnaire', language)}
+          </div>
+          <LangSwitch disabled={busy} />
         </div>
         <div className="csv-import-modal__message">
           {t('Every scale question is required; the text boxes are optional.', language)}
@@ -391,6 +468,7 @@ export function SusModal({ open, onClose }: Props) {
               value={participant}
               maxLength={40}
               placeholder="P01"
+              disabled={busy}
               onChange={(e) => setParticipant(e.target.value)}
             />
           </div>
@@ -421,6 +499,7 @@ export function SusModal({ open, onClose }: Props) {
                       name={`bg-${it.id}`}
                       value={level}
                       checked={background[it.id] === level}
+                      disabled={busy}
                       onChange={() => setBackground((prev) => ({ ...prev, [it.id]: level }))}
                     />
                     {level + 1}
@@ -430,19 +509,6 @@ export function SusModal({ open, onClose }: Props) {
             </div>
           ))}
         </div>
-        {/* The one question that asks WHICH software. Optional: a participant
-            with no such experience has nothing to name. */}
-        <label className="sus-modal__followup" htmlFor="bg-other-text">
-          {t('Which software? (optional)', language)}
-        </label>
-        <input
-          id="bg-other-text"
-          type="text"
-          className="sus-modal__followup-input"
-          value={otherEditors}
-          maxLength={300}
-          onChange={(e) => setOtherEditors(e.target.value)}
-        />
 
         {proAsked && (
           <>
@@ -457,6 +523,7 @@ export function SusModal({ open, onClose }: Props) {
                     className="sus-modal__followup-input"
                     value={typeof pro[q.id] === 'string' ? (pro[q.id] as string) : ''}
                     maxLength={300}
+                    disabled={busy}
                     onChange={(e) => setPro((prev) => ({ ...prev, [q.id]: e.target.value }))}
                   />
                 </label>
@@ -477,6 +544,7 @@ export function SusModal({ open, onClose }: Props) {
                           name={`pro-${q.id}`}
                           value={level}
                           checked={pro[q.id] === level}
+                          disabled={busy}
                           onChange={() => setPro((prev) => ({ ...prev, [q.id]: level }))}
                         />
                         <span className="sus-modal__level-label">{t(label, language)}</span>
@@ -519,13 +587,15 @@ export function SusModal({ open, onClose }: Props) {
                       name={`sus-${i}`}
                       value={v}
                       checked={responses[i] === v}
-                      onChange={() =>
+                      disabled={busy}
+                      onChange={() => {
+                        susAnswerLangRef.current[i] = language;
                         setResponses((prev) => {
                           const next = prev.slice();
                           next[i] = v;
                           return next;
-                        })
-                      }
+                        });
+                      }}
                     />
                     {v}
                   </label>
@@ -542,18 +612,24 @@ export function SusModal({ open, onClose }: Props) {
           id="sus-comment"
           className="sus-modal__comment"
           value={comment}
+          disabled={busy}
           onChange={(e) => setComment(e.target.value)}
           rows={3}
         />
 
+        {busy && (
+          <div className="csv-import-modal__message" role="status">
+            {t('Packing your answers and the session data…', language)}
+          </div>
+        )}
         <div className="csv-import-modal__buttons">
-          <button type="button" className="csv-import-modal__button" onClick={onClose}>
+          <button type="button" className="csv-import-modal__button" disabled={busy} onClick={onClose}>
             {t('Back to the editor', language)}
           </button>
           <button
             type="button"
             className="csv-import-modal__button csv-import-modal__button--yes"
-            disabled={!complete}
+            disabled={!complete || busy}
             title={complete ? undefined : t('Answer every scale question first', language)}
             onClick={handleSubmit}
           >

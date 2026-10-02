@@ -10,19 +10,19 @@
  * public, so the listing password never enters it. Set `EVAL_UPLOAD_URL` to
  * '' to disable.
  *
- * `EVAL_UPLOAD_URL` is RELATIVE, so it resolves against whichever host served
- * the app. It is CSP-legal ('self') on every host, but it reaches the
- * endpoint from only one (measured 2026-09-11):
- *   - alvismisjuns.lv/fastshaders/ → the endpoint → 'ok';
- *   - fs.sferas.lv, the STUDY host participants are sent to (deploy:sferas),
- *     is a static nginx container with no endpoint → 404 → 'failed';
+ * WHICH URL is decided per BUILD. The default is RELATIVE, so it resolves
+ * against whichever host served the app and stays CSP-legal ('self'):
+ *   - alvismisjuns.lv/fastshaders/ (and www.) → the endpoint → 'ok';
  *   - GitHub Pages → the POST reaches GitHub's edge → 405 → 'failed'.
- * Pointing the study host at alvismisjuns is a separate fix that needs server
- * work (CORS on upload.php for the OPTIONS preflight AND the POST,
- * `https://alvismisjuns.lv` in the sferas build's connect-src, and an
- * absolute URL here). Until then every fs.sferas.lv package degrades to the
- * download + mail floor, the standing rule that a server endpoint never
- * replaces the offline-capable path.
+ * fs.sferas.lv, the STUDY host participants are sent to, is a static nginx
+ * container with no endpoint, so the relative URL 404ed there and every study
+ * package read "Upload failed." (reported 2026-10-02). Its build therefore
+ * names alvismisjuns's endpoint ABSOLUTELY — `FS_EVAL_UPLOAD_URL` in
+ * scripts/deploy-sferas.sh, which vite.config.ts also adds to that build's
+ * connect-src — and upload.php answers the CORS preflight AND the POST for
+ * exactly that origin. Without the POST's Allow-Origin the browser would hide
+ * the response, and a package the server STORED would still read 'failed'.
+ * deploy-sferas.sh fails its verification if the preflight is not answered.
  *
  * The upload is ALWAYS in addition to the download, never instead of it —
  * the downloaded zip on the study machine is the in-person safety net, and a
@@ -34,8 +34,14 @@
  * controls.
  */
 
-/** RELATIVE, so it resolves against the serving host; only alvismisjuns has the endpoint (see the header). Empty = disabled. */
-export const EVAL_UPLOAD_URL: string = '/fastshaders-eval/upload.php';
+/**
+ * The build's FS_EVAL_UPLOAD_URL override when there is one (the fs.sferas.lv
+ * build's absolute alvismisjuns URL), else the RELATIVE default, which only
+ * alvismisjuns serves (see the header). Empty = disabled. The `typeof` guard
+ * keeps the module importable in bare node, where no Vite define exists.
+ */
+export const EVAL_UPLOAD_URL: string =
+  (typeof __FS_EVAL_UPLOAD_URL__ === 'string' && __FS_EVAL_UPLOAD_URL__) || '/fastshaders-eval/upload.php';
 /** Must match $SECRET in server/fastshaders-eval-upload.php. */
 export const EVAL_UPLOAD_KEY: string = 'fsx-ecec3b0ce84df95b09ca';
 
@@ -107,9 +113,10 @@ export async function uploadEvalPackage(
     return 'failed';
   } finally {
     // `finally`, not a line after the await: a REJECTED fetch is the ordinary
-    // case here (offline study machine, DNS/TLS failure, or a CORS rejection
-    // once the URL points cross-origin — on today's relative URL a 404/405
-    // RESOLVES with ok=false instead) and used to skip the clear outright,
+    // case here (offline study machine, DNS/TLS failure, or — on the
+    // cross-origin sferas build — a refused preflight or a connect-src that
+    // lacks the endpoint; a 404/405 on a relative URL RESOLVES with ok=false
+    // instead) and used to skip the clear outright,
     // stranding the timer plus its closure over the controller for the full
     // 30 s after the caller had already moved on. Aborting a settled
     // controller is a no-op, so this was only hygiene — but it is exactly the

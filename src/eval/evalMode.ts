@@ -36,13 +36,13 @@ export const EVAL_SCHEMA = 'fs-eval-1';
  * package says which wording its participant agreed to. BUMP IT whenever the
  * text changes materially; the per-version history is in docs/dev/eval-mode.md.
  */
-export const CONSENT_TEXT_VERSION = 'consent-8';
+export const CONSENT_TEXT_VERSION = 'consent-9';
 
 /**
- * The two addresses the study app is served from. NB the upload target is a
- * RELATIVE path (`evalUpload.ts`) and only alvismisjuns.lv has the endpoint,
- * so from fs.sferas.lv the upload 404s today (see evalUpload.ts's header for
- * the fix it needs). They are named here for the reader; the consent text
+ * The two addresses the study app is served from. Only alvismisjuns.lv has
+ * the upload endpoint: its build posts there by a RELATIVE path, while the
+ * fs.sferas.lv build names it absolutely and the endpoint admits that origin
+ * by CORS (see evalUpload.ts's header). They are named here for the reader; the consent text
  * spells them literally,
  * because in this codebase the English sentence IS the i18n key and an
  * interpolated constant would never match an entry in lv.json.

@@ -22,10 +22,11 @@ afterEach(() => {
 });
 
 describe('uploadEvalPackage', () => {
-  it('points at the study endpoint as a RELATIVE path', async () => {
+  it('points at the study endpoint as a RELATIVE path by default', async () => {
     // Relative keeps the POST inside the app's own CSP (`connect-src 'self' …`)
     // on every host — but it also means it only reaches an endpoint where one
-    // exists (alvismisjuns.lv; fs.sferas.lv 404s, see evalUpload.ts's header).
+    // exists (alvismisjuns.lv). vitest runs the default build (no
+    // FS_EVAL_UPLOAD_URL); the fs.sferas.lv build overrides it, pinned below.
     expect(EVAL_UPLOAD_URL).toBe('/fastshaders-eval/upload.php');
     expect(EVAL_UPLOAD_URL.startsWith('/')).toBe(true);
   });
@@ -130,6 +131,121 @@ describe('SusModal renders the too-large outcome', () => {
     expect(sus).toContain(`t('${N4_KEY}', language)`);
     expect(ui[N4_KEY]).toContain('{size}');
     expect(ui[N4_KEY]).toContain('64 MB');
+  });
+});
+
+describe('the study host posts to alvismisjuns cross-origin', () => {
+  // fs.sferas.lv is static nginx: the relative default 404ed there, so every
+  // study package read "Upload failed." (reported 2026-10-02). Four pieces must
+  // agree, and each lives in a different file: the sferas build's absolute URL,
+  // its connect-src, and the endpoint's preflight AND POST answers.
+  const sferas = read('../../scripts/deploy-sferas.sh');
+  const vite = read('../../vite.config.ts');
+  const php = read('../../server/fastshaders-eval-upload.php');
+  const ENDPOINT = 'https://alvismisjuns.lv/fastshaders-eval/upload.php';
+
+  const shellVar = (name: string) => sferas.match(new RegExp(`^${name}="([^"]*)"`, 'm'))?.[1];
+  const allowList = (header: string) =>
+    (php.match(new RegExp(`header\\('${header}: ([^']*)'\\)`))?.[1] ?? '')
+      .split(',')
+      .map((h) => h.trim().toLowerCase())
+      .filter(Boolean);
+
+  it('the sferas build names the endpoint absolutely, through the vite define', () => {
+    expect(shellVar('UPLOAD_URL')).toBe(ENDPOINT);
+    expect(shellVar('ORIGIN')).toBe('https://fs.sferas.lv');
+    expect(sferas).toMatch(/FS_EVAL_UPLOAD_URL="\$UPLOAD_URL"\s*\\\n\s*npm run build/);
+    expect(vite).toContain('checkedEvalUploadUrl(process.env.FS_EVAL_UPLOAD_URL');
+    expect(vite).toContain('__FS_EVAL_UPLOAD_URL__: JSON.stringify(FS_EVAL_UPLOAD_URL)');
+    expect(read('./evalUpload.ts')).toContain('__FS_EVAL_UPLOAD_URL__');
+  });
+
+  it("an absolute endpoint's origin joins the build's connect-src", () => {
+    expect(vite).toMatch(/const CONNECT_SRC = \[[\s\S]*?EVAL_UPLOAD_ORIGIN[\s\S]*?\]/);
+    expect(vite).toContain('`connect-src ${CONNECT_SRC}`');
+  });
+
+  it('the endpoint admits exactly the study origin, never a wildcard', () => {
+    const list = php.match(/^\$ALLOWED_ORIGINS\s*=\s*\[([^\]]*)\];/m);
+    expect(list, '$ALLOWED_ORIGINS').not.toBeNull();
+    const origins = [...list![1].matchAll(/'([^']*)'/g)].map((m) => m[1]);
+    expect(origins).toEqual([shellVar('ORIGIN')]);
+    expect(php).not.toMatch(/Access-Control-Allow-Origin:\s*\*/);
+    // Echoed back only after an exact, strict-typed membership test.
+    expect(php).toMatch(/in_array\(\$origin, \$ALLOWED_ORIGINS, true\)/);
+  });
+
+  it('answers the preflight, and sets Allow-Origin before any refusal can exit', () => {
+    const at = (needle: string) => {
+      const i = php.indexOf(needle);
+      expect(i, needle).toBeGreaterThan(-1);
+      return i;
+    };
+    const allowOrigin = at("header('Access-Control-Allow-Origin: '");
+    const preflight = at("=== 'OPTIONS') { http_response_code(204); exit; }");
+    // Every refusal below must carry the header too, or the browser hides the
+    // status from fetch(); and the preflight must be answered before POST-only.
+    expect(allowOrigin).toBeLessThan(preflight);
+    expect(preflight).toBeLessThan(at("!== 'POST'"));
+    expect(preflight).toBeLessThan(at('hash_equals('));
+    expect(allowList('Access-Control-Allow-Methods')).toContain('post');
+  });
+
+  it('allows every header uploadEvalPackage actually sends', async () => {
+    // A header added to the fetch but not to Allow-Headers fails ONLY
+    // cross-origin — i.e. only on the study host, and only as "Upload failed.".
+    const fetchSpy = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal('fetch', fetchSpy);
+    await uploadEvalPackage('fastshaders-eval-p01-202610021200.zip', bytes, ENDPOINT, 'k');
+    const [, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    const sent = Object.keys(init.headers as Record<string, string>).map((h) => h.toLowerCase());
+    expect(sent.length).toBeGreaterThan(0);
+    const allowed = allowList('Access-Control-Allow-Headers');
+    for (const h of sent) expect(allowed, `${h} is not in Access-Control-Allow-Headers`).toContain(h);
+    expect(init.method).toBe('POST');
+    expect(init.credentials, 'no cookies cross-origin, so no Allow-Credentials').toBeUndefined();
+  });
+
+  it('both deploy gates judge the live preflight the way a browser does', () => {
+    // Allow-Origin alone passed a preflight Chrome rejects: a 405 that still
+    // carries it, or an Allow-Headers list one header short. Both gates also
+    // require a 2xx and every header the client sends, and ask for exactly
+    // the template's list (pinned ⊇ the client above), so a header added to the
+    // client fails the DEPLOY while the live endpoint still lacks it.
+    const endpoint = read('../../scripts/deploy-eval-endpoint.sh');
+    expect(sferas).toContain('-X OPTIONS "$UPLOAD_URL"');
+    expect(sferas).toContain('-H "Access-Control-Request-Headers: $REQ_HEADERS"');
+    expect(sferas).toMatch(/\[ "\$PF_OK" = 1 \] && \[ "\$CORS" = "\$ORIGIN" \] && \[ -z "\$MISSING" \]/);
+    expect(endpoint).toContain('-H "Access-Control-Request-Headers: $REQ_HEADERS"');
+    expect(endpoint).toMatch(
+      /\[ "\$STUDY_OK" = 1 \] && \[ "\$CORS_STUDY" = "https:\/\/fs\.sferas\.lv" \] && \[ -z "\$MISSING" \] && \[ -z "\$CORS_OTHER" \]/,
+    );
+    for (const script of [sferas, endpoint]) expect(script).toMatch(/case "\$\w+_STATUS" in 2\?\?\)/);
+  });
+
+  it('the sferas deploy judges the endpoint BEFORE it builds or uploads', () => {
+    // Checked after the upload, a lagging endpoint failed the deploy with the
+    // new client already live — every study upload broken, not just the deploy.
+    const gate = sferas.indexOf('[ "$PF_OK" = 1 ] && [ "$CORS" = "$ORIGIN" ] && [ -z "$MISSING" ]');
+    expect(gate).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(sferas.indexOf('==> building'));
+    expect(gate).toBeLessThan(sferas.indexOf('==> uploading'));
+    const endpoint = read('../../scripts/deploy-eval-endpoint.sh');
+    expect(endpoint.indexOf('REQ_HEADERS="$(sed')).toBeLessThan(endpoint.indexOf('==> uploading'));
+  });
+
+  it("the gates' header extraction reads the template's Allow-Headers line", () => {
+    // Both scripts take REQ_HEADERS with this sed expression; if the PHP line
+    // is ever reformatted they stop with "cannot read Access-Control-Allow-Headers"
+    // at deploy time — this catches it in the suite instead.
+    for (const script of [sferas, read('../../scripts/deploy-eval-endpoint.sh')]) {
+      expect(script).toContain(`sed -n "s/.*header('Access-Control-Allow-Headers: \\([^']*\\)').*/\\1/p"`);
+    }
+    const extracted = php
+      .split('\n')
+      .map((line) => line.match(/.*header\('Access-Control-Allow-Headers: ([^']*)'\).*/)?.[1])
+      .find((v) => v !== undefined);
+    expect(extracted?.toLowerCase().replace(/ /g, '').split(',')).toEqual(allowList('Access-Control-Allow-Headers'));
   });
 });
 

@@ -7,24 +7,23 @@ import {
 } from './background';
 
 describe('the pre-SUS experience questions', () => {
-  it('asks the four the study defined, on one none→expert scale', () => {
-    expect(BACKGROUND_ITEMS.map((i) => i.id)).toEqual([
-      'blender', 'unreal', 'otherNodeEditors', 'shaderCode',
-    ]);
+  it('asks the three the study defined, on one none→expert scale', () => {
+    // 'otherNodeEditors' (with its "Which software?" box) was REMOVED on
+    // 2026-10-02 — the shader-knowledge question was already the fourth item
+    // and is now the third. The id must not come back under a different
+    // question, or older packages would read as answers to it.
+    expect(BACKGROUND_ITEMS.map((i) => i.id)).toEqual(['blender', 'unreal', 'shaderCode']);
+    expect(BACKGROUND_ITEMS.find((i) => i.id === 'shaderCode')?.question).toBe(
+      'Technical knowledge of shader programming (e.g. GLSL, HLSL)',
+    );
     expect(EXPERIENCE_LEVELS[0]).toBe('None');
     expect(EXPERIENCE_LEVELS[EXPERIENCE_LEVELS.length - 1]).toBe('Expert');
     expect(EXPERIENCE_LEVELS).toHaveLength(5);
   });
 
-  it('only the node-editor question asks WHICH software', () => {
-    const withFollowUp = BACKGROUND_ITEMS.filter((i) => i.followUp);
-    expect(withFollowUp.map((i) => i.id)).toEqual(['otherNodeEditors']);
-  });
-
-  it('requires every scale but never the free text', () => {
-    // A participant with no other-editor experience has nothing to name, so
-    // the text must not block submit; the four levels are quick and are the
-    // covariate the SUS score is read against, so they are required.
+  it('requires every scale', () => {
+    // The levels are quick and are the covariate the SUS score is read
+    // against, so every one of them gates submit.
     const all = Object.fromEntries(BACKGROUND_ITEMS.map((i) => [i.id, 0]));
     expect(backgroundComplete(all)).toBe(true);
     expect(backgroundComplete({ ...all, blender: null })).toBe(false);
@@ -40,26 +39,24 @@ describe('the pre-SUS experience questions', () => {
   });
 
   it('records the level AND its label, so 2 never has to be guessed at', () => {
-    const rec = buildBackgroundRecord(
-      { blender: 4, unreal: 0, otherNodeEditors: 2, shaderCode: 1 },
-      '  Houdini COPs, intermediate  ',
-    ) as { items: { id: string; level: number; label: string }[]; otherNodeEditorsText?: string };
+    const rec = buildBackgroundRecord({ blender: 4, unreal: 0, shaderCode: 2 }) as {
+      items: { id: string; level: number; label: string }[];
+    };
     expect(rec.items.map((i) => [i.id, i.level, i.label])).toEqual([
       ['blender', 4, 'Expert'],
       ['unreal', 0, 'None'],
-      ['otherNodeEditors', 2, 'Intermediate'],
-      ['shaderCode', 1, 'Beginner'],
+      ['shaderCode', 2, 'Intermediate'],
     ]);
-    expect(rec.otherNodeEditorsText).toBe('Houdini COPs, intermediate');
   });
 
-  it('omits the free text when it is blank, and keeps unanswered levels null', () => {
-    const rec = buildBackgroundRecord({ blender: 3 }, '   ') as {
+  it('keeps unanswered levels null, and records no free text', () => {
+    const rec = buildBackgroundRecord({ blender: 3 }) as Record<string, unknown> & {
       items: { level: number | null; label: string | null }[];
-      otherNodeEditorsText?: string;
     };
-    expect('otherNodeEditorsText' in rec).toBe(false);
     expect(rec.items[1].level).toBeNull();
     expect(rec.items[1].label).toBeNull();
+    // The retired "Which software?" box wrote this key; nothing may any more.
+    expect('otherNodeEditorsText' in rec).toBe(false);
+    expect(Object.keys(rec).sort()).toEqual(['items', 'scale']);
   });
 });

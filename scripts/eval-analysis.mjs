@@ -122,6 +122,47 @@ if (zipPaths.length === 0) {
   process.exit(1);
 }
 
+/**
+ * Which language version of the SUS a package ANSWERED. Since consent-9 the
+ * questionnaire has its own EN/LV switch, so sus.json notes the language of
+ * every item and says 'mixed' when the answers span both — such a form belongs
+ * to neither version. An older package records only the UI language at
+ * Submit, so a `lang-switch` while the questionnaire was open makes its
+ * language uncertain ('lv?'). "Open" runs from the FIRST sus-open after the
+ * LAST reload: answers survive closing and reopening the form, so a switch
+ * between two openings counts, but not a reload (the form's answers live in
+ * React state only), so a switch before one does not. Neither case is a
+ * FAILURE (the exit code stays 0); both are reported so the split can be
+ * stated honestly.
+ */
+function susFormLanguage(sus, events) {
+  const language = sus.language ?? '?';
+  const perItem = (sus.items ?? []).map((it) => it.language).filter(Boolean);
+  if (language === 'mixed') {
+    const n = (l) => perItem.filter((x) => x === l).length;
+    return {
+      language,
+      problem: `SUS answered in more than one language (en ×${n('en')}, lv ×${n('lv')}) — report it apart from both language versions`,
+    };
+  }
+  if (perItem.length > 0) return { language };
+  const submit = [...events].reverse().find((e) => e.type === 'sus-submit');
+  const seam = submit && [...events].reverse().find(
+    (e) => (e.type === 'recovered' || e.type === 'session-start') && e.t <= submit.t,
+  );
+  const firstOpen = submit && events.find(
+    (e) => e.type === 'sus-open' && e.t <= submit.t && (!seam || e.t >= seam.t),
+  );
+  const switches = firstOpen
+    ? events.filter((e) => e.type === 'lang-switch' && e.t >= firstOpen.t && e.t <= submit.t)
+    : [];
+  if (switches.length === 0) return { language };
+  return {
+    language: `${language}?`,
+    problem: `the language changed while the questionnaire was open (${switches.map((e) => `${e.from}→${e.to}`).join(', ')}), and this package predates per-answer languages: its "${language}" is only the language at Submit`,
+  };
+}
+
 const rows = [];
 const problems = [];
 for (const zp of zipPaths) {
@@ -148,6 +189,9 @@ for (const zp of zipPaths) {
     if (recomputed == null) problems.push(`${name}: SUS responses invalid/incomplete`);
     else if (recomputed !== sus.score) problems.push(`${name}: stored SUS ${sus.score} ≠ recomputed ${recomputed}`);
 
+    const formLanguage = susFormLanguage(sus, events.events ?? []);
+    if (formLanguage.problem) problems.push(`${name}: ${formLanguage.problem}`);
+
     const s = summaryFile.summary;
     if ((events.events?.length ?? 0) !== s.eventCount) {
       problems.push(`${name}: event count mismatch (${events.events?.length} vs summary ${s.eventCount})`);
@@ -170,8 +214,11 @@ for (const zp of zipPaths) {
       exp: Object.fromEntries(
         ((sus.background?.items) ?? []).map((it) => [it.id, it.level ?? '']),
       ),
+      // Packages from before consent-9 only: the retired "other node-based
+      // editors" item's free text (the item was removed on 2026-10-02).
       expOther: sus.background?.otherNodeEditorsText ?? '',
-      language: sus.language ?? '?',
+      language: formLanguage.language,
+      languageAtSubmit: sus.languageAtSubmit ?? '',
       sus: recomputed ?? sus.score,
       responses,
       wallMin: s.wallMs / 60000,
@@ -220,14 +267,16 @@ for (const [id, n] of bySession) {
 
 const fmt = (v, d = 1) => (v == null ? '—' : typeof v === 'number' ? v.toFixed(d) : String(v));
 console.log(`# FastShaders eval analysis — ${rows.length} package(s)\n`);
-const EXP = ['blender', 'unreal', 'otherNodeEditors', 'shaderCode'];
-console.log('| participant | task | costbar | lang | SUS | active min | node adds | connects | undos | blend/unreal/other/code | session |');
+// The questions asked since consent-9. The retired 'otherNodeEditors' level
+// (and its free text) still reach the CSV for older packages — never the table.
+const EXP = ['blender', 'unreal', 'shaderCode'];
+console.log('| participant | task | costbar | lang | SUS | active min | node adds | connects | undos | blend/unreal/code | session |');
 console.log('|---|---|---|---|---|---|---|---|---|---|---|');
 for (const r of rows) {
   const exp = EXP.map((k) => (r.exp?.[k] === '' || r.exp?.[k] == null ? '–' : r.exp[k])).join('/');
   console.log(`| ${r.participant} | ${r.task || '—'} | ${r.costBarVisible === '' ? '—' : (r.costBarVisible === 'true' ? 'on' : 'OFF')} | ${r.language} | ${fmt(r.sus)} | ${fmt(r.activeMin, 2)} | ${r.nodeAdds} | ${r.connects} | ${r.undos} | ${exp} | ${r.sessionId} |`);
 }
-console.log('\n(experience 0–4 = none…expert, in the order Blender / Unreal / other node editors / shader code)');
+console.log('\n(experience 0–4 = none…expert, in the order Blender / Unreal / shader code; a package from before consent-9 also answered "other node editors", which is in the CSV only)');
 
 const scores = rows.map((r) => r.sus).filter((v) => typeof v === 'number');
 if (scores.length >= 2) {
@@ -266,7 +315,7 @@ if (scores.length >= 2) {
     problems.push(`packages were priced by DIFFERENT cost tables (${tables.join(', ')}) — point totals are not comparable across them`);
   }
   const langs = [...new Set(rows.map((r) => r.language))];
-  console.log(`- language versions answered: ${langs.map((l) => `${l}×${rows.filter((r) => r.language === l).length}`).join(', ')} (report the split; the LV form is a non-validated adaptation)`);
+  console.log(`- language versions answered: ${langs.map((l) => `${l}×${rows.filter((r) => r.language === l).length}`).join(', ')} (report the split; the LV form is a non-validated adaptation; "mixed" = answered partly in each, "lv?"/"en?" = an older package whose language changed while the form was open)`);
 
   // Per-item means — the Lewis & Sauro (2018) item-diagnosis view.
   const itemMeans = Array.from({ length: 10 }, (_, i) => {
@@ -284,7 +333,7 @@ if (problems.length) {
 }
 
 // CSV — one row per participant, spreadsheet-ready.
-const cols = ['file', 'sessionId', 'participant', 'expBlender', 'expUnreal', 'expOtherNodeEditors', 'expShaderCode', 'expOther', 'task', 'briefBudget', 'costBarVisible', 'costTable', 'device', 'hasShot', 'budgetCrossings', 'overBudgetMin', 'language', 'sus', 'activeMin', 'wallMin', 'idleThresholdS', 'events', 'nodeAdds', 'distinctTypes', 'connects', 'undos', 'redos', 'applies', 'rebuilds', 'ttfConnectS', 'ttfNodeS', 'comment'];
+const cols = ['file', 'sessionId', 'participant', 'expBlender', 'expUnreal', 'expOtherNodeEditors', 'expShaderCode', 'expOther', 'task', 'briefBudget', 'costBarVisible', 'costTable', 'device', 'hasShot', 'budgetCrossings', 'overBudgetMin', 'language', 'languageAtSubmit', 'sus', 'activeMin', 'wallMin', 'idleThresholdS', 'events', 'nodeAdds', 'distinctTypes', 'connects', 'undos', 'redos', 'applies', 'rebuilds', 'ttfConnectS', 'ttfNodeS', 'comment'];
 const esc = (v) => {
   let s = v == null ? '' : String(v);
   if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;

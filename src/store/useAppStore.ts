@@ -2934,8 +2934,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
     saveString('fs:lang', lang);
     applyLangAttribute(lang);
     set({ language: lang });
-    // The ONE chokepoint for both switches (toolbar + the consent/disclosure
-    // dialogs'); a switch before Agree is a no-op, since no session is running.
+    // The ONE chokepoint for the toolbar's switch and every study dialog's
+    // LangSwitch; a switch before Agree or after Submit (the thank-you screen)
+    // logs nothing, since no session is running then.
     if (from !== lang) evalLog('lang-switch', { from, to: lang });
   },
 
