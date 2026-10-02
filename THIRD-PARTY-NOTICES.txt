@@ -1,0 +1,57 @@
+FastShaders — Third-party notices
+=================================
+
+FastShaders itself is MIT-licensed (© Alvis Misjuns; see LICENSE in the source
+repository, https://github.com/Alvis1/FastShaders). Distributed builds — the
+web app and the desktop binaries — bundle the third-party components below.
+This file travels with every build so their notice requirements travel too.
+
+Runtime / rendering
+-------------------
+- three.js (r184, WebGPU build incl. TSL) — MIT.
+  © 2010–2026 three.js authors. https://threejs.org
+- A-Frame 1.8.0 (bundled as a-frame-180-a-01.min.js, built on super-three) — MIT.
+  © A-Frame authors. https://aframe.io
+- aframe-orbit-controls — MIT. https://github.com/supermedium/superframe
+
+Editor
+------
+- React 18 + React DOM — MIT. © Meta Platforms, Inc.
+- @xyflow/react (React Flow) v12 — MIT. © webkid GmbH. https://reactflow.dev
+- Monaco Editor + @monaco-editor/react — MIT. © Microsoft Corporation.
+- zustand v5 — MIT. © Paul Henschel and contributors.
+- @babel/parser + @babel/traverse — MIT. © Sebastian McKenzie and contributors.
+- @dagrejs/dagre — MIT. © Chris Pettitt and contributors.
+- Tauri v2 (desktop shell) — MIT OR Apache-2.0. © Tauri Programme within
+  The Commons Conservancy.
+
+Fonts (self-hosted woff2 subsets via @fontsource)
+-------------------------------------------------
+- Inter — SIL Open Font License 1.1. © The Inter Project Authors
+  (https://github.com/rsms/inter).
+- JetBrains Mono — SIL Open Font License 1.1. © 2020 The JetBrains Mono
+  Project Authors (https://github.com/JetBrains/JetBrainsMono).
+
+Scientific colormap data (src/utils/colormapData.ts, baked into the app)
+------------------------------------------------------------------------
+- viridis, magma, inferno, plasma, cividis, cool-warm — via matplotlib, CC0.
+  (cividis: Nuñez, Anderton & Renslow, PLOS ONE 2018; cool-warm: Moreland 2009.)
+- batlow, lajolla, vik, roma — Fabio Crameri, "Scientific colour maps", MIT.
+  https://www.fabiocrameri.ch/colourmaps/
+- turbo — © 2019 Google LLC (Anton Mikhailov), Apache License 2.0.
+  http://www.apache.org/licenses/LICENSE-2.0
+- CET isoluminant maps — Peter Kovesi, "CET Perceptually Uniform Colour Maps",
+  CC-BY 4.0, via the colorcet distribution. https://colorcet.com
+
+3D preview models
+-----------------
+- Utah teapot — Martin Newell (University of Utah); public-domain classic.
+- Stanford bunny — Stanford University Computer Graphics Laboratory
+  (https://graphics.stanford.edu/data/3Dscanrep/); redistribution permitted
+  with attribution.
+
+Full licence texts for the npm-distributed packages above ship in their
+packages (node_modules/<name>/LICENSE) and are available from the linked
+project pages. MIT- and OFL-licensed components require this copyright notice
+to accompany distributed copies; Apache-2.0 (turbo) additionally requires the
+licence link above; CC-BY (CET maps) requires the attribution given above.
