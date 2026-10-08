@@ -23,7 +23,13 @@
  * chains: `a.mix(b, t)`, `a.smoothstep(b, c)` and `a.step(b)` all put the
  * RECEIVER in a different slot than the positional form (see the dataviz
  * contract test), while the free form is positional for every one of them.
+ *
+ * `kind: 'js'` rows are PLAIN-JS declarations, not `Fn`s (the LUT bakers —
+ * their text and its constraints live in engine/lutHelperText.ts). codeToGraph
+ * skips them by name whatever their init shape; a `support` row (fsLut) is no
+ * def's helper and ships only through another row's `requires`.
  */
+import { FS_LUT_LINES, FS_COLOR_RAMP_LINES } from './lutHelperText';
 
 export interface HelperAlias {
   /** The registry TYPE a call to this helper parses back into. */
@@ -43,6 +49,13 @@ export interface ModuleHelper {
   lines: string[];
   /** `three/tsl` names the body calls — force-imported when the helper ships. */
   imports: string[];
+  /** 'js' = a plain-JS module-scope declaration (never `= Fn(`): codeToGraph skips it BY NAME whatever its init
+   *  shape, and it is not graph content. Absent = a TSL `Fn` helper (every helper before 2026-10). */
+  kind?: 'js';
+  /** Other helpers this one calls at run time; graphToCode emits them too (table order). */
+  requires?: readonly string[];
+  /** A shared core no def names (fsLut): emitted only through another helper's `requires`. */
+  support?: true;
 }
 
 /**
@@ -103,6 +116,36 @@ const BRIGHT_CONTRAST_LINES = [
   '  const a = add(float(1), contrast);',
   '  const b = sub(bright, mul(contrast, float(0.5)));',
   '  return max(add(mul(vec3(col), a), b), float(0));',
+  '});',
+];
+
+/**
+ * Fresnel — Blender's, Cycles `fresnel_dielectric_cos` verbatim, plus Layer
+ * Weight's Facing at Blend 0.5 (1 − |N·V|), as ONE vec2 so both outputs share
+ * the dot product (the node's sockets are its .x/.y). Two departures: η is
+ * clamped to [1e-5, 1e4] (Cycles' low clamp; the high one stops η² overflowing
+ * float32 into NaN pixels), and `max(g + c, 1e-6)` guards the 0/0 a WGSL
+ * `select` still evaluates on the TIR branch. A wired normal is NOT normalized
+ * (Cycles doesn't; a zero normal gives c = 0 → Fresnel 1, Facing 1, never NaN).
+ * V = normalize(cameraPosition − pw), world space (per eye in XR). The normal
+ * and the world position are ARGUMENTS and the body names no geometry global,
+ * so a Splat Output Fn binds them to the splat's own `n`/`pw`. `frontFacing`
+ * is `true` outside the fragment stage (three's FrontFacingNode), so the splat
+ * Fns' vertex stage compiles. The parameter is `eta`: `ior` is a three/tsl
+ * export, and buildShaderModule imports every identifier it finds.
+ */
+const FS_FRESNEL_LINES = [
+  'const fsFresnel = Fn(([eta, n, pw]) => {',
+  '  const v = normalize(sub(cameraPosition, pw));',
+  '  const c = abs(dot(vec3(n), v));',
+  '  const e = clamp(float(eta), float(1e-5), float(1e4));',
+  '  const r = select(frontFacing, e, div(float(1), e));',
+  '  const g2 = add(sub(mul(r, r), float(1)), mul(c, c));',
+  '  const g = sqrt(max(g2, float(0)));',
+  '  const a = div(sub(g, c), max(add(g, c), float(1e-6)));',
+  '  const b = div(sub(mul(c, add(g, c)), float(1)), add(mul(c, sub(g, c)), float(1)));',
+  '  const fr = select(greaterThan(g2, float(0)), mul(mul(float(0.5), mul(a, a)), add(float(1), mul(b, b))), float(1));',
+  '  return vec2(fr, sub(float(1), c));',
   '});',
 ];
 
@@ -436,6 +479,11 @@ export const MODULE_HELPERS: ReadonlyMap<string, ModuleHelper> = new Map<string,
   ['sdfRevolve', { lines: SDF_REVOLVE_LINES, imports: ['vec2', 'sub', 'length'] }],
   ['sdfMask', { lines: SDF_MASK_LINES, imports: ['clamp', 'sub', 'float', 'div', 'max'] }],
   ['rayDirection', { lines: RAY_DIRECTION_LINES, imports: ['normalize', 'sub', 'positionWorld', 'cameraPosition'] }],
+  ['fsFresnel', { lines: FS_FRESNEL_LINES, imports: ['normalize', 'sub', 'cameraPosition', 'abs', 'dot', 'vec3', 'clamp', 'float', 'select', 'frontFacing', 'div', 'add', 'mul', 'sqrt', 'max', 'greaterThan', 'vec2'] }],
+  // Plain-JS rows (engine/lutHelperText.ts) — APPENDED, so every module emitted
+  // before them keeps its bytes; each ships only when a node (or `requires`) asks.
+  ['fsLut', { lines: [...FS_LUT_LINES], imports: ['texture', 'vec2', 'float'], kind: 'js', support: true }],
+  ['fsColorRamp', { lines: [...FS_COLOR_RAMP_LINES], imports: [], kind: 'js', requires: ['fsLut'] }],
 ]);
 
 /** Every emitted helper name — what codeToGraph skips as a declarator. */

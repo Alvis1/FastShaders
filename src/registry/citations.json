@@ -43,6 +43,14 @@
     "brightContrast": {
       "ref": "Blender Foundation. Blender, Brightness/Contrast shader node — Cycles svm_brightness_contrast (intern/cycles/kernel/svm/color_util.h): a = 1 + contrast, b = brightness − 0.5·contrast, max(a·color + b, 0) per channel. Reproduced exactly, with Blender's defaults.",
       "url": "https://projects.blender.org/blender/blender/src/branch/main/intern/cycles/kernel/svm/color_util.h"
+    },
+    "fresnel": {
+      "ref": "Blender Foundation. Blender, Fresnel shader node — Cycles svm_node_fresnel and fresnel_dielectric_cos (intern/cycles/kernel/closure/bsdf_util.h): eta = max(IOR, 1e-5), 1/eta on back faces, dielectric Fresnel of |N·V|; the Facing output is svm_node_layer_weight's Facing at Blend 0.5, 1 − |N·V|. Reproduced exactly with Blender's default IOR 1.5.",
+      "url": "https://projects.blender.org/blender/blender/src/branch/main/intern/cycles/kernel/closure/bsdf_util.h"
+    },
+    "colorRamp": {
+      "ref": "Blender Foundation. Blender, Color Ramp shader node — BKE_colorband_evaluate and BKE_colorband_evaluate_table_rgba (source/blender/blenkernel/intern/colorband.cc), key_curve_position_weights (key.cc): Linear, Constant, Ease, B-Spline and Cardinal (fc = 0.71) over a 257-entry table. Reproduced with RGB colour mode.",
+      "url": "https://projects.blender.org/blender/blender/src/branch/main/source/blender/blenkernel/intern/colorband.cc"
     }
   },
   "textures": {

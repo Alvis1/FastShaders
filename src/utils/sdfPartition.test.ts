@@ -394,6 +394,14 @@ describe('implicitRootOf — the reads an UNWIRED input makes', () => {
     expect(implicitRootOf(makeNode('x', 'wireframe', { edges: 1 }), none)).toBeNull();
   });
 
+  it('Fresnel reads the world normal while Normal is unwired, and the world position ALWAYS', async () => {
+    const { implicitRootOf } = await import('./sdfPartition');
+    expect(implicitRootOf(makeNode('f', 'fresnel'), none)).toBe('normalWorld');
+    // The view vector needs the position whatever is wired into Normal.
+    expect(implicitRootOf(makeNode('f', 'fresnel'), only('normal'))).toBe('positionWorld');
+    expect(implicitRootOf(makeNode('f', 'fresnel'), only('ior'))).toBe('normalWorld');
+  });
+
   it('everything else reads nothing implicitly: numbers, helpers, and the roots themselves', async () => {
     const { implicitRootOf } = await import('./sdfPartition');
     for (const type of ['sdCircle', 'sdBox', 'mix', 'add', 'length', 'hsl', 'append', 'time', 'float', 'positionLocal', 'uv', 'vertexColor', 'splatOutput']) {

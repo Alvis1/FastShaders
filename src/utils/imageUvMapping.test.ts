@@ -3,14 +3,22 @@ import { readFileSync } from 'node:fs';
 import { Matrix3, Vector3 } from 'three';
 import {
   readImageUvMapping,
+  readPictureRotation,
   gltfUvMatrix,
+  turnMatrix,
+  isIdentityTurn,
   sanitizeUvMappingKeys,
   withUvMapping,
+  withPictureRotation,
+  withoutLegacyTransform,
   gltfTextureValues,
   gltfSamplerValues,
+  turnSignOf,
   UV_MAPPING_KEYS,
   MAX_UV_TRANSFORM_MAGNITUDE,
   type GltfUvTransform,
+  type ImageUvSet,
+  type UvMappingPatch,
 } from './imageUvMapping';
 import { readImageTextureSpec } from './imageTextureSpec';
 
@@ -165,9 +173,117 @@ describe('gltfUvMatrix', () => {
   });
 });
 
+describe('readPictureRotation: the picture\'s turn, read strictly', () => {
+  const TAU = 2 * Math.PI;
+
+  it('reads a real number in radians, mod 2π, keeping its sign', () => {
+    expect(readPictureRotation({ rotation: 0.5 })).toBe(0.5);
+    expect(readPictureRotation({ rotation: -0.5 })).toBe(-0.5);
+    expect(readPictureRotation({ rotation: TAU + 0.5 })).toBeCloseTo(0.5, 12);
+    expect(readPictureRotation({ rotation: -TAU - 0.5 })).toBeCloseTo(-0.5, 12);
+    expect(readPictureRotation({ rotation: MAX_UV_TRANSFORM_MAGNITUDE })).toBe(MAX_UV_TRANSFORM_MAGNITUDE % TAU);
+  });
+
+  it('a whole number of turns — or float dust beside one — is exactly no turn', () => {
+    for (const r of [0, -0, TAU, -TAU, 2 * TAU, 3 * TAU, 1000 * TAU, 1e-13, -1e-13, TAU - 1e-13]) {
+      expect(Object.is(readPictureRotation({ rotation: r }), 0), String(r)).toBe(true);
+    }
+  });
+
+  it('junk is no turn, and nothing throws', () => {
+    const hostile: unknown[] = [
+      ...JUNK, 1e6 + 1, 2e6, Symbol('r'), { toString: 1 }, { valueOf: () => { throw new Error('x'); } }, 10n,
+    ];
+    for (const v of hostile) {
+      expect(Object.is(readPictureRotation({ rotation: v } as Record<string, unknown>), 0), typeof v).toBe(true);
+    }
+    expect(readPictureRotation(5 as unknown as Record<string, unknown>)).toBe(0);
+    expect(readPictureRotation(null as unknown as Record<string, unknown>)).toBe(0);
+  });
+
+  it('never enters readImageUvMapping: the turn is placement, not mapping', () => {
+    expect(readImageUvMapping({ rotation: 0.5 })).toEqual(DEFAULTS);
+  });
+});
+
+describe('turnMatrix: the turn about the picture\'s centre', () => {
+  it('is gltfUvMatrix\'s rotation at unit scale, snapped the same way', () => {
+    for (let i = -40; i <= 40; i++) {
+      const a = i * 0.37;
+      const m = gltfUvMatrix(t({ rotation: a }));
+      const r = turnMatrix(a);
+      expect([r.m00, r.m01, r.m10, r.m11], String(a)).toEqual([m.m00, m.m01, m.m10, m.m11]);
+    }
+  });
+
+  it('keeps the centre (½, ½) in place', () => {
+    for (let i = -40; i <= 40; i++) {
+      const r = turnMatrix(i * 0.37);
+      expect(r.m00 * 0.5 + r.m01 * 0.5 + r.tx).toBeCloseTo(0.5, 14);
+      expect(r.m10 * 0.5 + r.m11 * 0.5 + r.ty).toBeCloseTo(0.5, 14);
+    }
+  });
+
+  it('quarter and half turns are clean integers, never −0', () => {
+    expect(turnMatrix(Math.PI / 2)).toEqual({ m00: 0, m01: 1, m10: -1, m11: 0, tx: 0, ty: 1 });
+    expect(turnMatrix(-Math.PI / 2)).toEqual({ m00: 0, m01: -1, m10: 1, m11: 0, tx: 1, ty: 0 });
+    expect(turnMatrix(Math.PI)).toEqual({ m00: -1, m01: 0, m10: 0, m11: -1, tx: 1, ty: 1 });
+    for (const a of [Math.PI / 2, -Math.PI / 2, Math.PI, -Math.PI, 0]) {
+      for (const v of Object.values(turnMatrix(a))) expect(Object.is(v, -0), String(a)).toBe(false);
+    }
+  });
+
+  it('a whole turn, and anything but a finite number, is exactly the identity', () => {
+    const identity = { m00: 1, m01: 0, m10: 0, m11: 1, tx: 0, ty: 0 };
+    for (const a of [0, -0, 2 * Math.PI, -2 * Math.PI, 8 * Math.PI, NaN, Infinity, -Infinity]) {
+      expect(turnMatrix(a), String(a)).toEqual(identity);
+      expect(isIdentityTurn(turnMatrix(a))).toBe(true);
+    }
+    expect(turnMatrix('1' as unknown as number)).toEqual(identity);
+    expect(isIdentityTurn(turnMatrix(0.3))).toBe(false);
+  });
+});
+
+describe('withPictureRotation / withoutLegacyTransform', () => {
+  it('stores the canonical turn, which reads back exactly', () => {
+    for (const r of [0.5, -0.5, Math.PI, 7, -100.25, 1e6]) {
+      const v = withPictureRotation({}, r);
+      expect(typeof v.rotation).toBe('number');
+      expect(readPictureRotation(v)).toBe(v.rotation);
+      expect(v.rotation).toBe(readPictureRotation({ rotation: r }));
+      expect(sanitizeUvMappingKeys(v)).toBeNull();
+    }
+  });
+
+  it('deletes the key for no turn and for anything the reader would not take', () => {
+    for (const r of [0, -0, 2 * Math.PI, -4 * Math.PI, NaN, Infinity, 2e6, '1' as unknown as number]) {
+      expect(withPictureRotation({ rotation: 1, tileX: 2 }, r), String(r)).toEqual({ tileX: 2 });
+    }
+  });
+
+  it('turned and turned back is JSON-identical to a node never touched, and nothing is mutated', () => {
+    const orig: Record<string, string | number> = { imageB64: 'x', tileX: 2, flipX: 1 };
+    const on = withPictureRotation(orig, 0.75);
+    expect(on).toEqual({ ...orig, rotation: 0.75 });
+    expect(orig).toEqual({ imageB64: 'x', tileX: 2, flipX: 1 });
+    expect(JSON.stringify(withPictureRotation(on, 0))).toBe(JSON.stringify(orig));
+  });
+
+  it('withoutLegacyTransform drops the five xf keys and nothing else', () => {
+    const orig: Record<string, string | number> = {
+      imageB64: 'x', orientation: 'gltf', uvSet: 2, rotation: 0.5, tileX: 3,
+      xfOffsetX: 0.25, xfOffsetY: -0.5, xfRotation: 0.3, xfScaleX: 2, xfScaleY: 1,
+    };
+    const out = withoutLegacyTransform(orig);
+    expect(out).toEqual({ imageB64: 'x', orientation: 'gltf', uvSet: 2, rotation: 0.5, tileX: 3 });
+    expect(out).not.toBe(orig);
+    expect(orig.xfScaleX).toBe(2);
+  });
+});
+
 describe('sanitizeUvMappingKeys', () => {
   const clean: Record<string, string | number> = {
-    imageB64: 'x', orientation: 'gltf', normalGreen: 'flip', uvSet: 2,
+    imageB64: 'x', orientation: 'gltf', normalGreen: 'flip', uvSet: 2, rotation: 0.5,
     xfOffsetX: 0.25, xfOffsetY: -0.5, xfRotation: 0.3, xfScaleX: 2, xfScaleY: 1,
   };
 
@@ -201,23 +317,17 @@ describe('sanitizeUvMappingKeys', () => {
 });
 
 describe('withUvMapping', () => {
-  it('writes the canonical form: the two strings, and numbers as numbers', () => {
-    const on = withUvMapping({}, { orientation: 'gltf', normalGreenFlip: true, uvSet: 2, offsetX: 0.25, rotation: 0.3, scaleY: 3 });
-    expect(on).toEqual({ orientation: 'gltf', normalGreen: 'flip', uvSet: 2, xfOffsetX: 0.25, xfRotation: 0.3, xfScaleY: 3 });
+  it('writes the canonical form: the two strings, and the UV set as a number', () => {
+    const on = withUvMapping({}, { orientation: 'gltf', normalGreenFlip: true, uvSet: 2 });
+    expect(on).toEqual({ orientation: 'gltf', normalGreen: 'flip', uvSet: 2 });
     expect(typeof on.uvSet).toBe('number');
   });
 
   it('toggled on and back off is JSON-identical to a node never touched', () => {
     const orig: Record<string, string | number> = { imageB64: 'x', tileX: 2, flipX: 1 };
-    const on = withUvMapping(orig, {
-      orientation: 'gltf', normalGreenFlip: true, uvSet: 3,
-      offsetX: 0.25, offsetY: 0.5, rotation: 0.3, scaleX: 2, scaleY: 3,
-    });
+    const on = withUvMapping(orig, { orientation: 'gltf', normalGreenFlip: true, uvSet: 3 });
     expect(orig).toEqual({ imageB64: 'x', tileX: 2, flipX: 1 }); // not mutated
-    const off = withUvMapping(on, {
-      orientation: 'app', normalGreenFlip: false, uvSet: 0,
-      offsetX: 0, offsetY: 0, rotation: 0, scaleX: 1, scaleY: 1,
-    });
+    const off = withUvMapping(on, { orientation: 'app', normalGreenFlip: false, uvSet: 0 });
     expect(off).toEqual(orig);
     expect(JSON.stringify(off)).toBe(JSON.stringify(orig));
   });
@@ -227,17 +337,25 @@ describe('withUvMapping', () => {
     expect(v).toEqual({ orientation: 'gltf', xfScaleX: 2, uvSet: 1 });
   });
 
-  it('a non-finite number deletes, an out-of-range one clamps, −0 is the default', () => {
-    expect(withUvMapping({ xfScaleX: 2 }, { scaleX: NaN })).toEqual({});
-    expect(withUvMapping({}, { offsetX: 1e9 }).xfOffsetX).toBe(MAX_UV_TRANSFORM_MAGNITUDE);
-    expect(withUvMapping({}, { offsetX: -1e9 }).xfOffsetX).toBe(-MAX_UV_TRANSFORM_MAGNITUDE);
-    expect(withUvMapping({ xfOffsetX: 1 }, { offsetX: -0 })).toEqual({});
+  it('a UV set outside the closed table deletes the key', () => {
+    for (const bad of [4, -1, 1.5, NaN] as unknown as ImageUvSet[]) {
+      expect(withUvMapping({ uvSet: 2 }, { uvSet: bad }), String(bad)).toEqual({});
+    }
+  });
+
+  it('never writes the turn or a legacy xf* key: the turn has its own writer, the legacy keys none', () => {
+    // The fields the retired glTF-mapping block wrote, smuggled past the type:
+    // ignored, and nothing the node holds is touched.
+    const smuggled = { offsetX: 0.25, offsetY: 0.5, rotation: 0.3, scaleX: 2, scaleY: 3 } as unknown as UvMappingPatch;
+    expect(withUvMapping({}, smuggled)).toEqual({});
+    expect(withUvMapping({ rotation: 1, xfScaleX: 2 }, smuggled)).toEqual({ rotation: 1, xfScaleX: 2 });
+    expect(CODE).not.toMatch(/next\.xf\w*\s*=[^=]|next\[\s*'xf/);
   });
 
   it('what it writes reads back as what was asked', () => {
-    const v = withUvMapping({}, { orientation: 'gltf', uvSet: 2, rotation: 0.3, scaleX: 2 });
+    const v = withUvMapping({}, { orientation: 'gltf', uvSet: 2, normalGreenFlip: true });
     expect(readImageUvMapping(v)).toEqual({
-      orientation: 'gltf', normalGreenFlip: false, uvSet: 2, transform: t({ rotation: 0.3, scaleX: 2 }),
+      orientation: 'gltf', normalGreenFlip: true, uvSet: 2, transform: null,
     });
     expect(sanitizeUvMappingKeys(v)).toBeNull();
   });
@@ -270,17 +388,81 @@ describe('gltfTextureValues (the GLB importer\'s one writer)', () => {
   });
 
   it('reads the KHR_texture_transform, ignoring and reporting malformed parts', () => {
-    const ok = gltfTextureValues({ extensions: { KHR_texture_transform: { offset: [0.25, 0.5], rotation: 0.3, scale: [2, 3] } } }, opts);
-    expect(ok.values).toEqual({ orientation: 'gltf', xfOffsetX: 0.25, xfOffsetY: 0.5, xfRotation: 0.3, xfScaleX: 2, xfScaleY: 3 });
+    // Unturned, the transform IS the node's Tile and Offset, number for number.
+    const ok = gltfTextureValues({ extensions: { KHR_texture_transform: { offset: [0.25, 0.5], scale: [2, 3] } } }, opts);
+    expect(ok.values).toEqual({ orientation: 'gltf', tileX: 2, tileY: 3, offsetX: 0.25, offsetY: 0.5 });
     expect(ok.unsupported).toEqual([]);
     for (const bad of [[1], [NaN, 0], 'x', [0, 0, 0], [1e7, 0]]) {
       const r = gltfTextureValues({ extensions: { KHR_texture_transform: { offset: bad, scale: bad } } }, opts);
       expect(r.values, JSON.stringify(bad)).toEqual({ orientation: 'gltf' });
       expect(r.unsupported).toEqual(['offset', 'scale']);
     }
-    const rot = gltfTextureValues({ extensions: { KHR_texture_transform: { rotation: 'x' } } }, opts);
-    expect(rot.values).toEqual({ orientation: 'gltf' });
-    expect(rot.unsupported).toEqual(['rotation']);
+    for (const bad of ['x', '1', true, NaN, 2e6, [0.5], null, { toString: 1 }, Symbol('r')] as unknown[]) {
+      const rot = gltfTextureValues({ extensions: { KHR_texture_transform: { offset: [0.1, 0.2], rotation: bad } } }, opts);
+      // An ignored turn is no turn: the offset stays exactly the file's.
+      expect(rot.values, typeof bad).toEqual({ orientation: 'gltf', offsetX: 0.1, offsetY: 0.2 });
+      expect(rot.unsupported).toEqual(['rotation']);
+    }
+  });
+
+  it('writes the transform as the node\'s own Tile, Offset and Rotation — never an xf* key', () => {
+    // The spec's example 1: KHR {30°, scale (2, 1), offset (0.1, 0.2)}. The
+    // chain turns AFTER the offset, about the picture's centre, so the offset
+    // carries the pivot term: R(−φ)(t − c) + c.
+    const { values } = gltfTextureValues(
+      { extensions: { KHR_texture_transform: { offset: [0.1, 0.2], rotation: Math.PI / 6, scale: [2, 1] } } },
+      opts,
+    );
+    expect(Object.keys(values)).toEqual(['orientation', 'tileX', 'offsetX', 'offsetY', 'rotation']);
+    expect(values.tileX).toBe(2);
+    expect(values.offsetX as number).toBeCloseTo(0.30359, 5);
+    expect(values.offsetY as number).toBeCloseTo(0.040192, 6);
+    // θ = φ, the file's own number: an unflipped glTF node turns by ψ = θ,
+    // three.js's and glTF's sign (`turnSignOf`).
+    expect(values.rotation).toBe(Math.PI / 6);
+    expect(readPictureRotation(values)).toBe(values.rotation);
+    for (const k of UV_MAPPING_KEYS.filter((key) => key.startsWith('xf'))) expect(values, k).not.toHaveProperty(k);
+    expect(sanitizeUvMappingKeys(values)).toBeNull();
+  });
+
+  it('an unturned transform keeps its offset EXACTLY; a whole number of turns is no turn', () => {
+    for (const offset of [[0.1, 0.2], [-0.37, 5.25], [0.30000000000000004, 1e6], [7, -3]]) {
+      const { values } = gltfTextureValues({ extensions: { KHR_texture_transform: { offset } } }, opts);
+      expect([values.offsetX, values.offsetY], JSON.stringify(offset)).toEqual(offset);
+      expect(values).not.toHaveProperty('rotation');
+    }
+    for (const rotation of [0, -0, 2 * Math.PI, -4 * Math.PI, 1e-13]) {
+      const { values } = gltfTextureValues({ extensions: { KHR_texture_transform: { offset: [0.1, 0.2], rotation } } }, opts);
+      expect(values, String(rotation)).toEqual({ orientation: 'gltf', offsetX: 0.1, offsetY: 0.2 });
+    }
+  });
+
+  it('writes canonical numbers: snapped as gltfUvMatrix snaps, defaults left out, never −0', () => {
+    const quarter = gltfTextureValues({ extensions: { KHR_texture_transform: { rotation: Math.PI / 2 } } }, opts).values;
+    expect(quarter).toEqual({ orientation: 'gltf', offsetX: 1, rotation: Math.PI / 2 });
+    const half = gltfTextureValues({ extensions: { KHR_texture_transform: { rotation: Math.PI, scale: [2, 3] } } }, opts).values;
+    expect(half).toEqual({ orientation: 'gltf', tileX: 2, tileY: 3, offsetX: 1, offsetY: 1, rotation: Math.PI });
+    // Float dust beside an integer is what the legacy stage snapped away too,
+    // so an unrotated import emits the very digits it did.
+    const dust = gltfTextureValues({ extensions: { KHR_texture_transform: { offset: [1e-13, -0], scale: [2 + 1e-13, 1] } } }, opts).values;
+    expect(dust).toEqual({ orientation: 'gltf', tileX: 2 });
+    for (const v of [...Object.values(quarter), ...Object.values(half)]) expect(Object.is(v, -0)).toBe(false);
+  });
+
+  it('writes a negative scale as that axis\'s Flip, never a negative Tile, and re-signs the turn so ψ stays φ', () => {
+    // (−u, −v): both glTF mirrors (1 − u, 1 − v), the default tile, offset −1 each.
+    const both = gltfTextureValues({ extensions: { KHR_texture_transform: { scale: [-1, -1] } } }, opts).values;
+    expect(both).toEqual({ orientation: 'gltf', flipX: 1, flipY: 1, offsetX: -1, offsetY: -1 });
+    // One negative axis under a turn: Flip X ticked, Tile 2, the offset moved by
+    // the signed tile, and θ = −φ, since ONE ticked box flips the turn's sign.
+    const one = gltfTextureValues(
+      { extensions: { KHR_texture_transform: { offset: [0.1, 0.2], rotation: 0.3, scale: [-2, 3] } } },
+      opts,
+    ).values;
+    expect(Object.keys(one)).toEqual(['orientation', 'flipX', 'tileX', 'tileY', 'offsetX', 'offsetY', 'rotation']);
+    expect([one.flipX, one.tileX, one.tileY, one.rotation]).toEqual([1, 2, 3, -0.3]);
+    expect(turnSignOf(true, false)).toBe(-1);
+    for (const v of [both, one]) expect(sanitizeUvMappingKeys(v)).toBeNull();
   });
 
   it('passes the normal-green flip through', () => {
@@ -367,9 +549,13 @@ describe('imageUvMapping: one reader, one leaf', () => {
     expect(SRC).not.toMatch(/\brequire\(/);
   });
 
-  it('lists the eight keys in the documented order', () => {
+  it('lists the nine keys in the documented order', () => {
     expect([...UV_MAPPING_KEYS]).toEqual([
-      'orientation', 'normalGreen', 'uvSet', 'xfOffsetX', 'xfOffsetY', 'xfRotation', 'xfScaleX', 'xfScaleY',
+      'orientation', 'normalGreen', 'uvSet', 'rotation', 'xfOffsetX', 'xfOffsetY', 'xfRotation', 'xfScaleX', 'xfScaleY',
     ]);
+  });
+
+  it('the turn never joins the texture spec: it is UV math', () => {
+    expect(readImageTextureSpec({ rotation: 0.5 })).toEqual(readImageTextureSpec({}));
   });
 });

@@ -22,13 +22,14 @@ export { readImageTextureSpec, imageTextureSpecKey, type ImageTextureSpec };
  *     element are pixel-neutral: the element is only the upload's source, and
  *     everything a spec changes is set on the Texture.
  *
- * UV math never enters a key. Tile, offset, the Flip X/Y checkboxes, a wired
- * uv, a wired Direction and the glTF UV set / texture transform all live in
- * the uv EXPRESSION each node samples with, so nodes differing only there
- * sample one texture. (The node's `values.flipY` is the Flip Y checkbox, a uv
- * mirror; `Texture.flipY` is the spec's `flipY` — true, or false under the
- * glTF orientation, Phase 4's one Texture-object mapping setting. Two nodes
- * with one payload and different orientations therefore get two textures.)
+ * UV math never enters a key. Tile, offset, the turn, the Flip X/Y checkboxes,
+ * a wired uv, a wired Direction and the glTF UV set / legacy texture transform
+ * all live in the uv EXPRESSION each node samples with, so nodes differing
+ * only there sample one texture. (The node's `values.flipY` is the Flip Y
+ * checkbox, a uv mirror; `Texture.flipY` is the spec's `flipY` — true, or
+ * false under the glTF orientation, Phase 4's one Texture-object mapping
+ * setting. Two nodes with one payload and different orientations therefore
+ * get two textures.)
  *
  * Each OWNER is the first node PLACED in its group: the Image element's is the
  * first node with that payload, each Texture's the first with that payload x

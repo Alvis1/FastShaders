@@ -1,36 +1,61 @@
 /**
- * The glTF MAPPING of an Image/Texture node: how its picture lands on the UVs
- * of the model it came with. Four settings over eight `values` keys:
+ * How an Image/Texture node's picture lands on the UVs, beside the placement
+ * sockets themselves (Tile, Offset) and the Flip boxes: the facts a model's
+ * texture brings, the picture's turn, and the legacy transform the turn
+ * replaced. Nine `values` keys:
  *
- *   - `orientation`  exactly `'gltf'`: the texture is uploaded unflipped
- *                    (`Texture.flipY = false`, GLTFLoader's own choice) and the
- *                    app's baked 1-u correction is dropped;
+ *   - `orientation`  exactly `'gltf'`: a fact about the BYTES, not a setting —
+ *                    the texture is uploaded unflipped (`Texture.flipY =
+ *                    false`, GLTFLoader's own choice). That is ALL it
+ *                    changes: the UV chain, the Flips and the turn's sign
+ *                    read the same in both orientations;
  *   - `normalGreen`  exactly `'flip'`: the Output's normal-map decode flips its
  *                    green axis, GLTFLoader's `normalScale.y *= -1` for a
  *                    primitive without TANGENT;
  *   - `uvSet`        exactly the NUMBER 1, 2 or 3: sample `uv(n)` (three's
  *                    `uv1`..`uv3`, i.e. glTF TEXCOORD_1..3) instead of `uv()`;
+ *   - `rotation`     radians: the picture's TURN about its own centre, the
+ *                    last step of the placement chain (utils/imagePlacement.ts).
+ *                    Stored only — never a socket, a `defaultValues` entry or a
+ *                    texture key — and taken mod 2π, so a whole number of turns
+ *                    reads as none;
  *   - `xfOffsetX`, `xfOffsetY`, `xfRotation` (radians), `xfScaleX`,
- *     `xfScaleY`    KHR_texture_transform, finite numbers with |v| ≤ 1e6.
+ *     `xfScaleY`    LEGACY KHR_texture_transform, applied BEFORE the mirror.
+ *                    The importer no longer writes them, and every restore
+ *                    folds them into Tile/Offset/Rotation
+ *                    (`foldLegacyUvTransform`); a node the fold cannot express
+ *                    exactly keeps them and emits as it always did.
  *
- * `readImageUvMapping` is the ONE reader (codegen, the settings menu, tests),
- * and `withUvMapping` / `gltfTextureValues` are the ONLY writers — the GLB
- * importer (Phase 5) must go through `gltfTextureValues`. Every key comes out
- * of a `.fastshader` and is adversarial, so every read is EXACT: an absent,
- * junk or default-valued key means today's emission, byte for byte. Numbers
- * are read only as real numbers — `Number(true)` is 1, `Number(null)`,
- * `Number('')` and `Number([])` are 0, and a coerced 0 scale would collapse
- * the texture — and the writers only ever write the canonical form (numbers
- * as numbers, `'gltf'`/`'flip'` as the two strings), deleting a key whose
- * value is its default, so a node toggled on and back off is JSON-identical
- * to one never touched.
+ * Every number is finite with |v| ≤ 1e6, or it reads as its default.
+ * `readImageUvMapping` and `readPictureRotation` are the readers, and
+ * `readImagePlacement` (utils/imagePlacement.ts) composes them with the flips
+ * and the stored tile/offset into the ONE placement read that codegen, the
+ * fold and the GLB export share. Each writer owns its keys: `withUvMapping`
+ * (the importer's orientation, UV set and green flip, and the settings menu's
+ * UV set and green-flip rows), `gltfTextureValues` (the GLB importer — Phase 5
+ * must go through it — which writes a model's KHR_texture_transform as the
+ * node's own Tile/Offset/Rotation, a negative scale as that axis's Flip —
+ * `storedPlacement`, which the restore fold shares; the turn's sign is
+ * `turnSignOf`, the one the reader uses), `withPictureRotation` (the menu's
+ * Rotation row), `withoutLegacyTransform` (its "Older transform" Clear; both also used
+ * by the restore fold), and `withImagePayload` (utils/textureSources.ts), which
+ * moves `orientation` with the bytes. No menu sets `orientation`, and nothing
+ * writes an `xf*` key. Every key comes out of a `.fastshader`
+ * and is adversarial, so every read is EXACT: an absent, junk or
+ * default-valued key means today's emission, byte for byte. Numbers are read
+ * only as real numbers — `Number(true)` is 1, `Number(null)`, `Number('')` and
+ * `Number([])` are 0, and a coerced 0 scale would collapse the texture — and
+ * this module's writers only ever write the canonical form (numbers as
+ * numbers, `'gltf'`/`'flip'` as the two strings), deleting a key whose value is
+ * its default, so a node toggled on and back off is JSON-identical to one never
+ * touched.
  *
  * Only the ORIENTATION is a property of the Texture OBJECT, so only it joins
  * `ImageTextureSpec` (`flipY: values.orientation !== 'gltf'`, inlined there so
  * that module stays a leaf; `imageUvMapping.test.ts` pins that the two agree).
- * The UV set, the transform and the green flip are UV or channel math and
- * never enter a texture key: two nodes differing only in them share one
- * texture.
+ * The UV set, the turn, the transform and the green flip are UV or channel
+ * math and never enter a texture key: two nodes differing only in them share
+ * one texture.
  *
  * `gltfSamplerValues(sampler) → { values, unsupported }` (GLB Phase 5) sits
  * beside `gltfTextureValues` and writes the node's EXISTING texture keys
@@ -67,6 +92,7 @@ export const UV_MAPPING_KEYS = [
   'orientation',
   'normalGreen',
   'uvSet',
+  'rotation',
   'xfOffsetX',
   'xfOffsetY',
   'xfRotation',
@@ -78,14 +104,9 @@ export const UV_MAPPING_KEYS = [
  *  finite number at all) reads as the key's default. */
 export const MAX_UV_TRANSFORM_MAGNITUDE = 1e6;
 
-/** Each transform key, the patch field it is written from, and its default. */
-const XF_KEYS = [
-  { key: 'xfOffsetX', field: 'offsetX', dflt: 0 },
-  { key: 'xfOffsetY', field: 'offsetY', dflt: 0 },
-  { key: 'xfRotation', field: 'rotation', dflt: 0 },
-  { key: 'xfScaleX', field: 'scaleX', dflt: 1 },
-  { key: 'xfScaleY', field: 'scaleY', dflt: 1 },
-] as const;
+/** The five LEGACY transform keys: read, folded and deleted — nothing in the
+ *  app writes them any more. */
+const XF_KEYS = ['xfOffsetX', 'xfOffsetY', 'xfRotation', 'xfScaleX', 'xfScaleY'] as const;
 
 /** A real, finite, bounded number — or the default. Never `Number()`. */
 function fin(v: unknown, dflt: number): number {
@@ -119,8 +140,26 @@ export function readImageUvMapping(values: Readonly<Record<string, unknown>>): I
   return { orientation, normalGreenFlip, uvSet, transform: identity ? null : t };
 }
 
-/** Clean up float dust so a quarter turn emits `0`/`1`/`-1`, and never −0. */
-function snap(x: number): number {
+/**
+ * The picture's turn θ in radians, read strictly — a real finite number with
+ * |v| ≤ 1e6, else 0, never `Number()` — and taken mod 2π (JS `%`, so −30°
+ * stays −30°). It is 0 whenever its snapped matrix is the identity: a whole
+ * number of turns, or float dust beside one, is no turn at all, so it emits
+ * nothing.
+ */
+export function readPictureRotation(values: Readonly<Record<string, unknown>>): number {
+  return canonicalTurn(fin(field(values, 'rotation'), 0));
+}
+
+/** `radians` mod 2π, or exactly 0 when that turn snaps to the identity. */
+function canonicalTurn(radians: number): number {
+  const r = radians % (2 * Math.PI);
+  return isIdentityTurn(turnMatrix(r)) ? 0 : r;
+}
+
+/** Clean up float dust so a quarter turn emits `0`/`1`/`-1`, and never −0.
+ *  Exported for the placement fold, which writes numbers the same way. */
+export function snap(x: number): number {
   if (Math.abs(x) < 1e-12) return 0;
   const r = Math.round(x);
   if (Math.abs(x - r) < 1e-12) return r === 0 ? 0 : r;
@@ -162,6 +201,119 @@ export function gltfUvMatrix(t: GltfUvTransform): {
   };
 }
 
+/** A turn of the UVs, in `gltfUvMatrix`'s row form. */
+export interface UvTurn {
+  readonly m00: number;
+  readonly m01: number;
+  readonly m10: number;
+  readonly m11: number;
+  readonly tx: number;
+  readonly ty: number;
+}
+
+/**
+ * The turn by `radians` about the picture's centre c = (½, ½), in
+ * `gltfUvMatrix`'s row form: `u' = m00·u + m01·v + tx`, `v' = m10·u + m11·v +
+ * ty`. The 2×2 part is R(radians) with `gltfUvMatrix`'s rows (cos, sin),
+ * (−sin, cos), taken mod 2π and snapped the same way (it equals that matrix at
+ * unit scale), so a quarter turn is clean integers and a whole turn EXACTLY the
+ * identity; (tx, ty) = c − R·c, from the snapped R, keeps the centre in place.
+ * Anything but a finite number is the identity.
+ */
+export function turnMatrix(radians: number): UvTurn {
+  if (typeof radians !== 'number' || !Number.isFinite(radians)) return { m00: 1, m01: 0, m10: 0, m11: 1, tx: 0, ty: 0 };
+  const r = radians % (2 * Math.PI);
+  const c = Math.cos(r);
+  const s = Math.sin(r);
+  const m00 = snap(c);
+  const m01 = snap(s);
+  const m10 = snap(-s);
+  const m11 = snap(c);
+  return { m00, m01, m10, m11, tx: snap(0.5 - 0.5 * (m00 + m01)), ty: snap(0.5 - 0.5 * (m10 + m11)) };
+}
+
+/** Whether a turn's 2×2 part is exactly the identity (then nothing is emitted). */
+export function isIdentityTurn(t: UvTurn): boolean {
+  return t.m00 === 1 && t.m01 === 0 && t.m10 === 0 && t.m11 === 1;
+}
+
+/**
+ * THE sign of the picture's turn: the chain turns by ψ = θ·turnSignOf(…), i.e.
+ * ψ = θ·(exactly one Flip ticked ? −1 : 1) — the mirror stage's determinant,
+ * which it cancels. Each ticked box mirrors its axis and nothing else mirrors,
+ * in either orientation (the app's old baked 1-u is gone), so the orientation
+ * has no say. With positive tiles a positive θ turns the picture
+ * COUNTER-clockwise on UVs that run u right and v up — three's primitives,
+ * the Teapot, and the generated spherical UVs of the Bunny and of an OBJ
+ * without UVs — in all 8 orientation × flip states: the sense three.js's
+ * `Texture.rotation` and glTF's KHR_texture_transform `rotation` use, so a
+ * model's φ imports as θ = φ. `readImagePlacement` (utils/imagePlacement.ts —
+ * the emitter's read, and through it the restore fold and the GLB export) and
+ * `storedPlacement` (the KHR import and the fold) all take it from here, so
+ * the four cannot disagree.
+ */
+export function turnSignOf(flipX: boolean, flipY: boolean): 1 | -1 {
+  return flipX !== flipY ? -1 : 1;
+}
+
+/**
+ * A placement as a WRITER computes it, before it is stored: the Flips as
+ * ticked, the tile and offset that follow the mirror — a tile may be negative
+ * here — and ψ, the turn the chain must turn by.
+ */
+export interface PlacementDraft {
+  readonly flipX: boolean;
+  readonly flipY: boolean;
+  readonly tileX: number;
+  readonly tileY: number;
+  readonly offsetX: number;
+  readonly offsetY: number;
+  readonly psi: number;
+}
+
+/** What a writer stores for a draft: no negative tile, and the turn θ. */
+export interface StoredPlacement {
+  readonly flipX: boolean;
+  readonly flipY: boolean;
+  readonly tileX: number;
+  readonly tileY: number;
+  readonly offsetX: number;
+  readonly offsetY: number;
+  /** ψ·turnSignOf(the RESULTING Flips) — `withPictureRotation` takes it mod 2π. */
+  readonly theta: number;
+}
+
+/**
+ * A draft as the node stores it, with NO negative tile. An axis whose tile k
+ * is negative becomes that axis's Flip toggled, tile |k| and offset o + k:
+ *
+ *   K·(d·u + e) + o  ≡  (−K)·(−d·u + 1 − e) + (o + K)
+ *
+ * with (d, e) that axis's mirror — which toggling the box toggles, since each
+ * ticked box mirrors its own axis in either orientation. The chain before the
+ * turn is unchanged, so ψ is too, and θ is ψ over the RESULTING Flips'
+ * sign. The two writers of a model's transform — the KHR import
+ * (`gltfTextureValues`) and the restore fold of a legacy one
+ * (utils/imagePlacement.ts) — both store through here, so they agree to the
+ * bit. A Tile the USER types negative is left as typed: it mirrors once more,
+ * so it turns the picture the other way.
+ */
+export function storedPlacement(d: PlacementDraft): StoredPlacement {
+  const negX = d.tileX < 0;
+  const negY = d.tileY < 0;
+  const flipX = negX ? !d.flipX : d.flipX;
+  const flipY = negY ? !d.flipY : d.flipY;
+  return {
+    flipX,
+    flipY,
+    tileX: negX ? -d.tileX : d.tileX,
+    tileY: negY ? -d.tileY : d.tileY,
+    offsetX: negX ? snap(d.offsetX + d.tileX) : d.offsetX,
+    offsetY: negY ? snap(d.offsetY + d.tileY) : d.offsetY,
+    theta: d.psi * turnSignOf(flipX, flipY),
+  };
+}
+
 /**
  * Drop every mapping key that does not hold its exact shape. Null when
  * nothing was dropped, so an untouched graph keeps its identity (the store
@@ -177,7 +329,7 @@ export function sanitizeUvMappingKeys(
   if (has('orientation') && field(values, 'orientation') !== 'gltf') drop.push('orientation');
   if (has('normalGreen') && field(values, 'normalGreen') !== 'flip') drop.push('normalGreen');
   if (has('uvSet') && !isUvSet(field(values, 'uvSet'))) drop.push('uvSet');
-  for (const { key } of XF_KEYS) {
+  for (const key of ['rotation', ...XF_KEYS]) {
     // NaN as the default can never equal a real read, so this is "does it
     // pass `fin`" without a second copy of the rule.
     if (has(key) && Number.isNaN(fin(field(values, key), NaN))) drop.push(key);
@@ -188,23 +340,19 @@ export function sanitizeUvMappingKeys(
   return next;
 }
 
+/** The three facts `withUvMapping` writes. The turn has its own writer
+ *  (`withPictureRotation`), and the legacy `xf*` keys have none. */
 export interface UvMappingPatch {
   orientation?: ImageOrientation;
   normalGreenFlip?: boolean;
   uvSet?: ImageUvSet;
-  offsetX?: number;
-  offsetY?: number;
-  rotation?: number;
-  scaleX?: number;
-  scaleY?: number;
 }
 
 /**
- * A NEW values object with `patch` applied in canonical form. A patched field
- * at its default DELETES its key; a non-finite number reads as the default
- * (so it deletes too), and a finite one past `MAX_UV_TRANSFORM_MAGNITUDE` is
- * clamped to it rather than written as something the reader would ignore.
- * Fields absent from `patch` keep whatever the node already holds.
+ * A NEW values object with `patch` applied in canonical form: `'gltf'` and
+ * `'flip'` as the two strings, the UV set as the number 1, 2 or 3, and a
+ * patched field at its default DELETES its key. Fields absent from `patch`
+ * keep whatever the node already holds.
  */
 export function withUvMapping(
   values: Record<string, string | number>,
@@ -223,14 +371,31 @@ export function withUvMapping(
     if (isUvSet(patch.uvSet)) next.uvSet = patch.uvSet;
     else delete next.uvSet;
   }
-  for (const { key, field: f, dflt } of XF_KEYS) {
-    const raw = patch[f];
-    if (raw === undefined) continue;
-    let n = typeof raw === 'number' && Number.isFinite(raw) ? raw : dflt;
-    n = Math.max(-MAX_UV_TRANSFORM_MAGNITUDE, Math.min(MAX_UV_TRANSFORM_MAGNITUDE, n));
-    if (n === dflt) delete next[key];
-    else next[key] = n;
-  }
+  return next;
+}
+
+/**
+ * A NEW values object with `radians` as the picture's turn, in the canonical
+ * form `readPictureRotation` returns: mod 2π, and DELETED when that is no turn
+ * — 0, a whole number of turns, or anything the reader would not take (a
+ * non-number, NaN, |v| > 1e6) — so what is stored is exactly what is read.
+ */
+export function withPictureRotation(
+  values: Record<string, string | number>,
+  radians: number,
+): Record<string, string | number> {
+  const next: Record<string, string | number> = { ...values };
+  const r = canonicalTurn(fin(radians, 0));
+  if (r === 0) delete next.rotation;
+  else next.rotation = r;
+  return next;
+}
+
+/** A NEW values object without the five legacy `xf*` keys. It CHANGES the
+ *  picture unless the fold (utils/imagePlacement.ts) has absorbed them first. */
+export function withoutLegacyTransform(values: Record<string, string | number>): Record<string, string | number> {
+  const next: Record<string, string | number> = { ...values };
+  for (const key of XF_KEYS) delete next[key];
   return next;
 }
 
@@ -263,8 +428,11 @@ function pair(v: unknown): [number, number] | null {
  *   - `offset` / `scale` must be `[number, number]`, `rotation` a number,
  *     each finite with |v| ≤ 1e6 — a malformed one is reported and ignored.
  *
- * The result always carries `orientation: 'gltf'`: a texture that came with a
- * model is stored top-down, whatever else it says.
+ * The transform becomes the node's OWN Tile, Offset and Rotation, exactly
+ * (`withKhrPlacement`) — a negative scale as that axis's Flip, never a
+ * negative Tile, and never the legacy `xf*` keys. The result always carries
+ * `orientation: 'gltf'`: a texture that came with a model is stored top-down,
+ * whatever else it says.
  */
 export function gltfTextureValues(
   textureInfo: unknown,
@@ -283,27 +451,82 @@ export function gltfTextureValues(
     else unsupported.push('texCoord');
   }
 
-  const patch: UvMappingPatch = { orientation: 'gltf', uvSet, normalGreenFlip: opts.normalGreenFlip === true };
+  // KHR_texture_transform's own defaults: no offset, no turn, unit scale.
+  let offset: [number, number] = [0, 0];
+  let rotation = 0;
+  let scale: [number, number] = [1, 1];
   if (ext) {
     const off = own(ext, 'offset');
     if (off !== undefined) {
       const p = pair(off);
-      if (p) [patch.offsetX, patch.offsetY] = p;
+      if (p) offset = p;
       else unsupported.push('offset');
     }
     const rot = own(ext, 'rotation');
     if (rot !== undefined) {
-      if (isBounded(rot)) patch.rotation = rot;
+      if (isBounded(rot)) rotation = rot;
       else unsupported.push('rotation');
     }
     const sc = own(ext, 'scale');
     if (sc !== undefined) {
       const p = pair(sc);
-      if (p) [patch.scaleX, patch.scaleY] = p;
+      if (p) scale = p;
       else unsupported.push('scale');
     }
   }
-  return { values: withUvMapping({}, patch), unsupported };
+  const mapping = withUvMapping({}, { orientation: 'gltf', uvSet, normalGreenFlip: opts.normalGreenFlip === true });
+  return { values: withKhrPlacement(mapping, offset, rotation, scale), unsupported };
+}
+
+/**
+ * A KHR_texture_transform — `u' = R(φ)·(s∘u) + t`, the Khronos reference
+ * order (`gltfUvMatrix`) — as the node's own placement. The chain turns by ψ
+ * about c = (½, ½), AFTER the tile and the offset (utils/imagePlacement.ts),
+ * so on a glTF node with neither Flip ticked it is KHR's map exactly when
+ * ψ = φ, Tile = s and Offset = t + (R(−φ)(t − c) − (t − c)) — the offset that
+ * lands the picture where KHR's turn about the UV ORIGIN puts it; with no turn
+ * R(−φ) is exactly the identity, so it is t itself. `storedPlacement` then
+ * writes a negative scale as that axis's Flip, tile |s| and offset + s, and
+ * θ = φ·turnSignOf(the resulting Flips): an unflipped import stores
+ * Rotation = φ, the file's own number.
+ *
+ * θ is stored in the form the reader returns (`withPictureRotation`), and the
+ * offset is computed with the very matrix the chain turns by (`turnMatrix`).
+ * Every number is snapped as `gltfUvMatrix` snaps its own, so an unrotated
+ * transform with no negative scale keeps the digits the legacy stage emitted;
+ * a value at its default is not written. `values` is a fresh mapping (no Flip,
+ * Tile, Offset or turn of its own): `gltfTextureValues` is the only caller.
+ */
+function withKhrPlacement(
+  values: Record<string, string | number>,
+  t: readonly [number, number],
+  phi: number,
+  s: readonly [number, number],
+): Record<string, string | number> {
+  const back = turnMatrix(-phi);
+  const dx = t[0] - 0.5;
+  const dy = t[1] - 0.5;
+  const p = storedPlacement({
+    flipX: false,
+    flipY: false,
+    tileX: snap(s[0]),
+    tileY: snap(s[1]),
+    offsetX: snap(t[0] + (back.m00 * dx + back.m01 * dy - dx)),
+    offsetY: snap(t[1] + (back.m10 * dx + back.m11 * dy - dy)),
+    psi: phi,
+  });
+  const next: Record<string, string | number> = { ...values };
+  // A ticked box is written the way the menu's checkbox writes one.
+  if (p.flipX) next.flipX = 1;
+  if (p.flipY) next.flipY = 1;
+  const placement: readonly (readonly [string, number, number])[] = [
+    ['tileX', p.tileX, 1],
+    ['tileY', p.tileY, 1],
+    ['offsetX', p.offsetX, 0],
+    ['offsetY', p.offsetY, 0],
+  ];
+  for (const [key, n, dflt] of placement) if (n !== dflt) next[key] = n;
+  return withPictureRotation(next, p.theta);
 }
 
 /** What `gltfSamplerValues` could not represent. A closed vocabulary with no

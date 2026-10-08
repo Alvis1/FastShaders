@@ -112,6 +112,11 @@ export function imageNodeCost(base: number, width: unknown, height: unknown): nu
 export function nodeCostPoints(node: AppNode, edges: AppEdge[], wiredHandles?: readonly string[]): number {
   const type = node.data.registryType;
   if (!type) return 0;
+  // Color Ramp IS one 1-D LUT fetch — the same measurement as the Colormap
+  // node — so it is charged at colormap's live price and a measured profile
+  // reprices both; its own complexity.json entry is only what node creation
+  // and the Designer read.
+  if (type === 'colorRamp') return getCost('colormap');
   const base = getCost(type);
   if (type === 'imageNode') {
     const v = getNodeValues(node);

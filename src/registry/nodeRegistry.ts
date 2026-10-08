@@ -93,7 +93,7 @@ const definitions: NodeDefinition[] = [
     inputs: [],
     outputs: [{ id: 'out', label: 'Direction', dataType: 'vec3' }],
     description:
-      'Normalized view-space direction from the fragment toward the camera — the classic view vector for fresnel and rim effects.',
+      'Normalized view-space direction from the fragment toward the camera. Compare it only with other view-space directions: dotted with a world or object normal it mixes spaces, and the result turns with the model.',
   },
   {
     type: 'cameraPosition',
@@ -156,6 +156,33 @@ const definitions: NodeDefinition[] = [
     outputs: [{ id: 'out', label: 'Normal', dataType: 'vec3' }],
     description:
       'Surface normal in world space — where the face points after the model\'s own rotation is applied. Compare against world-space directions such as a view vector; the plain Normal node is object space and turns with the model. On a Gaussian splat it points at the camera until React to light is on.',
+  },
+  // Blender's Fresnel (Cycles svm_node_fresnel + fresnel_dielectric_cos) and Layer Weight's Facing at Blend 0.5,
+  // from ONE fsFresnel call returning vec2 (x = Fresnel, y = Facing): the outputs are SWIZZLES of that call
+  // (graphToCode resolveEdgeRef / codeToGraph OWN_MEMBER_TO_HANDLE), the toHsl pattern, and `out` stays
+  // outputs[0]. The helper takes the normal AND the world position as ARGUMENTS (engine/moduleHelpers.ts), so a
+  // Splat Output Fn binds both to the splat (`n`, `pw`); unwired, the call spells the bare globals, which the
+  // parse reads back as "unwired". `normal` has no defaultValues entry and no value box (hideValue): its
+  // unwired meaning is the surface normal, which no number can say. Helper parameter is `eta`: `ior` is a
+  // three/tsl export. Tested against a transcription of Cycles in engine/fresnelNode.test.ts.
+  {
+    type: 'fresnel',
+    label: 'Fresnel',
+    category: 'input',
+    tslFunction: 'fsFresnel',
+    tslImportModule: '',
+    inputs: [
+      { id: 'ior', label: 'IOR', dataType: 'float' },
+      { id: 'normal', label: 'Normal', dataType: 'vec3', hideValue: true },
+    ],
+    outputs: [
+      { id: 'out', label: 'Fresnel', dataType: 'float' },
+      { id: 'facing', label: 'Facing', dataType: 'float' },
+    ],
+    defaultValues: { ior: 1.5 },
+    description:
+      'How strongly a surface reflects at the angle you see it from, computed exactly as Blender’s Fresnel: low where the surface faces you, rising to 1 at the silhouette. IOR picks the material — 1.33 water, 1.5 glass; higher reflects more even head-on. Facing is 0 where the surface faces you and 1 edge-on, the classic rim mask. An unconnected Normal uses the surface’s own normal in world space, including a normal map on the material. Also: rim, edge glow, layer weight, reflectance, glancing angle, silhouette, ior, schlick, blender',
+    construction: 'c = |N·V|, η = clamp(IOR, 1e-5, 1e4) (1/η on back faces), g = √(η² − 1 + c²); Fresnel = ½·((g − c)/(g + c))²·(1 + ((c(g + c) − 1)/(c(g − c) + 1))²), or 1 when η² − 1 + c² ≤ 0; Facing = 1 − c',
   },
   {
     type: 'tangentLocal',
@@ -316,7 +343,7 @@ const definitions: NodeDefinition[] = [
   // surface); a wired edge overrides the stored value.
   //
   // OUTPUTS: `out` (Color, vec3) stays outputs[0] — every `outputs[0]` reader
-  // (splice, a dropped wire, ⌘-click Preview, the `?? 'out'` defaults, the
+  // (splice, a dropped wire, Alt+click Preview, the `?? 'out'` defaults, the
   // designer's `sockets['out']` key) and every saved edge mean it. R, G, B and
   // Alpha are always mounted float SWIZZLES of the same ONE sample; their ids
   // must equal utils/imageChannels.ts's IMAGE_CHANNEL_COMPONENTS keys, in that
@@ -1578,6 +1605,28 @@ const definitions: NodeDefinition[] = [
     // brightContrast.test.ts pins every operation in it against the emitted
     // helper and the CPU evaluator.
     construction: 'out = max(color * (1 + contrast) + bright - contrast * 0.5, 0)',
+  },
+  // Blender's Color Ramp (ShaderNodeValToRGB; BKE_colorband_evaluate, all five interpolations, stops in LINEAR
+  // light). ONE fsColorRamp call bakes the ramp into a 257-texel HalfFloat RGBA table at module load (cached by
+  // content, so equal ramps share a texture) and returns the sample; Color/Alpha are its .rgb/.a. The ramp
+  // rides in the call as a canonical string RE-FORMATTED from the parse (utils/colorRamp.ts), so it round-trips
+  // through the code panel and stored text never reaches the module. Ramp data lives in values.stops /
+  // values.interp — never defaultValues (on a ShaderNode that map is the row list); ABSENT = black→white Linear.
+  {
+    type: 'colorRamp',
+    label: 'Color Ramp',
+    category: 'type',
+    tslFunction: 'fsColorRamp',
+    tslImportModule: '',
+    inputs: [{ id: 'fac', label: 'Factor', dataType: 'float' }],
+    outputs: [
+      { id: 'out', label: 'Color', dataType: 'vec3' },
+      { id: 'alpha', label: 'Alpha', dataType: 'float' },
+    ],
+    defaultValues: { fac: 0.5 },
+    description:
+      'Turn a 0–1 factor into a colour and an alpha through a gradient of up to 32 stops, blended Linear, Constant, Ease, B-Spline or Cardinal in linear light — exactly as Blender bakes it. Outside the first and last stop the end colours hold. Also: colour ramp, color ramp, colorramp, gradient, stops, colour band, color band, colorband, valtorgb, lut, fac, blender',
+    construction: 'Color, Alpha = the stops at Factor, blended in linear light (held at the first and last stop outside them), baked into a 257-texel table',
   },
 
   // ===== DATA VISUALIZATION =====

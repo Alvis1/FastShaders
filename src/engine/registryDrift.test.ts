@@ -129,6 +129,14 @@ describe('registry defaults and evaluator fallbacks agree', () => {
     expect(res![2]).toBeCloseTo(0, 12);
   });
 
+  it('fresnel declares ior = 1.5 (Blender main); a bare node is head-on [F0, Facing] = [0.04, 0]', () => {
+    declares('fresnel', 'ior', 1.5);
+    const res = evalBare('fresnel');
+    expect(res).not.toBeNull();
+    expect(res![0]).toBeCloseTo(0.04, 12);
+    expect(res![1]).toBe(0);
+  });
+
   it('the already-correct ones stay correct', () => {
     declares('pow', 'base', 1);
     declares('pow', 'exp', 1);

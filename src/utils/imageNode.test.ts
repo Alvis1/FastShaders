@@ -21,7 +21,9 @@ import {
   PROJECT_IMAGE_BUDGET_COUNT,
   LIBRARY_IMAGE_BUDGET_COUNT,
 } from './imageNode';
-import { makeNode } from '../test-utils';
+import { readImagePlacement, placementAt } from './imagePlacement';
+import { getNodeValues } from '@/types';
+import { makeNode, makeEdge } from '../test-utils';
 import { DESKTOP_CAPS } from './platformCaps';
 
 /** A tiny valid payload: 3 bytes → 4 base64 chars. */
@@ -228,7 +230,7 @@ describe('totalImageChars / sanitizeImageNodes', () => {
 
   it('always strips hard violations, even with soft limits off', () => {
     const nodes = [img('a', 'https://evil.example/x.png'), img('b', URL_PNG)];
-    const r = sanitizeImageNodes(nodes, false);
+    const r = sanitizeImageNodes(nodes, [], false);
     expect(r.strippedCount).toBe(1);
     expect((r.nodes[0].data as { values: Record<string, unknown> }).values.imageB64).toBe('');
     expect((r.nodes[1].data as { values: Record<string, unknown> }).values.imageB64).toBe(URL_PNG);
@@ -236,8 +238,8 @@ describe('totalImageChars / sanitizeImageNodes', () => {
 
   it('enforces the per-image soft cap when asked', () => {
     const overSoft = `data:image/png;base64,${'A'.repeat(MAX_IMAGE_ENCODED_CHARS + 4)}`;
-    expect(sanitizeImageNodes([img('a', overSoft)], true).strippedCount).toBe(1);
-    expect(sanitizeImageNodes([img('a', overSoft)], false).strippedCount).toBe(0);
+    expect(sanitizeImageNodes([img('a', overSoft)], [], true).strippedCount).toBe(1);
+    expect(sanitizeImageNodes([img('a', overSoft)], [], false).strippedCount).toBe(0);
   });
 
   it('enforces the running total cap', () => {
@@ -247,22 +249,22 @@ describe('totalImageChars / sanitizeImageNodes', () => {
     const chunk = (i: number) =>
       `data:image/png;base64,${'ABCDEF'[i]}${'A'.repeat(MAX_IMAGE_ENCODED_CHARS - 1_000 - 1)}`;
     const nodes = Array.from({ length: 6 }, (_, i) => img(`n${i}`, chunk(i)));
-    const r = sanitizeImageNodes(nodes, true);
+    const r = sanitizeImageNodes(nodes, [], true);
     expect(r.strippedCount).toBe(6 - Math.floor(MAX_TOTAL_IMAGE_CHARS / chunk(0).length));
     expect(r.strippedCount).toBeGreaterThan(0);
-    expect(sanitizeImageNodes(nodes, false).strippedCount).toBe(0);
+    expect(sanitizeImageNodes(nodes, [], false).strippedCount).toBe(0);
   });
 
   it('a repeat of a kept payload is free; a payload that fails is stripped from every instance', () => {
     const chunk = `data:image/png;base64,${'A'.repeat(MAX_IMAGE_ENCODED_CHARS - 1_000)}`;
     const copies = Array.from({ length: 6 }, (_, i) => img(`n${i}`, chunk));
     // Six copies of one payload are all kept: the store writes it once.
-    const r = sanitizeImageNodes(copies, true);
+    const r = sanitizeImageNodes(copies, [], true);
     expect(r.strippedCount).toBe(0);
     expect(r.nodes).toBe(copies);
     // A payload that fails is stripped from EVERY instance, and counted per node.
     const hostile = [img('a', 'data:text/html;base64,AAAA'), img('b', URL_PNG), img('c', 'data:text/html;base64,AAAA')];
-    const h = sanitizeImageNodes(hostile, true);
+    const h = sanitizeImageNodes(hostile, [], true);
     expect(h.strippedCount).toBe(2);
     expect(h.nodes.map((n) => (n.data as { values: Record<string, unknown> }).values.imageB64)).toEqual(['', URL_PNG, '']);
   });
@@ -280,7 +282,7 @@ describe('totalImageChars / sanitizeImageNodes', () => {
       });
     };
     const keptByNow = (urls: string[]): boolean[] =>
-      sanitizeImageNodes(urls.map((u, i) => img(`n${i}`, u)), true).nodes.map(
+      sanitizeImageNodes(urls.map((u, i) => img(`n${i}`, u)), [], true).nodes.map(
         (n) => (n.data as { values: Record<string, unknown> }).values.imageB64 !== '',
       );
     const PREFIX = 'data:image/png;base64,';
@@ -329,7 +331,7 @@ describe('totalImageChars / sanitizeImageNodes', () => {
 
   it('strips a stray storage ref, which is not counted as a strip', () => {
     const nodes = [makeNode('a', 'imageNode', { imageB64: URL_PNG, width: 2, height: 2, imageRef: 'img1-0ce4918c-q' })];
-    const r = sanitizeImageNodes(nodes, false);
+    const r = sanitizeImageNodes(nodes, [], false);
     expect(r.strippedCount).toBe(0);
     expect(r.nodes).not.toBe(nodes);
     const v = (r.nodes[0].data as { values: Record<string, unknown> }).values;
@@ -341,7 +343,7 @@ describe('totalImageChars / sanitizeImageNodes', () => {
 
   it('returns the original array untouched when nothing is stripped', () => {
     const nodes = [img('a', URL_PNG)];
-    expect(sanitizeImageNodes(nodes, true).nodes).toBe(nodes);
+    expect(sanitizeImageNodes(nodes, [], true).nodes).toBe(nodes);
   });
 
   // Provenance keys (written by the drop-time power-of-two snap) arrive from
@@ -356,27 +358,27 @@ describe('totalImageChars / sanitizeImageNodes', () => {
 
     it('keeps a well-formed originId + src dimension pair', () => {
       const nodes = [withOrigin({ originId: 'abcdef0123456789', srcWidth: 1920, srcHeight: 1080 })];
-      const r = sanitizeImageNodes(nodes, true);
+      const r = sanitizeImageNodes(nodes, [], true);
       expect(r.strippedCount).toBe(0);
       expect(r.nodes).toBe(nodes); // untouched → same identity
     });
 
     it('drops a malformed originId but keeps the image working', () => {
-      const r = sanitizeImageNodes([withOrigin({ originId: '../../etc/passwd' })], true);
+      const r = sanitizeImageNodes([withOrigin({ originId: '../../etc/passwd' })], [], true);
       expect(r.strippedCount).toBe(0);
       expect(valuesOf(r).originId).toBeUndefined();
       expect(valuesOf(r).imageB64).toBe(URL_PNG);
     });
 
     it('drops out-of-range source dimensions', () => {
-      expect(valuesOf(sanitizeImageNodes([withOrigin({ srcWidth: 99999, srcHeight: 1080 })], true)).srcWidth)
+      expect(valuesOf(sanitizeImageNodes([withOrigin({ srcWidth: 99999, srcHeight: 1080 })], [], true)).srcWidth)
         .toBeUndefined();
-      expect(valuesOf(sanitizeImageNodes([withOrigin({ srcWidth: 0, srcHeight: 0 })], true)).srcHeight)
+      expect(valuesOf(sanitizeImageNodes([withOrigin({ srcWidth: 0, srcHeight: 0 })], [], true)).srcHeight)
         .toBeUndefined();
     });
 
     it('drops a half pair — an aspect ratio needs both', () => {
-      const v = valuesOf(sanitizeImageNodes([withOrigin({ srcWidth: 1920 })], true));
+      const v = valuesOf(sanitizeImageNodes([withOrigin({ srcWidth: 1920 })], [], true));
       expect(v.srcWidth).toBeUndefined();
       expect(v.srcHeight).toBeUndefined();
     });
@@ -390,7 +392,7 @@ describe('totalImageChars / sanitizeImageNodes', () => {
       // hardening pass must not read it as half a pair — that would strip the
       // way back from every such node on the next reload with no symptom.
       const nodes = [withOrigin({ originId: 'abcdef0123456789' })];
-      const r = sanitizeImageNodes(nodes, true);
+      const r = sanitizeImageNodes(nodes, [], true);
       expect(r.nodes).toBe(nodes);
       const v = valuesOf(r);
       expect(v.originId).toBe('abcdef0123456789');
@@ -401,6 +403,7 @@ describe('totalImageChars / sanitizeImageNodes', () => {
     it('still strips a hostile payload on a node carrying provenance', () => {
       const r = sanitizeImageNodes(
         [makeNode('a', 'imageNode', { imageB64: 'https://evil.example/x.png', width: 2, height: 2, originId: 'zz' })],
+        [],
         true,
       );
       expect(r.strippedCount).toBe(1);
@@ -531,23 +534,49 @@ describe('image budget counting: the project per instance, the library per disti
 });
 
 describe('sanitizeImageNodes — the glTF mapping keys', () => {
-  const mapped = {
-    orientation: 'gltf', normalGreen: 'flip', uvSet: 3,
-    xfOffsetX: 0.25, xfOffsetY: -0.5, xfRotation: -1, xfScaleX: 2, xfScaleY: 0.5,
-  };
+  const mapped = { orientation: 'gltf', normalGreen: 'flip', uvSet: 3, rotation: 0.5 };
+  /** A LEGACY transform (utils/imagePlacement.ts folds it on restore). */
+  const xf = { xfOffsetX: 0.25, xfOffsetY: -0.5, xfRotation: -1, xfScaleX: 2, xfScaleY: 0.5 };
+  /** A wire into Tile X — which keeps a foldable transform exactly where it is. */
+  const tileWire = [makeEdge('f1', 'out', 'a', 'tileX')];
   const valuesOf = (r: { nodes: unknown[] }) =>
     (r.nodes[0] as { data: { values: Record<string, unknown> } }).data.values;
 
   it('keeps valid keys and returns the SAME array when clean', () => {
     const nodes = [makeNode('a', 'imageNode', values(mapped))];
-    const r = sanitizeImageNodes(nodes, true);
+    const r = sanitizeImageNodes(nodes, [], true);
     expect(r.nodes).toBe(nodes);
     expect(r.strippedCount).toBe(0);
+    // A legacy transform the fold may not touch is clean too.
+    const residue = [makeNode('a', 'imageNode', values({ ...mapped, ...xf }))];
+    expect(sanitizeImageNodes(residue, tileWire, true).nodes).toBe(residue);
+  });
+
+  it('folds a legacy transform into Tile/Offset/Rotation with the picture unchanged', () => {
+    const node = makeNode('a', 'imageNode', values({ ...mapped, ...xf }));
+    const r = sanitizeImageNodes([node], [], true);
+    const v = valuesOf(r) as Record<string, string | number>;
+    for (const k of Object.keys(xf)) expect(v[k], k).toBeUndefined();
+    expect([v.orientation, v.normalGreen, v.uvSet, v.imageB64]).toEqual(['gltf', 'flip', 3, URL_PNG]);
+    expect(r.strippedCount).toBe(0);
+    const before = readImagePlacement(getNodeValues(node));
+    const after = readImagePlacement(v);
+    expect(after.xf).toBeNull();
+    for (const [u, w] of [[0, 0], [1, 0], [0, 1], [0.3, 0.7]]) {
+      const [a, b] = [placementAt(before, u, w), placementAt(after, u, w)];
+      expect(Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]), `${u},${w}`).toBeLessThan(1e-12);
+    }
+    // The input is untouched.
+    expect(getNodeValues(node).xfScaleX).toBe(2);
   });
 
   it('drops junk keys, and only them, without counting a strip', () => {
-    const junk = { orientation: 'GLTF', normalGreen: 1, uvSet: '1', xfScaleX: 'abc', xfOffsetX: 1e7, xfRotation: Infinity };
-    const r = sanitizeImageNodes([makeNode('a', 'imageNode', values({ ...junk, xfScaleY: 2 }))], true);
+    const junk = {
+      orientation: 'GLTF', normalGreen: 1, uvSet: '1', rotation: '1', xfScaleX: 'abc', xfOffsetX: 1e7, xfRotation: Infinity,
+    };
+    // The wired Tile X keeps the one valid transform key in place, so this
+    // sees the sanitizer alone.
+    const r = sanitizeImageNodes([makeNode('a', 'imageNode', values({ ...junk, xfScaleY: 2 }))], tileWire, true);
     const v = valuesOf(r);
     for (const k of Object.keys(junk)) expect(v[k], k).toBeUndefined();
     expect(v.xfScaleY).toBe(2);
@@ -558,7 +587,7 @@ describe('sanitizeImageNodes — the glTF mapping keys', () => {
   it('does not throw on a primitive values object', () => {
     const n = makeNode('a', 'imageNode');
     (n.data as { values: unknown }).values = 5;
-    expect(() => sanitizeImageNodes([n], true)).not.toThrow();
+    expect(() => sanitizeImageNodes([n], [], true)).not.toThrow();
   });
 });
 
@@ -568,13 +597,13 @@ describe('sanitizeImageNodes — the soft caps are a parameter (desktop room)', 
   const nodes = [makeNode('a', 'imageNode', values({ imageB64: big }))];
 
   it('the two-argument call applies THIS build\'s (web) caps and strips it', () => {
-    const r = sanitizeImageNodes(nodes, true);
+    const r = sanitizeImageNodes(nodes, [], true);
     expect(r.strippedCount).toBe(1);
     expect((r.nodes[0].data as { values: Record<string, unknown> }).values.imageB64).toBe('');
   });
 
   it('the desktop caps keep it, untouched and by identity', () => {
-    const r = sanitizeImageNodes(nodes, true, {
+    const r = sanitizeImageNodes(nodes, [], true, {
       image: DESKTOP_CAPS.imageChars,
       total: DESKTOP_CAPS.projectImageChars,
     });
@@ -584,7 +613,7 @@ describe('sanitizeImageNodes — the soft caps are a parameter (desktop room)', 
 
   it('the hard ceiling is not a parameter: it strips over 8M whatever caps are passed', () => {
     const over = `data:image/png;base64,${'A'.repeat(HARD_MAX_IMAGE_ENCODED_CHARS)}`;
-    const r = sanitizeImageNodes([makeNode('a', 'imageNode', values({ imageB64: over }))], true, {
+    const r = sanitizeImageNodes([makeNode('a', 'imageNode', values({ imageB64: over }))], [], true, {
       image: Number.MAX_SAFE_INTEGER,
       total: Number.MAX_SAFE_INTEGER,
     });

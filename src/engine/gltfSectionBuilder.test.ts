@@ -142,14 +142,19 @@ describe('BLENDER: sections, sharing, factors, settings', () => {
     expect(floats).toContain(0.8);
   });
 
-  it('base colour: texture × nothing when the factor is white; the texture carries the KHR_texture_transform', async () => {
+  it('base colour: texture × nothing when the factor is white; the texture carries the KHR_texture_transform as its own Tile/Offset', async () => {
     const { built, sec } = await build(blenderGlb());
     const feeder = feederOf(built.nodes, built.edges, sec(1).id, 'color')!;
     expect(feeder.data.registryType).toBe('imageNode');
     const v = getNodeValues(feeder);
     expect(v.orientation).toBe('gltf');
-    expect(v.xfOffsetX).toBe(0.25);
-    expect(v.xfScaleX).toBe(2);
+    // KHR {offset [0.25, 0], scale [2, 2]}, no turn: Tile 2×2 and Offset
+    // (0.25, 0) themselves — the default offsetY and turn are not written, and
+    // no legacy `xf*` key is.
+    expect([v.tileX, v.tileY, v.offsetX]).toEqual([2, 2, 0.25]);
+    for (const k of ['offsetY', 'rotation', 'xfOffsetX', 'xfOffsetY', 'xfRotation', 'xfScaleX', 'xfScaleY']) {
+      expect(v, k).not.toHaveProperty(k);
+    }
     expect(v.colorSpace).toBe('color');
   });
 
@@ -366,6 +371,21 @@ describe('the fan-out key', () => {
     expect(gltfTextureNodeKey(m, orm, 'data', false)).not.toBe(gltfTextureNodeKey(m, orm, 'data', true));
     expect(gltfTextureNodeKey(m, base, 'color', false)).not.toBe(gltfTextureNodeKey(m, orm, 'color', false));
     expect(gltfTextureNodeKey(m, { ...base, texture: 99 }, 'color', false)).toBeNull();
+  });
+
+  it('a mirrored use is its own node: a negative scale is the Flip in the key, never a negative Tile', () => {
+    const m = readOk(blenderGlb());
+    const base = m.materials[0].slots.find((s) => s.slot === 'baseColor')!;
+    const withKhr = (scale: [number, number]) => ({
+      ...base,
+      textureInfo: { index: base.texture, extensions: { KHR_texture_transform: { offset: [0.25, 0] as [number, number], scale } } },
+    });
+    const plain = gltfTextureNodeKey(m, withKhr([2, 2]), 'color', false)!;
+    const mirrored = gltfTextureNodeKey(m, withKhr([-2, 2]), 'color', false)!;
+    expect(mirrored).not.toBe(plain);
+    expect(mirrored).toContain('flipX=1');
+    expect(mirrored).toContain('tileX=2');
+    expect(mirrored).not.toMatch(/tile[XY]=-/);
   });
 });
 

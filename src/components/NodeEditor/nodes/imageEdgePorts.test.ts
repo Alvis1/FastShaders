@@ -248,7 +248,7 @@ describe('the Image node rows are gone, but its port TABLE is intact', () => {
   });
 
   it('`out` is still outputs[0] — the one line that cannot be relaxed', () => {
-    // Drop-on-edge insertion, a dropped wire, ⌘-click Preview, cpuEvaluator's
+    // Drop-on-edge insertion, a dropped wire, Alt+click Preview, cpuEvaluator's
     // shape fallback and dragConnect's phantom-tile tie-break all mean it.
     expect(imageDef.outputs[0]).toMatchObject({ id: 'out', dataType: 'vec3' });
   });

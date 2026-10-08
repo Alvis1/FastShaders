@@ -81,7 +81,7 @@ export const contrastColor = getContrastColor;
  *  glyph-less — dx/dy means CSS px here vs glyph-space units on glyph nodes —
  *  so the designer refuses to author an svg for them (and glyphCoverage.test.ts
  *  would fail if one were saved anyway). */
-export const ART_NODE_TYPES = new Set<string>(['colormap']);
+export const ART_NODE_TYPES = new Set<string>(['colormap', 'colorRamp']);
 
 /** Default channel count per socket data type (preview-state seeding only). */
 export const TYPE_CHANNELS: Record<string, number> = {

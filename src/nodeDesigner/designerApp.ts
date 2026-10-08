@@ -2082,10 +2082,10 @@ function defOffFor(key) { if (key === 'out') return 0; const n = NODE_BY_TYPE[st
 function opBodyH() { return state.height > 0 ? Math.max(28, state.height) : Math.max(52, Math.round(34 * state.scale) + 10); }
 /* operator layout = glyph present + exactly two inputs (NodeVisual's rule) */
 /* Mirrors NodeGlyph's `usesOperatorLayout` (glyph OR socket-growing, 2 base
-   inputs) over the DRAFT glyph. Gating on the glyph alone left `append` — the
+   inputs, exactly 1 output) over the DRAFT glyph. Gating on the glyph alone left `append` — the
    one glyphless growing node — measured against the rows layout the stage no
    longer draws for it. */
-function layoutIsOp() { const n = NODE_BY_TYPE[state.type]; return !!n && n.in.length === 2 && (!!state.glyph || !!n.grows); }
+function layoutIsOp() { const n = NODE_BY_TYPE[state.type]; return !!n && n.in.length === 2 && n.out.length === 1 && (!!state.glyph || !!n.grows); }
 const ui = { zoom: parseFloat(lsGet('nd:zoom', '1')) || 1, panX: 0, panY: 0, bg: lsGet('nd:stageBg', '#FAFAFA') };
 /* Baseline = the app's LIVE saved designs (bridge import), so even without the
    dev endpoint or a linked folder (e.g. the deployed copy) the designer shows
@@ -2848,7 +2848,7 @@ function openGlyph() {
      dx/dy CSS-px meaning, and a saved svg would also fail glyphCoverage's
      stale-exemption assertion. Refuse here (the inspector glyph card is the
      only route in; the stage already treats art clicks as inert). */
-  if (ND.ART_NODE_TYPES.has(state.type)) { toast('"' + state.type + '" draws its real art (the ramp) — it has no SVG glyph. Drag the ramp on the canvas to move it.'); return; }
+  if (ND.ART_NODE_TYPES.has(state.type)) { toast('"' + state.type + '" draws its real art (its ramp or curves) — it has no SVG glyph. Drag the art on the canvas to move it.'); return; }
   clearGlyphSel();
   glyphUndo.length = 0;                           // the gesture history belongs to ONE glyph session
   nudgeRun = false; nudgeKind = '';

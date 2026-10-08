@@ -232,7 +232,8 @@ export function parseStoredGroupsReport(parsed: unknown): StoredGroupsReport {
           // payload; a ref that cannot be resolved is an image the load could
           // not restore, and N8 reports it with the rest.
           const refs = resolveImageRefs(shape.nodes, index, budget);
-          const imgs = sanitizeImageNodes(refs.nodes, false);
+          // The group's own edges: a wired Tile/Offset blocks the legacy UV fold.
+          const imgs = sanitizeImageNodes(refs.nodes, shape.edges, false);
           // The Output sections are sanitized WITH a count (decision 9).
           const secs = sanitizeOutputMaterialsReport(sanitizeDataRangeNodes(sanitizeDataNodes(imgs.nodes).nodes));
           // ONE Output NODE per material, on the group's own SANITIZED edges
@@ -579,7 +580,10 @@ export type ContextMenuType =
   | 'stripes'
   | 'dataviz'
   | 'colormap'
-  | 'dataRange';
+  | 'dataRange'
+  // Not a settings menu: the socket list Ctrl/⌘+click and the node menu's
+  // Attach row open for `nodeId` (menus/AttachMenu.tsx, utils/nodeAttach.ts).
+  | 'attach';
 
 interface ContextMenuState {
   open: boolean;
@@ -1262,7 +1266,9 @@ export function parseStoredGraph(input: unknown): StoredGraph | null {
       // image this load could not restore, and N8 reports it with the rest.
       const refs = resolveImageRefs(data.nodes);
       data.nodes = refs.nodes;
-      const imgs = sanitizeImageNodes(data.nodes, false);
+      // The edges too: a wired Tile/Offset blocks the legacy UV fold
+      // (utils/imagePlacement.ts) that runs in here.
+      const imgs = sanitizeImageNodes(data.nodes, data.edges, false);
       data.nodes = imgs.nodes;
 
       // Data-node CSV blobs are adversarial for the same reason. The cap is the
@@ -2577,7 +2583,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
   setNodePreview: (target) => {
     // Value-equal targets are a no-op: the outside-press closer and a
-    // ⌘/Ctrl+click can both write in one gesture, and a second notification
+    // Alt+click can both write in one gesture, and a second notification
     // for the same target would re-run the sync engine's preview pass for
     // nothing.
     const cur = get().nodePreview;

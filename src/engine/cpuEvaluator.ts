@@ -21,6 +21,8 @@ import { hasNoiseRangeFlag, isUnsignedNoise } from '@/utils/noiseRange';
 import { sameGraphSemantics } from '@/utils/graphSemantics';
 import { buildTimeUpstreamSet, buildDownstreamClosure } from '@/utils/graphTraversal';
 import { IMAGE_CHANNEL_INDEX } from '@/utils/imageChannels';
+import { fresnelFacing } from '@/utils/fresnel';
+import { readColorRamp, rampFetch, rampRangeOver } from '@/utils/colorRamp';
 
 /** Multiplier applied to UV coordinates before sampling noise (matches GPU preview scale). */
 const NOISE_UV_SCALE = 4;
@@ -419,6 +421,12 @@ export function handleChannels(
   if (node?.data.registryType === 'imageNode') {
     return (typeof handle === 'string' ? IMAGE_CHANNEL_INDEX.get(handle) : undefined) ?? IMAGE_RGB_RUN;
   }
+  // Fresnel's whole vector is [Fresnel, Facing] (the helper's vec2); `out`,
+  // null and every tampered id read Fresnel — graphToCode's `?? 'x'`.
+  if (node?.data.registryType === 'fresnel') return handle === 'facing' ? 1 : 0;
+  // Color Ramp's whole vector is the rgba sample; `out`, null and every
+  // tampered id carry its RGB — graphToCode's `?? 'rgb'`.
+  if (node?.data.registryType === 'colorRamp') return handle === 'alpha' ? 3 : IMAGE_RGB_RUN;
   return handleSlice(node, handle);
 }
 
@@ -563,6 +571,23 @@ function evaluate(
     }
     const v = values[portId];
     return v !== undefined ? Number(v) : fallback;
+  };
+
+  // A scalar input read exactly as codegen's resolveArguments reads it: wired →
+  // the upstream channel when finite, else null (unknown); unwired → the stored
+  // value when finite, else `fallback` (the registry default codegen emits).
+  const finiteScalar = (portId: string, fallback: number): number | null => {
+    const edge = nodeEdges.find((e) => e.targetHandle === portId);
+    if (edge) {
+      const upstream = sliceEval(
+        evaluate(edge.source, time, cache, idx, nidx),
+        handleChannels(nidx.get(edge.source), edge.sourceHandle),
+      );
+      const u = upstream?.[0];
+      return u !== undefined && Number.isFinite(u) ? u : null;
+    }
+    const v = valueNum(values[portId]);
+    return Number.isFinite(v) ? v : fallback;
   };
 
   // Resolve a multi-channel input. If an edge exists, the upstream result is authoritative
@@ -935,6 +960,21 @@ function evaluate(
       result = [H, S, L];
       break;
     }
+    // Fresnel — the head-on sample (the centre of a sphere faces the camera):
+    // [F0, 0], 0.04 at IOR 1.5. Its range is analytical (a sampled field).
+    case 'fresnel': {
+      const ior = finiteScalar('ior', 1.5);
+      result = ior === null ? null : fresnelFacing(1, ior);
+      break;
+    }
+    // Color Ramp — [r, g, b, a] in LINEAR light, fetched from the same half
+    // table the shader samples (utils/colorRamp.ts). Unwired Factor is
+    // Blender's constant 0.5; a non-finite wired one is unknown, as in codegen.
+    case 'colorRamp': {
+      const tt = finiteScalar('fac', 0.5);
+      result = tt === null ? null : rampFetch(readColorRamp(values), tt);
+      break;
+    }
     // Brightness/Contrast — Blender's formula, read exactly as the helper reads
     // it (engine/moduleHelpers.ts): `vec3(col)` broadcasts a scalar, pads a
     // vec2 with 0 and drops a fourth channel; only the bottom is clamped.
@@ -1234,6 +1274,19 @@ function rangeOfValue(v: number[]): RangeResult {
   return { min: [...v], max: [...v] };
 }
 
+/** Sources whose every value is a unit vector. `normalWorld` is unit by
+ *  construction (three's transformDirection ends in normalize()). */
+const UNIT_VECTOR_TYPES: ReadonlySet<string> = new Set([
+  'normalLocal', 'tangentLocal', 'normalWorld', 'positionWorldDirection', 'positionViewDirection',
+]);
+
+/** A unit-vector source, or a Normalize node: |v| = 1, which the per-channel
+ *  box ([−1, 1]³, corner length √3) cannot express. */
+function isUnitVectorSource(node: AppNode | undefined): boolean {
+  const type = node?.data.registryType;
+  return type !== undefined && (UNIT_VECTOR_TYPES.has(type) || type === 'normalize');
+}
+
 /**
  * The analytically-known range of a SAMPLED FIELD (a value that varies across
  * the surface), null for every other node. ONE table with two jobs:
@@ -1251,12 +1304,13 @@ function analyticalRange(node: AppNode): RangeResult | null {
   // Unit vectors: every channel lies in [-1, 1]. `normalWorld` is unit by
   // construction (three's transformDirection ends in normalize()). The box is
   // per-channel, so it cannot express |v| = 1: the tightest axis-aligned bound.
-  if (
-    type === 'normalLocal' || type === 'tangentLocal' || type === 'normalWorld' ||
-    type === 'positionWorldDirection' || type === 'positionViewDirection'
-  ) {
+  if (UNIT_VECTOR_TYPES.has(type)) {
     return { min: [-1, -1, -1], max: [1, 1, 1] };
   }
+
+  // Fresnel/Facing: both in [0, 1] for a unit normal — the analytical seed.
+  // A WIRED non-unit normal widens it, which computeRange decides first.
+  if (type === 'fresnel') return { min: [0, 0], max: [1, 1] };
 
   // Wireframe coverage is 0…1 per pixel and depends on screen-space
   // derivatives, which the CPU has no equivalent of: a range, never a sample.
@@ -1401,6 +1455,20 @@ function computeRange(
   };
 
   let result: RangeResult | null = null;
+
+  // Fresnel with a WIRED normal: [0,1] holds only for |N| ≤ 1 (no normalize — Cycles). A unit-vector source keeps
+  // it; otherwise bound |N| by the box corner L: Facing = 1 − c ∈ [1 − L, 1]; Fresnel ≥ 0 always, ≤ 1 while L ≤ 1.
+  if (type === 'fresnel') {
+    const nEdge = nodeEdges.find((e) => e.targetHandle === 'normal');
+    if (nEdge && !isUnitVectorSource(nodeIndex.get(nEdge.source))) {
+      const r = portRange('normal', 0);
+      const L = Math.hypot(...[0, 1, 2].map((i) => Math.max(Math.abs(r.min[i] ?? r.min[0]), Math.abs(r.max[i] ?? r.max[0]))));
+      const res: RangeResult = !Number.isFinite(L) ? { min: [0, -Infinity], max: [Infinity, 1] }
+        : L <= 1 ? { min: [0, 0], max: [1, 1] } : { min: [0, 1 - L], max: [Infinity, 1] };
+      cache.set(nodeId, res);
+      return res;
+    }
+  }
 
   // ─── Special-case nodes with analytical ranges ──────────────────────────
   const analytical = analyticalRange(node);
@@ -1548,6 +1616,16 @@ function computeRange(
       // hsl() builds an RGB triple, toHsl() a normalized (h, s, l).
       result = { min: [0, 0, 0], max: [1, 1, 1] };
       break;
+    case 'colorRamp': {
+      // Exact over the half table: both ends plus every texel centre between
+      // them (rangeHalf), so a ramp that dips between its stops is not
+      // reported by its endpoints alone. ±Infinity bounds go through as they
+      // are — ClampToEdge holds the end colours, so `−∞…1` is the whole ramp,
+      // not the colour at 0.5 — and rangeHalf reads a NaN bound as unknown.
+      const r = portRange('fac', 0.5);
+      result = rampRangeOver(readColorRamp(values), r.min[0] ?? 0.5, r.max[0] ?? 0.5);
+      break;
+    }
     case 'brightContrast': {
       // Per channel out = c + k·(c − 0.5) + bright: bilinear in (c, k) and
       // linear in bright, so the extremes sit on the box's corners; then the

@@ -21,6 +21,7 @@ import { stripMirrorParts } from './partKeyLiteral';
 import { safeJsonReviver } from '@/utils/safeJson';
 import type { MaterialSettings } from '@/types';
 import { materialSettingsFromSource, PART_SETTING_KEYS } from './materialSettingsCode';
+import { MODULE_HELPER_NAMES } from './moduleHelpers';
 
 // Handle babel traverse CJS/ESM interop
 const traverse = (typeof (_traverse as unknown as { default?: unknown }).default === 'function'
@@ -48,6 +49,10 @@ const MATERIAL_KEYS: ReadonlySet<string> = new Set([...PART_SETTING_KEYS, 'merge
 const SPLAT_FN_DECL_RE = /^const\s+sp\d+(?:Shade|Shape|Size|Feather)\s*=\s*Fn\s*\(/;
 
 /** Net brace depth change across `s`: every `{` minus every `}`. */
+/** A module-scope helper's first line: `const <helper> = Fn(` or a plain-JS `const <helper> = (` (fsLut's IIFE),
+ *  built ONCE from the table so a new row is preserved without touching this file. */
+const MODULE_HELPER_DECL = new RegExp(`^\\s*const\\s+(${[...MODULE_HELPER_NAMES].join('|')})\\s*=\\s*(?:Fn\\(|\\()`);
+
 function braceDelta(s: string): number {
   let d = 0;
   for (const ch of s) {
@@ -224,20 +229,22 @@ export function scriptToTSLWithSettings(
       continue;
     }
 
-    // Preserve module-scope helper Fns (hsl/toHsl) emitted before the main
-    // shader. codeToGraph skips their *definition* (path.skip), but the editor
-    // code + live preview still need them present so the `hsl(...)` call
-    // resolves — dropping them would re-introduce the helper-drop bug on the
-    // .js → editor direction.
-    if (!insideFn && !keepHelper &&
-        /^\s*const\s+(hsl|toHsl)\s*=\s*Fn\(/.test(trimmed)) {
-      helperBraces = braceDelta(line);
+    // Preserve the module-scope helpers emitted before the main shader — EVERY
+    // row of the one table (engine/moduleHelpers.ts), `Fn` and plain-JS alike.
+    // codeToGraph skips their *definition* (path.skip), but the editor code +
+    // live preview still need them present so the `hsl(...)` / `fsColorRamp(...)`
+    // call resolves. This used to name hsl/toHsl only, so a `.js` using
+    // Brightness/Contrast, the distance-field family or Ray Direction came into
+    // the editor calling a helper nothing declared. Braces are counted on the
+    // MASKED line: a helper's string or comment may hold a brace.
+    if (!insideFn && !keepHelper && MODULE_HELPER_DECL.test(trimmed)) {
+      helperBraces = braceDelta(maskedTrimmed);
       keepHelper = helperBraces > 0;
       outLines.push(line);
       continue;
     }
     if (keepHelper) {
-      helperBraces += braceDelta(line);
+      helperBraces += braceDelta(maskedTrimmed);
       outLines.push(line);
       if (helperBraces <= 0) keepHelper = false;
       continue;

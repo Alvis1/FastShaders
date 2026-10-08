@@ -23,12 +23,13 @@
  * canvas encode lives in `imageImport.ts`.
  */
 
-import type { AppNode, ShaderNodeData } from '@/types';
+import type { AppEdge, AppNode, ShaderNodeData } from '@/types';
 import { valueStr, valueNum } from './valueCoerce';
 import { getNodeValues } from '@/types';
 import { base64ToBytes } from './binaryCodec';
 import { fnv1a32Bytes } from './payloadDigest';
-import { sanitizeUvMappingKeys } from './imageUvMapping';
+import { readImageUvMapping, sanitizeUvMappingKeys } from './imageUvMapping';
+import { foldLegacyUvTransform, wiredPlacementIndex } from './imagePlacement';
 import { PLATFORM_CAPS } from './platformCaps';
 
 /** Soft per-image cap on the encoded data-URL length. 600K chars ≈ 450 KB
@@ -529,9 +530,15 @@ export interface ImageSanitizeResult {
  * a payload already kept is free (why not DISTINCT: docs/dev/storage-and-limits.md
  * § STORED once). A stray `imageRef` is removed and not counted as a strip.
  * `caps` defaults to THIS build's soft budgets (utils/platformCaps.ts).
+ *
+ * It is also where a legacy `xf*` transform folds into Tile/Offset/Rotation
+ * (`foldLegacyUvTransform`, utils/imagePlacement.ts), which is why it takes the
+ * arriving `edges`: a wired Tile/Offset socket blocks the fold. REQUIRED, so
+ * the compiler names every restore path that has to hand them over.
  */
 export function sanitizeImageNodes(
   nodes: AppNode[],
+  edges: readonly AppEdge[],
   enforceSoft: boolean,
   caps: { image: number; total: number } = { image: MAX_IMAGE_ENCODED_CHARS, total: MAX_TOTAL_IMAGE_CHARS },
 ): ImageSanitizeResult {
@@ -539,6 +546,9 @@ export function sanitizeImageNodes(
   let runningTotal = 0;
   let changed = false;
   const kept = new Set<string>();
+  // The graph's wired Tile/Offset sockets, scanned once — and only when a node
+  // holds a legacy transform to fold (a hostile file may carry thousands).
+  let wired: Map<string, Set<string>> | null = null;
   const out = nodes.map((n) => {
     if (n.data?.registryType !== 'imageNode') return n;
     const values = getNodeValues(n);
@@ -548,11 +558,18 @@ export function sanitizeImageNodes(
     // both are whitelisted here rather than at every read site; a malformed
     // one is dropped (the node keeps working, it just can't be reverted).
     let base = sanitizeOriginKeys(values) ?? values;
-    // The glTF mapping keys (utils/imageUvMapping.ts) are canonicalised here
-    // on all three restore paths (loadGraph, applyProjectToStore,
-    // loadSavedGroups): a malformed one is dropped as a resource bound.
-    // Emission reads them strictly anyway, so this is not the security control.
+    // The UV mapping keys (utils/imageUvMapping.ts: a model's facts, the turn
+    // and the legacy transform) are canonicalised here on every restore path
+    // (loadGraph, a project opened or added, loadSavedGroups, Mesh with
+    // Materials): a malformed one is dropped as a resource bound. Emission
+    // reads them strictly anyway, so this is not the security control.
     base = sanitizeUvMappingKeys(base) ?? base;
+    // A legacy `xf*` transform folds into Tile/Offset/Rotation — exactly, or
+    // the node keeps it and emits as before.
+    if (readImageUvMapping(base).transform) {
+      wired ??= wiredPlacementIndex(edges, nodes);
+      base = foldLegacyUvTransform(base, wired.has(n.id));
+    }
     // Plain property access, never `in` (see sanitizeOriginKeys).
     if ((base as Record<string, unknown>)[IMAGE_REF_KEY] !== undefined) {
       base = { ...base };

@@ -186,7 +186,7 @@ export default function(params) {
 // Content-Security-Policy, its img-src directive must allow data:.
 
 import * as THREE from 'three/webgpu';
-import { texture, uv, vec2 } from 'three/tsl';
+import { texture, uv } from 'three/tsl';
 
 export const threeRevision = '184';
 
@@ -202,7 +202,7 @@ _image1_tex.flipY = true;
 _image1_tex.needsUpdate = true;
 
 export default function() {
-  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const image1 = texture(_image1_tex, uv()).rgb;
   return { colorNode: image1 };
 }
 ",

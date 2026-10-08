@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { Connection } from '@xyflow/react';
 import { useAppStore } from '@/store/useAppStore';
 import { AddNodeMenu } from './AddNodeMenu';
 import { ConnectionStub } from './ConnectionStub';
@@ -13,6 +14,7 @@ import { StripesSettingsMenu } from './StripesSettingsMenu';
 import { DataVizSettingsMenu } from './DataVizSettingsMenu';
 import { ColormapSettingsMenu } from './ColormapSettingsMenu';
 import { DataRangeSettingsMenu } from './DataRangeSettingsMenu';
+import { AttachMenu } from './AttachMenu';
 import { isTypingTarget } from '@/utils/isTypingTarget';
 import './ContextMenu.css';
 
@@ -23,7 +25,9 @@ const EDGE_MARGIN = 8;
  *  one must not dismiss the menu (each dismisses itself). */
 const DISMISS_EXEMPT = '.palette-pop, .mesh-picker__pop';
 
-export function ContextMenu() {
+/** `onAttach` is NodeEditor's connect path (history + `applyConnection`), handed
+ *  down so the Attach list wires exactly as a dragged wire does. */
+export function ContextMenu({ onAttach }: { onAttach: (c: Connection) => void }) {
   const { open, x, y, type, nodeId, edgeId, sourceNodeId, sourceHandleId, sourceHandleType } = useAppStore(
     (s) => s.contextMenu,
   );
@@ -114,6 +118,7 @@ export function ContextMenu() {
         {type === 'dataviz' && nodeId && <DataVizSettingsMenu nodeId={nodeId} />}
         {type === 'colormap' && nodeId && <ColormapSettingsMenu nodeId={nodeId} />}
         {type === 'dataRange' && nodeId && <DataRangeSettingsMenu nodeId={nodeId} />}
+        {type === 'attach' && nodeId && <AttachMenu nodeId={nodeId} onAttach={onAttach} />}
       </div>
     </>
   );

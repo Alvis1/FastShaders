@@ -449,7 +449,7 @@ describe('image payload storage: behaviour', () => {
     it('every restore path resolves refs BEFORE the image sanitizer', () => {
       const resolveAt = storeSrc.indexOf('resolveImageRefs(data.nodes)');
       expect(resolveAt).toBeGreaterThan(-1);
-      expect(storeSrc.indexOf('sanitizeImageNodes(data.nodes, false)')).toBeGreaterThan(resolveAt);
+      expect(storeSrc.indexOf('sanitizeImageNodes(data.nodes, data.edges, false)')).toBeGreaterThan(resolveAt);
 
       const lib = storeSrc.slice(
         storeSrc.indexOf('export function loadSavedGroupsReport('),
@@ -458,7 +458,7 @@ describe('image payload storage: behaviour', () => {
       const harvestAt = lib.indexOf('harvestImagePayloads(candidates.flatMap(');
       expect(harvestAt).toBeGreaterThan(-1);
       expect(lib.indexOf('.map((g) => {')).toBeGreaterThan(harvestAt);
-      expect(lib.indexOf('sanitizeImageNodes(refs.nodes, false)')).toBeGreaterThan(
+      expect(lib.indexOf('sanitizeImageNodes(refs.nodes, shape.edges, false)')).toBeGreaterThan(
         lib.indexOf('resolveImageRefs(shape.nodes, index, budget)'),
       );
 

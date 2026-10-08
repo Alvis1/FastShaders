@@ -8,8 +8,10 @@
  * have no notion of two nodes sharing one picture beyond an equal string, and
  * the texture planner already shares the module-scope objects of equal
  * strings (engine/imageTexturePlan.ts). The node's own sampling settings
- * (colour space, filter, flips, tile/offset, the future glTF mapping keys)
- * stay as they are: they describe how THIS node samples the picture.
+ * (colour space, filter, flips, tile/offset/rotation, the UV set, the green
+ * flip) stay as they are: they describe how THIS node samples the picture.
+ * Only `orientation`, a fact about the bytes, moves with the payload
+ * (`withImagePayload`).
  *
  * Provenance (`originId`, `srcWidth`/`srcHeight`) moves WITH the payload,
  * because the original cache behind Revert and the Resolution ladder is

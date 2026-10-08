@@ -37,11 +37,11 @@ describe('graphToCode — imageNode emission', () => {
     expect(code).toContain('_image1_tex.colorSpace = globalThis.THREE.SRGBColorSpace;');
     expect(code).toContain('_image1_tex.wrapS = globalThis.THREE.RepeatWrapping;');
     expect(code).toContain('_image1_tex.flipY = true;');
-    // The horizontal correction (u' = 1-u) is baked into the default; the
-    // user-facing "Flip X" toggle (unchecked by default) cancels it.
-    expect(code).toContain(
-      'const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;',
-    );
+    // The picture is sampled as stored: no mirror unless a Flip box is ticked.
+    // (A baked u' = 1-u "correction" read MIRRORED on three's primitives,
+    // whose UVs run u right and v up — removed 2026-10-08.)
+    expect(code).toContain('const image1 = texture(_image1_tex, uv()).rgb;');
+    expect(code).not.toMatch(/import \{[^}]*\bvec2\b[^}]*\} from 'three\/tsl'/);
     expect(code).toContain('return image1;');
     // Setup precedes the Fn (module scope), sample lives inside it.
     expect(code.indexOf('new Image()')).toBeLessThan(code.indexOf('Fn(() => {'));
@@ -90,26 +90,34 @@ describe('graphToCode — imageNode emission', () => {
     }
   });
 
-  it('connected uv input replaces the uv() fallback (flip still applies)', () => {
-    const image = makeNode('img1', 'imageNode', valid);
-    const v2 = makeNode('v1', 'vec2', { x: 0.5, y: 0.5 });
-    const output = makeNode('out1', 'output');
-    const edges = [
-      makeEdge('v1', 'out', 'img1', 'uv'),
-      makeEdge('img1', 'out', 'out1', 'color'),
-    ];
-    const { code } = graphToCode([image, v2, output], edges);
-    expect(code).toContain(
+  it('connected uv input replaces the uv() fallback (a ticked flip still applies)', () => {
+    const wired = (values: Record<string, string | number>) => {
+      const image = makeNode('img1', 'imageNode', values);
+      const v2 = makeNode('v1', 'vec2', { x: 0.5, y: 0.5 });
+      const output = makeNode('out1', 'output');
+      const edges = [
+        makeEdge('v1', 'out', 'img1', 'uv'),
+        makeEdge('img1', 'out', 'out1', 'color'),
+      ];
+      return graphToCode([image, v2, output], edges).code;
+    };
+    const code = wired(valid);
+    expect(code).toContain('const image1 = texture(_image1_tex, vec21).rgb;');
+    expect(code).not.toContain('uv()');
+    expect(wired({ ...valid, flipX: 1 })).toContain(
       'const image1 = texture(_image1_tex, vec21.mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;',
     );
-    expect(code).not.toContain('uv()');
   });
 
-  it('UV settings: Flip X checked → raw uv(); tile/offset chain on; repeat off → clamp', () => {
-    // Checking "Flip X" cancels the baked-in horizontal correction → bare uv().
-    const neutral = imageGraph({ ...valid, flipX: 1 });
+  it('UV settings: Flip X checked → mirrored u; tile/offset chain on; repeat off → clamp', () => {
+    // Unchecked samples the picture as stored; checking "Flip X" mirrors u.
+    const neutral = imageGraph(valid);
     const plain = graphToCode(neutral.nodes, neutral.edges);
     expect(plain.code).toContain('const image1 = texture(_image1_tex, uv()).rgb;');
+    const flipped = imageGraph({ ...valid, flipX: 1 });
+    expect(graphToCode(flipped.nodes, flipped.edges).code).toContain(
+      'const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;',
+    );
 
     const { nodes, edges } = imageGraph({
       ...valid,
@@ -123,7 +131,7 @@ describe('graphToCode — imageNode emission', () => {
     });
     const { code } = graphToCode(nodes, edges);
     expect(code).toContain(
-      'const image1 = texture(_image1_tex, uv().mul(vec2(1, -1)).add(vec2(0, 1)).mul(vec2(2, 3)).add(vec2(0.25, -0.5))).rgb;',
+      'const image1 = texture(_image1_tex, uv().mul(vec2(-1, -1)).add(vec2(1, 1)).mul(vec2(2, 3)).add(vec2(0.25, -0.5))).rgb;',
     );
     expect(code).toContain('_image1_tex.wrapS = globalThis.THREE.ClampToEdgeWrapping;');
     expect(code).toContain('_image1_tex.wrapT = globalThis.THREE.ClampToEdgeWrapping;');
@@ -155,9 +163,7 @@ describe('graphToCode — imageNode emission', () => {
     const { code } = graphToCode(nodes, edges);
     expect(code).not.toContain('fetch');
     // Unparseable numbers fall back to the defaults (tile 1, offset 0).
-    expect(code).toContain(
-      'const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;',
-    );
+    expect(code).toContain('const image1 = texture(_image1_tex, uv()).rgb;');
   });
 
   it('malformed payload degrades to an inert vec3 declaration (no dangling var)', () => {
@@ -254,7 +260,7 @@ describe('graphToCode — imageNode emission', () => {
     expect(code).toContain('return { normal: normalMap(image1) };');
     expect(code).toMatch(/import \{[^}]*\bnormalMap\b[^}]*\} from 'three\/tsl'/);
     // The sample itself is unchanged — only the Normal channel wraps it.
-    expect(code).toContain('const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;');
+    expect(code).toContain('const image1 = texture(_image1_tex, uv()).rgb;');
   });
 
   it('image → Color is NOT wrapped (raw .rgb sample, no normalMap)', () => {
@@ -312,40 +318,49 @@ describe('graphToCode — imageNode glTF mapping (orientation, UV set, green fli
     expect(moved).toEqual([]);
   });
 
-  it('(b) the glTF orientation uploads unflipped and drops the 1-u correction', () => {
+  it('(b) the glTF orientation uploads unflipped — and that is ALL it changes', () => {
     const c = code(imageGraph({ ...valid, orientation: 'gltf' }));
     expect(c).toContain('_image1_tex.flipY = false;');
     expect(c).not.toContain('_image1_tex.flipY = true;');
     expect(sample(c)).toBe('  const image1 = texture(_image1_tex, uv()).rgb;');
+    // The uv chain is the app orientation's own: neither bakes a mirror in.
+    expect(sample(c)).toBe(sample(code(imageGraph(valid))));
   });
 
-  it('(c) under glTF each ticked Flip box mirrors; under the app orientation Flip X still cancels the correction', () => {
-    expect(sample(code(imageGraph({ ...valid, orientation: 'gltf', flipX: 1 }))))
-      .toBe('  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;');
-    expect(sample(code(imageGraph({ ...valid, orientation: 'gltf', flipY: 1 }))))
-      .toBe('  const image1 = texture(_image1_tex, uv().mul(vec2(1, -1)).add(vec2(0, 1))).rgb;');
-    const app = code(imageGraph({ ...valid, flipX: 1 }));
-    expect(sample(app)).toBe('  const image1 = texture(_image1_tex, uv()).rgb;');
-    expect(app).toContain('_image1_tex.flipY = true;');
+  it('(c) each ticked Flip box mirrors its axis in BOTH orientations; unticked mirrors nothing', () => {
+    for (const o of [{}, { orientation: 'gltf' }] as Record<string, string>[]) {
+      expect(sample(code(imageGraph({ ...valid, ...o, flipX: 1 }))), JSON.stringify(o))
+        .toBe('  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;');
+      expect(sample(code(imageGraph({ ...valid, ...o, flipY: 1 }))), JSON.stringify(o))
+        .toBe('  const image1 = texture(_image1_tex, uv().mul(vec2(1, -1)).add(vec2(0, 1))).rgb;');
+      expect(sample(code(imageGraph({ ...valid, ...o, flipX: 1, flipY: 1 }))), JSON.stringify(o))
+        .toBe('  const image1 = texture(_image1_tex, uv().mul(vec2(-1, -1)).add(vec2(1, 1))).rgb;');
+      expect(sample(code(imageGraph({ ...valid, ...o }))), JSON.stringify(o))
+        .toBe('  const image1 = texture(_image1_tex, uv()).rgb;');
+    }
+    expect(code(imageGraph({ ...valid, flipX: 1 }))).toContain('_image1_tex.flipY = true;');
   });
 
   it('(d) a UV set samples uv(n); a wired uv input beats it', () => {
     const c = code(imageGraph({ ...valid, uvSet: 2 }));
-    expect(sample(c)).toBe('  const image1 = texture(_image1_tex, uv(2).mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;');
+    expect(sample(c)).toBe('  const image1 = texture(_image1_tex, uv(2)).rgb;');
     expect(importLine(c)).toMatch(/\buv\b/);
     const wired = graphToCode(
       [makeNode('img1', 'imageNode', { ...valid, uvSet: 2 }), makeNode('v1', 'vec2', { x: 0.5, y: 0.5 }), makeNode('out1', 'output')],
       [makeEdge('v1', 'out', 'img1', 'uv'), makeEdge('img1', 'out', 'out1', 'color')],
     ).code;
-    expect(sample(wired)).toBe('  const image1 = texture(_image1_tex, vec21.mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;');
+    expect(sample(wired)).toBe('  const image1 = texture(_image1_tex, vec21).rgb;');
     expect(wired).not.toContain('uv(2)');
   });
 
   it('(e) the transform comes BEFORE the mirror, tile and offset', () => {
-    expect(sample(code(imageGraph({ ...valid, xfScaleX: 2, xfScaleY: 3 }))))
+    expect(sample(code(imageGraph({ ...valid, flipX: 1, xfScaleX: 2, xfScaleY: 3 }))))
       .toBe('  const image1 = texture(_image1_tex, uv().mul(vec2(2, 3)).mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;');
-    expect(sample(code(imageGraph({ ...valid, xfScaleX: 2, xfScaleY: 3, tileX: 4, tileY: 4, offsetX: 0.5 }))))
+    expect(sample(code(imageGraph({ ...valid, flipX: 1, xfScaleX: 2, xfScaleY: 3, tileX: 4, tileY: 4, offsetX: 0.5 }))))
       .toBe('  const image1 = texture(_image1_tex, uv().mul(vec2(2, 3)).mul(vec2(-1, 1)).add(vec2(1, 0)).mul(vec2(4, 4)).add(vec2(0.5, 0))).rgb;');
+    // Unflipped, the transform is followed straight by the tile.
+    expect(sample(code(imageGraph({ ...valid, xfScaleX: 2, xfScaleY: 3, tileX: 4, tileY: 4 }))))
+      .toBe('  const image1 = texture(_image1_tex, uv().mul(vec2(2, 3)).mul(vec2(4, 4))).rgb;');
   });
 
   it('(f) a rotation is ONE mat2 of clean constants, row-major, and imports mat2 (and no unused vec2)', () => {
@@ -358,8 +373,8 @@ describe('graphToCode — imageNode glTF mapping (orientation, UV set, green fli
     expect(sample(c)).toBe('  const image1 = texture(_image1_tex, mat2(0, 1, -1, 0).mul(uv())).rgb;');
     expect(importLine(c)).toMatch(/\bmat2\b/);
     expect(importLine(c)).not.toMatch(/\bvec2\b/);
-    // Under the app orientation the mirror follows it.
-    expect(code(imageGraph({ ...valid, xfRotation: Math.PI / 2 }))).toContain('mat2(0, 1, -1, 0).mul(uv()).mul(vec2(-1, 1))');
+    // A ticked Flip X's mirror follows it, in either orientation.
+    expect(code(imageGraph({ ...valid, flipX: 1, xfRotation: Math.PI / 2 }))).toContain('mat2(0, 1, -1, 0).mul(uv()).mul(vec2(-1, 1))');
   });
 
   it('(g) an offset alone adds straight after the base', () => {

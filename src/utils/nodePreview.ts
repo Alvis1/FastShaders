@@ -9,7 +9,7 @@ import { generateEdgeId } from '@/utils/idGenerator';
 /**
  * PREVIEW MODE — look at ONE node's output on the 3D view.
  *
- * Right-click a node → Preview (or ⌘/Ctrl+click it) and, for as long as the
+ * Right-click a node → Preview (or Alt+click it) and, for as long as the
  * mode lasts, the 3D preview renders THAT socket on the Output's Color channel
  * with every other input of the Output disabled; the canvas dims everything
  * else and draws a straight line along the route. A press anywhere else, or
@@ -28,7 +28,7 @@ import { generateEdgeId } from '@/utils/idGenerator';
 export interface NodePreviewTarget {
   /** The previewed node. */
   nodeId: string;
-  /** Which of its output sockets — `outputs[0]` from ⌘/Ctrl+click, any from the menu. */
+  /** Which of its output sockets — `outputs[0]` from Alt+click, any from the menu. */
   handleId: string;
 }
 
@@ -88,7 +88,7 @@ export const PREVIEW_KEEP_SELECTOR = '.context-menu, .palette-pop, .mesh-picker_
  * per-column `dynamicOutputs` when it has them, else the registry definition's
  * `outputs`. Empty for the sinks (both Output kinds declare `outputs: []`),
  * groups and notes — a node with nothing to route gets no Preview row and
- * ⌘/Ctrl+click on it falls through to ordinary selection.
+ * Alt+click on it falls through to ordinary selection.
  */
 export function previewableOutputs(node: AppNode): PortDefinition[] {
   if (node.type === 'group' || node.type === 'note') return [];

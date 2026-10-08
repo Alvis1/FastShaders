@@ -7,6 +7,7 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { graphToCode } from './graphToCode';
 import { codeToGraph } from './codeToGraph';
 import { makeNode, makeEdge } from '@/test-utils';
+import { tslTokenHits } from '@/lutHelperHarness';
 
 const traverse = (typeof (_traverse as unknown as { default?: unknown }).default === 'function'
   ? (_traverse as unknown as { default: typeof _traverse }).default
@@ -29,6 +30,11 @@ describe('module-scope helper table', () => {
         // A mode variant's mode is in the owner's closed vocabulary.
         const mode = h.alias.values?.mode;
         if (typeof mode === 'string') expect(owner!.modes?.values, `${name} mode ${mode}`).toContain(mode);
+        continue;
+      }
+      // A SUPPORT row (fsLut) is no def's helper: it ships only through another row's `requires`.
+      if (h.support) {
+        expect(h.kind, `${name} support row`).toBe('js');
         continue;
       }
       const def = [...NODE_REGISTRY.values()].find((d) => d.tslFunction === name);
@@ -57,6 +63,12 @@ describe('module-scope helper table', () => {
 
   it('each helper declares exactly the name its key promises', () => {
     for (const [type, h] of MODULE_HELPERS) {
+      if (h.kind === 'js') {
+        // A plain-JS declaration, never an `Fn` — codeToGraph skips it by NAME whatever its init.
+        expect(h.lines[0], type).toMatch(new RegExp(`^const ${type} = (?!Fn\\()`));
+        expect(['};', '})();'], type).toContain(h.lines[h.lines.length - 1]);
+        continue;
+      }
       expect(h.lines[0], type).toMatch(new RegExp(`^const ${type} = Fn\\(`));
       expect(h.lines[h.lines.length - 1], type).toBe('});');
     }
@@ -75,10 +87,16 @@ describe('module-scope helper table', () => {
           if (path.parentPath?.parent.type === 'ArrayPattern') locals.add(path.node.name);
         },
         CallExpression(path) {
-          if (t.isIdentifier(path.node.callee)) called.add(path.node.callee.name);
+          if (!t.isIdentifier(path.node.callee)) return;
+          const name = path.node.callee.name;
+          // A plain-JS helper calls its own closures and arrow PARAMETERS (`bake()`): a real scope binding.
+          if (h.kind === 'js' && path.scope.hasBinding(name)) return;
+          called.add(name);
         },
       });
       for (const name of called) {
+        // The two globals a plain-JS helper may call, and the table's own helpers.
+        if (h.kind === 'js' && (name === 'Number' || name === 'parseInt' || MODULE_HELPERS.has(name))) continue;
         if (name === 'Fn' || name === type || locals.has(name)) continue;
         expect(h.imports, `${type} calls ${name}`).toContain(name);
       }
@@ -87,6 +105,51 @@ describe('module-scope helper table', () => {
 
   it('MODULE_HELPER_NAMES is exactly the key set', () => {
     expect([...MODULE_HELPER_NAMES].sort()).toEqual([...MODULE_HELPERS.keys()].sort());
+  });
+
+  it('every `requires` names a table key EARLIER in table order (emission order defines it before use)', () => {
+    const order = [...MODULE_HELPERS.keys()];
+    for (const [name, h] of MODULE_HELPERS) {
+      for (const r of h.requires ?? []) {
+        expect(order.indexOf(r), `${name} requires ${r}`).toBeGreaterThanOrEqual(0);
+        expect(order.indexOf(r), `${name} requires ${r}`).toBeLessThan(order.indexOf(name));
+      }
+    }
+  });
+
+  it('no helper text holds a token the loader would import beyond its own imports (a LINT — lutHelperLoaders is the pin)', () => {
+    for (const [name, h] of MODULE_HELPERS) {
+      expect(tslTokenHits(h.lines.join('\n'), [...h.imports, 'Fn']), name).toEqual([]);
+    }
+  });
+
+  it('no plain-JS helper holds a SHORTHAND object property (loader fixTSLShadowing renames shorthand keys)', () => {
+    const js = [...MODULE_HELPERS].filter(([, h]) => h.kind === 'js');
+    expect(js.length).toBeGreaterThan(0);
+    for (const [name, h] of js) {
+      const shorthand: string[] = [];
+      traverse(parse(h.lines.join('\n'), { sourceType: 'module' }), {
+        ObjectProperty(path) {
+          if (path.node.shorthand) shorthand.push(t.isIdentifier(path.node.key) ? path.node.key.name : '?');
+        },
+      });
+      expect(shorthand, name).toEqual([]);
+    }
+  });
+});
+
+describe('plain-JS helpers ride along through `requires`', () => {
+  it('a support row is emitted by nothing on its own — a plain graph never carries fsLut', () => {
+    const code = graphToCode([makeNode('f', 'float'), makeNode('out', 'output')], [makeEdge('f', 'out', 'out', 'roughness')]).code;
+    expect(code).not.toContain('fsLut');
+  });
+
+  it('the helper names are reserved from the variable namer', () => {
+    // A property node literally named fsLut would shadow the helper the LUT nodes call.
+    const p = makeNode('p', 'property_float', { name: 'fsLut', value: 0.5 });
+    const code = graphToCode([p, makeNode('out', 'output')], [makeEdge('p', 'out', 'out', 'roughness')]).code;
+    expect(code).not.toMatch(/const fsLut = /);
+    expect(code).toContain('const fsLut2 = uniform(');
   });
 });
 

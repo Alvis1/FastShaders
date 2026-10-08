@@ -1,14 +1,12 @@
 import { useAppStore } from '@/store/useAppStore';
 import { t, formatNodeLabel, portLabel } from '@/i18n';
-import { getNodeValues, getNodeExposedPorts } from '@/types';
+import { getNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import { DragNumberInput } from '../inputs/DragNumberInput';
-import { toggleExposedPort, usesExposedPorts } from '@/utils/exposedPorts';
-import { asOneHistoryEntry } from '@/utils/historyGesture';
-import { rowStyle, labelStyle, checkLabelStyle, checkStyle, nameFieldStyle, NodeActions } from './menuShared';
-import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
+import { usesExposedPorts } from '@/utils/exposedPorts';
+import { rowStyle, labelStyle, NodeActions } from './menuShared';
 import { uniformTypeFor, constantTypeFor, convertPropertyNode } from '@/utils/propertyConvert';
-import { useHistoryBracket } from '@/hooks/useHistoryBracket';
+import { isEvalMode } from '@/eval/evalMode';
+import { ParamRow } from './ParamRow';
 import { ImageNodeSettings } from './ImageNodeSettings';
 import { PreviewChannelRow } from './PreviewChannelRow';
 import { SoundNodeSettings } from './SoundNodeSettings';
@@ -26,11 +24,6 @@ interface NodeSettingsMenuProps {
 export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const language = useAppStore((s) => s.language);
-  // Color swatches fire an input event per frame while their picker is
-  // dragged, and the property-name field fires one per keystroke — each would
-  // otherwise pushHistory a full-graph structuredClone. Bracket them so a
-  // burst lands as one undo entry (DragNumberInput brackets its own drags).
-  const { bracket, closeBracket } = useHistoryBracket();
 
   // Subscribe to THIS node, not to the whole array (the idiom every settings
   // menu here follows, RampColorPorts included). React Flow's
@@ -48,42 +41,19 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
    *  the shared footer's five `Preview <socket>` rows, and the two lines that
    *  spelled "Image" under the headings are gone with them. */
   const imageNode = node.data.registryType === 'imageNode';
+  /** The Image node draws its Tile/Offset rows itself (ImageNodeSettings: the
+   *  same ParamRow, named, beside the turn they work with) — except in a study
+   *  session, which keeps today's menu: the raw-key rows below, in this order.
+   *  `isEvalMode` is sampled once per page, so every render agrees. */
+  const imageOwnsParamRows = imageNode && !isEvalMode();
 
-  const exposedPorts: string[] = getNodeExposedPorts(node);
-  // Only opt-in-socket nodes get expose/hide checkboxes. Everywhere else the
-  // ports are always rendered, so a checkbox would be a dead switch whose
-  // uncheck silently deletes edges. This used to be a second, hand-maintained
+  // Only opt-in-socket nodes get the socket-only rows below (ParamRow draws
+  // each row's checkbox on the same test). Everywhere else the ports are
+  // always rendered, so a checkbox would be a dead switch whose uncheck
+  // silently deletes edges. This used to be a second, hand-maintained
   // category list here; it is the shared rule now, so adding a node to
   // usesExposedPorts can't leave its checkboxes behind.
   const showPortToggles = usesExposedPorts(def);
-
-  const handleValueChange = (key: string, value: string | number) => {
-    // For the property name field, keep as string (don't parse as number)
-    if (key === 'name' && (node.data.registryType === 'property_float' || node.data.registryType === 'property_color')) {
-      updateNodeData(nodeId, {
-        values: { ...getNodeValues(node), [key]: String(value) },
-      });
-      return;
-    }
-    const numVal = typeof value === 'number' ? value : parseFloat(value);
-    updateNodeData(nodeId, {
-      values: {
-        ...getNodeValues(node),
-        [key]: isNaN(numVal) ? value : numVal,
-      },
-    });
-  };
-
-  const handleTogglePort = (key: string) => {
-    // `toggleExposedPort` deletes the hidden port's edges (its own pushHistory)
-    // and is evaluated BEFORE `updateNodeData` (argument order), which pushes
-    // again — two entries per click, the first of which lands on "socket still
-    // exposed, wire already gone", a state the user never authored. One
-    // bracket around the whole statement makes it one undoable act.
-    asOneHistoryEntry(() => {
-      updateNodeData(nodeId, { exposedPorts: toggleExposedPort(nodeId, exposedPorts, key) });
-    });
-  };
 
   return (
     <div className="context-menu__list">
@@ -129,83 +99,21 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
       {/* Input ports not in defaultValues (tslRef params like position, time) — only show toggles for non-basic categories */}
       {showPortToggles && def?.inputs
         .filter((inp) => !def.defaultValues || !(inp.id in def.defaultValues))
-        .map((inp) => {
-          const isExposed = exposedPorts.includes(inp.id);
-          return (
-            <div key={inp.id} style={rowStyle}>
-              <label style={checkLabelStyle}>
-                <input
-                  type="checkbox"
-                  checked={isExposed}
-                  onChange={() => handleTogglePort(inp.id)}
-                  title={t('Expose as input socket', language)}
-                  style={checkStyle}
-                />
-                {portLabel(inp.label, language)}
-              </label>
-            </div>
-          );
-        })}
+        .map((inp) => (
+          <ParamRow key={inp.id} nodeId={nodeId} paramKey={inp.id} label={portLabel(inp.label, language)} />
+        ))}
 
+      {/* One row per registry default, under its raw key (ParamRow). The
+          Image node's are drawn by ImageNodeSettings instead, outside a study
+          session — see `imageOwnsParamRows`. */}
       {def?.defaultValues &&
-        Object.entries(def.defaultValues).map(([key, defaultVal]) => {
-          const isColor = typeof defaultVal === 'string' && defaultVal.startsWith('#');
-          const isPropertyName =
-            key === 'name' &&
-            (node.data.registryType === 'property_float' || node.data.registryType === 'property_color');
-          const isPort = typeof defaultVal === 'string' && !defaultVal.startsWith('#') && !isPropertyName;
-          const currentValue = getNodeValues(node)[key] ?? defaultVal;
-          const isExposed = exposedPorts.includes(key);
+        !imageOwnsParamRows &&
+        Object.keys(def.defaultValues).map((key) => <ParamRow key={key} nodeId={nodeId} paramKey={key} />)}
 
-          return (
-            <div key={key} style={rowStyle}>
-              <label style={checkLabelStyle}>
-                {showPortToggles && (
-                  <input
-                    type="checkbox"
-                    checked={isExposed}
-                    onChange={() => handleTogglePort(key)}
-                    title={t('Expose as input socket', language)}
-                    style={checkStyle}
-                  />
-                )}
-                {key}
-              </label>
-              {isPropertyName ? (
-                <input
-                  type="text"
-                  value={String(currentValue)}
-                  onChange={(e) => { bracket(); handleValueChange(key, e.target.value); }}
-                  onBlur={closeBracket}
-                  style={nameFieldStyle}
-                />
-              ) : isColor ? (
-                // `history="bracket"`: handleValueChange -> updateNodeData ->
-                // an unconditional pushHistory, so this is a real graph edit
-                // and the picker owns the coalescing bracket the row used to
-                // open by hand for the native input's per-frame stream.
-                <PaletteColorPicker
-                  className="context-menu__color"
-                  history="bracket"
-                  value={String(currentValue)}
-                  onPick={(hex) => handleValueChange(key, hex)}
-                />
-              ) : isPort ? null : (
-                <DragNumberInput
-                  value={Number(currentValue)}
-                  onChange={(v) => handleValueChange(key, v)}
-                />
-              )}
-            </div>
-          );
-        })}
-
-      {/* Image node: image-specific toggles, provenance, and the revert for
-          the drop-time power-of-two snap. Tile/offset values + their
-          expose-as-socket checkboxes render through the GENERIC sections above
-          (same rules as the noise nodes' params); only what has no registry
-          default lives in that component. Its own component because it needs
-          hooks — see ImageNodeSettings. */}
+      {/* Image node: the picture, where it lands (Tile/Offset through the same
+          ParamRow, outside a study session; the turn; the Flips), provenance
+          and the revert for the drop-time power-of-two snap. Its own
+          component because it needs hooks — see ImageNodeSettings. */}
       {node.data.registryType === 'imageNode' && <ImageNodeSettings nodeId={nodeId} />}
 
       {/* Sound node: which source to capture from. Session-only — it never

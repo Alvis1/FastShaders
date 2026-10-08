@@ -102,6 +102,11 @@ export function hasNodeGlyph(type: string, design?: GlyphDesign): boolean {
  * registry decides how it BEHAVES. `growsOperands` covers add/sub/mul/div
  * (already glyphed, so unchanged) plus `append`.
  *
+ * And exactly ONE output: the operator card draws exactly one output socket, so
+ * a second output (Fresnel's Facing) would never mount — its edges kept in the
+ * store and emitted, never drawn. No 2-input glyph/grows node had a second
+ * output when the rule was added (2026-10-08), so no node changed layout.
+ *
  * Keep all four gates on this one predicate — ShaderNode, NodeVisual (the
  * one-node-one-look replica), layoutEngine's footprint estimate, and the Node
  * Designer's `layoutIsOp` (which mirrors it over its own draft state).
@@ -110,7 +115,7 @@ export function usesOperatorLayout(
   def: NodeDefinition | undefined,
   design?: GlyphDesign,
 ): boolean {
-  if (!def || def.inputs.length !== 2) return false;
+  if (!def || def.inputs.length !== 2 || def.outputs.length !== 1) return false;
   return hasNodeGlyph(def.type, design) || growsOperands(def);
 }
 

@@ -93,11 +93,13 @@ describe('pickTextureValues', () => {
     expect(pickTextureValues({ imageB64: B }, src())).toBeNull();
   });
 
-  it('swaps the picture and keeps every sampling setting', () => {
+  it('swaps the picture and keeps every sampling and placement setting', () => {
     const current = {
       imageB64: A, width: 64, height: 32, fileName: 'a.png',
       colorSpace: 'data', filter: 'nearest', flipX: 1, flipY: 1, repeat: 0, tileX: 3, offsetY: 0.25,
-      uvSet: 2, xfRotation: 0.5,
+      // The turn is placement, not a fact about the bytes, so it stays — as
+      // does a legacy transform the restore fold had to leave in place.
+      rotation: 0.5, uvSet: 2, xfRotation: 0.5,
     };
     const next = pickTextureValues(current, src())!;
     expect(next).toEqual({

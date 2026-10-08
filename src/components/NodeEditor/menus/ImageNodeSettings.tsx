@@ -1,8 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAppStore, resolveDeviceTextureDim, resolveDeviceBudget } from '@/store/useAppStore';
-import { t } from '@/i18n';
+import { t, portLabel } from '@/i18n';
 import { getNodeValues } from '@/types';
-import { rowStyle, labelStyle, checkLabelStyle, checkStyle, wideFieldStyle } from './menuShared';
+import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { rowStyle, labelStyle, checkLabelStyle, checkStyle, wideFieldStyle, fieldStyle } from './menuShared';
+import { DragNumberInput } from '../inputs/DragNumberInput';
+import { ParamRow } from './ParamRow';
+import {
+  readImageUvMapping,
+  readPictureRotation,
+  withUvMapping,
+  withPictureRotation,
+  withoutLegacyTransform,
+  type UvMappingPatch,
+  type ImageUvSet,
+} from '@/utils/imageUvMapping';
+import { readImagePlacement } from '@/utils/imagePlacement';
 import { imageCharsReplacing, MAX_TOTAL_IMAGE_CHARS, displayImageFileName, resolveImageDrop } from '@/utils/imageNode';
 import { resolutionLadder } from '@/utils/imageCodec';
 import { resizeEncodedImage, encodeImageFile, isSvgFile, type ImageConvertMode } from '@/utils/imageImport';
@@ -14,7 +27,6 @@ import { encodeGltfImages } from '@/utils/gltfTextureEncode';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { isEvalMode } from '@/eval/evalMode';
 import { TexturePicker } from './TexturePicker';
-import { ImageMappingSettings } from './ImageMappingSettings';
 import { loadImageOrigin, stashImageOrigin, canStashPayload, type ImageOriginPayload } from '@/utils/imageOriginCache';
 import { deriveOriginView, type LoadedOrigin } from './imageOriginView';
 import { generateId } from '@/utils/idGenerator';
@@ -24,6 +36,9 @@ const valueStyle = {
   color: 'var(--text-primary)',
   fontVariantNumeric: 'tabular-nums',
 } as const;
+
+/** A small button inside a row ("Older transform" → Clear). */
+const rowButtonStyle = { ...fieldStyle, width: 'auto', cursor: 'pointer' } as const;
 
 /**
  * "From file…" (TexturePicker) — the canvas drop's pipeline, aimed at an
@@ -260,7 +275,8 @@ async function materialiseModelTextureInner(targetId: string, src: ModelTextureS
   // What is NOT carried: the UV set and the KHR_texture_transform. Those live
   // on the material's textureInfo, not on the picture — they describe how ONE
   // material samples it, and this node may be sampling it for something else
-  // entirely. The settings menu's glTF-mapping block is where a user sets them.
+  // entirely. Where THIS node samples it is the node's own to set: the menu's
+  // UV set row, and its Tile, Offset and Rotation rows.
   const picked = withImagePayload(liveVals, {
     dataUrl: enc.payload.dataUrl,
     width: enc.payload.width,
@@ -305,7 +321,9 @@ async function materialiseModelTextureInner(targetId: string, src: ModelTextureS
 
 /** Image-node section of the right-click settings menu. Its own component
  *  because it needs hooks: the origin read is PREFETCHED (keyed by originId,
- *  see imageOriginView.ts) so Revert and Data-map each write ONE updateNodeData. */
+ *  see imageOriginView.ts) so Revert and Data-map each write ONE updateNodeData.
+ *  Outside a study session it also draws the node's Tile/Offset rows — the
+ *  generic ParamRow, which NodeSettingsMenu then skips (`imageOwnsParamRows`). */
 export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const language = useAppStore((s) => s.language);
@@ -370,6 +388,59 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
       </label>
     </div>
   );
+
+  /**
+   * PLACEMENT, one control per concept: Tile and Offset are the node's own
+   * sockets, and their rows are the generic menu's ParamRow, named here
+   * rather than printed as raw keys; the turn is stored only (`rotation`,
+   * never a socket); the Flips are the checkbox rows. Read through the ONE
+   * placement reader codegen shares (utils/imagePlacement.ts), and written
+   * through each key's one writer.
+   */
+  const def = NODE_REGISTRY.get(node.data.registryType);
+  const placement = readImagePlacement(vals);
+  const mapping = readImageUvMapping(vals);
+  /** θ in degrees, rounded to the thousandth: a stored −π/6 shows −30, not
+   *  float dust. */
+  const rotationDeg = Math.round(((placement.theta * 180) / Math.PI) * 1000) / 1000;
+
+  /** Rotation (°): degrees in, radians stored by `withPictureRotation` in the
+   *  form the reader returns (mod 2π, no key for no turn). One updateNodeData
+   *  per act — DragNumberInput brackets a scrub into one entry — and none for
+   *  an act that changes nothing: clicking into the field and out again
+   *  commits the SHOWN value, and writing that back would round an imported
+   *  turn to the thousandth of a degree and push an empty undo entry. */
+  const setRotation = (deg: number) => {
+    if (!Number.isFinite(deg) || deg === rotationDeg) return;
+    const live = useAppStore.getState().nodes.find((n) => n.id === nodeId);
+    if (!live || live.data.registryType !== 'imageNode') return;
+    const liveVals = getNodeValues(live);
+    // Whole turns come off in DEGREES, where `%` is exact, so any number typed
+    // is a turn the reader takes rather than one past its 1e6 bound.
+    const next = withPictureRotation(liveVals, ((deg % 360) * Math.PI) / 180);
+    if (readPictureRotation(next) === readPictureRotation(liveVals)) return;
+    updateNodeData(nodeId, { values: next });
+  };
+
+  /** "Older transform" → Clear: the legacy `xf*` keys a restore could not
+   *  fold (utils/imagePlacement.ts) go, in one updateNodeData. That CHANGES
+   *  the picture — the row's title says so — and Undo brings it back. */
+  const clearLegacyTransform = () => {
+    const live = useAppStore.getState().nodes.find((n) => n.id === nodeId);
+    if (!live || live.data.registryType !== 'imageNode') return;
+    const liveVals = getNodeValues(live);
+    if (!readImagePlacement(liveVals).xf) return;
+    updateNodeData(nodeId, { values: withoutLegacyTransform(liveVals) });
+  };
+
+  /** The model binding (UV set, normal-map green flip), written through
+   *  `withUvMapping` against the LIVE node, so a key back at its default is
+   *  deleted rather than stored. One updateNodeData per change. */
+  const writeMapping = (patch: UvMappingPatch) => {
+    const live = useAppStore.getState().nodes.find((n) => n.id === nodeId);
+    if (!live || live.data.registryType !== 'imageNode') return;
+    updateNodeData(nodeId, { values: withUvMapping(getNodeValues(live), patch) });
+  };
 
   // Read-only source info: format, encoded (post-downscale) resolution,
   // and payload size (base64 chars → ~3/4 bytes). Reflects what's actually
@@ -821,6 +892,43 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
         )
       )}
       {infoRow(t('Size', language), size)}
+      {/* Where the picture lands: Tile X/Y and Offset X/Y (each with its
+          expose-as-socket box — the registry defaults, drawn by the generic
+          ParamRow under their socket names), the turn, and — only on a node a
+          restore could not fold — the legacy transform, with the one way to
+          drop it. A study session keeps today's menu (research §7): the
+          generic loop draws Tile/Offset there under their raw keys, and there
+          is no turn to set; stored values still emit, the gate is UI-only. */}
+      {!study && (
+        <>
+          {Object.keys(def?.defaultValues ?? {}).map((key) => {
+            const input = def?.inputs.find((i) => i.id === key);
+            return (
+              <ParamRow key={key} nodeId={nodeId} paramKey={key} label={input ? portLabel(input.label, language) : key} />
+            );
+          })}
+          <div style={rowStyle}>
+            <span
+              style={labelStyle}
+              title={t('Turns the picture about its own centre. A positive angle turns it counter-clockwise on the Sphere, Plane, Cube, Teapot and Bunny, and clockwise on most imported models — the sign three.js and glTF use (with positive Tile X and Tile Y). With different Tile X and Tile Y the turned picture is stretched along the surface, as in glTF.', language)}
+            >
+              {t('Rotation (°)', language)}
+            </span>
+            <DragNumberInput value={rotationDeg} step={1} onChange={setRotation} />
+          </div>
+          {placement.xf && (
+            <div
+              style={rowStyle}
+              title={t('A transform saved by an earlier FastShaders that Tile, Offset and Rotation cannot express. It still applies. Clearing it changes the picture.', language)}
+            >
+              <span style={labelStyle}>{t('Older transform', language)}</span>
+              <button type="button" style={rowButtonStyle} onClick={clearLegacyTransform}>
+                {t('Clear', language)}
+              </button>
+            </div>
+          )}
+        </>
+      )}
       {checkboxRow(t('Repeat (tile the image)', language), 'repeat', true,
         t('On: the image wraps/tiles. Off: edge pixels clamp beyond 0–1 UV.', language))}
       {checkboxRow(t('Flip X', language), 'flipX', false, t('Mirror the image left–right', language))}
@@ -861,11 +969,53 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
         </select>
       </div>
 
-      {/* The glTF mapping (orientation, UV set, green flip, texture
-          transform), collapsed. Study sessions keep today's Image node
-          (research §7), so it is hidden there too; stored mapping keys still
-          emit, because the gate is UI-only. */}
-      {!study && <ImageMappingSettings nodeId={nodeId} />}
+      {/* The model binding: which of the model's UV sets to sample, and the
+          green flip a normal map needs on a model without tangents — what a
+          texture that came with a model brings (the importer writes both).
+          The picture's ORIENTATION has no row: it is a fact about the bytes,
+          moved with them (withImagePayload), that sets Texture.flipY and
+          nothing else — the Flips mirror the picture as stored in either
+          orientation, so toggling Flip Y (Offset Y reflected) draws what the
+          other orientation draws. Hidden in a study session, like the
+          placement rows above. */}
+      {!study && (
+        <>
+          <div style={rowStyle}>
+            <span
+              style={labelStyle}
+              title={t("Which of the model's texture-coordinate sets to sample (glTF TEXCOORD_0–3). A model without that set shows one flat colour. A wired UV input replaces this.", language)}
+            >
+              {t('UV set', language)}
+            </span>
+            <select
+              style={wideFieldStyle}
+              value={String(mapping.uvSet)}
+              onChange={(e) => {
+                // A closed table, never Number(): only these four strings map.
+                const next: ImageUvSet = e.target.value === '1' ? 1 : e.target.value === '2' ? 2 : e.target.value === '3' ? 3 : 0;
+                writeMapping({ uvSet: next });
+              }}
+            >
+              <option value="0">{t('UV 0 (default)', language)}</option>
+              <option value="1">UV 1</option>
+              <option value="2">UV 2</option>
+              <option value="3">UV 3</option>
+            </select>
+          </div>
+          <div style={rowStyle}>
+            <label style={checkLabelStyle}>
+              <input
+                type="checkbox"
+                checked={mapping.normalGreenFlip}
+                onChange={() => writeMapping({ normalGreenFlip: !mapping.normalGreenFlip })}
+                title={t("For a normal map on a model without tangent data (Blender's default glTF export): inverts the green channel the way three.js does for glTF. Only matters while this image is wired into the Output's Normal.", language)}
+                style={checkStyle}
+              />
+              {t('Flip normal green (Y)', language)}
+            </label>
+          </div>
+        </>
+      )}
 
       {/* The drop-time optimization preference, surfaced HERE because it is
           otherwise a one-way door: "Don't ask again" on the import dialog

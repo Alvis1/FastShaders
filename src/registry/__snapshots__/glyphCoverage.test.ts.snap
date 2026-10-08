@@ -15,6 +15,7 @@ exports[`glyph coverage > the set of designer-authored SVGs changes only deliber
   "div",
   "dot",
   "floor",
+  "fresnel",
   "isolines",
   "length",
   "max",

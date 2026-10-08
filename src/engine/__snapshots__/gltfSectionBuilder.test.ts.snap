@@ -147,7 +147,7 @@ exports[`what the restore paths and the parse make of it > BLENDER: snapshot of 
   emitOrder=0 gltfMaterialIndex=undefined
   exposedPorts=undefined materialSettings=undefined
   modelSignature=undefined modelMeshes=undefined
-imageNode#1 {"imageB64":"<31 chars>","width":4,"height":4,"fileName":"BaseColor.png","colorSpace":"color","orientation":"gltf","xfOffsetX":0.25,"xfScaleX":2,"xfScaleY":2}
+imageNode#1 {"imageB64":"<31 chars>","width":4,"height":4,"fileName":"BaseColor.png","colorSpace":"color","orientation":"gltf","tileX":2,"tileY":2,"offsetX":0.25}
 imageNode#2 {"imageB64":"<35 chars>","width":4,"height":2,"fileName":"ORM.png","colorSpace":"data","orientation":"gltf"}
 float#3 {"value":0.8}
 mul#4 {}

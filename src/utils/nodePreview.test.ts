@@ -516,9 +516,17 @@ describe('preview mode wiring (source pins)', () => {
   const engine = read('../hooks/useSyncEngine.ts');
   const menu = read('../components/NodeEditor/menus/menuShared.tsx');
 
-  it('⌘/Ctrl+click is Preview mode, so those keys left the multi-select set (Shift stays)', () => {
+  it('Alt+click is Preview mode and Ctrl/⌘+click the Attach list, so those keys stay out of the multi-select set (Shift only)', () => {
     expect(editor).toMatch(/const MULTI_SELECT_KEYS = \['Shift'\];/);
-    expect(editor).toMatch(/if \(e\.metaKey \|\| e\.ctrlKey\) \{\s*\n\s*lastActivationRef\.current = null;/);
+    expect(editor).toMatch(/if \(e\.ctrlKey \|\| e\.metaKey \|\| e\.altKey\) \{\s*\n\s*lastActivationRef\.current = null;/);
+    const i = editor.indexOf('if (e.ctrlKey || e.metaKey || e.altKey) {');
+    const block = editor.slice(i, i + 700);
+    // Ctrl/⌘ is tested FIRST: with Alt also held it is the Attach list, never
+    // a preview — so the preview branch is the bare `else`, reached by Alt alone.
+    expect(block.indexOf('if (e.ctrlKey || e.metaKey) {')).toBeGreaterThan(-1);
+    expect(block.indexOf("openContextMenu(e.clientX, e.clientY, 'attach', node.id)"))
+      .toBeLessThan(block.indexOf('} else {'));
+    expect(block).toContain('store.setNodePreview(same ? null : { nodeId: node.id, handleId: outs[0].id })');
   });
 
   it('the outside-press closer is CAPTURE-phase pointerdown, exempting the keep selector and the middle button', () => {

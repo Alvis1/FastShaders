@@ -128,7 +128,7 @@ export interface OutputPlans {
  * moment an Output is added or deleted. Two digits, matching `unfoldedId`'s
  * `#m01`, and it simply grows past 99.
  */
-function outputOrdinals(outs: readonly AppNode[]): ReadonlyMap<string, string> {
+export function outputOrdinals(outs: readonly AppNode[]): ReadonlyMap<string, string> {
   const out = new Map<string, string>();
   const plain = outputsInEmitOrder(outs);
   if (plain.length < 2) return out;

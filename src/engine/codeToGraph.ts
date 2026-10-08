@@ -7,7 +7,7 @@ import { isUsableMeshName } from '@/utils/meshInventory';
 import { MAX_PARTS, MAX_PART_ENTRIES, MAX_INDEX_MATERIALS, defaultOutput, outputNodes } from '@/utils/outputMaterials';
 import { MATERIAL_PART_KEY_RE, emitRank, sanitizeModelSignature } from './materialPartsContract';
 import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF, getFlowNodeType, chainPortId, growsOperands, MAX_CHAIN_OPERANDS } from '@/registry/nodeRegistry';
-import { MODULE_HELPER_NAMES, HELPER_ALIASES } from './moduleHelpers';
+import { MODULE_HELPERS, MODULE_HELPER_NAMES, HELPER_ALIASES } from './moduleHelpers';
 import { PART_SETTING_KEYS, materialSettingsFromSource } from './materialSettingsCode';
 import {
   ACTIVE_OUTPUT_KEY,
@@ -24,8 +24,9 @@ import { generateId } from '@/utils/idGenerator';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
 import { makeTypedEdge } from '@/utils/edgeUtils';
 import complexityData from '@/registry/complexity.json';
-import { VALID_SWIZZLE, TOHSL_COMPONENT_TO_HANDLE } from './graphToCode';
+import { VALID_SWIZZLE, TOHSL_COMPONENT_TO_HANDLE, OWN_MEMBER_TO_HANDLE } from './graphToCode';
 import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
+import { DEFAULT_RAMP_STOPS, formatRampStops, isRampInterp, parseRampStops } from '@/utils/colorRamp';
 
 /** Output channels whose widget stores a NUMBER / a HEX color — the parse
  *  twin of graphToCode's stored-value emission (keep the two in sync). */
@@ -545,7 +546,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
           addEdge(rawEdges, sourceId, varToHandle.get(prop.value.name) ?? 'out', outputId, channel);
         }
       } else if (t.isMemberExpression(prop.value)) {
-        const ref = resolveMemberExpr(prop.value, rawNodes, rawEdges, varToNodeId, splitNodes);
+        const ref = resolveMemberExpr(prop.value, rawNodes, rawEdges, varToNodeId, splitNodes, varToHandle);
         if (ref) {
           addEdge(rawEdges, ref.nodeId, ref.handle, outputId, channel, 'float');
         }
@@ -1132,11 +1133,15 @@ export function codeToGraph(code: string): CodeToGraphResult {
         // bodies contain raw TSL primitives (mul/sub/clamp/…) which would
         // otherwise be parsed as standalone nodes, polluting the graph on every
         // code→graph round-trip.
+        // A `kind: 'js'` helper (fsLut — engine/lutHelperText.ts) is ONE `const`
+        // declarator by contract, skipped whatever its init shape: `path.skip()`
+        // stops every visitor, so its nested `return`s, assignments and calls are
+        // never graph content. A user's own `const fsLut = …` is replaced by ours
+        // on re-emit — the `fs` prefix is the mitigation.
         if (
           (MODULE_HELPER_NAMES.has(varName) || HELPER_ALIASES.has(varName)) &&
-          t.isCallExpression(init) &&
-          t.isIdentifier(init.callee) &&
-          init.callee.name === 'Fn'
+          (MODULE_HELPERS.get(varName)?.kind === 'js' ||
+            (t.isCallExpression(init) && t.isIdentifier(init.callee) && init.callee.name === 'Fn'))
         ) {
           path.skip();
           return;
@@ -1151,16 +1156,27 @@ export function codeToGraph(code: string): CodeToGraphResult {
           if (t.isCallExpression(init) && t.isIdentifier(init.callee) && init.callee.name === 'Fn') {
             const arrow = init.arguments[0];
             if (arrow && (t.isArrowFunctionExpression(arrow) || t.isFunctionExpression(arrow))) {
-              helperReturnTargets.set(arrow, { nodeId: ensureMarchOutput(), handle });
+              const target = { nodeId: ensureMarchOutput(), handle };
+              helperReturnTargets.set(arrow, target);
+              // A CONSTANT field (`Fn(([p]) => fresnel1.y)`, graphToCode's form for a
+              // field that does not depend on p) has an expression body: no return
+              // statement routes it, and its wire was lost on every Apply.
+              if (!t.isBlockStatement(arrow.body)) {
+                const ref = resolveReturnSource(unwrapScalarWiden(arrow.body), rawNodes, rawEdges, varToNodeId, varToHandle, splitNodes, code, warnings);
+                if (ref) addEdge(rawEdges, ref.nodeId, ref.handle, target.nodeId, target.handle);
+              }
             }
             return;
           }
-          // A captured chain (not position-dependent): an edge from its node.
-          if (t.isIdentifier(init)) {
+          // A captured chain (not position-dependent): an edge from its node —
+          // or from its own socket (`const rm1Color = colorRamp1.rgb;`), through
+          // the scalar→colour widening (`const rm1Color = vec3(fresnel1.y);`).
+          const captured = unwrapScalarWiden(init);
+          if (t.isIdentifier(captured) || t.isMemberExpression(captured)) {
             const target = ensureMarchOutput();
-            const src = varToNodeId.get(init.name) ?? ensureBareInputNode(init.name, rawNodes, varToNodeId);
-            if (src) addEdge(rawEdges, src, varToHandle.get(init.name) ?? 'out', target, handle);
-            return;
+            const ref = resolveRefExpr(captured, rawNodes, rawEdges, varToNodeId, varToHandle, splitNodes);
+            if (ref) addEdge(rawEdges, ref.nodeId, ref.handle, target, handle);
+            if (ref || t.isIdentifier(captured)) return;
           }
           // A colour swatch's stored value (surface Color, Light colour, Ambient).
           if (handle === 'color' || handle === 'lightColor' || handle === 'ambient') {
@@ -1188,9 +1204,9 @@ export function codeToGraph(code: string): CodeToGraphResult {
             if (!arg) return;
             const lit = extractLiteral(arg);
             if (typeof lit === 'number') { values[handle] = lit; return; }
-            if (t.isIdentifier(arg)) {
-              const src = varToNodeId.get(arg.name) ?? ensureBareInputNode(arg.name, rawNodes, varToNodeId);
-              if (src) addEdge(rawEdges, src, varToHandle.get(arg.name) ?? 'out', target, handle, 'float');
+            if (t.isIdentifier(arg) || t.isMemberExpression(arg)) {
+              const ref = resolveRefExpr(arg, rawNodes, rawEdges, varToNodeId, varToHandle, splitNodes);
+              if (ref) addEdge(rawEdges, ref.nodeId, ref.handle, target, handle, 'float');
             }
           };
           path.get('init').traverse({
@@ -1325,7 +1341,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
         // through the shared split node so later references (sub(f2, f1),
         // returns, …) resolve to that component instead of being dropped.
         if (t.isMemberExpression(init)) {
-          const ref = resolveMemberExpr(init, rawNodes, rawEdges, varToNodeId, splitNodes);
+          const ref = resolveMemberExpr(init, rawNodes, rawEdges, varToNodeId, splitNodes, varToHandle);
           if (ref) {
             varToNodeId.set(varName, ref.nodeId);
             varToHandle.set(varName, ref.handle);
@@ -1594,6 +1610,34 @@ function ensureBareInputNode(
   return nodeId;
 }
 
+/**
+ * A REFERENCE to a socket — an identifier (a declared node, an alias, or a bare
+ * input global) or a member (a swizzle through a Split, or a node's OWN socket:
+ * `fresnel1.y`, `toHsl1.x`) — resolved to its node and handle, or undefined.
+ * The one reader for every site that accepts a reference but not a call: a site
+ * that took identifiers only dropped an own-member ref with no message.
+ */
+function resolveRefExpr(
+  expr: t.Node,
+  nodes: AppNode[],
+  edges: AppEdge[],
+  varToNodeId: Map<string, string>,
+  varToHandle: Map<string, string>,
+  splitNodesMap: Map<string, string>,
+): { nodeId: string; handle: string } | undefined {
+  // someVar  (or `output = someVar` for three.js editor compatible form)
+  if (t.isIdentifier(expr)) {
+    const id = varToNodeId.get(expr.name) ?? ensureBareInputNode(expr.name, nodes, varToNodeId);
+    if (id) return { nodeId: id, handle: varToHandle.get(expr.name) ?? 'out' };
+  }
+  // someVar.x — member expression through split node
+  if (t.isMemberExpression(expr)) {
+    const ref = resolveMemberExpr(expr, nodes, edges, varToNodeId, splitNodesMap, varToHandle);
+    if (ref) return ref;
+  }
+  return undefined;
+}
+
 /** Resolve a return statement argument to a source node ID + optional handle. */
 function resolveReturnSource(
   arg: t.Node,
@@ -1605,16 +1649,8 @@ function resolveReturnSource(
   code: string,
   errors: ParseError[],
 ): { nodeId: string; handle: string } | undefined {
-  // return someVar;  (or `output = someVar` for three.js editor compatible form)
-  if (t.isIdentifier(arg)) {
-    const id = varToNodeId.get(arg.name) ?? ensureBareInputNode(arg.name, nodes, varToNodeId);
-    if (id) return { nodeId: id, handle: varToHandle.get(arg.name) ?? 'out' };
-  }
-  // return someVar.x; — member expression through split node
-  if (t.isMemberExpression(arg)) {
-    const ref = resolveMemberExpr(arg, nodes, edges, varToNodeId, splitNodesMap);
-    if (ref) return ref;
-  }
+  const ref = resolveRefExpr(arg, nodes, edges, varToNodeId, varToHandle, splitNodesMap);
+  if (ref) return ref;
   // return someFunc(a, b); — process as an inline call and return its node ID
   if (t.isCallExpression(arg)) {
     const tempVar = '_return';
@@ -1623,6 +1659,81 @@ function resolveReturnSource(
     if (id) return { nodeId: id, handle: 'out' };
   }
   return undefined;
+}
+
+/**
+ * Readers for the `fs*` helper calls whose arguments are not all sockets
+ * (engine/moduleHelpers.ts `kind: 'js'` rows and fsFresnel): keyed by registry
+ * TYPE, each stores its non-socket arguments in the node's `values` —
+ * PARSE-THEN-RE-EMIT through the one strict grammar (utils/pointListCodec.ts),
+ * so graphToCode re-formats them and the user's text contributes no
+ * characters — and returns the SOCKET arguments in port order for
+ * processCall's generic loop. Every message is `severity: 'warning'` (an Apply
+ * is never blocked) and quotes user text only through `argReporter`.
+ */
+export type HelperArgReader = (
+  call: t.CallExpression,
+  node: AppNode,
+  code: string,
+  errors: ParseError[],
+) => t.CallExpression['arguments'];
+export const HELPER_ARG_READERS: ReadonlyMap<string, HelperArgReader> = new Map<string, HelperArgReader>([
+  ['fresnel', (call, _node, code, errors) => {
+    const { warn, quote } = argReporter(call, code, errors);
+    const [eta, n, pw, ...rest] = call.arguments;
+    // The emitter spells an unwired Normal as the bare global (flat body) or the splat Fn's `n`; the world position
+    // likewise. Neither may reach ensureBareInputNode, which would mint a Normal (world) / Position (world) node and
+    // grow the graph on every Apply.
+    const implicit = (a: t.Node, root: string): boolean =>
+      (t.isIdentifier(a) && a.name === root) || implicitNoisePos?.(a) === root;
+    if (pw !== undefined && !implicit(pw, 'positionWorld')) {
+      warn(`fsFresnel: the position argument ${quote(pw)} cannot be represented — the node always uses the surface's world position.`);
+    }
+    if (rest.length) warn(`fsFresnel: ${rest.length} extra argument${rest.length > 1 ? 's' : ''} dropped.`);
+    const sockets: t.CallExpression['arguments'] = eta !== undefined ? [eta] : [];
+    if (n !== undefined && !implicit(n, 'normalWorld')) {
+      if (t.isIdentifier(n) || t.isMemberExpression(n) || t.isCallExpression(n)) sockets.push(n);
+      else warn(`fsFresnel: Normal takes a wire — ${quote(n)} was dropped.`);
+    }
+    return sockets;
+  }],
+  ['colorRamp', (call, node, code, errors) => {
+    const { warn, quote } = argReporter(call, code, errors);
+    const [fac, stops, interp, ...rest] = call.arguments;
+    // Only a string LITERAL is read, through the one strict grammar, and stored RE-FORMATTED (a valid but
+    // non-canonical `#FF0000`/`0.50` lands canonical). The default is stored as nothing — absent = default.
+    const vals: Record<string, string> = {};
+    if (stops !== undefined) {
+      const parsed = t.isStringLiteral(stops) ? parseRampStops(stops.value) : null;
+      if (parsed) {
+        const c = formatRampStops(parsed);
+        if (c !== DEFAULT_RAMP_STOPS) vals.stops = c;
+      } else warn(`fsColorRamp: the stops ${quote(stops)} could not be read — the default black-to-white ramp is used.`);
+    }
+    if (interp !== undefined) {
+      if (t.isStringLiteral(interp) && isRampInterp(interp.value)) {
+        if (interp.value !== 'linear') vals.interp = interp.value;
+      } else warn(`fsColorRamp: ${quote(interp)} is not linear, constant, ease, bspline or cardinal — Linear is used.`);
+    }
+    if (rest.length) warn(`fsColorRamp: ${rest.length} extra argument${rest.length > 1 ? 's' : ''} dropped.`);
+    if (Object.keys(vals).length) setNodeValues(node, vals);
+    return fac !== undefined ? [fac] : [];
+  }],
+]);
+
+/** The readers' shared reporting: `warn` pushes a non-blocking warning on the call's line; `quote` is the
+ *  argument's source text, capped at 80 chars, in double quotes (or `"argument"` without positions). */
+export function argReporter(call: t.CallExpression, code: string, errors: ParseError[]): {
+  warn: (message: string) => void;
+  quote: (n: t.Node) => string;
+} {
+  return {
+    warn: (message) => errors.push({ message, line: call.loc?.start.line, severity: 'warning' }),
+    quote: (n) => {
+      const text = n.start != null && n.end != null ? code.slice(n.start, n.end) : 'argument';
+      return `"${text.length > 80 ? `${text.slice(0, 80)}…` : text}"`;
+    },
+  };
 }
 
 function processCall(
@@ -1676,7 +1787,7 @@ function processCall(
       }
       if (t.isMemberExpression(inner)) {
         // `worley.x.toVar()` — alias to the split-node component.
-        const ref = resolveMemberExpr(inner, nodes, edges, varToNodeId, splitNodesMap);
+        const ref = resolveMemberExpr(inner, nodes, edges, varToNodeId, splitNodesMap, varToHandle);
         if (ref) {
           varToNodeId.set(varName, ref.nodeId);
           varToHandle.set(varName, ref.handle);
@@ -1747,7 +1858,7 @@ function processCall(
 
   // Detect UV-tiling pattern: mul(uv(), vec2(x, y)) → create UV node with tiling values
   if (funcName === 'mul' && callExpr.arguments.length === 2) {
-    if (tryParseUVTiling(callExpr, varName, nodes, varToNodeId)) return;
+    if (tryParseUVTiling(callExpr, varName, nodes, varToNodeId, { edges, varToHandle, splitNodesMap })) return;
   }
 
   // Detect the Time-speed pattern `time.mul(<numeric literal>)` — the exact
@@ -1812,7 +1923,7 @@ function processCall(
               addEdge(edges, sourceId, varToHandle.get(arg.name) ?? 'out', nodeId, ports[i]);
             }
           } else if (t.isMemberExpression(arg)) {
-            const ref = resolveMemberExpr(arg, nodes, edges, varToNodeId, splitNodesMap);
+            const ref = resolveMemberExpr(arg, nodes, edges, varToNodeId, splitNodesMap, varToHandle);
             if (ref) {
               addEdge(edges, ref.nodeId, ref.handle, nodeId, ports[i], 'float');
             }
@@ -1890,6 +2001,18 @@ function processCall(
   nodes.push(node);
   varToNodeId.set(varName, nodeId);
 
+  // fs* helpers carry non-socket arguments (Fresnel's implicit geometry, the Color Ramp / RGB Curves canonical
+  // strings): a per-type reader stores them in `values` (PARSE-THEN-RE-EMIT) and returns only the SOCKET
+  // arguments, in port order, for the generic loop below.
+  let callArgs: t.CallExpression['arguments'] = callExpr.arguments;
+  const special = HELPER_ARG_READERS.get(def.type);
+  if (special) {
+    if (objectVarName || objectMember) {
+      errors.push({ message: `${funcName} must be called as a plain function — its settings were not read.`, line: callExpr.loc?.start.line, severity: 'warning' });
+      callArgs = [];
+    } else callArgs = special(callExpr, node, code, errors);
+  }
+
   // Noise nodes: special positional arg mapping
   // graphToCode emits: mx_worley_noise_float(posOrMul)
   // where posOrMul is either `positionGeometry`, a var ref, or `mul(pos, scale)`
@@ -1916,7 +2039,7 @@ function processCall(
         severity: 'warning',
       });
     }
-    processNoiseCall(callExpr, node, edges, varToNodeId, varToHandle);
+    processNoiseCall(callExpr, node, nodes, edges, varToNodeId, varToHandle, splitNodesMap, code, errors);
     return;
   }
 
@@ -1931,7 +2054,7 @@ function processCall(
         varToNodeId.get(objectVarName) ?? ensureBareInputNode(objectVarName, nodes, varToNodeId);
       if (sourceId) src = { nodeId: sourceId, handle: varToHandle.get(objectVarName) ?? 'out' };
     } else if (objectMember) {
-      src = resolveMemberExpr(objectMember, nodes, edges, varToNodeId, splitNodesMap);
+      src = resolveMemberExpr(objectMember, nodes, edges, varToNodeId, splitNodesMap, varToHandle);
     }
     if (src) {
       addEdge(edges, src.nodeId, src.handle, nodeId, def.inputs[0].id, def.inputs[0].dataType);
@@ -1957,8 +2080,8 @@ function processCall(
     });
   };
 
-  for (let i = 0; i < callExpr.arguments.length; i++) {
-    const arg = callExpr.arguments[i];
+  for (let i = 0; i < callArgs.length; i++) {
+    const arg = callArgs[i];
     // Socket-growing calls carry more args than the two static registry ports —
     // synthesize the extra operand ports (c, d, …) so the whole
     // `add(a, b, c, d)` chain wires up instead of stopping at `b`.
@@ -2013,7 +2136,7 @@ function processCall(
     } else if (t.isMemberExpression(arg)) {
       // Member expression: someVar.x (or a bare global like positionGeometry.y)
       // → resolve through split node
-      const ref = resolveMemberExpr(arg, nodes, edges, varToNodeId, splitNodesMap);
+      const ref = resolveMemberExpr(arg, nodes, edges, varToNodeId, splitNodesMap, varToHandle);
       if (ref && port) {
         addEdge(edges, ref.nodeId, ref.handle, nodeId, port.id, 'float');
       } else if (ref && def.inputs.length === 0 && defaultKeys[i]) {
@@ -2071,7 +2194,8 @@ function tryParseUVTiling(
   callExpr: t.CallExpression,
   varName: string,
   nodes: AppNode[],
-  varToNodeId: Map<string, string>
+  varToNodeId: Map<string, string>,
+  refs?: { edges: AppEdge[]; varToHandle: Map<string, string>; splitNodesMap: Map<string, string> },
 ): boolean {
   const [arg0, arg1] = callExpr.arguments;
 
@@ -2101,6 +2225,17 @@ function tryParseUVTiling(
   });
   nodes.push(node);
   varToNodeId.set(varName, nodeId);
+  // A WIRED tiling (`vec2(float1, 1)`, `vec2(fresnel1.y, 1)`) is an edge into
+  // its socket — graphToCode resolves a wired tiling to the ref. Without this
+  // the wire was lost on every Apply, with no message.
+  if (refs) {
+    (['tilingU', 'tilingV'] as const).forEach((port, i) => {
+      const a = arg1.arguments[i];
+      if (!a || !(t.isIdentifier(a) || t.isMemberExpression(a))) return;
+      const ref = resolveRefExpr(a, nodes, refs.edges, varToNodeId, refs.varToHandle, refs.splitNodesMap);
+      if (ref) addEdge(refs.edges, ref.nodeId, ref.handle, nodeId, port, 'float');
+    });
+  }
   return true;
 }
 
@@ -2219,7 +2354,8 @@ function tryParseTimeSpeed(
  * null. Installed around exactly that parse by `withImplicitNoisePos` (the
  * parser is synchronous and never re-entered, so one module slot is enough;
  * `processCall` and its recursion stay unaware of scopes). Null everywhere
- * else, where a bare identifier keeps its old meaning.
+ * else, where a bare identifier keeps its old meaning. Fresnel's reader
+ * (HELPER_ARG_READERS) reuses it for its `n`/`pw` arguments.
  */
 let implicitNoisePos: ((arg: t.Node) => string | null) | null = null;
 
@@ -2241,13 +2377,36 @@ function withImplicitNoisePos<T>(resolve: (arg: t.Node) => string | null, parse:
 function processNoiseCall(
   callExpr: t.CallExpression,
   node: AppNode,
+  nodes: AppNode[],
   edges: AppEdge[],
   varToNodeId: Map<string, string>,
-  varToHandle: Map<string, string>
+  varToHandle: Map<string, string>,
+  splitNodesMap: Map<string, string>,
+  code: string,
+  errors: ParseError[],
 ): void {
   const nodeId = node.id;
   const extractedValues: Record<string, string | number> = {};
   const args = callExpr.arguments;
+
+  // A position that is neither implicit, an identifier, nor a member: a member
+  // (`fresnel1.x`, `toHsl1.y`, a Split swizzle) is a wire into `pos`; anything
+  // else has no graph form and is reported rather than dropped in silence.
+  const wireMemberPos = (pos: t.Node): void => {
+    const ref = t.isMemberExpression(pos)
+      ? resolveRefExpr(pos, nodes, edges, varToNodeId, varToHandle, splitNodesMap)
+      : undefined;
+    if (ref) {
+      addEdge(edges, ref.nodeId, ref.handle, nodeId, 'pos');
+      return;
+    }
+    const text = pos.start != null && pos.end != null ? code.slice(pos.start, pos.end) : 'argument';
+    errors.push({
+      message: `Cannot represent "${text.length > 80 ? `${text.slice(0, 80)}…` : text}" as the noise position — it was left unwired.`,
+      line: pos.loc?.start.line ?? callExpr.loc?.start.line,
+      severity: 'warning',
+    });
+  };
 
   // Process a (pos, scale) pair extracted from either `mul(pos, scale)` or
   // `pos.mul(scale)`. graphToCode emits the chained form; the three.js TSL
@@ -2263,6 +2422,8 @@ function processNoiseCall(
       } else {
         extractedValues.pos = posInner.name;
       }
+    } else {
+      wireMemberPos(posInner);
     }
     const scaleLit = extractLiteral(scaleInner);
     if (scaleLit !== undefined) {
@@ -2306,6 +2467,8 @@ function processNoiseCall(
       } else {
         extractedValues.pos = posArg.name;
       }
+    } else {
+      wireMemberPos(posArg);
     }
   }
 
@@ -2331,8 +2494,20 @@ function resolveMemberExpr(
   edges: AppEdge[],
   varToNodeId: Map<string, string>,
   splitNodesMap: Map<string, string>,
+  varToHandle?: ReadonlyMap<string, string>,
 ): { nodeId: string; handle: string } | null {
   if (!t.isIdentifier(expr.object) || !t.isIdentifier(expr.property)) return null;
+  // A node that addresses its OWN sockets as members of ONE emitted call (Fresnel .x/.y, Color Ramp .rgb/.a —
+  // graphToCode resolveEdgeRef). Without this, `colorRamp1.rgb` is "Cannot represent" and every Apply would
+  // unwire it, and `fresnel1.y` would splice a Split node.
+  // An ALIAS (`const f = fresnel1.y`) already names one socket — `varToHandle` has it — so `f.x` is a swizzle
+  // of that socket, never the own-member map (which would read `.x` as Fresnel).
+  const ownId = varToHandle?.has(expr.object.name) ? undefined : varToNodeId.get(expr.object.name);
+  if (ownId) {
+    const ownType = nodeById(nodes, ownId)?.data.registryType;
+    const ownHandle = ownType ? OWN_MEMBER_TO_HANDLE.get(ownType)?.get(expr.property.name) : undefined;
+    if (ownHandle) return { nodeId: ownId, handle: ownHandle };
+  }
   const varName = expr.object.name;
   const component = SWIZZLE_ALIAS[expr.property.name] ?? expr.property.name;
   if (!VALID_SWIZZLE.has(component)) return null;
@@ -2361,8 +2536,9 @@ function resolveMemberExpr(
     if (!splitDef) return null;
     splitId = generateId();
     nodes.push(createNode(splitId, splitDef, `split_${varName}`));
-    // Wire source → split.v
-    addEdge(edges, sourceId, 'out', splitId, 'v');
+    // Wire source → split.v — from the socket an ALIAS names (`const f = fresnel1.y; … f.x` swizzles Facing),
+    // else `out`.
+    addEdge(edges, sourceId, varToHandle?.get(varName) ?? 'out', splitId, 'v');
     splitNodesMap.set(varName, splitId);
   }
 

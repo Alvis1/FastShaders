@@ -217,34 +217,53 @@ describe('resetNodeValues — a Splat Output\'s React to light is its mode, not 
   });
 });
 
-describe('resetNodeValues — the Image node\'s glTF mapping is payload, not a setting', () => {
-  const mapping: Record<string, string | number> = {
-    orientation: 'gltf', normalGreen: 'flip', uvSet: 2,
-    xfOffsetX: 0.25, xfOffsetY: -0.5, xfRotation: 0.3, xfScaleX: 2, xfScaleY: 3,
-  };
+describe('resetNodeValues — an Image node keeps the facts about its picture, never its placement', () => {
+  // Row order, UV set and the normal-map green flip describe how the picture
+  // meets the model it came with, and only that file says what they were. The
+  // placement — Tile, Offset, the turn, the Flips, a legacy `xf*` transform —
+  // is a setting like any other, an imported texture's included (owner to
+  // confirm), and Undo restores it.
+  const PIC = 'data:image/webp;base64,AAAA';
+  const facts: Record<string, string | number> = { orientation: 'gltf', normalGreen: 'flip', uvSet: 2 };
 
-  it('keeps all eight mapping keys while the sampling settings still reset', () => {
+  it('keeps the three facts while every placement and sampling setting resets', () => {
     const out = resetNodeValues(def('imageNode'), {
-      imageB64: 'data:image/webp;base64,AAAA', width: 4, height: 4,
-      ...mapping, filter: 'nearest', flipX: 1, colorSpace: 'data', tileX: 3,
+      imageB64: PIC, width: 4, height: 4, ...facts,
+      tileX: 3, tileY: 2, offsetX: 0.25, offsetY: -0.5, rotation: 0.4, flipX: 1, flipY: 1,
+      xfOffsetX: 0.25, xfOffsetY: -0.5, xfRotation: 0.3, xfScaleX: 2, xfScaleY: 3,
+      filter: 'nearest', colorSpace: 'data', repeat: 0,
     });
-    for (const [k, v] of Object.entries(mapping)) expect(out[k], k).toBe(v);
-    expect(out.filter).toBeUndefined();
-    expect(out.flipX).toBeUndefined();
-    expect(out.colorSpace).toBeUndefined();
-    expect(out.tileX).toBe(1);
+    expect(out).toEqual({ imageB64: PIC, width: 4, height: 4, ...facts, tileX: 1, tileY: 1, offsetX: 0, offsetY: 0 });
   });
 
-  it('preserves exactly the keys imageUvMapping defines', async () => {
+  it('of the keys imageUvMapping defines, preserves exactly the three facts', async () => {
     const { UV_MAPPING_KEYS } = await import('./imageUvMapping');
-    for (const k of UV_MAPPING_KEYS) {
-      expect(resetNodeValues(def('imageNode'), { [k]: 'x' })[k], k).toBe('x');
+    const kept = UV_MAPPING_KEYS.filter((k) => resetNodeValues(def('imageNode'), { [k]: 'x' })[k] === 'x');
+    expect([...kept].sort()).toEqual(Object.keys(facts).sort());
+    // The turn and the five legacy keys are placement: a Reset drops them.
+    for (const k of UV_MAPPING_KEYS.filter((key) => !kept.includes(key))) {
+      expect(resetNodeValues(def('imageNode'), { [k]: 0.5 }), k).not.toHaveProperty(k);
     }
-    expect(Object.keys(mapping).sort()).toEqual([...UV_MAPPING_KEYS].sort());
   });
 
-  it('a node carrying a mapping and nothing else is not dirty', () => {
-    const atDefault = { ...resetNodeValues(def('imageNode'), {}), ...mapping };
+  it('an imported texture\'s placement resets too: it is plain Tile, Offset and Rotation', async () => {
+    const { gltfTextureValues } = await import('./imageUvMapping');
+    const imported = gltfTextureValues(
+      { extensions: { KHR_texture_transform: { offset: [0.1, 0.2], rotation: Math.PI / 6, scale: [2, 1] } } },
+      { normalGreenFlip: true },
+    ).values;
+    const node = { imageB64: PIC, width: 4, height: 4, ...imported };
+    expect(isAtDefaultValues(def('imageNode'), node)).toBe(false);
+    expect(resetNodeValues(def('imageNode'), node)).toEqual({
+      imageB64: PIC, width: 4, height: 4, orientation: 'gltf', normalGreen: 'flip',
+      tileX: 1, tileY: 1, offsetX: 0, offsetY: 0,
+    });
+  });
+
+  it('a node carrying the facts and nothing else is not dirty; a turn or a legacy transform is', () => {
+    const atDefault = { ...resetNodeValues(def('imageNode'), {}), ...facts };
     expect(isAtDefaultValues(def('imageNode'), atDefault)).toBe(true);
+    expect(isAtDefaultValues(def('imageNode'), { ...atDefault, rotation: 0.5 })).toBe(false);
+    expect(isAtDefaultValues(def('imageNode'), { ...atDefault, xfScaleX: 2 })).toBe(false);
   });
 });

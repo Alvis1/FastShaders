@@ -12,6 +12,13 @@
   overflow: hidden;
 }
 
+/* Touch the browser does not report (Steam Frame's laser) acts as a mouse
+   (touchAsMouse.ts). Without this, Chrome takes the first move of each touch
+   as a page pan and cancels the pointer the marquee and the edge drag follow. */
+.node-editor__canvas.fs-touch-as-mouse {
+  touch-action: none;
+}
+
 /* Pinned to the canvas's top-RIGHT corner with the SAME gap on both edges, so
    the pill sits in the corner rather than floating at an arbitrary inset — it
    used to stand `--ctl-size + --space-2` (36px) off the right while keeping a

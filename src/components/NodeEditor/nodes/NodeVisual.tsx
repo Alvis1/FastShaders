@@ -2,6 +2,7 @@ import type { CSSProperties } from 'react';
 import type { NodeDefinition } from '@/types';
 import { getTypeColor } from '@/utils/colorUtils';
 import { getColormap, colormapGradientCss } from '@/utils/colormaps';
+import { ColorRampStrip } from './ColorRampArt';
 import { formatNodeLabel } from '@/i18n';
 import { useAppStore } from '@/store/useAppStore';
 import { buildRows, visiblePortRows, outputRowLabel, ImageThumbEmpty, IMAGE_EMPTY_HINT_EVAL, PortValueCell } from './ShaderNode';
@@ -196,8 +197,11 @@ export function NodeVisual({
     // line, which is how a 47px design rendered as a ~95px tile beside a 47px
     // canvas node; with NodeTitle wrapping at one balanced seam the title is
     // two rows at most, so the floor-only branch had nothing left to protect.
-    nodeStyle.width = box.width;
-    nodeStyle.minWidth = 'min-content';
+    // Spelled min-content-as-WIDTH, authored-as-FLOOR for WebKit's sake — the
+    // same reason ShaderNode gives (the wrapper and the stack layers must
+    // track the card's real width).
+    nodeStyle.width = 'min-content';
+    nodeStyle.minWidth = box.width;
   }
   if (textScale !== 1) (nodeStyle as Record<string, string | number>)['--node-text-scale'] = textScale;
   // While stacked, the card drops its own shadow — only the deepest layer
@@ -328,6 +332,7 @@ export function NodeVisual({
                   swatch={colorSwatch(inp.id)}
                   value={num(inp.id)}
                   onNumber={(v) => change(inp.id, v)}
+                  hideValue={inp.hideValue === true}
                 />
               );
             })}
@@ -402,6 +407,16 @@ export function NodeVisual({
             }}
           />
         )}
+        {/* Color Ramp: the same strip as the canvas node (ColorRampArt), moved
+            by the designer's dx/dy/scale like the colormap ramp. */}
+        {def.type === 'colorRamp' && (
+          <ColorRampStrip
+            stops={values?.stops}
+            interp={values?.interp}
+            dataNdArt={interactive ? '' : undefined}
+            style={{ ...nodeArtStyle(def.type, design), ...interactiveStyle }}
+          />
+        )}
         <div
           className={`shader-node__region${edgePorts ? ' shader-node__edge-region' : ''}`}
           style={{
@@ -449,7 +464,7 @@ export function NodeVisual({
               const inputMoved = row.input ? sockets[row.input.id] != null : false;
               const state = row.input ? stateOf(row.input.id) : null;
               const isConnected = row.input ? connected(row.input.id) : false;
-              const showInlineValue = row.input && !row.settingKey && !isConnected;
+              const showInlineValue = row.input && !row.settingKey && !isConnected && row.input.hideValue !== true;
               if (inputMoved) {
                 return (
                   <div key={i} className="node-base__row shader-node__row">
@@ -517,6 +532,7 @@ export function NodeVisual({
                   swatch={colorSwatch(inp.id)}
                   value={num(inp.id)}
                   onNumber={(v) => change(inp.id, v)}
+                  hideValue={inp.hideValue === true}
                 />
                 <StaticHandle side="left" dataType={inp.dataType} port={inp.id} label={inp.label} style={{ top: calcTop(off) }} />
               </div>

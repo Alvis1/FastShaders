@@ -43,6 +43,7 @@ import { isLosslessWebpBytes } from './imageCodec';
 import { UNTRUSTED_TEXTURE_SIDE } from './textureMemory';
 import { MAX_INDEX_MATERIALS } from '@/engine/materialPartsContract';
 import { orderFeatures, type GltfFeatureId } from './gltfFeatures';
+import { linearToSrgb01 } from './colorUtils';
 
 // The closed vocabulary lives in the import-free leaf gltfFeatures.ts (the
 // note's copy reaches it from the store's side); re-exported here, where the
@@ -123,9 +124,7 @@ const clamp01 = (v: unknown): number =>
 
 /** One linear channel to its 8-bit sRGB encoding (the sRGB transfer curve). */
 function srgb8(c: unknown): number {
-  const l = clamp01(c);
-  const s = l <= 0.0031308 ? 12.92 * l : 1.055 * Math.pow(l, 1 / 2.4) - 0.055;
-  return Math.round(clamp01(s) * 255);
+  return Math.round(clamp01(linearToSrgb01(clamp01(c))) * 255);
 }
 
 /**

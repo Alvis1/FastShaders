@@ -40,6 +40,7 @@ import { isUnsignedNoise } from '@/utils/noiseRange';
 import { isWireframeEdges } from '@/utils/wireframeMode';
 import { decodeDataNode, columnForHandle } from '@/utils/dataNode';
 import { readSoundSettings } from '@/utils/soundSettings';
+import { readColorRamp } from '@/utils/colorRamp';
 import {
   SOUND_CHANNELS,
   soundUniformName,
@@ -58,7 +59,8 @@ import { isSafeUnknownExpression } from './unknownExpression';
 // uses, so codegen and the UI agree on what counts as a scalar.
 import { getNodeOutputShape, portShapeForHandle } from './cpuEvaluator';
 import { IMAGE_CHANNEL_COMPONENTS, isImageChannelHandle } from '@/utils/imageChannels';
-import { readImageUvMapping, gltfUvMatrix } from '@/utils/imageUvMapping';
+import { readImageUvMapping, gltfUvMatrix, turnMatrix, isIdentityTurn } from '@/utils/imageUvMapping';
+import { readImagePlacement, type PlacementSocket } from '@/utils/imagePlacement';
 import {
   minMax,
   normalize01,
@@ -133,7 +135,9 @@ function bakeHalfFloatTexture(setupLines: string[], name: string, data: Float32A
 
 /**
  * Variable base names for nodes whose `tslFunction` is empty because
- * graphToCode emits them by hand. Without an entry a node falls through to the
+ * graphToCode emits them by hand, or whose variable is named after the node
+ * rather than the `fs*` helper it calls (a user property named `fresnel` must
+ * keep its bare name). Without an entry a node falls through to the
  * empty-string fallback and every instance collides on the same name.
  */
 const CUSTOM_EMISSION_BASENAMES: Record<string, string> = {
@@ -144,6 +148,8 @@ const CUSTOM_EMISSION_BASENAMES: Record<string, string> = {
   dataRange: 'dataRange',
   isolines: 'isolines',
   wireframe: 'wireframe',
+  fresnel: 'fresnel',
+  colorRamp: 'colorRamp',
 };
 
 /** Emit the setup lines for a 256-texel RGBA colormap LUT. Values are baked in
@@ -217,6 +223,30 @@ export const VALID_SWIZZLE = new Set(['x', 'y', 'z', 'w']);
  */
 export const TOHSL_HANDLE_TO_COMPONENT = new Map<string, string>([['h', 'x'], ['s', 'y'], ['l', 'z']]);
 export const TOHSL_COMPONENT_TO_HANDLE = new Map<string, string>([['x', 'h'], ['y', 's'], ['z', 'l']]);
+
+/**
+ * codeToGraph's inverse for nodes that address their OWN output sockets as
+ * members of ONE emitted call (Fresnel `.x`/`.y`, Color Ramp `.rgb`/`.a`):
+ * registryType → member → handle. Each node's graphToCode-side map sits beside
+ * it as the other half of a drift pair. Maps all the way down — the member name
+ * is adversarial text from the code panel.
+ */
+export const OWN_MEMBER_TO_HANDLE: ReadonlyMap<string, ReadonlyMap<string, string>> = new Map<string, ReadonlyMap<string, string>>([
+  ['fresnel', new Map([['x', 'out'], ['y', 'facing']])],
+  ['colorRamp', new Map([['rgb', 'out'], ['a', 'alpha']])],
+]);
+
+/** Fresnel's sockets ⇄ the members of its ONE `fsFresnel` call (a vec2); the
+ *  other half of `OWN_MEMBER_TO_HANDLE.get('fresnel')`. */
+export const FRESNEL_HANDLE_TO_MEMBER = new Map<string, string>([['out', 'x'], ['facing', 'y']]);
+
+/** Color Ramp's sockets ⇄ the members of its ONE `fsColorRamp` call (the vec4
+ *  sample); the other half of `OWN_MEMBER_TO_HANDLE.get('colorRamp')`. */
+export const COLOR_RAMP_HANDLE_TO_MEMBER = new Map<string, string>([['out', 'rgb'], ['alpha', 'a']]);
+
+/** Sources whose sockets are members of ONE emitted call, so a Split fed by one
+ *  must read per SOURCE SOCKET (resolveEdgeRef's split branch). */
+const SPLIT_SOCKET_AWARE: ReadonlySet<string> = new Set(['fresnel', 'colorRamp', 'toHsl']);
 
 /**
  * `#rrggbb` → the `0xrrggbb` literal the colour constructors take.
@@ -574,6 +604,15 @@ export function graphToCode(
     return getNodeOutputShape(edge.source, nodes, edges);
   };
 
+  /** `ref` narrowed to a scalar for an edge whose source port is not 1-channel. Color Ramp's Color is `.rgb` of
+   *  a vec4; its scalar is `.x` of the BARE variable (the same red), never `.rgb.x`, which codeToGraph cannot read. */
+  const narrowRef = (edge: AppEdge, ref: string): string => {
+    if (shapeOfEdgeSource(edge) === 1) return ref;
+    const src = gidx.nodeById.get(edge.source);
+    const base = src?.data.registryType === 'colorRamp' ? varNames.get(src.id) : undefined;
+    return base ? `${base}.x` : `${ref}.x`;
+  };
+
   /**
    * The scalar an edge carries: the plain reference when the source is
    * 1-channel, its `.x` otherwise. Used by the dataviz-family nodes, whose
@@ -583,7 +622,7 @@ export function graphToCode(
     if (!edge) return null;
     const ref = resolveEdgeRef(edge, varNames, gidx);
     if (!ref) return null;
-    return shapeOfEdgeSource(edge) === 1 ? ref : `${ref}.x`;
+    return narrowRef(edge, ref);
   };
 
   /**
@@ -871,25 +910,25 @@ export function graphToCode(
         // quad's (absent) uv attribute — see implicitBinding.
         const scopedUv = !uvRef && !dirRef ? implicitBinding('uv') : null;
         if (!uvRef && !scopedUv) addImport('three/tsl', 'uv');
-        // The `1-u` correction is the baked-in DEFAULT, so Flip X mirrors relative
-        // to the corrected look. Numbers only, never a stored string.
-        const numVal = (key: string, dflt: number) => {
-          const v = valueNum(nv[key]);
-          return Number.isFinite(v) ? v : dflt;
-        };
         const mapping = readImageUvMapping(nv);
-        const gltf = mapping.orientation === 'gltf';
-        // App orientation: the 1-u correction is baked in while Flip X is
-        // UNCHECKED. glTF orientation: the model's own UVs already match the
-        // (unflipped) file, so each ticked box mirrors — the >= 0.5 threshold
-        // the card's thumbnail uses on both axes.
-        const mirrorX = gltf ? numVal('flipX', 0) >= 0.5 : numVal('flipX', 0) < 0.5;
-        const mirrorY = numVal('flipY', 0) >= 0.5;
-        // Tile/offset can be sockets: a wired edge overrides the stored number.
-        const tileX = numericParam(node, 'tileX', 1, varNames, gidx);
-        const tileY = numericParam(node, 'tileY', 1, varNames, gidx);
-        const offsetX = numericParam(node, 'offsetX', 0, varNames, gidx);
-        const offsetY = numericParam(node, 'offsetY', 0, varNames, gidx);
+        // The placement is read ONCE, by the reader the restore fold shares
+        // (utils/imagePlacement.ts): the Flip thresholds, the stored tile/offset
+        // and the turn's sign. Each ticked box mirrors its axis, in both
+        // orientations — the >= 0.5 threshold the card's thumbnail uses — and
+        // nothing else does: the app orientation's old baked `1-u` default
+        // made every picture read mirrored on three's primitives.
+        const placement = readImagePlacement(nv);
+        const { mirrorX, mirrorY } = placement;
+        // Tile/offset can be sockets: a wired edge overrides the stored number,
+        // which is the reader's — numbers only, never a stored string.
+        const socketOr = (key: PlacementSocket, stored: number): string => {
+          const edge = inEdge(gidx, node.id, key);
+          return (edge && resolveEdgeRef(edge, varNames, gidx)) || num(stored);
+        };
+        const tileX = socketOr('tileX', placement.tileX);
+        const tileY = socketOr('tileY', placement.tileY);
+        const offsetX = socketOr('offsetX', placement.offsetX);
+        const offsetY = socketOr('offsetY', placement.offsetY);
         // A wired UV input wins over the UV set; the literal digit comes from
         // the reader's closed 1..3 table, never from the stored value.
         let uvExpr = uvRef ?? scopedUv ?? (mapping.uvSet > 0 ? `uv(${mapping.uvSet})` : 'uv()');
@@ -897,9 +936,12 @@ export function graphToCode(
         // imported exactly when used (a rotation-only transform needs only
         // mat2). On the legacy path it is the old `uvExpr !== base` test.
         let usesVec2 = false;
-        // glTF texture transform, applied FIRST, as constants only. ROW-major:
-        // all-number arguments build a THREE.Matrix2; never pass a NODE here
-        // (pinned by imageUvTransformTsl.test.ts).
+        // The LEGACY glTF texture transform (`xf*`), applied FIRST, as
+        // constants only. Every restore folds it into tile/offset/turn where
+        // that is exact (utils/imagePlacement.ts); a node still holding it
+        // emits it here, unchanged. ROW-major: all-number arguments build a
+        // THREE.Matrix2; never pass a NODE here (pinned by
+        // imageUvTransformTsl.test.ts).
         if (mapping.transform) {
           const m = gltfUvMatrix(mapping.transform);
           if (m.m01 !== 0 || m.m10 !== 0) {
@@ -924,6 +966,22 @@ export function graphToCode(
         }
         if (offsetX !== '0' || offsetY !== '0') {
           uvExpr = `${uvExpr}.add(vec2(${offsetX}, ${offsetY}))`;
+          usesVec2 = true;
+        }
+        // The TURN, last: ψ about the picture's centre (½, ½) as ONE
+        // numbers-only mat2 (row-major, as above) and the shift that pins the
+        // centre — nothing at all when it snaps to the identity. A wired
+        // Direction replaces the whole path below, so it gets no turn.
+        const turn = turnMatrix(placement.psi);
+        if (!dirRef && !isIdentityTurn(turn)) {
+          addImport('three/tsl', 'mat2');
+          // A wired UV that no stage above has touched may be a SCALAR (a
+          // Float, Time, a noise or channel output): `mat2.mul(float)` is a
+          // mat2, and the `.add(vec2(…))` after it builds mat2 + vec2, which
+          // neither GLSL nor WGSL compiles. `vec2(x)` widens it to (x, x), the
+          // point an unturned scalar UV samples; a vec3/vec4 keeps its `.xy`.
+          const turned = uvRef && uvExpr === uvRef ? `vec2(${uvExpr})` : uvExpr;
+          uvExpr = `mat2(${num(turn.m00)}, ${num(turn.m01)}, ${num(turn.m10)}, ${num(turn.m11)}).mul(${turned}).add(vec2(${num(turn.tx)}, ${num(turn.ty)}))`;
           usesVec2 = true;
         }
         if (usesVec2) addImport('three/tsl', 'vec2');
@@ -1468,6 +1526,32 @@ export function graphToCode(
       const boxArgs = resolveArguments(node, varNames, def, gidx, helperCallPorts(callee, def.inputs));
       usedHelperNames.add(callee);
       bodyLines.push(`  const ${varName} = ${callee}(${boxArgs.join(', ')});`);
+    } else if (def.type === 'fresnel') {
+      // Blender's Fresnel + Layer Weight's Facing from ONE fsFresnel call (engine/moduleHelpers.ts); consumers read
+      // .x/.y of it (resolveEdgeRef). The normal and world position are ARGUMENTS: inside a Splat Output Fn they
+      // bind to the splat's own `n`/`pw` (implicitBinding); elsewhere they are the bare globals, which codeToGraph
+      // reads back as "Normal unwired". Never `fsFresnel(1.5, 0, …)`: a zero normal is Fresnel 1 everywhere.
+      const [eta] = resolveArguments(node, varNames, def, gidx, ['ior']);
+      const nEdge = inEdge(gidx, node.id, 'normal');
+      const nRef = nEdge ? resolveEdgeRef(nEdge, varNames, gidx) : null;
+      const geo = (root: string): string => {
+        const bound = implicitBinding(root);
+        if (bound) return bound;
+        addImport('three/tsl', root);
+        return root;
+      };
+      usedHelperNames.add('fsFresnel');
+      bodyLines.push(`  const ${varName} = fsFresnel(${eta}, ${nRef ?? geo('normalWorld')}, ${geo('positionWorld')});`);
+    } else if (def.type === 'colorRamp') {
+      // Blender's Color Ramp: ONE fsColorRamp call (engine/lutHelperText.ts) whose value is the vec4 sample;
+      // Color/Alpha are its .rgb/.a (resolveEdgeRef). The ramp is a canonical string RE-FORMATTED from the parse,
+      // so no stored character reaches the module; an unreadable stored ramp says so in the code. Factor is
+      // narrowed inside the helper (`float(fac)` takes .x), never `.x` here — a nested member would not parse back.
+      const ramp = readColorRamp(getNodeValues(node));
+      const [fac] = resolveArguments(node, varNames, def, gidx, ['fac']);
+      if (ramp.rejected) bodyLines.push(`  // ${varName}: stored ramp unreadable - default used`);
+      usedHelperNames.add('fsColorRamp');
+      bodyLines.push(`  const ${varName} = fsColorRamp(${fac}, ${JSON.stringify(ramp.canonical)}, ${JSON.stringify(ramp.interp)});`);
     } else if (def.modes) {
       // A def with MODES calls the variant its mode selects (the default mode
       // is the def's own tslFunction), with that variant's port list — a
@@ -1490,6 +1574,8 @@ export function graphToCode(
     const d = registry.get(n.data.registryType);
     if (d && (d.type === 'hsl' || d.type === 'toHsl' || d.type === 'rayDirection')) usedHelperNames.add(d.tslFunction);
   }
+  // A helper's run-time dependencies ride along (fsColorRamp/fsRgbCurves call fsLut).
+  for (const name of [...usedHelperNames]) for (const r of MODULE_HELPERS.get(name)?.requires ?? []) usedHelperNames.add(r);
   for (const [name, helper] of MODULE_HELPERS) {
     if (!usedHelperNames.has(name)) continue;
     usedHelpers.push(name);
@@ -1531,7 +1617,7 @@ export function graphToCode(
       let fieldName: string | null = null;
       if (fieldRef) {
         const scoped = part.scopes.get('field')!.has(fieldEdge!.source);
-        const scalarRef = shapeOfEdgeSource(fieldEdge!) === 1 ? fieldRef : `${fieldRef}.x`;
+        const scalarRef = narrowRef(fieldEdge!, fieldRef);
         if (scoped) {
           pushScopeFn(lines, `${base}Field`, 'p', scopeLines.get('field')!, scalarRef);
           fieldName = `${base}Field`;
@@ -1544,7 +1630,7 @@ export function graphToCode(
       let densityName: string | null = null;
       if (densityRef) {
         const scoped = part.scopes.get('density')!.has(densityEdge!.source);
-        const scalarRef = shapeOfEdgeSource(densityEdge!) === 1 ? densityRef : `${densityRef}.x`;
+        const scalarRef = narrowRef(densityEdge!, densityRef);
         pushScopeFn(lines, `${base}Density`, 'p', scoped ? scopeLines.get('density')! : [], scalarRef);
         densityName = `${base}Density`;
       }
@@ -2410,6 +2496,20 @@ function resolveEdgeRef(
     if (comp && base) return `${base}.${comp}`;
   }
 
+  // Fresnel: Fresnel/Facing are .x/.y of the node's ONE fsFresnel call (a vec2); `out`, null and any tampered
+  // handle read .x. Map lookup, so `__proto__` resolves to .x.
+  if (sourceNode.data.registryType === 'fresnel') {
+    const base = varNames.get(sourceNode.id);
+    if (base) return `${base}.${FRESNEL_HANDLE_TO_MEMBER.get(edge.sourceHandle ?? '') ?? 'x'}`;
+  }
+
+  // Color Ramp: Color/Alpha are .rgb/.a of the node's ONE fsColorRamp sample (a vec4); `out`, null and any
+  // tampered handle read .rgb.
+  if (sourceNode.data.registryType === 'colorRamp') {
+    const base = varNames.get(sourceNode.id);
+    if (base) return `${base}.${COLOR_RAMP_HANDLE_TO_MEMBER.get(edge.sourceHandle ?? '') ?? 'rgb'}`;
+  }
+
   // Texture (Image) node: Alpha/R/G/B read components of this node's ONE
   // sample — only in WIDE mode (a channel socket is wired, imageSampleIsWide),
   // where the variable is the vec4 sample, so `out`, a null handle and any
@@ -2425,8 +2525,20 @@ function resolveEdgeRef(
   // If source is a split node, inline as inputVar.component
   if (sourceNode.data.registryType === 'split' && edge.sourceHandle && edge.sourceHandle !== 'out' && VALID_SWIZZLE.has(edge.sourceHandle)) {
     const splitInputEdge = inEdge(gidx, sourceNode.id, 'v');
-    if (splitInputEdge && varNames.has(splitInputEdge.source)) {
-      return `${varNames.get(splitInputEdge.source)}.${edge.sourceHandle}`;
+    const bare = splitInputEdge ? varNames.get(splitInputEdge.source) : undefined;
+    if (splitInputEdge && bare) {
+      // Sources that address their OWN sockets as members of one emitted call (Fresnel .x/.y, Color Ramp .rgb/.a,
+      // RGB-to-HSL .x/.y/.z) are read per SOURCE SOCKET (CLAUDE.md, "Edge VALUES"): a scalar socket is its own .x
+      // and has no .y/.z/.w (null — the consumer reads as unwired); a vector socket swizzles the bare variable.
+      // Every other source keeps the bare-variable text, byte-identical.
+      const src = gidx.nodeById.get(splitInputEdge.source);
+      if (src && SPLIT_SOCKET_AWARE.has(src.data.registryType)) {
+        const inner = resolveEdgeRef(splitInputEdge, varNames, gidx);
+        if (inner && inner !== bare && portShapeForHandle(src, splitInputEdge.sourceHandle ?? 'out') === 1) {
+          return edge.sourceHandle === 'x' ? inner : null;
+        }
+      }
+      return `${bare}.${edge.sourceHandle}`;
     }
   }
 

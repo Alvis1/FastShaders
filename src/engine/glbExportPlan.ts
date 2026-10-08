@@ -24,10 +24,13 @@
  * the module carries the authored look, the file keeps the model's.
  *
  * The texture's placement is rebuilt from the node's stored values: `texCoord`
- * from `uvSet`, KHR_texture_transform from the `xf*` keys composed with the
- * Flip / Tile / Offset settings (`composeKhrTextureTransform`, exact when the
- * Khronos reference form can hold it, else the xf part alone and a
- * `uv-approximated` note), and the sampler from `readImageTextureSpec`.
+ * from `uvSet`, KHR_texture_transform from the Flip / Tile / Offset / Rotation
+ * placement the shader emits — plus a legacy `xf*` transform the restore fold
+ * left behind — through the emitter's own reader (`composeKhrTextureTransform`:
+ * exact in closed form, a legacy residue exact when the Khronos reference form
+ * can hold it, else a `uv-approximated` note, which a WIRED Tile/Offset socket
+ * also gets — the stored numbers are written, but the shader samples the
+ * wire), and the sampler from `readImageTextureSpec`.
  */
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { valueNum, valueStr } from '@/utils/valueCoerce';
@@ -39,7 +42,14 @@ import {
   planIndexPartsAcross,
 } from '@/utils/outputMaterials';
 import { modelSignatureMatches, type ModelSignature } from './materialPartsContract';
-import { gltfUvMatrix, readImageUvMapping } from '@/utils/imageUvMapping';
+import {
+  gltfUvMatrix,
+  readImageUvMapping,
+  snap,
+  turnMatrix,
+  MAX_UV_TRANSFORM_MAGNITUDE,
+} from '@/utils/imageUvMapping';
+import { readImagePlacement, type ImagePlacement } from '@/utils/imagePlacement';
 import { readImageTextureSpec } from '@/utils/imageTextureSpec';
 import { IMAGE_MIME_FORMAT, decodeDataUri, sniffImageFormat } from '@/utils/glbContainer';
 import { isLosslessWebpBytes } from '@/utils/imageCodec';
@@ -108,19 +118,8 @@ const FACTOR_LEAF_TYPES: ReadonlySet<string> = new Set([
 
 /* ── the texture transform ───────────────────────────────────────────────── */
 
-const MAX_MAGNITUDE = 1e6;
-
-function snap(x: number): number {
-  if (Math.abs(x) < 1e-12) return 0;
-  const r = Math.round(x);
-  if (Math.abs(x - r) < 1e-12) return r === 0 ? 0 : r;
-  return x === 0 ? 0 : x;
-}
-
-/** The codegen's own read: `Number()`, a non-finite value is the default. */
-function numVal(values: Readonly<Record<string, unknown>>, key: string, dflt: number): number {
-  const v = valueNum(values[key]);
-  return Number.isFinite(v) ? v : dflt;
+function inBounds(n: number): boolean {
+  return Number.isFinite(n) && Math.abs(n) <= MAX_UV_TRANSFORM_MAGNITUDE;
 }
 
 function transformOf(offset: [number, number], rotation: number, scale: [number, number]): KhrTextureTransform | null {
@@ -132,50 +131,66 @@ function transformOf(offset: [number, number], rotation: number, scale: [number,
 }
 
 /**
- * The node's glTF texture transform (the `xf*` keys) composed with its Flip,
- * Tile and Offset settings as ONE KHR_texture_transform in the Khronos
- * reference form (scale, then rotation about the UV origin, then offset —
- * utils/imageUvMapping.ts `gltfUvMatrix`). The shader's uv pipeline is
- * transform → mirror → tile → offset (graphToCode's image branch, glTF
- * orientation), so the composed map is `A·uv + b` with
- * `A = diag(kx·dmx, ky·dmy)·M` and `b = (kx·(dmx·tx + emx) + ox, …)`.
+ * The node's placement as ONE KHR_texture_transform in the Khronos reference
+ * form (scale, then rotation about the UV origin, then offset —
+ * utils/imageUvMapping.ts `gltfUvMatrix`), read through `readImagePlacement`,
+ * the reader graphToCode's image branch emits from. The chain is [legacy xf]
+ * → mirror → tile → offset → turn ψ about c = (½, ½) (utils/imagePlacement.ts),
+ * so the composed map is `R(ψ)·(B·uv + Q − c) + c` with
+ * `B = diag(kx·dmx, ky·dmy)·M` and `Q = (kx·(dmx·tx + emx) + ox, …)` — M and
+ * t the legacy transform's (the identity when the node holds none, as every
+ * node the restore fold could express does).
  *
- * `exact` is false — and the xf part alone is returned — when a Tile/Offset
- * socket is WIRED (a value the file cannot hold), when a number is out of
- * bounds, or when A is not of the reference form (a rotation under a
- * non-uniform tile). A diagonal A is written as signed scales with no
- * rotation. Null = the identity.
+ * The offset is Q turned about c, `Q + (R(ψ)(Q − c) − (Q − c))`. B is split
+ * into R(r)·S exactly as it was before the turn existed, and the turn ADDS to
+ * it — R(ψ)·R(r) = R(ψ + r) — so a turn never changes whether the result is
+ * exact, and at ψ = 0 every result is the very bits the unturned composition
+ * wrote. Without a legacy transform B is diagonal: the closed form — scale
+ * (dmx·kx, dmy·ky), rotation ψ — exact for every value in bounds, a turn under
+ * an uneven tile included. A diagonal B is written as signed scales.
+ *
+ * `exact` is false when a number is out of bounds or B is not of the reference
+ * form (a legacy rotation under a non-uniform tile, the residue the restore
+ * fold leaves) — then the xf part alone is returned — and whenever a
+ * Tile/Offset socket is WIRED: a value the file cannot hold, so the STORED
+ * numbers are composed all the same (an imported texture still exports its
+ * own transform) but never called exact. Null = the identity.
  */
 export function composeKhrTextureTransform(
   values: Readonly<Record<string, unknown>>,
   wired: { tileX: boolean; tileY: boolean; offsetX: boolean; offsetY: boolean },
 ): { transform: KhrTextureTransform | null; exact: boolean } {
-  const xf = readImageUvMapping(values).transform;
-  const xfPart = xf ? transformOf([xf.offsetX, xf.offsetY], xf.rotation, [xf.scaleX, xf.scaleY]) : null;
-  if (wired.tileX || wired.tileY || wired.offsetX || wired.offsetY) return { transform: xfPart, exact: false };
+  const composed = composePlacement(readImagePlacement(values));
+  if (wired.tileX || wired.tileY || wired.offsetX || wired.offsetY) return { transform: composed.transform, exact: false };
+  return composed;
+}
 
+function composePlacement(p: ImagePlacement): { transform: KhrTextureTransform | null; exact: boolean } {
+  const { xf, tileX: kx, tileY: ky, offsetX: ox, offsetY: oy } = p;
+  const xfPart = xf ? transformOf([xf.offsetX, xf.offsetY], xf.rotation, [xf.scaleX, xf.scaleY]) : null;
   const M = gltfUvMatrix(xf ?? { offsetX: 0, offsetY: 0, rotation: 0, scaleX: 1, scaleY: 1 });
-  const flipX = numVal(values, 'flipX', 0) >= 0.5;
-  const flipY = numVal(values, 'flipY', 0) >= 0.5;
-  const dmx = flipX ? -1 : 1;
-  const emx = flipX ? 1 : 0;
-  const dmy = flipY ? -1 : 1;
-  const emy = flipY ? 1 : 0;
-  const kx = numVal(values, 'tileX', 1);
-  const ky = numVal(values, 'tileY', 1);
-  const ox = numVal(values, 'offsetX', 0);
-  const oy = numVal(values, 'offsetY', 0);
+  const dmx = p.mirrorX ? -1 : 1;
+  const emx = p.mirrorX ? 1 : 0;
+  const dmy = p.mirrorY ? -1 : 1;
+  const emy = p.mirrorY ? 1 : 0;
 
   const a00 = snap(kx * dmx * M.m00);
   const a01 = snap(kx * dmx * M.m01);
   const a10 = snap(ky * dmy * M.m10);
   const a11 = snap(ky * dmy * M.m11);
-  const bx = snap(kx * (dmx * M.tx + emx) + ox);
-  const by = snap(ky * (dmy * M.ty + emy) + oy);
+  // Q turned about c by the very matrix the emitter turns with — Q itself
+  // when ψ = 0, where that matrix is exactly the identity.
+  const R = turnMatrix(p.psi);
+  const qx = kx * (dmx * M.tx + emx) + ox;
+  const qy = ky * (dmy * M.ty + emy) + oy;
+  const cx = qx - 0.5;
+  const cy = qy - 0.5;
+  const bx = snap(qx + (R.m00 * cx + R.m01 * cy - cx));
+  const by = snap(qy + (R.m10 * cx + R.m11 * cy - cy));
   const all = [a00, a01, a10, a11, bx, by];
-  if (!all.every((n) => Number.isFinite(n) && Math.abs(n) <= MAX_MAGNITUDE)) return { transform: xfPart, exact: false };
+  if (!all.every(inBounds)) return { transform: xfPart, exact: false };
 
-  if (a01 === 0 && a10 === 0) return { transform: transformOf([bx, by], 0, [a00, a11]), exact: true };
+  if (a01 === 0 && a10 === 0) return { transform: transformOf([bx, by], p.psi, [a00, a11]), exact: true };
 
   const sx = Math.hypot(a00, a10);
   if (sx < 1e-12) return { transform: xfPart, exact: false };
@@ -184,7 +199,7 @@ export function composeKhrTextureTransform(
   const sy = a01 * s + a11 * c;
   const exact = Math.abs(a01 - sy * s) + Math.abs(a11 - sy * c) <= 1e-9 * Math.max(1, Math.abs(sy));
   if (!exact) return { transform: xfPart, exact: false };
-  return { transform: transformOf([bx, by], Math.atan2(snap(s), snap(c)), [sx, sy]), exact: true };
+  return { transform: transformOf([bx, by], p.psi + Math.atan2(snap(s), snap(c)), [sx, sy]), exact: true };
 }
 
 /* ── the plan ────────────────────────────────────────────────────────────── */

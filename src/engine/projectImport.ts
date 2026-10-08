@@ -78,11 +78,14 @@ function enqueueCount(
  * `project` null is a bare script: no refs, `nodes` are bounded as they are.
  * A node left without pixels is counted ONCE, as `missing` when it carried a
  * top-level ref, otherwise as `stripped`. See docs/dev/images-and-textures.md.
+ * `edges` are the arriving graph's: a wired Tile/Offset socket blocks the
+ * legacy UV fold `sanitizeImageNodes` runs (utils/imagePlacement.ts).
  */
 function ingestImages(
   project: FastShadersProject | null,
   moduleText: string,
   nodes: AppNode[],
+  edges: readonly AppEdge[],
   ignoreLimits: boolean,
 ): { nodes: AppNode[]; stripped: number; missing: number } {
   let dangling = 0;
@@ -96,7 +99,7 @@ function ingestImages(
     nodes = refs.nodes;
   }
   // Soft caps follow the platform (utils/platformCaps.ts); hard ceilings always apply.
-  const images = sanitizeImageNodes(nodes, !ignoreLimits);
+  const images = sanitizeImageNodes(nodes, edges, !ignoreLimits);
   return {
     nodes: images.nodes,
     stripped: images.strippedCount + dangling - losses.alsoDangling,
@@ -163,7 +166,7 @@ function applyProjectToStore(
 
   // Imported files are adversarial input: image payloads are bounded before
   // they enter the store, and every picture that does not come back is announced.
-  const images = ingestImages(project, moduleText, project.graph.nodes, store.ignoreImageLimits);
+  const images = ingestImages(project, moduleText, project.graph.nodes, project.graph.edges, store.ignoreImageLimits);
   enqueueCount('images-stripped', images.stripped);
   enqueueCount('images-missing', images.missing);
 
@@ -260,7 +263,7 @@ export function commitGlbImport(
 
   // The image BACKSTOP: the builder already encodes under the caps, and the
   // store boundary re-asserts them, like every path that brings payloads in.
-  const images = sanitizeImageNodes(built.nodes, !store.ignoreImageLimits);
+  const images = sanitizeImageNodes(built.nodes, arrivingEdges, !store.ignoreImageLimits);
   built.nodes = images.nodes;
   enqueueCount('images-stripped', images.strippedCount);
 
@@ -779,6 +782,7 @@ export async function addDroppedShader(
     graph.project && { ...graph.project, graph: { ...graph.project.graph, nodes, edges } },
     graph.moduleText,
     nodes,
+    edges,
     store.ignoreImageLimits,
   );
   nodes = sanitizeDataRangeNodes(sanitizeDataNodes(images.nodes).nodes);

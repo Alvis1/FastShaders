@@ -17,6 +17,13 @@ export interface PortDefinition {
    * for cross-node name collisions — prose naming other nodes belongs here.
    */
   description?: string;
+  /**
+   * Blender's hide_value: an UNCONNECTED input shows no value box on any surface (canvas operator cell, canvas
+   * rows, detached cells, every NodeVisual twin, the Designer stage). Its socket alone says "wire me". The
+   * port's value is never read by codegen (a dedicated emitter supplies the unwired meaning). Inputs only;
+   * absent = today's rule. NODE_DESIGN_REQUIREMENTS #12/#16/#24.
+   */
+  hideValue?: true;
 }
 
 export type NodeCategory =

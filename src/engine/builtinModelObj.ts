@@ -316,7 +316,13 @@ export function bareObjArrays(text: string): MeshArrays | null {
   return splitUvSeam({ positions, normals, uvs: sphericalUvs(positions, c), indices });
 }
 
-/** fit-bounds' `sphericalUVs`: each vertex's direction from `c`. */
+/**
+ * fit-bounds' `sphericalUVs`: each vertex's direction from `c`, as three's
+ * SphereGeometry parameterizes a sphere — u = ½ − atan2(z, x)/2π runs RIGHT
+ * across the front and v up, so a picture reads the right way round on the
+ * exported bunny exactly as on the preview's (until 2026-10-08 u ran the other
+ * way, in all three copies). Keep it identical to the preview's and podest's.
+ */
 function sphericalUvs(positions: Float32Array, c: number[]): Float32Array {
   const uvs = new Float32Array((positions.length / 3) * 2);
   for (let i = 0; i < positions.length / 3; i++) {
@@ -327,7 +333,7 @@ function sphericalUvs(positions: Float32Array, c: number[]): Float32Array {
       y /= len;
       z /= len;
     }
-    uvs[i * 2] = Math.atan2(z, x) / (Math.PI * 2) + 0.5;
+    uvs[i * 2] = 0.5 - Math.atan2(z, x) / (Math.PI * 2);
     uvs[i * 2 + 1] = Math.asin(Math.max(-1, Math.min(1, y))) / Math.PI + 0.5;
   }
   return uvs;

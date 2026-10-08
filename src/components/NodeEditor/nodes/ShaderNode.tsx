@@ -31,6 +31,7 @@ import { edgePortOffset, edgePortRailHeight, usesEdgePorts } from './edgePorts';
 import { effectiveNodeDef } from '@/utils/exposedPorts';
 import { displayImageFileName, validImageDataUrl } from '@/utils/imageNode';
 import { getColormap, colormapGradientCss } from '@/utils/colormaps';
+import { ColorRampStrip } from './ColorRampArt';
 import { parseFormula, hasCustomFormula } from '@/utils/dataRangeFormula';
 import { modeOf } from '@/engine/moduleHelpers';
 import './ShaderNode.css';
@@ -374,7 +375,9 @@ export function visiblePortRows(
  * rendered here.
  *
  * Renders NOTHING when there is nothing to show (connected, no derivable
- * label), so a wired port never leaves an empty positioned strip behind.
+ * label), so a wired port never leaves an empty positioned strip behind —
+ * and nothing for an UNCONNECTED `hideValue` port, whose socket alone says
+ * "wire me" (Blender's hide_value; NODE_DESIGN_REQUIREMENTS #12).
  */
 export function PortValueCell({
   justify,
@@ -385,6 +388,7 @@ export function PortValueCell({
   swatch,
   value,
   onNumber,
+  hideValue,
 }: {
   /** Designer justification — the `--center`/`--left`/`--right` class suffix. */
   justify: string;
@@ -400,7 +404,10 @@ export function PortValueCell({
   value: number;
   /** Commit for the number box — the int rounding happens here, once. */
   onNumber: (v: number) => void;
+  /** The port's `hideValue` flag: unconnected, the cell shows nothing. */
+  hideValue?: boolean;
 }) {
+  if (!connected && hideValue) return null;
   const isInt = dataType === 'int';
   const content = connected
     ? edge
@@ -873,8 +880,18 @@ export const ShaderNode = memo(function ShaderNode({
     // .node-base__title). Previously this pinned `minWidth` to the authored
     // width too, so an over-long title had nowhere to go but a third, fourth
     // and fifth row.
-    nodeStyle.width = box.width;
-    nodeStyle.minWidth = 'min-content';
+    //
+    // Spelled as `width: min-content; min-width: <authored>` rather than the
+    // equivalent `width: <authored>; min-width: min-content`: both resolve to
+    // max(authored, min-content), but WebKit drops an intrinsic `min-width`
+    // when it sizes the PARENT, so the fit-content wrapper — the box the
+    // multi-channel stack layers fill and React Flow measures — stayed at the
+    // bare authored width while the card grew past it. Measured 2026-10-08 in
+    // WebKit: 25 of 69 cards (canvas + tiles) wider than their wrapper, a
+    // stacked oneMinus1 drawing its layers 4px short; 0 after, and no card
+    // changed size in Chrome or WebKit.
+    nodeStyle.width = 'min-content';
+    nodeStyle.minWidth = box.width;
   }
 
   // Multi-channel stacked-cards effect: the node stacks only when multi-channel
@@ -1052,6 +1069,7 @@ export const ShaderNode = memo(function ShaderNode({
                 swatch={colorSwatch(inp.id)}
                 value={valueNum(data.values[inp.id] ?? def.defaultValues?.[inp.id] ?? identity)}
                 onNumber={(v) => handleChange(inp.id, v)}
+                hideValue={inp.hideValue === true}
               />
             );
           })}
@@ -1169,6 +1187,12 @@ export const ShaderNode = memo(function ShaderNode({
           }}
         />
       )}
+      {/* Color Ramp: its real ramp, the colormap strip's twin (ColorRampArt —
+          one renderer for canvas, NodeVisual and the editor). RAW values on
+          purpose: the reader is total on `unknown` and never coerces. */}
+      {data.registryType === 'colorRamp' && (
+        <ColorRampStrip stops={data.values?.stops} interp={data.values?.interp} style={nodeArtStyle(data.registryType)} />
+      )}
 
       {/* Data Range carrying a user-authored formula. The SURPRISING state is
           the one that gets marked (the ClockNode `×speed` and noise `±1`
@@ -1269,11 +1293,10 @@ export const ShaderNode = memo(function ShaderNode({
                   : null),
                 // Flip X / Flip Y are shown, not just stored — a checkbox in a
                 // menu you have to close to see the result of is a guess. The
-                // sign convention comes straight from graphToCode: the DEFAULT
-                // (both unchecked) is the corrected, file-matching orientation
-                // (`mirrorX = flipX < 0.5` bakes the 1-u fix in), so each ticked
-                // box mirrors the picture on that axis relative to what is drawn
-                // here. `transform` is safe on this element — the card's own
+                // rule is graphToCode's (`readImagePlacement`: `mirrorX: flipX`):
+                // both unchecked samples the picture as stored, and each ticked
+                // box mirrors it on that axis, on the card and on the mesh
+                // alike. `transform` is safe on this element — the card's own
                 // hover lift is a `scale:` on `.node-base`, not on the image.
                 ...(flipThumbX || flipThumbY
                   ? { transform: `scale(${flipThumbX ? -1 : 1}, ${flipThumbY ? -1 : 1})` }
@@ -1338,7 +1361,7 @@ export const ShaderNode = memo(function ShaderNode({
       <div className="node-base__body">
         {visibleRows.map((row, i) => {
           const inputConnected = row.input ? connectedInputs.has(row.input.id) : false;
-          const showInlineValue = row.input && !inputConnected && !row.settingKey;
+          const showInlineValue = row.input && !inputConnected && !row.settingKey && row.input.hideValue !== true;
           // Designer-moved input: its socket + value render detached (below),
           // so this row's left side stays empty.
           const inputMoved = row.input ? sockOv[row.input.id] != null : false;
@@ -1477,6 +1500,7 @@ export const ShaderNode = memo(function ShaderNode({
               swatch={colorSwatch(inp.id)}
               value={valueNum(data.values[inp.id] ?? def.defaultValues?.[inp.id] ?? 0)}
               onNumber={(v) => handleChange(inp.id, v)}
+              hideValue={inp.hideValue === true}
             />
             <TypedHandle
               type="target"

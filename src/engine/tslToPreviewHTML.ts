@@ -835,9 +835,10 @@ export const FIT_BOUNDS_SCRIPT = `<script>
     }
 
     // A spherical projection has a SEAM: atan2 wraps from +PI to -PI across the
-    // -X half-plane, so u steps 1 -> 0 there. On an INDEXED mesh both sides of
-    // that step share ONE vertex, so every triangle straddling it interpolates u
-    // backwards across the whole range — the entire 0..1 texture crushed, and
+    // -X half-plane, so u jumps a whole period (0 <-> 1) there. On an INDEXED
+    // mesh both sides of that step share ONE vertex, so every triangle
+    // straddling it interpolates u backwards across the whole range — the
+    // entire 0..1 texture crushed, and
     // mirrored, into a band one triangle wide. MEASURED on the built-in models:
     // 245 of the teapot's 6320 triangles (u-span up to 0.996) and 584 of the
     // bunny's 69451, and on the teapot the seam plane runs straight through the
@@ -974,7 +975,15 @@ export const FIT_BOUNDS_SCRIPT = `<script>
 
     // Spherical UVs from each vertex's direction relative to the local center
     // — the regen path's fallback for a source with no texture coordinates of
-    // its own, and the preserve path's when a GLB ships none.
+    // its own, and the preserve path's when a GLB ships none. They are three's
+    // OWN SphereGeometry parameterization (u = 1/2 - atan2(z, x) / 2PI,
+    // v = 1/2 + asin(y) / PI: on a unit sphere, exactly that sphere's uv), so u
+    // runs RIGHT and v UP across the front like every built-in primitive's,
+    // and a picture reads the right way round on the Bunny and on a dropped
+    // OBJ without UVs exactly as it does on the Sphere. Until 2026-10-08 u ran
+    // the other way (atan2(z, x) / 2PI + 1/2) — the reason the Image node once
+    // baked a 1-u into every picture, which mirrored it on every primitive
+    // instead. The seam stays where atan2 wraps; splitUVSeam is direction-blind.
     function sphericalUVs(g, c) {
       var pos = g.attributes.position;
       var uvs = new Float32Array(pos.count * 2);
@@ -984,7 +993,7 @@ export const FIT_BOUNDS_SCRIPT = `<script>
         v.fromBufferAttribute(pos, i).sub(c);
         var len = v.length();
         if (len > 0) v.multiplyScalar(1 / len);
-        uvs[i * 2] = Math.atan2(v.z, v.x) / TWO_PI + 0.5;
+        uvs[i * 2] = 0.5 - Math.atan2(v.z, v.x) / TWO_PI;
         uvs[i * 2 + 1] = Math.asin(Math.max(-1, Math.min(1, v.y))) / Math.PI + 0.5;
       }
       g.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));

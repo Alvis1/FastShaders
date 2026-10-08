@@ -39,14 +39,17 @@ const PRESERVED_KEYS: Record<string, readonly string[]> = {
   // The picture, its encoded dimensions (payload METADATA — without them
   // decodeImageNode returns null and the image renders black, and the
   // size-aware price falls back to the flat table value), and the original
-  // behind "Revert to original". Then the eight glTF mapping keys
-  // (utils/imageUvMapping.ts): how the picture lands on the MODEL it came with
-  // (set by the GLB importer). A Reset restores tile/offset/flips/filter;
-  // dropping these would silently re-map an imported texture the user cannot
-  // reconstruct without the model file.
+  // behind "Revert to original". Then three facts about how the picture meets
+  // the MODEL it came with (utils/imageUvMapping.ts, set by the GLB importer):
+  // its row order, the UV set and the normal-map green flip. Dropping them
+  // would silently re-map an imported texture, and only the model file says
+  // what they were. The PLACEMENT is a setting, an imported texture's included
+  // (the importer writes it as plain Tile, Offset and Rotation): a Reset puts
+  // Tile/Offset back to their defaults and drops the turn, the Flips and a
+  // legacy `xf*` transform, and Undo restores them.
   imageNode: [
     'imageB64', 'width', 'height', 'fileName', 'originId', 'srcWidth', 'srcHeight',
-    'orientation', 'normalGreen', 'uvSet', 'xfOffsetX', 'xfOffsetY', 'xfRotation', 'xfScaleX', 'xfScaleY',
+    'orientation', 'normalGreen', 'uvSet',
   ],
   // The verbatim TSL this node exists to round-trip.
   unknown: ['functionName', 'rawExpression'],

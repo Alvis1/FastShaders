@@ -172,7 +172,7 @@ describe('display only — emission is unmoved', () => {
       [img(), makeNode('out1', 'output')],
       [makeEdge('img1', 'out', 'out1', 'color')],
     );
-    expect(code).toContain('  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;\n');
+    expect(code).toContain('  const image1 = texture(_image1_tex, uv()).rgb;\n');
     expect(code).toContain('  return image1;\n');
     expect(code).not.toContain('.rgba');
     expect(code).not.toContain('vec4(');

@@ -32,6 +32,12 @@ const LIST_PITCH = 19.2; // list-mode operand row pitch (matches ShaderNode)
 const CHAR_W = 6.4; // approx px per header character at the 9px title font
 const MIN_W = 72; // floor for an auto-width node
 const W_PAD = 42; // sockets + labels on both sides of an auto-width node
+// Rows-layout nodes that draw their ART above the rows (the colormap strip is
+// deliberately left out — its footprint predates this table). A Map: the rows
+// branch runs even when `def` is undefined, so `type` is an untrusted string out
+// of a file, and a Record lookup of `constructor`/`__proto__` would make the
+// body height NaN. Color Ramp: .shader-node__ramp-strip 12 + 4/2 margins.
+const ART_H: ReadonlyMap<string, number> = new Map([['colorRamp', 18]]);
 
 // Flow component types whose root element applies `transform: scale(costScale)`
 // (top-left origin) — the same set NodeEditor's drag-connect hit boxes scale.
@@ -149,7 +155,7 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
     } else {
       const rows = Math.max(def ? def.inputs.length : 1, def ? def.outputs.length : 1, 1);
       const glyph = hasNodeGlyph(type) ? GLYPH_H : 0;
-      bodyH = Math.max(28, rows * ROW_H + glyph + 8);
+      bodyH = Math.max(28, rows * ROW_H + glyph + 8) + (ART_H.get(type) ?? 0);
     }
   }
 

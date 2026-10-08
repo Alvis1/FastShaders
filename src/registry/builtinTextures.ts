@@ -522,16 +522,15 @@ export default shader;`;
 //  - BINARY ARITHMETIC ONLY. A three-operand Multiply is priced base x (N - 1)
 //    by the CostBar and 1 by the tile badge, so the tile would print less than
 //    the graph costs.
-//  - THE IMAGE SWAP IS TWO GESTURES, never a hunt for a socket. An Image node
-//    shows no input sockets at rest, so "wire Divide into its UV" was the step
-//    users missed — and an image sampled at its own uv() shows its detail
-//    inside every emitter, the overlay again. Deleting the noise bridges its
-//    input to its reader (bridgeEdgesAcrossDeletedNodes), and a node dropped
-//    on a wire is spliced in at its FIRST input (pickSpliceInputPort) — for an
-//    Image that is UV, with Color out — so Divide → UV and Color → max. DELETE
-//    FIRST, as the note says: the wire it leaves runs across the frame, clear
-//    of the others. The wire INTO the noise is short and crossed by the
-//    emitter wires, and a drop aimed at it caught one of those.
+//  - THE IMAGE SWAP IS A PLAIN WIRE, never a hunt for a socket. An Image node
+//    shows no input sockets at rest, and an unwired UV reads the mesh's own
+//    uv(): wired into max by hand, the picture was read at every fragment and
+//    each diode showed a slice of it (the owner's report, 2026-10-08: "the
+//    diodes still have gradients on them"). connectNodes now hands an Image
+//    the coordinate of the source it replaces (imageUvHandoff.ts) — the
+//    noise's `pos`, or the Divide wire a deleted noise leaves — so the note's
+//    wire, in either order with the delete, lands Divide → UV. Dropping the
+//    Image ON that leftover wire still splices the same way (first input, UV).
 //
 // The emitter maths runs in units of the emitter's own radius: the cell is 4.4
 // wide, so the centres sit at 1.1 / 3.3 / 2.2 and `1 - distance²` reaches zero
@@ -610,7 +609,7 @@ const TEXTURE_ENTRIES: CodeGroupEntry[] = [
     description: 'An LED screen seen up close: each pixel is three diodes, red, green and blue, each lit by only its own color of the picture. Wire the black Color node into the Output node\'s Color and the last Multiply into its Emissive (right-click the Output and tick Emissive): the board stays dark and the diodes make their own light. diodeScale sets how many pixels fit across; the note in the frame says how to show a picture. Switch the preview Model to Plane to see the diodes round; the sphere stretches UV twice as wide as it is tall, so there they are ovals.',
     note: {
       heading: 'Swap Noise for an Image',
-      text: 'To show a picture: drop it on the canvas, delete the noise node, then drag the new Image node over the wire that is left until the wire lights up. Divide feeds it each pixel\'s center UV.',
+      text: 'Drop a picture on the canvas, wire the Image node\'s Color into Max where the noise node was, then delete the noise. Divide MUST be wired into the Image\'s UV (top socket), or diodes get gradients.',
     } },
 ];
 

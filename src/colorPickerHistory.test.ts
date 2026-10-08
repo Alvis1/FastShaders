@@ -91,7 +91,9 @@ const SITES: { file: string; history: 'bracket' | 'none'; count: number; why: st
     why: 'group frame colour -> updateGroupData (pushHistory)',
   },
   {
-    file: 'components/NodeEditor/menus/NodeSettingsMenu.tsx',
+    // The generic menu's defaultValues row (NodeSettingsMenu draws every one
+    // through ParamRow, as does the Image node's Tile/Offset block).
+    file: 'components/NodeEditor/menus/ParamRow.tsx',
     history: 'bracket',
     count: 1,
     why: 'hex defaultValues row -> handleValueChange -> updateNodeData (pushHistory)',

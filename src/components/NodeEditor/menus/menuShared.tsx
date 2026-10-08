@@ -295,6 +295,7 @@ export function NodeActions({ nodeId, preview = true }: { nodeId: string; previe
   const removeNode = useAppStore((s) => s.removeNode);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
+  const openContextMenu = useAppStore((s) => s.openContextMenu);
   const language = useAppStore((s) => s.language);
   // PREVIEW MODE (utils/nodePreview.ts). Lives in this shared footer rather
   // than in NodeSettingsMenu so every per-node menu — Stripes, Data Viz,
@@ -347,7 +348,7 @@ export function NodeActions({ nodeId, preview = true }: { nodeId: string; previe
               <button
                 key={port.id}
                 className={`context-menu__item${active ? ' context-menu__item--focused' : ''}`}
-                title={t('Show this output on the 3D preview in place of the Output’s wiring — ⌘/Ctrl+click the node does the same; a click anywhere else stops it', language)}
+                title={t('Show this output on the 3D preview in place of the Output’s wiring — Alt/⌥+click the node does the same; a click anywhere else stops it', language)}
                 onClick={() => {
                   setNodePreview(active ? null : { nodeId, handleId: port.id });
                   closeContextMenu();
@@ -357,6 +358,24 @@ export function NodeActions({ nodeId, preview = true }: { nodeId: string; previe
               </button>
             );
           })}
+        </>
+      )}
+      {/* ATTACH (utils/nodeAttach.ts): swaps this menu for the socket list
+          Ctrl/⌘+click opens, in place. Every node with an output gets it — the
+          Image node too, whose Preview lives at the top of its menu instead. */}
+      {previewPorts.length > 0 && (
+        <>
+          {!preview && <div className="context-menu__divider" />}
+          <button
+            className="context-menu__item"
+            title={t('Wire this node into an Output socket picked from a list — Ctrl/⌘+click the node does the same', language)}
+            onClick={() => {
+              const { x, y } = useAppStore.getState().contextMenu;
+              openContextMenu(x, y, 'attach', nodeId);
+            }}
+          >
+            {t('Attach to Output…', language)}
+          </button>
         </>
       )}
       <div className="context-menu__divider" />

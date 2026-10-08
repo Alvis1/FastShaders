@@ -39,7 +39,8 @@ import type { AppNode, AppEdge } from '@/types';
 
 const URL_WEBP = `data:image/webp;base64,${btoa('abc')}`;
 const valid = { imageB64: URL_WEBP, width: 2, height: 2, fileName: 'x.webp', colorSpace: 'color' };
-const SAMPLE_UV = 'uv().mul(vec2(-1, 1)).add(vec2(1, 0))';
+// An unflipped picture samples as stored (no baked mirror since 2026-10-08).
+const SAMPLE_UV = 'uv()';
 const RGB_LINE = `  const image1 = texture(_image1_tex, ${SAMPLE_UV}).rgb;\n`;
 const RGBA_LINE = `  const image1 = texture(_image1_tex, ${SAMPLE_UV}).rgba;\n`;
 

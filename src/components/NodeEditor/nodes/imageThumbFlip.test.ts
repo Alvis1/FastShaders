@@ -1,10 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { readImagePlacement } from '@/utils/imagePlacement';
+import { valueNum } from '@/utils/valueCoerce';
 
 const SHADER_NODE = readFileSync(new URL('./ShaderNode.tsx', import.meta.url), 'utf8');
 const SHADER_CSS = readFileSync(new URL('./ShaderNode.css', import.meta.url), 'utf8');
 const NODE_VISUAL = readFileSync(new URL('./NodeVisual.tsx', import.meta.url), 'utf8');
 const GRAPH_TO_CODE = readFileSync(new URL('../../../engine/graphToCode.ts', import.meta.url), 'utf8');
+const PLACEMENT = readFileSync(new URL('../../../utils/imagePlacement.ts', import.meta.url), 'utf8');
 const TEXTURE_SPEC = readFileSync(new URL('../../../utils/imageTextureSpec.ts', import.meta.url), 'utf8');
 const IMAGE_PLAN = readFileSync(new URL('../../../engine/imageTexturePlan.ts', import.meta.url), 'utf8');
 
@@ -18,15 +21,43 @@ describe('the Image node card shows its flips', () => {
   });
 
   it('reads the flags the way CODEGEN reads them', () => {
-    // The sign convention is the trap. graphToCode bakes the 1-u correction in
-    // when flipX is UNCHECKED (`mirrorX = flipX < 0.5`), so the DEFAULT is the
-    // file-matching orientation and each ticked box mirrors what the card
-    // draws — which is only true if both sides use the same >= 0.5 threshold.
-    // Under the glTF orientation there is no baked correction (the texture is
-    // uploaded unflipped), so each ticked box mirrors: the card and codegen
-    // then use the same >= 0.5 threshold on both axes.
-    expect(GRAPH_TO_CODE).toMatch(/const mirrorX = gltf \? numVal\('flipX', 0\) >= 0\.5 : numVal\('flipX', 0\) < 0\.5;/);
-    expect(GRAPH_TO_CODE).toMatch(/const mirrorY = numVal\('flipY', 0\) >= 0\.5;/);
+    // The sign convention was the trap. Until 2026-10-08 graphToCode baked a
+    // 1-u "correction" in while flipX was UNCHECKED (`mirrorX = flipX < 0.5`
+    // under the app orientation), which read MIRRORED on three's primitives —
+    // and an unticked card next to a mirrored mesh. Now each ticked box
+    // mirrors its axis in BOTH orientations and nothing else mirrors, so the
+    // card and codegen use one rule: the same >= 0.5 threshold on both axes.
+    // Codegen takes the flags from the ONE placement reader, which the
+    // restore fold shares.
+    expect(GRAPH_TO_CODE).toMatch(/const placement = readImagePlacement\(nv\);/);
+    expect(GRAPH_TO_CODE).toMatch(/const \{ mirrorX, mirrorY \} = placement;/);
+    expect(PLACEMENT).toMatch(/const flipX = stored\(values, 'flipX', 0\) >= 0\.5;/);
+    expect(PLACEMENT).toMatch(/const flipY = stored\(values, 'flipY', 0\) >= 0\.5;/);
+    expect(PLACEMENT).toMatch(/mirrorX: flipX,/);
+    expect(PLACEMENT).toMatch(/mirrorY: flipY,/);
+    // The baked default may not come back in any spelling.
+    expect(PLACEMENT).not.toMatch(/mirrorX: [^,]*!flipX/);
+    expect(PLACEMENT).not.toMatch(/mirrorX: gltf/);
+  });
+
+  it('mirrors exactly what the shader mirrors, in BOTH orientations', () => {
+    // The card's own read (source-pinned above) against codegen's reader, over
+    // every finite value a file may store — a non-finite one is the documented
+    // junk case (docs/dev/images-and-textures.md), where the reader falls back
+    // to the default.
+    const card = (v: unknown) => valueNum(v ?? 0) >= 0.5;
+    const values: unknown[] = [0, 1, 0.49, 0.5, 2, -1, '1', '0', '', ' 1 ', true, false, null, undefined];
+    for (const orientation of [undefined, 'gltf']) {
+      for (const fx of values) {
+        for (const fy of values) {
+          const v = { ...(orientation ? { orientation } : {}), flipX: fx, flipY: fy } as Record<string, unknown>;
+          const p = readImagePlacement(v);
+          expect([p.mirrorX, p.mirrorY], JSON.stringify(v)).toEqual([card(fx), card(fy)]);
+        }
+      }
+    }
+    // An untouched node: an unmirrored card over an unmirrored sample.
+    expect(readImagePlacement({})).toMatchObject({ mirrorX: false, mirrorY: false });
   });
 });
 

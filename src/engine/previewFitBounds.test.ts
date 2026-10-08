@@ -504,6 +504,64 @@ describe('fit-bounds normalization', () => {
     expect(raised, 'the seam split produced no duplicates at all').toBeGreaterThan(0);
   });
 
+  it('projects three\'s OWN SphereGeometry uv: u right and v up seen from outside, so a picture reads the right way round', () => {
+    // Until 2026-10-08 the projection ran u the other way (atan2(z, x)/2π + ½),
+    // so every bare OBJ was textured MIRRORED — the reason the Image node once
+    // baked a 1-u into every picture, which mirrored it on every primitive
+    // instead. podest's twin and the exported bunny OBJ are held equal to this
+    // copy (below), so the three move together.
+    const sphere = new THREE.SphereGeometry(1, 32, 16);
+    const authored = new Map<string, number[][]>();
+    const key = (x: number, y: number, z: number) => [x, y, z].map((n) => n.toFixed(4)).join(',');
+    const sp = sphere.attributes.position;
+    const su = sphere.attributes.uv;
+    for (let i = 0; i < sp.count; i++) {
+      const k = key(sp.getX(i), sp.getY(i), sp.getZ(i));
+      authored.set(k, [...(authored.get(k) ?? []), [su.getX(i), su.getY(i)]]);
+    }
+    const root = new THREE.Object3D();
+    root.add(new THREE.Mesh(bare(sphere.clone()), new THREE.MeshBasicMaterial()));
+    runFit(root);
+    const g = (root.children[0] as THREE.Mesh).geometry;
+    const p = g.attributes.position;
+    const uv = g.attributes.uv;
+    // The very values, away from the poles (three offsets a pole row's u): the
+    // sphere's own uv at that point, u modulo the seam's whole period.
+    let compared = 0;
+    for (let i = 0; i < p.count; i++) {
+      const y = p.getY(i) / 0.8;
+      if (Math.abs(y) > 0.999) continue;
+      const own = authored.get(key(p.getX(i) / 0.8, y, p.getZ(i) / 0.8));
+      expect(own, `no sphere vertex at ${i}`).toBeTruthy();
+      const du = uv.getX(i) - own![0][0];
+      expect(Math.abs(du - Math.round(du)), `u at ${i}`).toBeLessThan(1e-5);
+      expect(Math.abs(uv.getY(i) - own![0][1]), `v at ${i}`).toBeLessThan(1e-5);
+      compared++;
+    }
+    expect(compared).toBeGreaterThan(400);
+    // Handedness, triangle by triangle: (∂P/∂u × ∂P/∂v) points OUT of the
+    // surface, i.e. seen from outside u runs right and v up, never mirrored.
+    const idx = g.index!;
+    const P = [0, 1, 2].map(() => new THREE.Vector3());
+    let right = 0;
+    let mirrored = 0;
+    for (let t = 0; t + 2 < idx.count; t += 3) {
+      const c = [idx.getX(t), idx.getX(t + 1), idx.getX(t + 2)];
+      c.forEach((v, k) => P[k].fromBufferAttribute(p, v));
+      if (P.some((q) => Math.abs(q.y / 0.8) > 0.95)) continue;
+      const n = new THREE.Vector3().subVectors(P[1], P[0]).cross(new THREE.Vector3().subVectors(P[2], P[0]));
+      const out = n.dot(P[0]) > 0 ? 1 : -1;
+      const du1 = uv.getX(c[1]) - uv.getX(c[0]);
+      const dv1 = uv.getY(c[1]) - uv.getY(c[0]);
+      const du2 = uv.getX(c[2]) - uv.getX(c[0]);
+      const dv2 = uv.getY(c[2]) - uv.getY(c[0]);
+      if (out * (du1 * dv2 - du2 * dv1) > 0) right++;
+      else mirrored++;
+    }
+    expect(mirrored).toBe(0);
+    expect(right).toBeGreaterThan(300);
+  });
+
   it('leaves a seam-free mesh byte-identical (the split is opt-in by defect)', () => {
     // A cube's spherical UVs happen to straddle the seam, so use the half that
     // cannot: a mesh whose every triangle already sits inside one u period must

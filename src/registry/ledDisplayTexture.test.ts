@@ -8,6 +8,8 @@ import { graphToCode } from '@/engine/graphToCode';
 import { nodeCostPoints } from '@/utils/nodeCost';
 import { bridgeEdgesAcrossDeletedNodes } from '@/utils/edgeUtils';
 import { pickSpliceInputPort } from '@/components/NodeEditor/edgeSplice';
+import { connectNodes } from '@/components/NodeEditor/edgeInsert';
+import { useAppStore } from '@/store/useAppStore';
 import {
   LED_BRIGHTNESS,
   LED_CELL,
@@ -328,33 +330,52 @@ describe('LED Display texture', () => {
     expect(code).toMatch(/const (\w+) = texture\([^;]+\)\.rgb;[\s\S]*max\(\1, 0\)/);
   });
 
-  it('gets there with the two gestures the note names, deleting first', () => {
-    // "Delete the noise node, then drag the Image node over the wire that is
-    // left": deleting bridges the noise's input to its reader, and a node
-    // dropped on a wire is spliced in at its FIRST input with its first output
-    // — for an Image that is UV in and Color out. No hidden socket to find.
-    // (Drop-first rewires the same on paper, but on the canvas the wire into
-    // the noise is short and crossed by the emitter wires; the note says
-    // delete first.)
+  it('gets there with the wire the note names, in either order with the delete', () => {
+    // "Wire the Image node's Color into Max where the noise node was, then
+    // delete the noise." Through the real connect rule: an Image taking a
+    // source's place inherits that source's coordinate (imageUvHandoff.ts) —
+    // the noise's `pos` while it is still there, the Divide wire it leaves
+    // once deleted. Before that rule, a hand-wired Image read its own uv() and
+    // every diode showed a slice of the picture (the owner's report,
+    // 2026-10-08). No hidden socket to find.
     const { nodes, edges } = led();
     const noise = members(nodes).find(isNoise)!;
     const divide = ofType(nodes, 'div')[0];
     const picture = pictureOf(nodes, edges);
-    const imageDef = NODE_REGISTRY.get('imageNode')!;
-    const port = pickSpliceInputPort(imageDef, [], []);
-    expect(port).toBe('uv');
-    expect(imageDef.outputs[0].id).toBe('out');
+    const handle = edgeInto(edges, picture, 'a')!.source === noise.id ? 'a' : 'b';
+    const image = makeNode('img', 'imageNode');
+    const endState = () => {
+      const es = useAppStore.getState().edges;
+      return {
+        uv: es.filter((e) => e.target === 'img').map((e) => `${e.source}:${e.targetHandle}`),
+        out: es.filter((e) => e.source === 'img').map((e) => `${e.target}:${e.targetHandle}`),
+        noise: es.some((e) => e.source === noise.id || e.target === noise.id),
+      };
+    };
+    const want = { uv: [`${divide.id}:uv`], out: [`${picture.id}:${handle}`], noise: false };
+    const removeNoise = () =>
+      useAppStore.setState((s) => ({
+        nodes: s.nodes.filter((n) => n.id !== noise.id),
+        edges: bridgeEdgesAcrossDeletedNodes(s.edges, new Set([noise.id])),
+      }));
 
-    const bridged = bridgeEdgesAcrossDeletedNodes(edges, new Set([noise.id]));
-    const left = bridged.filter((e) => e.source === divide.id && e.target === picture.id);
-    expect(left).toHaveLength(1);
-    const spliced = [
-      ...bridged.filter((e) => e !== left[0]),
-      makeEdge(left[0].source, left[0].sourceHandle ?? 'out', 'img', port!),
-      makeEdge('img', imageDef.outputs[0].id, left[0].target, left[0].targetHandle ?? 'a'),
-    ];
-    expect(spliced.filter((e) => e.target === 'img').map((e) => `${e.source}:${e.targetHandle}`)).toEqual([`${divide.id}:uv`]);
-    expect(spliced.filter((e) => e.source === 'img').map((e) => `${e.target}:${e.targetHandle}`)).toEqual([`${picture.id}:a`]);
+    // Wire first, then delete (the note's order).
+    useAppStore.setState({ nodes: [...members(nodes), image], edges: [...edges] });
+    connectNodes('img', 'out', picture.id, handle);
+    removeNoise();
+    expect(endState()).toEqual(want);
+
+    // Delete first, then wire.
+    useAppStore.setState({ nodes: [...members(nodes), image], edges: [...edges] });
+    removeNoise();
+    connectNodes('img', 'out', picture.id, handle);
+    expect(endState()).toEqual(want);
+
+    // Dropping the Image ON the leftover wire still splices the same way: the
+    // FIRST input of an Image is UV, and its first output is Color.
+    const imageDef = NODE_REGISTRY.get('imageNode')!;
+    expect(pickSpliceInputPort(imageDef, [], [])).toBe('uv');
+    expect(imageDef.outputs[0].id).toBe('out');
   });
 
   it('costs what its tile says, and the tile counts its shader nodes', () => {
@@ -413,7 +434,15 @@ describe('LED Display texture', () => {
     expect(text).toContain('noise node');
     expect(members(led().nodes).filter(isNoise)).toHaveLength(1);
     expect(text).toContain('Image node');
-    expect(text.indexOf('delete the noise')).toBeLessThan(text.indexOf('Image node over the wire'));
+    // There are TWO Max nodes (the grid guard and the picture's clamp): the
+    // note names the one by where the noise was.
+    expect(ofType(led().nodes, 'max')).toHaveLength(2);
+    expect(text).toContain('into Max where the noise node was');
+    // And it SAYS the one wire everything depends on, even though the connect
+    // rule usually makes it (imageUvHandoff.ts): re-wiring an Image that
+    // already feeds Max inherits nothing, and without Divide → UV every diode
+    // shows a slice of the picture (the owner's ask, 2026-10-08).
+    expect(text).toContain("Divide MUST be wired into the Image's UV");
     for (const e of led().edges) {
       expect(e.source).not.toBe(notes[0].id);
       expect(e.target).not.toBe(notes[0].id);

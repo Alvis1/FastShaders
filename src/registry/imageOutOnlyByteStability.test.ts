@@ -102,7 +102,7 @@ function outOnlyCases(): Record<string, Graph> {
         makeEdge('a1', 'out', 'out1', 'emissive'),
       ],
     },
-    // 4. Preview mode's derived graph (⌘/Ctrl+click previews `outputs[0]`).
+    // 4. Preview mode's derived graph (Alt+click previews `outputs[0]`).
     'preview-mode': (() => {
       const g = previewSource();
       return previewGraph(g.nodes, g.edges, { nodeId: 'imgA', handleId: 'out' });
@@ -125,15 +125,17 @@ function outOnlyCases(): Record<string, Graph> {
 
 /**
  * 7. JUNK values of the glTF mapping keys Phase 4 Step 7 introduces
- * (`orientation`, `normalGreen`, `uvSet`, `xf*`). Each is read EXACTLY from
- * Step 7 on, so every value below must emit what the flagless graph emits.
- * Valid values stay OUT of this list — Step 7 changes their bytes by design.
+ * (`orientation`, `normalGreen`, `uvSet`, `xf*`), and of the picture's turn
+ * (`rotation`, utils/imagePlacement.ts). Each is read EXACTLY, so every value
+ * below must emit what the flagless graph emits. Valid values stay OUT of this
+ * list — they change the bytes by design.
  */
 const XF_JUNK: unknown[] = ['1', '0.5', 'abc', '', true, null, NaN, Infinity, -Infinity, 2e6, -2e6];
 const JUNK_FLAGS: Record<string, unknown[]> = {
   orientation: ['GLTF', 'gltf ', ' gltf', 'Gltf', '', true, 1, 0, null, NaN],
   normalGreen: ['FLIP', 'flip ', 'Flip', '', true, 1, -1, null, NaN],
   uvSet: ['1', '2', '', true, 1.5, 4, -1, 0.5, null, NaN, Infinity],
+  rotation: XF_JUNK,
   xfOffsetX: XF_JUNK,
   xfOffsetY: XF_JUNK,
   xfRotation: XF_JUNK,
@@ -229,6 +231,7 @@ describe('out-only image graphs emit byte-identical code', () => {
       'orientation',
       'normalGreen',
       'uvSet',
+      'rotation',
       'xfOffsetX',
       'xfOffsetY',
       'xfRotation',
@@ -236,7 +239,7 @@ describe('out-only image graphs emit byte-identical code', () => {
       'xfScaleY',
     ]);
     // The whole sweep, so a value cannot be quietly dropped either.
-    expect(Object.values(JUNK_FLAGS).reduce((n, v) => n + v.length, 0)).toBe(10 + 9 + 11 + 5 * 11);
+    expect(Object.values(JUNK_FLAGS).reduce((n, v) => n + v.length, 0)).toBe(10 + 9 + 11 + 6 * 11);
   });
 
   it('every case really exercises what its key names', () => {

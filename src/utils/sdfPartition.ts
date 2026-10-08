@@ -265,6 +265,8 @@ export function noisePosIdentifier(raw: unknown): string {
  *   dataviz           `signal`  → samples at `uv()` (a traced Data column is
  *                                 an edge from the Data node, itself below)
  *   stripes, dataNode, wireframe (grid)   always sample at `uv()`
+ *   fresnel           `normal`  → normalWorld (unwired), else positionWorld —
+ *                                 it always reads the world position
  *
  * A scope with `implicitRoots` binds the returned type like a wired root
  * (`bindingOfRoot`): `p` for a position, `pw`, `n` (or its object-space
@@ -291,6 +293,8 @@ export function implicitRootOf(node: AppNode, wired: (handle: string) => boolean
       return 'uv';
     case 'wireframe':
       return isWireframeEdges(getNodeValues(node)) ? null : 'uv';
+    case 'fresnel':
+      return wired('normal') ? 'positionWorld' : 'normalWorld';
     default:
       return null;
   }

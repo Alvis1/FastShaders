@@ -13,7 +13,13 @@ import { labelStyle } from './menuShared';
  *  "Color R G B A". By socket ID, never by length ("Krāsa" stays whole). */
 const ABBREVIATED: ReadonlySet<string> = new Set(['alpha']);
 
-const rowStyle = {
+/** A socket chip's text: its translated name, `alpha` cut to its first letter.
+ *  Shared with AttachMenu's "from" chips, which name the same sockets. */
+export function chipText(portId: string, name: string): string {
+  return ABBREVIATED.has(portId) ? [...name][0] ?? name : name;
+}
+
+export const chipRowStyle = {
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-1)',
@@ -27,7 +33,7 @@ const headerStyle = {
   padding: 'var(--space-2) var(--space-3) 2px',
 } as const;
 
-const buttonStyle = {
+export const chipStyle = {
   padding: '2px 7px',
   background: 'var(--bg-input)',
   border: '1px solid var(--border-subtle)',
@@ -42,9 +48,11 @@ const buttonStyle = {
 /** The ACTIVE channel: a ring, like the texture grid's selected cell. Drawn
  *  with `box-shadow`, NOT `outline`: an inline outline would replace the UA's
  *  focus ring on exactly the lit button. */
-const activeButtonStyle = {
-  ...buttonStyle,
-  borderColor: 'var(--border-focus)',
+export const activeChipStyle = {
+  ...chipStyle,
+  // The whole shorthand, never `borderColor` over chipStyle's `border`: React
+  // warns on a shorthand/longhand mix when the two styles swap on a press.
+  border: '1px solid var(--border-focus)',
   boxShadow: '0 0 0 1px var(--border-focus)',
   color: 'var(--text-primary)',
 } as const;
@@ -65,13 +73,13 @@ export function PreviewChannelRow({ nodeId }: { nodeId: string }) {
       <span
         style={headerStyle}
         title={t(
-          'Show one of this texture’s channels on the 3D preview in place of the Output’s wiring — click the lit one to stop. ⌘/Ctrl+click the node previews its Color.',
+          'Show one of this texture’s channels on the 3D preview in place of the Output’s wiring — click the lit one to stop. Alt/⌥+click the node previews its Color.',
           language,
         )}
       >
         {t('Preview Channel', language)}
       </span>
-      <div style={rowStyle}>
+      <div style={chipRowStyle}>
         {ports.map((port) => {
           const active = nodePreview?.nodeId === nodeId && nodePreview.handleId === port.id;
           const name = portLabel(port.label, language);
@@ -81,7 +89,7 @@ export function PreviewChannelRow({ nodeId }: { nodeId: string }) {
               type="button"
               // No `context-menu__item`: that class is a full-width row, and
               // these are chips in a flex line.
-              style={active ? activeButtonStyle : buttonStyle}
+              style={active ? activeChipStyle : chipStyle}
               aria-pressed={active}
               // The full name is ALWAYS there; the action is appended to it.
               title={active ? `${name} — ${t('Stop preview', language)}` : name}
@@ -90,7 +98,7 @@ export function PreviewChannelRow({ nodeId }: { nodeId: string }) {
                 closeContextMenu();
               }}
             >
-              {ABBREVIATED.has(port.id) ? [...name][0] ?? name : name}
+              {chipText(port.id, name)}
             </button>
           );
         })}

@@ -67,9 +67,37 @@ describe('node-visual parity across surfaces', () => {
     expect(rule).toContain('font-size: var(--font-size-md);');
   });
 
+  // WebKit drops an intrinsic `min-width` when sizing the parent, so the old
+  // `width: <authored>; min-width: min-content` left the fit-content wrapper
+  // (which the multi-channel stack layers fill, and React Flow measures) at
+  // the bare authored width while the card grew past it — stacked layers drew
+  // short on 25 of 69 cards in Safari. Chrome never showed it.
+  it('the authored width is the FLOOR and min-content the WIDTH, on both renderers (WebKit)', () => {
+    for (const file of ['./ShaderNode.tsx', './NodeVisual.tsx']) {
+      const src = read(file);
+      expect(src).toContain("nodeStyle.width = 'min-content';");
+      expect(src).toContain('nodeStyle.minWidth = box.width;');
+      expect(src).not.toMatch(/minWidth\s*[=:]\s*'min-content'/);
+    }
+  });
+
   it('the Slider range input zeroes its UA margin itself — the designer page loads no reset', () => {
     const css = read('./ShaderNode.css');
     const rule = css.slice(css.indexOf('.shader-node__slider {'), css.indexOf('}', css.indexOf('.shader-node__slider {')));
     expect(rule).toContain('margin: 0;');
+  });
+
+  // Blender's hide_value (Fresnel's Normal): a box forgotten on ONE of the five
+  // value sites would only ever show on that surface — the parity class above.
+  it('hideValue is honoured on every value cell of both renderers', () => {
+    for (const file of ['./ShaderNode.tsx', './NodeVisual.tsx']) {
+      const src = read(file);
+      const cells = src.match(/<PortValueCell\b/g)?.length ?? 0;
+      expect(cells, file).toBeGreaterThan(0);
+      // `hideValue={` appears only at call sites (the definition destructures it), one per `<PortValueCell`.
+      expect(src.match(/hideValue=\{/g)?.length ?? 0, file).toBe(cells);
+      expect(src, file).toMatch(/const showInlineValue = [^;]*hideValue !== true/);
+    }
+    expect(read('./ShaderNode.tsx')).toMatch(/if \(!connected && hideValue\) return null;/);
   });
 });

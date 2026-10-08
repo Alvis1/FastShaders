@@ -2,7 +2,7 @@
 
 exports[`out-only image graphs emit byte-identical code > flagless baselines for the junk-flag sweep 1`] = `
 {
-  "flagless-color": "import { Fn, texture, uv, vec2 } from 'three/tsl';
+  "flagless-color": "import { Fn, texture, uv } from 'three/tsl';
 
 const _image1_img = new Image();
 _image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
@@ -16,14 +16,14 @@ _image1_tex.flipY = true;
 _image1_tex.needsUpdate = true;
 
 const shader = Fn(() => {
-  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const image1 = texture(_image1_tex, uv()).rgb;
 
   return image1;
 });
 
 export default shader;
 ",
-  "flagless-normal": "import { Fn, normalMap, texture, uv, vec2 } from 'three/tsl';
+  "flagless-normal": "import { Fn, normalMap, texture, uv } from 'three/tsl';
 
 const _image1_img = new Image();
 _image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
@@ -40,14 +40,14 @@ _image1_tex.flipY = true;
 _image1_tex.needsUpdate = true;
 
 const shader = Fn(() => {
-  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const image1 = texture(_image1_tex, uv()).rgb;
 
   return { normal: normalMap(image1) };
 });
 
 export default shader;
 ",
-  "flagless-share": "import { Fn, mul, texture, uv, vec2 } from 'three/tsl';
+  "flagless-share": "import { Fn, mul, texture, uv } from 'three/tsl';
 
 const _image1_img = new Image();
 _image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
@@ -61,8 +61,8 @@ _image1_tex.flipY = true;
 _image1_tex.needsUpdate = true;
 
 const shader = Fn(() => {
-  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
-  const image2 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const image1 = texture(_image1_tex, uv()).rgb;
+  const image2 = texture(_image1_tex, uv()).rgb;
   const mul1 = mul(image1, image2);
 
   return mul1;
@@ -75,7 +75,7 @@ export default shader;
 
 exports[`out-only image graphs emit byte-identical code > out-only cases 1`] = `
 {
-  "color-normal-env-one-node": "import { Fn, normalMap, texture, uv, vec2 } from 'three/tsl';
+  "color-normal-env-one-node": "import { Fn, normalMap, texture, uv } from 'three/tsl';
 
 const _image1_img = new Image();
 _image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
@@ -89,7 +89,7 @@ _image1_tex.flipY = true;
 _image1_tex.needsUpdate = true;
 
 const shader = Fn(() => {
-  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const image1 = texture(_image1_tex, uv()).rgb;
 
   return { color: image1, normal: normalMap(image1), env: texture(_image1_tex) };
 });
@@ -106,7 +106,7 @@ const shader = Fn(() => {
 
 export default shader;
 ",
-  "preview-mode": "import { Fn, color, mul, texture, uv, vec2 } from 'three/tsl';
+  "preview-mode": "import { Fn, color, mul, texture, uv } from 'three/tsl';
 
 const _image1_img = new Image();
 _image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
@@ -120,7 +120,7 @@ _image1_tex.flipY = true;
 _image1_tex.needsUpdate = true;
 
 const shader = Fn(() => {
-  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const image1 = texture(_image1_tex, uv()).rgb;
   const color1 = color(0x112233);
   const mul1 = mul(image1, 1);
 
@@ -129,7 +129,7 @@ const shader = Fn(() => {
 
 export default shader;
 ",
-  "tampered-handle-constructor": "import { Fn, mul, texture, uv, vec2 } from 'three/tsl';
+  "tampered-handle-constructor": "import { Fn, mul, texture, uv } from 'three/tsl';
 
 const _image1_img = new Image();
 _image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
@@ -143,7 +143,7 @@ _image1_tex.flipY = true;
 _image1_tex.needsUpdate = true;
 
 const shader = Fn(() => {
-  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const image1 = texture(_image1_tex, uv()).rgb;
   const mul1 = mul(image1, 1);
 
   return mul1;
@@ -151,7 +151,7 @@ const shader = Fn(() => {
 
 export default shader;
 ",
-  "tampered-handle-empty": "import { Fn, mul, texture, uv, vec2 } from 'three/tsl';
+  "tampered-handle-empty": "import { Fn, mul, texture, uv } from 'three/tsl';
 
 const _image1_img = new Image();
 _image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
@@ -165,7 +165,7 @@ _image1_tex.flipY = true;
 _image1_tex.needsUpdate = true;
 
 const shader = Fn(() => {
-  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const image1 = texture(_image1_tex, uv()).rgb;
   const mul1 = mul(image1, 1);
 
   return mul1;
@@ -173,7 +173,7 @@ const shader = Fn(() => {
 
 export default shader;
 ",
-  "tampered-handle-null": "import { Fn, mul, texture, uv, vec2 } from 'three/tsl';
+  "tampered-handle-null": "import { Fn, mul, texture, uv } from 'three/tsl';
 
 const _image1_img = new Image();
 _image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
@@ -187,7 +187,7 @@ _image1_tex.flipY = true;
 _image1_tex.needsUpdate = true;
 
 const shader = Fn(() => {
-  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const image1 = texture(_image1_tex, uv()).rgb;
   const mul1 = mul(image1, 1);
 
   return mul1;
@@ -195,7 +195,7 @@ const shader = Fn(() => {
 
 export default shader;
 ",
-  "tampered-handle-proto": "import { Fn, mul, texture, uv, vec2 } from 'three/tsl';
+  "tampered-handle-proto": "import { Fn, mul, texture, uv } from 'three/tsl';
 
 const _image1_img = new Image();
 _image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
@@ -209,7 +209,7 @@ _image1_tex.flipY = true;
 _image1_tex.needsUpdate = true;
 
 const shader = Fn(() => {
-  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const image1 = texture(_image1_tex, uv()).rgb;
   const mul1 = mul(image1, 1);
 
   return mul1;
@@ -217,7 +217,7 @@ const shader = Fn(() => {
 
 export default shader;
 ",
-  "tampered-handle-x": "import { Fn, mul, texture, uv, vec2 } from 'three/tsl';
+  "tampered-handle-x": "import { Fn, mul, texture, uv } from 'three/tsl';
 
 const _image1_img = new Image();
 _image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
@@ -231,7 +231,7 @@ _image1_tex.flipY = true;
 _image1_tex.needsUpdate = true;
 
 const shader = Fn(() => {
-  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const image1 = texture(_image1_tex, uv()).rgb;
   const mul1 = mul(image1, 1);
 
   return mul1;
@@ -239,7 +239,7 @@ const shader = Fn(() => {
 
 export default shader;
 ",
-  "through-mul": "import { Fn, mul, texture, uv, vec2 } from 'three/tsl';
+  "through-mul": "import { Fn, mul, texture, uv } from 'three/tsl';
 
 const _image1_img = new Image();
 _image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
@@ -253,7 +253,7 @@ _image1_tex.flipY = true;
 _image1_tex.needsUpdate = true;
 
 const shader = Fn(() => {
-  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const image1 = texture(_image1_tex, uv()).rgb;
   const mul1 = mul(image1, 1);
 
   return mul1;
@@ -261,7 +261,7 @@ const shader = Fn(() => {
 
 export default shader;
 ",
-  "two-consumers": "import { Fn, add, mul, texture, uv, vec2 } from 'three/tsl';
+  "two-consumers": "import { Fn, add, mul, texture, uv } from 'three/tsl';
 
 const _image1_img = new Image();
 _image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
@@ -275,7 +275,7 @@ _image1_tex.flipY = true;
 _image1_tex.needsUpdate = true;
 
 const shader = Fn(() => {
-  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const image1 = texture(_image1_tex, uv()).rgb;
   const mul1 = mul(image1, 1);
   const add1 = add(image1, 0);
 

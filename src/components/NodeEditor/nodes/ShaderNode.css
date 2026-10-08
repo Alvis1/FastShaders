@@ -231,6 +231,20 @@
   pointer-events: none;
 }
 
+/* Color Ramp node: its real ramp (nodes/ColorRampArt.tsx), the colormap strip's
+   twin. No `background` here: the gradient and the alpha checker are both set
+   INLINE (one shorthand would wipe the other layer). A reading — never inside
+   .node-glyph, never dark-mode re-mapped. */
+.shader-node__ramp-strip {
+  display: block;
+  width: 96px;
+  height: 12px;
+  margin: 4px 6px 2px;
+  border-radius: 0;
+  border: 1px solid rgba(var(--node-ink-rgb), 0.28);
+  pointer-events: none;
+}
+
 /* ===== Operator layout (2-input glyph node: glyph BETWEEN the two inputs) ===== */
 .shader-node__op {
   position: relative;

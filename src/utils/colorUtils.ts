@@ -76,6 +76,15 @@ export function srgbToLinear01(c: number): number {
   return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
 }
 
+/** Linear-light channel → sRGB-encoded (0-1): the exact inverse of srgbToLinear01. Non-finite → 0, clamped.
+ *  The ONE copy (gltfImportPlan's hex, Color Ramp's stop colours); NodeEditor/ledDisplayTile.ts still keeps
+ *  a private one, left for its owner to fold. */
+export function linearToSrgb01(c: number): number {
+  if (!Number.isFinite(c)) return 0;
+  const v = c < 0 ? 0 : c > 1 ? 1 : c;
+  return v <= 0.0031308 ? 12.92 * v : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
+}
+
 /**
  * Pick a foreground color (black or white) that contrasts with `bgHex`.
  * Uses perceived luminance (Rec. 601). Defaults to black for light backgrounds,

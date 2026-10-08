@@ -1018,6 +1018,10 @@ describe('Splat Output — an unwired input never reads the quad (implicit reads
     const c = code({ nodes: [image(), splat()], edges: [makeEdge('img', 'out', 'sp', 'color')] });
     const shade = fnBody(c, 'sp1Shade');
     expect(shade).toContain(`const image1 = texture(_image1_tex, ${UV}`);
+    // …and samples it AS STORED: the projection runs u right and v up across
+    // the splat's front, like three's primitives, so no mirror is baked in
+    // (until 2026-10-08 a 1-u followed it and the slide read mirrored).
+    expect(shade).toContain(`const image1 = texture(_image1_tex, ${UV}).rgb;`);
     expect(c).not.toContain('uv(');
     expect(c).not.toMatch(/^import \{[^}]*\buv\b[^}]*\} from 'three\/tsl';$/m);
     // The module-scope decode is emitted once, outside every Fn.

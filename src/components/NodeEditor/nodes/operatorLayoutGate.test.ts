@@ -84,6 +84,8 @@ describe('the predicate exists and asks both questions', () => {
     expect(body).toContain('hasNodeGlyph(');
     expect(body).toContain('growsOperands(');
     expect(body).toMatch(/hasNodeGlyph\([^)]*\)\s*\|\|\s*growsOperands\(/);
+    // …and refuses a second output, which the operator card has no socket for.
+    expect(body).toMatch(/outputs\.length !== 1/);
     // and it is `growsOperands` from the registry, not a local re-derivation
     // that could disagree with effectiveInputs about which nodes grow
     expect(glyph).toMatch(/import \{[^}]*growsOperands[^}]*\} from '@\/registry\/nodeRegistry'/);
@@ -120,6 +122,7 @@ describe('all four gates ask the one predicate', () => {
     expect(body).toContain('state.glyph');
     expect(body).toMatch(/\.grows/);
     expect(body).toMatch(/\.in\.length === 2/);
+    expect(body).toMatch(/\.out\.length === 1/);
   });
 
   it('NdNodeInfo carries `grows`, sourced from the registry', () => {
@@ -171,12 +174,24 @@ describe('the predicate answers correctly for the nodes that made it necessary',
        future def lands on the wrong side, without pinning a list that has to be
        edited every time a node is added. */
     for (const d of getAllDefinitions()) {
-      const expected = d.inputs.length === 2 && (hasNodeGlyph(d.type) || growsOperands(d));
+      // One output too: the operator card draws exactly one output socket (Fresnel's Facing would never mount).
+      const expected = d.inputs.length === 2 && d.outputs.length === 1 && (hasNodeGlyph(d.type) || growsOperands(d));
       expect(usesOperatorLayout(d), d.type).toBe(expected);
     }
     // a non-2-input node never takes it, however it is drawn
     expect(usesOperatorLayout(def('mix'))).toBe(false);   // 3 inputs
     expect(usesOperatorLayout(def('uv'))).toBe(false);    // glyphed, 0 inputs
     expect(usesOperatorLayout(undefined)).toBe(false);    // unknown registryType
+    // a glyphed 2-input node with a SECOND output takes the rows layout — the
+    // operator card would never mount that socket (Fresnel's Facing)
+    const add = def('add');
+    expect(usesOperatorLayout({ ...add, outputs: [...add.outputs, { id: 'y', label: 'Y', dataType: 'float' }] })).toBe(false);
+  });
+
+  it('fresnel — glyphed, 2 inputs, 2 outputs — takes the rows layout, so Facing mounts', () => {
+    expect(hasNodeGlyph('fresnel')).toBe(true);
+    expect(def('fresnel').inputs).toHaveLength(2);
+    expect(def('fresnel').outputs).toHaveLength(2);
+    expect(usesOperatorLayout(def('fresnel'))).toBe(false);
   });
 });

@@ -69,7 +69,7 @@ describe('one button per previewable socket', () => {
   it('the header and its hint are translated', () => {
     expect(t('Preview Channel', 'lv')).not.toBe('Preview Channel');
     const hint =
-      'Show one of this texture’s channels on the 3D preview in place of the Output’s wiring — click the lit one to stop. ⌘/Ctrl+click the node previews its Color.';
+      'Show one of this texture’s channels on the 3D preview in place of the Output’s wiring — click the lit one to stop. Alt/⌥+click the node previews its Color.';
     expect(ROW).toContain(hint);
     expect(t(hint, 'lv')).not.toBe(hint);
   });

@@ -15,6 +15,7 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { effectiveExposedPorts, usesExposedPorts } from '@/utils/exposedPorts';
 import { makeTypedEdge } from '@/utils/edgeUtils';
 import { pickSpliceInputPort } from './edgeSplice';
+import { inheritedImageUv } from './imageUvHandoff';
 import type { AppNode, AppEdge, NodeDefinition } from '@/types';
 import { getNodeValues } from '@/types';
 
@@ -112,10 +113,11 @@ export function spliceNodeIntoEdge(
  * Wire one connection under the app's connect rules, and nothing else.
  *
  * Extracted out of NodeEditor's `applyConnection` so the ADD-MENU path can obey
- * the same two rules rather than restating them: inputs are single-connection
+ * the same rules rather than restating them: inputs are single-connection
  * (a second wire to one target handle replaces the first, it does not stack),
- * and landing on a hidden parameter socket makes the exposure permanent, or the
- * fresh edge points at a handle that never mounts and simply does not draw.
+ * landing on a hidden parameter socket makes the exposure permanent, or the
+ * fresh edge points at a handle that never mounts and simply does not draw, and
+ * an Image replacing a source inherits the coordinate that source sampled at.
  *
  * Deliberately NOT the whole of `applyConnection`: the eval telemetry and the
  * image→normal colour-space flip stay with it, because they need the node scan
@@ -129,11 +131,18 @@ export function connectNodes(
   targetHandle: string | null,
 ): void {
   const store = useAppStore.getState();
+  // Read before the replacement below drops the input's current wire: an Image
+  // taking another source's place samples where that source sampled
+  // (imageUvHandoff.ts).
+  const uv = inheritedImageUv(store.nodes, store.edges, source, target, targetHandle);
   const filtered = store.edges.filter(
     (e) => !(e.target === target && e.targetHandle === targetHandle),
   );
-  store.setEdges([...filtered, makeTypedEdge(source, sourceHandle, target, targetHandle)] as AppEdge[]);
+  const added = [makeTypedEdge(source, sourceHandle, target, targetHandle)];
+  if (uv) added.push(makeTypedEdge(uv.source, uv.sourceHandle, source, 'uv'));
+  store.setEdges([...filtered, ...added] as AppEdge[]);
   exposeConnectedTarget(target, targetHandle);
+  if (uv) exposeConnectedTarget(source, 'uv');
 }
 
 /** Which end of a wire the add-node menu was opened from. React Flow's own

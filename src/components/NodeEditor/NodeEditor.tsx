@@ -141,6 +141,7 @@ import type { AppNode, AppEdge, ShaderNodeData, OutputNodeData, NodeDefinition }
 import { getNodeValues } from '@/types';
 import { t } from '@/i18n';
 import { initialNodeValues } from '@/utils/newNodeValues';
+import { TOUCH_UNDETECTED, installTouchAsMouse } from './touchAsMouse';
 import './NodeEditor.css';
 
 // Constant ReactFlow prop objects, hoisted so their identities are stable —
@@ -232,7 +233,8 @@ const NODE_MENU_TYPES: Record<string, ContextMenuType> = {
   dataRange: 'dataRange',
 };
 /**
- * Shift ONLY adds to the selection — ⌘/Ctrl+click is Preview mode. An array is
+ * Shift ONLY adds to the selection — Ctrl/⌘+click opens the Attach list and
+ * Alt+click is Preview mode (onNodeClick). An array is
  * "any of these"; module scope because useKeyPress memoizes on its identity.
  * docs/dev/canvas-interaction.md, "Selection".
  */
@@ -731,8 +733,8 @@ export function NodeEditor() {
   /**
    * PREVIEW MODE (utils/nodePreview.ts): one node's output stands in for the
    * Output's Color channel on the 3D view. Entered from the node's right-click
-   * menu (menuShared's NodeActions) or by ⌘/Ctrl+click (onNodeClick below);
-   * left by a press anywhere else, by Escape, by ⌘/Ctrl+clicking the node
+   * menu (menuShared's NodeActions) or by Alt+click (onNodeClick below);
+   * left by a press anywhere else, by Escape, by Alt+clicking the node
    * again, or by the graph being replaced. The mode is STORE state because the
    * sync engine must emit the rerouted `previewCode`; everything visual here
    * is imperative — the `fs-menu-active` idiom above — because looking at a
@@ -745,7 +747,7 @@ export function NodeEditor() {
    * `fs-menu-active` above, and it is measured, not taste. React Flow's node
    * wrapper renders its `className` from props (`selected`, `dragging`, …),
    * and React writes the whole string whenever that prop changes, which
-   * erases anything added by hand: a ⌘/Ctrl+click both selects the node and
+   * erases anything added by hand: an Alt+click both selects the node and
    * starts the preview, and the `selected` write landed AFTER this effect's
    * `classList.add` (MutationObserver, old value carrying the class, new
    * value without it) — so the previewed node dimmed with the rest. A drag
@@ -783,7 +785,7 @@ export function NodeEditor() {
   // opens (portalled popovers included) and the 3D pane — orbiting the model
   // IS looking at the preview — all via PREVIEW_KEEP_SELECTOR; and the MIDDLE
   // button, since panning around the canvas is not a click. A press on
-  // ANOTHER node ends this preview first, so ⌘/Ctrl+click and a Preview row
+  // ANOTHER node ends this preview first, so Alt+click and a Preview row
   // on that node then start theirs from a clean state.
   useEffect(() => {
     if (!previewSrcId) return;
@@ -844,24 +846,34 @@ export function NodeEditor() {
    * carries a long-press beside its own double-click handler).
    */
   const onNodeClick = useCallback((e: React.MouseEvent, node: AppNode) => {
-    // ⌘/Ctrl+click → PREVIEW MODE, toggling off on the node already previewed
-    // (the outside-press closer has already ended any OTHER node's preview by
-    // the time this click lands). Above the double-click pairing, so a
-    // modified click never counts toward a label peek. A node's own widgets
-    // keep their click (PEEK_EXEMPT_SELECTOR — the Sound node's arm light is
-    // a real button), and a node with no output has nothing to route, so
-    // there the click falls through to ordinary selection. Ctrl+click is the
-    // right-click on macOS and opens the menu instead — the Preview row
-    // covers it there; ⌘ is the key on that platform.
-    if (e.metaKey || e.ctrlKey) {
+    // The two modified clicks (owner request 2026-10-08), above the
+    // double-click pairing so a modified click never counts toward a label
+    // peek:
+    //  - Ctrl/⌘+click → the ATTACH list (utils/nodeAttach.ts) — ⌘ as Ctrl's
+    //    Mac twin, the app's Ctrl+Z / ⌘Z pairing. macOS turns a Ctrl+click
+    //    into a right-click, so there it arrives through onNodeContextMenu
+    //    instead; the two open the same list at the same point, so a browser
+    //    that sends both events lands in one state.
+    //  - Alt/⌥+click → PREVIEW MODE, toggling off on the node already
+    //    previewed (the outside-press closer has already ended any OTHER
+    //    node's preview by the time this click lands).
+    // A node's own widgets keep their click (PEEK_EXEMPT_SELECTOR — the Sound
+    // node's arm light is a real button), and a node with no output has
+    // nothing to route, so there the click falls through to ordinary
+    // selection.
+    if (e.ctrlKey || e.metaKey || e.altKey) {
       lastActivationRef.current = null;
       const el = e.target as Element | null;
       if (el?.closest?.(PEEK_EXEMPT_SELECTOR)) return;
       const outs = previewableOutputs(node);
       if (outs.length === 0) return;
       const store = useAppStore.getState();
-      const same = store.nodePreview?.nodeId === node.id;
-      store.setNodePreview(same ? null : { nodeId: node.id, handleId: outs[0].id });
+      if (e.ctrlKey || e.metaKey) {
+        store.openContextMenu(e.clientX, e.clientY, 'attach', node.id);
+      } else {
+        const same = store.nodePreview?.nodeId === node.id;
+        store.setNodePreview(same ? null : { nodeId: node.id, handleId: outs[0].id });
+      }
       return;
     }
     const t = Date.now();
@@ -1183,9 +1195,14 @@ export function NodeEditor() {
   // pointer query while this JS model uses the broader dynamic signal — the
   // divergence is intentional (sizing follows the device class, interaction
   // follows the pointer actually in use).
+  //
+  // A touch the browser says it cannot produce (TOUCH_UNDETECTED: Steam
+  // Frame's controller laser) keeps the DESKTOP model. Its touch is a pointer
+  // standing in for a mouse, and it has no second finger to navigate with
+  // (touchAsMouse.ts).
   const [isCoarsePointer, setIsCoarsePointer] = useState(() => {
     if (typeof navigator !== 'undefined' && (navigator.maxTouchPoints ?? 0) > 0) return true;
-    if (typeof window === 'undefined' || !window.matchMedia) return false;
+    if (TOUCH_UNDETECTED || typeof window === 'undefined' || !window.matchMedia) return false;
     return window.matchMedia('(any-pointer: coarse)').matches || window.matchMedia('(pointer: coarse)').matches;
   });
   useEffect(() => {
@@ -1195,7 +1212,7 @@ export function NodeEditor() {
     // never re-renders mid-drag. Keeps a hybrid device (iPad + Magic Keyboard,
     // or a touchscreen laptop) correct for whichever input the user reaches for.
     const onPointerDown = (e: PointerEvent) => {
-      if (e.pointerType === 'mouse') setIsCoarsePointer(false);
+      if (e.pointerType === 'mouse' || (e.pointerType === 'touch' && TOUCH_UNDETECTED)) setIsCoarsePointer(false);
       else if (e.pointerType === 'touch' || e.pointerType === 'pen') setIsCoarsePointer(true);
     };
     window.addEventListener('pointerdown', onPointerDown, { capture: true });
@@ -2158,6 +2175,16 @@ export function NodeEditor() {
     [applyConnection],
   );
 
+  // A socket picked from the ATTACH list (menus/AttachMenu.tsx): one undo
+  // entry, then the same commit a dragged wire gets.
+  const onAttach = useCallback(
+    (connection: Connection) => {
+      useAppStore.getState().pushHistory();
+      applyConnection(connection);
+    },
+    [applyConnection],
+  );
+
   // Also the selection rectangle's menu: a right-click on it is a canvas one.
   const onPaneContextMenu = useCallback(
     (event: MouseEvent | React.MouseEvent) => {
@@ -2199,6 +2226,12 @@ export function NodeEditor() {
   const onNodeContextMenu = useCallback(
     (event: React.MouseEvent, node: AppNode) => {
       event.preventDefault();
+      // macOS's Ctrl+click IS this event, so Ctrl here is the Attach gesture
+      // (see onNodeClick) — on a node that has an output to attach.
+      if (event.ctrlKey && previewableOutputs(node).length > 0) {
+        openContextMenu(event.clientX, event.clientY, 'attach', node.id);
+        return;
+      }
       const menuType =
         node.type === 'group'
           ? 'group'
@@ -2983,6 +3016,14 @@ export function NodeEditor() {
     return () => window.removeEventListener('keydown', onKey);
   }, [fitView]);
 
+  // Touch d3 cannot hear (touchAsMouse.ts): replay its node / selection-box
+  // drags as the mouse events React Flow's d3-drag listens for.
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el || !TOUCH_UNDETECTED) return;
+    return installTouchAsMouse(el);
+  }, []);
+
   // Touch/pen long-press → context menu. We dispatch a synthetic `contextmenu`
   // MouseEvent on the original DOM target so React Flow's existing per-element
   // handlers (onPaneContextMenu / onNodeContextMenu / onEdgeContextMenu /
@@ -3475,7 +3516,7 @@ export function NodeEditor() {
   return (
     <div className="node-editor" style={canvasCssVars}>
       <div
-        className={`node-editor__canvas${drawToolActive ? ' fs-draw-active' : ''}${drawToolActive && drawEraser ? ' fs-erase-active' : ''}${connecting ? ' fs-connecting' : ''}${previewSrcId ? ' fs-previewing' : ''}`}
+        className={`node-editor__canvas${TOUCH_UNDETECTED ? ' fs-touch-as-mouse' : ''}${drawToolActive ? ' fs-draw-active' : ''}${drawToolActive && drawEraser ? ' fs-erase-active' : ''}${connecting ? ' fs-connecting' : ''}${previewSrcId ? ' fs-previewing' : ''}`}
         ref={canvasRef}
         // HTML5 drag wandering off the canvas (into the code editor / assets
         // bar) must tear down the live previews — dragover stops firing here,
@@ -3578,7 +3619,8 @@ export function NodeEditor() {
           nodesDraggable={!drawToolActive}
           elementsSelectable={!drawToolActive}
           selectionMode={SelectionMode.Partial}
-          // Shift+click adds to the selection (⌘/Ctrl+click is Preview mode).
+          // Shift+click adds to the selection (Alt+click is Preview mode,
+          // Ctrl/⌘+click the Attach list).
           multiSelectionKeyCode={MULTI_SELECT_KEYS}
           // Shift MUST be released from its DEFAULT job (hold-to-marquee) for
           // the line above to work at all: while selectionKeyCode is held, the
@@ -3786,7 +3828,7 @@ export function NodeEditor() {
         )}
         <ImageConvertInfoModal open={convertInfoOpen} onClose={() => setConvertInfoOpen(false)} />
 
-        {contextMenu.open && <ContextMenu />}
+        {contextMenu.open && <ContextMenu onAttach={onAttach} />}
         <ImageImportModal request={convertAsk} onResolve={resolveConvertAsk} />
         <NewShaderModal
           open={newShaderOpen}
