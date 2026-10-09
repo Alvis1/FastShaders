@@ -5,7 +5,7 @@
  * The endpoint exists ONLY on alvismisjuns.lv (a PHP container; live since
  * 2026-08-29): `/fastshaders-eval/upload.php`, collected at
  * `/fastshaders-eval/list.php` (password-protected). It is deployed by
- * `scripts/deploy-eval-endpoint.sh`, which renders `server/*.php` with the
+ * `scripts/deploy-eval-endpoint.sh`, which renders `scripts/eval-endpoint/*.php` with the
  * secrets from the gitignored `.vscode/eval-endpoint.json` — this repo is
  * public, so the listing password never enters it. Set `EVAL_UPLOAD_URL` to
  * '' to disable.
@@ -42,13 +42,13 @@
  */
 export const EVAL_UPLOAD_URL: string =
   (typeof __FS_EVAL_UPLOAD_URL__ === 'string' && __FS_EVAL_UPLOAD_URL__) || '/fastshaders-eval/upload.php';
-/** Must match $SECRET in server/fastshaders-eval-upload.php. */
+/** Must match $SECRET in scripts/eval-endpoint/fastshaders-eval-upload.php. */
 export const EVAL_UPLOAD_KEY: string = 'fsx-ecec3b0ce84df95b09ca';
 
 const UPLOAD_TIMEOUT_MS = 30_000;
 /**
  * Client-side mirror of the server's cap (`$MAX_BYTES` in
- * server/fastshaders-eval-upload.php; evalUpload.test.ts pins the two) —
+ * scripts/eval-endpoint/fastshaders-eval-upload.php; evalUpload.test.ts pins the two) —
  * refuse before shipping bytes. MiB: the N4 notice's fixed "64 MB" means this.
  */
 export const MAX_UPLOAD_BYTES = 64 * 1024 * 1024;

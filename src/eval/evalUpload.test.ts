@@ -87,7 +87,7 @@ describe('the client and server caps agree', () => {
     expect(MAX_UPLOAD_BYTES).toBe(64 * 2 ** 20);
     // The live copy is rendered from this template (render-eval-endpoint.mjs
     // substitutes only secrets and the inbox), so this covers the deployed cap.
-    const php = read('../../server/fastshaders-eval-upload.php');
+    const php = read('../../scripts/eval-endpoint/fastshaders-eval-upload.php');
     expect(php).toMatch(/\$MAX_BYTES\s*=\s*64\s*\*\s*1024\s*\*\s*1024\s*;/);
   });
 });
@@ -141,7 +141,7 @@ describe('the study host posts to alvismisjuns cross-origin', () => {
   // its connect-src, and the endpoint's preflight AND POST answers.
   const sferas = read('../../scripts/deploy-sferas.sh');
   const vite = read('../../vite.config.ts');
-  const php = read('../../server/fastshaders-eval-upload.php');
+  const php = read('../../scripts/eval-endpoint/fastshaders-eval-upload.php');
   const ENDPOINT = 'https://alvismisjuns.lv/fastshaders-eval/upload.php';
 
   const shellVar = (name: string) => sferas.match(new RegExp(`^${name}="([^"]*)"`, 'm'))?.[1];

@@ -33,10 +33,10 @@ UPLOAD_URL="https://alvismisjuns.lv/fastshaders-eval/upload.php"
 # the LIVE endpoint for exactly these BEFORE anything is uploaded, so a header
 # added to the client stops this deploy while the live endpoint still lacks
 # it — the study host keeps its previous build — instead of every upload.
-REQ_HEADERS="$(sed -n "s/.*header('Access-Control-Allow-Headers: \([^']*\)').*/\1/p" "$ROOT/server/fastshaders-eval-upload.php" \
+REQ_HEADERS="$(sed -n "s/.*header('Access-Control-Allow-Headers: \([^']*\)').*/\1/p" "$ROOT/scripts/eval-endpoint/fastshaders-eval-upload.php" \
   | head -1 | tr 'A-Z' 'a-z' | tr -d ' ')"
 
-[ -n "$REQ_HEADERS" ] || { echo "cannot read Access-Control-Allow-Headers from server/fastshaders-eval-upload.php"; exit 1; }
+[ -n "$REQ_HEADERS" ] || { echo "cannot read Access-Control-Allow-Headers from scripts/eval-endpoint/fastshaders-eval-upload.php"; exit 1; }
 [ -f "$CONF" ] || { echo "missing $CONF (SFTP credentials)"; exit 1; }
 command -v psftp >/dev/null || { echo "psftp not found — brew install putty"; exit 1; }
 

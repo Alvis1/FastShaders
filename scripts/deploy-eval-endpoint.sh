@@ -3,7 +3,7 @@
 #
 #   bash scripts/deploy-eval-endpoint.sh
 #
-# The repo keeps `server/*.php` as CHANGE-ME TEMPLATES because it is public;
+# The repo keeps `scripts/eval-endpoint/*.php` as CHANGE-ME TEMPLATES because it is public;
 # the real secrets live in the gitignored `.vscode/eval-endpoint.json` (same
 # pattern as `.vscode/sftp.json`, which supplies the SSH credentials). This
 # script renders the templates with those secrets into a temp dir and uploads
@@ -28,13 +28,13 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
 # Render the templates with the real secrets (see render-eval-endpoint.mjs).
-node "$ROOT/scripts/render-eval-endpoint.mjs" "$ROOT/server" "$STAGE" "$EVAL_CONF"
+node "$ROOT/scripts/render-eval-endpoint.mjs" "$ROOT/scripts/eval-endpoint" "$STAGE" "$EVAL_CONF"
 
 # The headers the upload sends, as the template allows them — read BEFORE the
 # upload, so a template line this cannot parse stops here instead of leaving a
 # new endpoint live and unverified. The verification below asks for exactly
 # these.
-REQ_HEADERS="$(sed -n "s/.*header('Access-Control-Allow-Headers: \([^']*\)').*/\1/p" "$ROOT/server/fastshaders-eval-upload.php" \
+REQ_HEADERS="$(sed -n "s/.*header('Access-Control-Allow-Headers: \([^']*\)').*/\1/p" "$ROOT/scripts/eval-endpoint/fastshaders-eval-upload.php" \
   | head -1 | tr 'A-Z' 'a-z' | tr -d ' ')"
 [ -n "$REQ_HEADERS" ] || { echo "cannot read Access-Control-Allow-Headers from the template" >&2; exit 1; }
 
