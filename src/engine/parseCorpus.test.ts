@@ -1,5 +1,5 @@
 /**
- * Parse-corpus guard: every human-authored shader fixture under Tests/ is
+ * Parse-corpus guard: every human-authored shader fixture under tests/corpus/ is
  * parsed with codeToGraph and its shape pinned against hardcoded expectations
  * ({nodeTypeCounts, edgeCount, errorCount, warningCount}). This freezes
  * human-code fidelity — a parser change that silently drops wiring, duplicates
@@ -17,9 +17,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { codeToGraph } from './codeToGraph';
 
-const TESTS_DIR = fileURLToPath(new URL('../../Tests', import.meta.url));
+const TESTS_DIR = fileURLToPath(new URL('../../tests/corpus', import.meta.url));
 
-/** Recursively collect shader fixtures (`.js`, incl. `.tsl.js`) under Tests/. */
+/** Recursively collect shader fixtures (`.js`, incl. `.tsl.js`) under tests/corpus/. */
 function collectShaderFiles(dir: string, prefix = ''): string[] {
   const out: string[] = [];
   const entries = readdirSync(dir, { withFileTypes: true })
@@ -177,7 +177,7 @@ const EXPECTED: Record<string, CorpusStats> = {
   },
 };
 
-describe('parse corpus — human-authored shader fixtures under Tests/', () => {
+describe('parse corpus — human-authored shader fixtures under tests/corpus/', () => {
   const files = collectShaderFiles(TESTS_DIR);
 
   it('covers exactly the fixture set on disk', () => {

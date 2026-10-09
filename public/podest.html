@@ -3318,7 +3318,7 @@
   // Every shader swap costs one dynamic import, and imported ES modules can
   // NEVER be unloaded from a living document — the module registry keeps
   // each one (plus any textures its closure pins). Measured 2026-08-07 on
-  // the Tests/1stTest corpus: ~50 KB of stage heap per swap with materials
+  // the tests/corpus/1stTest shaders: ~50 KB of stage heap per swap with materials
   // correctly disposed — slow, but unbounded, and ~100× worse for exports
   // carrying base64 images. The stage is DISPOSABLE by contract
   // (applyStateToStage replays everything), so a periodic restart while

@@ -95,7 +95,7 @@ describe('vendored A-Frame scripts stay in sync with the submodule source', () =
       'never from this app, so the vendored copy had no consumer.',
     'a-frame-shaderloader-0.5.js':
       'frozen for shaders exported before 0.6; same as 0.4 — CDN-only. ' +
-      'Tests/index.html loads it from the submodule path, not public/js.',
+      'tests/corpus/index.html loads it from the submodule path, not public/js.',
     'a-frame-shaderloader-0.6.js':
       'frozen for shaders exported before 0.8; they load it from the CDN. ' +
       'Every same-origin consumer (preview, XR popup, podest stage and VR ' +

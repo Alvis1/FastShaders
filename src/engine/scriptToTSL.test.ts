@@ -702,7 +702,7 @@ ${props}  };
     expect(r.code).toBe(scriptToTSL(src));
   });
 
-  it('handles the single-line return form the Tests/ corpus uses', () => {
+  it('handles the single-line return form the tests/corpus/ shaders use', () => {
     const src = 'import { color } from "three/tsl";\n\n'
       + 'export default function (params) {\n'
       + '  return { colorNode: color(0xffffff), transparent: true, alphaTest: 0.25 };\n}\n';

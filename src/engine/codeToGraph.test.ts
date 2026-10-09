@@ -311,9 +311,9 @@ describe('codeToGraph — member-init declarations (const f1 = worley.x)', () =>
     expect(result.errors.every((e) => e.severity === 'warning')).toBe(true);
   });
 
-  it('imports Tests/morph-triangles-watercolor.tsl.js without dropping the worley split wiring', () => {
+  it('imports tests/corpus/morph-triangles-watercolor.tsl.js without dropping the worley split wiring', () => {
     const fixture = readFileSync(
-      fileURLToPath(new URL('../../Tests/morph-triangles-watercolor.tsl.js', import.meta.url)),
+      fileURLToPath(new URL('../../tests/corpus/morph-triangles-watercolor.tsl.js', import.meta.url)),
       'utf8',
     );
     const result = codeToGraph(fixture);
@@ -561,7 +561,7 @@ describe('codeToGraph — time node speed', () => {
     expect(timeNodes(result)).toHaveLength(1);
   });
 
-  it('does NOT collapse a variable receiver (the Tests/ corpus idiom)', () => {
+  it('does NOT collapse a variable receiver (the tests/corpus/ idiom)', () => {
     const result = codeToGraph(
       wrap(
         '  const time1 = time;\n  const m1 = mul(time1, 5);\n  const m2 = mul(time1, -4.4);\n  return add(m1, m2);',
