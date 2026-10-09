@@ -3,18 +3,22 @@
   "private": true,
   "version": "0.3.36",
   "type": "module",
+  "engines": {
+    "node": ">=22.6"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "deploy": "npm run build && gh-pages -d dist",
+    "deploy": "bash scripts/check-submodule.sh && npm run build && gh-pages -d dist",
     "tauri": "tauri",
     "eval:analysis": "node scripts/eval-analysis.mjs",
     "deploy:alvismisjuns": "bash scripts/deploy-alvismisjuns.sh",
     "deploy:sferas": "bash scripts/deploy-sferas.sh",
-    "gen:teapot": "node --experimental-strip-types scripts/gen-teapot-obj.mjs"
+    "sync:generated": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/sync-generated.mjs",
+    "preversion": "bash scripts/check-submodule.sh"
   },
   "dependencies": {
     "@babel/parser": "^7.26.0",

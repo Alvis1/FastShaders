@@ -266,7 +266,10 @@ VR popup is silent.
 ## Self-hosting
 
 Podest works on any plain static server with no configuration. Copy these files,
-keeping the layout:
+keeping the layout, from a build's `dist/` (or the deployed site) — in the source
+tree, `public/js/` and `public/models/teapot.obj` are generated at every
+dev/build/test start (`npm run sync:generated` writes them on their own) and
+are not committed:
 
 ```
 podest.html                          279 KB

@@ -66,6 +66,8 @@ echo "  upload preflight: status ${PF_STATUS:-none}, origin ${CORS:-none}${MISSI
   || { echo "  → the live endpoint does not admit $ORIGIN's upload; nothing was uploaded. Run  bash scripts/deploy-eval-endpoint.sh  first." >&2; exit 1; }
 
 if [ "${1:-}" != "--no-build" ]; then
+  # public/js is generated from the submodule: build only from a committed pointer.
+  bash "$ROOT/scripts/check-submodule.sh"
   echo "==> building (base /, CSP for fs.sferas.lv, study uploads to alvismisjuns.lv)"
   cd "$ROOT"
   FS_BASE=/ \

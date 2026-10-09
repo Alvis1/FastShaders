@@ -1,7 +1,8 @@
 /**
  * The runtime Utah Teapot: proves the tessellation IS the official one, that
  * the atlas is a real bijection, that normals and winding agree, and that the
- * committed `public/models/teapot.obj` is exactly what the generator emits.
+ * generated `public/models/teapot.obj` (written by scripts/sync-generated.mjs)
+ * is exactly what the generator emits.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -200,9 +201,23 @@ describe('Utah Teapot OBJ', () => {
     expect(meshes).toBe(1);
   });
 
-  it('public/models/teapot.obj is byte-identical to the generator output (regenerate with `npm run gen:teapot`)', () => {
-    const committed = readFileSync(new URL('../../public/models/teapot.obj', import.meta.url), 'utf8');
-    expect(committed).toBe(api.obj(STATIC_TEAPOT_RESOLUTION));
+  it('public/models/teapot.obj is byte-identical to the generator output (written by scripts/sync-generated.mjs)', () => {
+    const generated = readFileSync(new URL('../../public/models/teapot.obj', import.meta.url), 'utf8');
+    expect(generated).toBe(api.obj(STATIC_TEAPOT_RESOLUTION));
+  });
+
+  it('stays loadable under plain Node type stripping (scripts/sync-generated.mjs imports it)', () => {
+    // Node's strip-types resolves no `@/` alias, needs explicit `.ts` on every
+    // relative import, and cannot strip an enum, namespace or parameter property.
+    for (const file of ['./teapotGeometry.ts', './teapotData.ts']) {
+      const src = readFileSync(new URL(file, import.meta.url), 'utf8');
+      const specs = [...src.matchAll(/^\s*(?:import|export)\b[^;]*?\sfrom\s+['"]([^'"]+)['"]/gm)].map((m) => m[1]);
+      for (const spec of specs) {
+        expect(spec.startsWith('.') && spec.endsWith('.ts'), `${file} imports '${spec}'`).toBe(true);
+      }
+      expect(src, file).not.toMatch(/^\s*(?:export\s+)?(?:const\s+)?enum\s/m);
+      expect(src, file).not.toMatch(/^\s*(?:export\s+)?namespace\s/m);
+    }
   });
 
   it('the preview script registers the teapot-mesh component only where AFRAME + THREE exist', () => {

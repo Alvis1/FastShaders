@@ -121,9 +121,10 @@ npm test           # vitest suite
 npm run build      # typecheck + production build
 ```
 
-Node 20+. The vendored A-Frame and shaderloader scripts are committed under `public/js/`, so a plain
-clone builds; the `a-frame-shaderloader` submodule is only needed to change them (clone with
-`--recurse-submodules`). Desktop builds additionally need a [Rust toolchain](https://rustup.rs):
+Node 22.6+. Clone with `--recurse-submodules`: the A-Frame and shaderloader scripts come from the
+`a-frame-shaderloader` submodule and are generated into `public/js/` at every dev, build and test
+start (they are not committed), so a clone without the submodule stops with a message saying so.
+Desktop builds additionally need a [Rust toolchain](https://rustup.rs):
 `npm run tauri dev` / `npm run tauri build`. Release binaries are built by CI on version tags.
 
 ## License

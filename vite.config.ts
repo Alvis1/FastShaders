@@ -2,7 +2,8 @@
 import { defineConfig, type Plugin, type Connect } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { cpSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'fs';
+import { cpSync, readFileSync, writeFileSync, existsSync, rmSync } from 'fs';
+import { execFileSync } from 'child_process';
 
 /**
  * Shape of `src/registry/descriptionSplice.ts`, declared structurally rather
@@ -406,92 +407,37 @@ const ND_I18N = path.resolve(__dirname, 'src/i18n/node-i18n.json');
  */
 
 /**
- * Copy `srcPath` → `dstPath` only when their bytes differ. Compare-before-write
- * skips no-op copies (no mtime churn) and writes in place (no unlink — cpSync's
- * unlink can EPERM on restricted mounts). The dest dir is created if missing so
- * a fresh/partial checkout doesn't ENOENT. Buffer comparison is binary-safe.
+ * The files the repository deliberately does not track — the vendored A-Frame
+ * family in public/js/ and ShaderCarousel/components/three/ (from the
+ * a-frame-shaderloader submodule), the benches' three in
+ * ShaderCarousel/lib/three/ (from node_modules/three) and
+ * public/models/teapot.obj (from the runtime tessellator) — are written by
+ * `scripts/sync-generated.mjs`, the ONE implementation (`npm run
+ * sync:generated` runs it by hand). **Edit only the sources; the outputs are
+ * generated and gitignored.** A missing source FAILS the start (a clone without
+ * the submodule would otherwise build a dist with no js/), and the script
+ * prunes its output folders, so a stale file cannot ship from a local deploy.
+ *
+ * Runs at buildStart, which vitest's server also calls, so dev, build, test and
+ * the desktop build all see fresh files. KEEP THIS BODY SYNCHRONOUS: Rollup
+ * runs buildStart hooks in parallel, and only a synchronous body finishes
+ * before `shaderCarouselDesktopStagePlugin`'s buildStart copies ShaderCarousel/
+ * (with the generated three) into src-tauri/carousel-dist. It also runs before
+ * `shaderCarouselCopyPlugin`'s closeBundle copy for the web build.
+ *
+ * A child process because the teapot generator is TypeScript that plain Node
+ * loads with type stripping, and because importing src/ statically from this
+ * config would put one file in two TS projects (TS6305, see tsconfig.node.json).
  */
-const syncVendoredFile = (srcPath: string, dstPath: string): void => {
-  const src = readFileSync(srcPath);
-  const dst = existsSync(dstPath) ? readFileSync(dstPath) : null;
-  if (dst && src.equals(dst)) return;
-  mkdirSync(path.dirname(dstPath), { recursive: true });
-  writeFileSync(dstPath, src);
-};
-
-/**
- * Vendor the shared A-Frame preview scripts from a SINGLE source of truth.
- *
- * The canonical copies live in the `a-frame-shaderloader/` submodule's `js/`
- * dir — that's where `build/build.mjs` emits the A-Frame IIFE bundle
- * (`a-frame-180-a-01.min.js`, r184) and where the shaderloader component +
- * orbit-controls are maintained (and what the jsdelivr CDN serves for exported
- * shaders). The FastShaders app (preview iframe) loads them from `public/js/`,
- * and the ShaderCarousel `bench-inout` page loads the bundle from
- * `ShaderCarousel/components/three/`.
- *
- * Rather than hand-maintaining three copies (which silently drift and pick up
- * version skew), this plugin copies the canonical files into both consumer
- * locations at dev/build start. **Edit only the submodule source; the copies
- * are generated.** `src/vendorSync.test.ts` fails if any copy diverges, so a
- * stale consumer copy can't ship. Compare-before-write avoids mtime churn and
- * keeps startup from EPERM-ing on restricted mounts (no unlink).
- *
- * Runs at buildStart — before `shaderCarouselCopyPlugin`'s closeBundle copy, so
- * the carousel deploy picks up the freshly-synced bundle.
- */
-const VENDOR_SRC = path.resolve(__dirname, 'a-frame-shaderloader/js');
-const VENDOR_TARGETS: { file: string; dests: string[] }[] = [
-  { file: 'a-frame-180-a-01.min.js', dests: ['public/js', 'ShaderCarousel/components/three'] },
-  // 0.4, 0.5 and 0.6 are deliberately NOT vendored — see NOT_VENDORED in
-  // src/vendorSync.test.ts. Nothing resolves them same-origin: every export
-  // and the A-Frame tab reference them on the CDN by URL. The preview, its XR
-  // popup, podest's stage and podest's VR popup load 0.8. NB this plugin only
-  // ever COPIES, so dropping a row leaves the old file wherever a host keeps
-  // it: GitHub Pages deploys with force_orphan and loses it, the psftp hosts
-  // (alvismisjuns, sferas) never delete and keep it.
-  { file: 'a-frame-shaderloader-0.8.js', dests: ['public/js'] },
-  // The glTF decoders (three r184's glTF Draco build and meshopt 1.1, the Basis
-  // Universal KTX2 transcoder, plus the README carrying their provenance and the
-  // Apache-2.0 text that must travel with Draco and Basis alike) sit beside the
-  // loader, whose FastShaders.decoders section installs them. They ship in EVERY
-  // build (web, both psftp hosts, the desktop app): a surface that decodes a
-  // dropped compressed model — mesh or texture — must work offline, and the
-  // sandboxed preview can fetch nothing, so its parent pushes these bytes in.
-  { file: 'decoders/draco_wasm_wrapper.js', dests: ['public/js'] },
-  { file: 'decoders/draco_decoder.wasm', dests: ['public/js'] },
-  { file: 'decoders/meshopt_decoder.module.js', dests: ['public/js'] },
-  { file: 'decoders/basis_transcoder.js', dests: ['public/js'] },
-  { file: 'decoders/basis_transcoder.wasm', dests: ['public/js'] },
-  { file: 'decoders/README.md', dests: ['public/js'] },
-  { file: 'aframe-orbit-controls.min.js', dests: ['public/js'] },
-  // The Gaussian-splat runtime (three r186's GaussianSplat addon + its loaders,
-  // built by the submodule's build/build-splat.mjs). Top-level js/, never under
-  // decoders/: a page loads it with a <script> tag after the A-Frame bundle,
-  // and only a document showing a splat model emits that tag.
-  { file: 'fs-splat-0.1.js', dests: ['public/js'] },
-];
 const vendorSyncPlugin = (): Plugin => ({
   name: 'fs-vendor-sync',
   buildStart() {
-    for (const { file, dests } of VENDOR_TARGETS) {
-      const srcPath = path.join(VENDOR_SRC, file);
-      if (!existsSync(srcPath)) {
-        console.warn(`[fs-vendor-sync] missing source ${file} — skipped`);
-        continue;
-      }
-      // Per-dest try/catch so a failure copying to one consumer location can't
-      // skip the others (which would ship a silently-stale copy past the drift
-      // test).
-      for (const dest of dests) {
-        const dstPath = path.resolve(__dirname, dest, file);
-        try {
-          syncVendoredFile(srcPath, dstPath);
-        } catch (e) {
-          console.warn(`[fs-vendor-sync] ${dest}/${file} skipped:`, (e as Error).message);
-        }
-      }
-    }
+    execFileSync(
+      process.execPath,
+      ['--experimental-strip-types', '--disable-warning=ExperimentalWarning',
+        path.resolve(__dirname, 'scripts/sync-generated.mjs')],
+      { stdio: ['ignore', 'inherit', 'inherit'] },
+    );
   },
 });
 type NdSend = (code: number, obj: unknown) => void;

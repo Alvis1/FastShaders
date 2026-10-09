@@ -32,10 +32,13 @@ cost bar as a one-click chip. That is why those two are the paths to prefer:
 together. From anywhere else — including the plain static server below —
 download the profile `.json` and drag it onto the cost bar instead.
 
-The suite is static HTML with no build step, so any http(s) server works:
+The suite is static HTML with no build step, so any http(s) server works —
+once its two generated folders exist (`lib/three/` and `components/three/`
+are written by `npm run dev`, `npm run build`, `npm test` or
+`npm run sync:generated`, never committed):
 
 ```bash
-cd FastShaders && python3 -m http.server 8765
+cd FastShaders && npm run sync:generated && python3 -m http.server 8765
 # → http://127.0.0.1:8765/ShaderCarousel/
 ```
 
@@ -281,15 +284,16 @@ lib/
   bench-registry.js   the one shader corpus, built against a TSL namespace
   bench-ui.js         picker, settings, start gate, done popup, headset detect
   bench-style.css     the one stylesheet all three pages link
-  three/              three r184 WebGPU ESM builds (import-map target)
-components/three/     A-Frame 1.8.0 IIFE bundle (vendor-synced, do not edit)
+  three/              three r184 WebGPU ESM builds (import-map target; generated from node_modules/three)
+components/three/     A-Frame 1.8.0 IIFE bundle (generated from the submodule, do not edit)
 benchData/            committed runs, METHODS.md, fit-calibration.mjs (CLI) + fit-core.mjs (its pure half)
 context.md            design rationale + paper-section mapping
 ```
 
-`components/three/a-frame-180-a-01.min.js` is copied in from the
-`a-frame-shaderloader` submodule by a Vite plugin and pinned by a drift test —
-edit the submodule source, never this copy.
+`components/three/a-frame-180-a-01.min.js` (from the `a-frame-shaderloader`
+submodule) and `lib/three/*.min.js` (from `node_modules/three/build`) are
+written by `scripts/sync-generated.mjs` at every dev/build/test start and pinned
+by a drift test; neither is committed. Edit the sources, never these copies.
 
 ## Deployment
 
@@ -297,7 +301,8 @@ On a web build the suite is copied into `dist/ShaderCarousel/` and is live at
 `<base>/ShaderCarousel/` (the editor's **SC** toolbar link). `benchData/` is
 excluded, and `bench-inout` is rewritten to share the app's A-Frame bundle —
 which means **the dist copy is not portable on its own**; to move the suite
-elsewhere, copy this source tree, which is self-contained.
+elsewhere, run `npm run sync:generated` and copy this source tree, which is
+then self-contained.
 
 On a desktop build it is excluded from `dist/` and staged into
 `src-tauri/carousel-dist/` as a Tauri resource for the LAN server, keeping its

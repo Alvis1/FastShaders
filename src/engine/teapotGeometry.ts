@@ -11,8 +11,13 @@
  *  - `TEAPOT_SCRIPT` is a self-contained JS script string, the `FIT_BOUNDS_SCRIPT`
  *    precedent: the preview iframe evaluates it (it registers the `teapot-mesh`
  *    A-Frame component there), and `loadTeapot()` evaluates the SAME text in
- *    node for the tests and for `scripts/gen-teapot-obj.mjs`. One tessellator,
+ *    node for the tests and for `scripts/sync-generated.mjs`. One tessellator,
  *    three consumers, no hand-mirrored twin to drift.
+ *  - That script imports this module under plain Node's type stripping (it
+ *    writes the untracked `public/models/teapot.obj` at every dev/build/test
+ *    start), so this file and `teapotData.ts` keep RELATIVE `.ts` imports only:
+ *    no `@/` alias, no enum, namespace or parameter property.
+ *    `teapotGeometry.test.ts` pins it.
  *  - The mesh is built INSIDE the iframe rather than posted in as OBJ text. The
  *    built-in models ride the `fs:obj-model` feed as text and that was the
  *    obvious route, but at the default resolution the teapot is 118k vertices /
@@ -242,7 +247,7 @@ export const TEAPOT_SCRIPT = `<script>
       L.push("# Origin: the historic Utah Teapot developed at the University of Utah.");
       L.push("#   Model data freely available for any use — https://graphics.cs.utah.edu/teapot/");
       L.push("# Texture coordinates: the Bijective Layout of the official Utah Teapot page (Cem Yuksel, 2026).");
-      L.push("# Tessellated by FastShaders (scripts/gen-teapot-obj.mjs) at resolution " + N + ": " + N + "x" + N + " quads per patch, " + nf + " triangles.");
+      L.push("# Tessellated by FastShaders at resolution " + N + ": " + N + "x" + N + " quads per patch, " + nf + " triangles.");
       L.push("# Y up; bounding box centred at the origin; longest axis 1.6 (the FastShaders preview convention).");
       L.push("o Utah Teapot");
       L.push("");

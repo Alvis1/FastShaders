@@ -32,6 +32,8 @@ read -r HOST USER KEY REMOTE <<< "$(node -e '
 export DEPLOY_PP="$(node -e 'console.log(require(process.argv[1]).passphrase ?? "")' "$CONF")"
 
 if [ "${1:-}" != "--no-build" ]; then
+  # public/js is generated from the submodule: build only from a committed pointer.
+  bash "$ROOT/scripts/check-submodule.sh"
   echo "==> building (base /fastshaders/, CSP for alvismisjuns.lv)"
   cd "$ROOT"
   FS_BASE=/fastshaders/ \

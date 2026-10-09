@@ -24,6 +24,15 @@ dist-sferas
 .vscode/sftp.json
 vite.config.d.ts
 
+# Generated at every dev/build/test start by scripts/sync-generated.mjs (run by
+# vite's fs-vendor-sync plugin; `npm run sync:generated` by hand). Sources: the
+# a-frame-shaderloader submodule's js/, node_modules/three/build, and
+# src/engine/teapotGeometry.ts. Never commit them — edit the sources.
+public/js/
+ShaderCarousel/components/three/
+ShaderCarousel/lib/three/
+public/models/teapot.obj
+
 # Machine-local editor config (ShaderCarousel Live Server holds a local TLS key passphrase)
 ShaderCarousel/.vscode/
 # Env files must never be trackable
