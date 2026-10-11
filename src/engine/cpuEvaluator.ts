@@ -509,8 +509,17 @@ export function portShapeForHandle(
   handle: string,
   registry: Map<string, NodeDefinition> = NODE_REGISTRY,
 ): number {
-  const dyn = (node.data as { dynamicOutputs?: { id: string; dataType: string }[] }).dynamicOutputs;
-  const dynPort = dyn?.find((o) => o.id === handle);
+  const dyn = (node.data as { dynamicOutputs?: unknown }).dynamicOutputs;
+  // The restore gate (graphShape `isUsableDataPort`) already refuses a
+  // malformed list, and nothing in-session mints one — but this runs inside
+  // TypedEdge's store selector on every render, where a throw unmounts the
+  // whole app, so a path that ever skips the gate must not reach `.find` on a
+  // non-array or `.id` on a null entry.
+  const dynPort = Array.isArray(dyn)
+    ? (dyn as ({ id?: unknown; dataType?: unknown } | null | undefined)[]).find(
+        (o) => o != null && o.id === handle,
+      )
+    : undefined;
   if (dynPort) return shapeOfDataType(dynPort.dataType as TSLDataType);
   const def = registry.get(node.data.registryType);
   const port = def?.outputs.find((o) => o.id === handle);
@@ -1884,4 +1893,28 @@ function sdCombineValue(mode: string, a: number, b: number, k: number): number {
   if (mode === 'intersect') return -smin(-a, -b);
   if (mode === 'subtract') return -smin(-a, b);
   return smin(a, b);
+}
+
+/** getLiveUpstreamSet's memo, one set per shared ctx (so per graph version). */
+const liveUpstreamByCtx = new WeakMap<EvalCtx, ReadonlySet<string>>();
+
+/**
+ * Every node whose value CHANGES ON ITS OWN (nodes included): fed by a Time
+ * node, or by the Sound node. The canvas's "this wire is live" question — a
+ * live wire marches, a still one is drawn solid with direction chevrons
+ * (TypedEdge, PreviewLink). One forward BFS over the UNWRAPPED edges, memoized
+ * on the same ctx as getTimeUpstreamSet, so a per-edge selector pays a Set
+ * lookup per notify. Sound is seeded whether or not a capture is armed: the
+ * armed state lives in soundSession, outside the store, and a graph does not
+ * change when the microphone does.
+ */
+export function getLiveUpstreamSet(nodes: AppNode[], edges: AppEdge[]): ReadonlySet<string> {
+  const ctx = getCtx(nodes, edges);
+  let live = liveUpstreamByCtx.get(ctx);
+  if (!live) {
+    live = buildDownstreamClosure(nodes, ctx.edges, (n) =>
+      n.data.registryType === 'time' || n.data.registryType === 'soundNode');
+    liveUpstreamByCtx.set(ctx, live);
+  }
+  return live;
 }

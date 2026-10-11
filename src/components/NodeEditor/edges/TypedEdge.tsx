@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, type CSSProperties } from 'react';
 import {
   EdgeLabelRenderer,
   getBezierPath,
@@ -13,15 +13,19 @@ import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '@/store/useAppStore';
 import { COUNT_EDGE_COLORS, getContrastColor } from '@/utils/colorUtils';
 import { setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
-import { evaluateEdgeSource, getEdgeOutputShape, getUnwrappedEdge } from '@/engine/cpuEvaluator';
+import { evaluateEdgeSource, getEdgeOutputShape, getLiveUpstreamSet, getUnwrappedEdge } from '@/engine/cpuEvaluator';
 import {
-  RIBBON_DASH,
+  ARROW_FLARE,
   RIBBON_GAP,
-  bezierControlOffset,
-  radialControlPoint,
+  arrowMarks,
+  catmullRomToBeziers,
+  chevronPath,
+  edgeBezier,
+  ribbonHalfWidth,
   ribbonStrokeWidth,
   splinePath,
 } from './bezierGeometry';
+import { handleEl, nodeEl } from '../nodeElement';
 import { EdgeInfoCard } from './EdgeInfoCard';
 
 type Waypoint = { x: number; y: number };
@@ -147,6 +151,31 @@ const HOVER_EDGE_BOOST = 1.35;
  *  ribbon geometrically similar, just bigger. */
 const SELECTED_EDGE_BOOST = 1.8;
 
+/**
+ * Added to the channel count (1–4) when the wire is LIVE: its source changes
+ * on its own (fed by Time or Sound, `getLiveUpstreamSet`). A live wire keeps
+ * React Flow's marching ants (`.animated`); a STILL one is drawn solid, its
+ * paths tagged `fs-edge-still` and styled STILL_PATH_STYLE (the dash and the
+ * march off), with direction chevrons along it. Owner, 2026-10-11: "marching only
+ * animated". An idle canvas then repaints nothing — every marching SVG path
+ * forced Chrome's layerization pass every frame (a static 150-node graph:
+ * ~7 ms/frame at 1x for 280 marching paths, ~0.3 with none).
+ */
+const LIVE_BIT = 8;
+
+/**
+ * The drawn paths' inline styles — never a pointer target (the hit path is).
+ * A STILL path also opts out of React Flow's `.react-flow__edge.animated path`
+ * dash and march HERE, inline, rather than in a stylesheet: every edge is
+ * stored `animated: true`, an inline declaration beats that rule wherever
+ * TypedEdge is drawn, and it is drawn where no `.node-editor` ancestor and no
+ * NodeEditor.css exist — node-editor.html's GraphModal, whose still wires and
+ * chevrons kept dashing and marching under a CSS opt-out scoped to the canvas.
+ * Module constants, so a render allocates neither.
+ */
+const LIVE_PATH_STYLE: CSSProperties = { pointerEvents: 'none' };
+const STILL_PATH_STYLE: CSSProperties = { pointerEvents: 'none', strokeDasharray: 'none', animation: 'none' };
+
 function getOffsets(count: number): number[] {
   if (count <= 1) return [0];
   const offsets: number[] = [];
@@ -182,20 +211,12 @@ function getRadialBezierPath(params: {
   targetY: number;
   targetPosition: Position;
 }): [string, number, number] {
-  const { sourceX: sx, sourceY: sy, radial: [rx, ry], targetX: tx, targetY: ty, targetPosition } = params;
-  // Source handle: RF's formula projected onto the radial exit axis, with a
+  const { sourceX: sx, sourceY: sy, radial, targetX: tx, targetY: ty, targetPosition } = params;
+  // Source control: RF's formula projected onto the radial exit axis, with a
   // small floor so the perpendicular exit stays readable even when the target
-  // sits beside/behind the socket. Shared with the drop-on-edge hit test.
-  const [c1x, c1y] = radialControlPoint(sx, sy, rx, ry, tx, ty);
-  // Target handle: exactly RF's getControlWithCurvature per-axis behavior.
-  let c2x = tx;
-  let c2y = ty;
-  switch (targetPosition) {
-    case Position.Left: c2x = tx - bezierControlOffset(tx - sx); break;
-    case Position.Right: c2x = tx + bezierControlOffset(sx - tx); break;
-    case Position.Top: c2y = ty - bezierControlOffset(ty - sy); break;
-    case Position.Bottom: c2y = ty + bezierControlOffset(sy - ty); break;
-  }
+  // sits beside/behind the socket; target control: exactly RF's. The ONE
+  // curve the drop-on-edge hit test and the chevrons also measure.
+  const [, , c1x, c1y, c2x, c2y] = edgeBezier(sx, sy, radial, tx, ty, targetPosition);
   // Cubic bezier at t=0.5.
   const labelX = (sx + 3 * c1x + 3 * c2x + tx) / 8;
   const labelY = (sy + 3 * c1y + 3 * c2y + ty) / 8;
@@ -299,25 +320,34 @@ export function TypedEdge({
   // Computed IN the selector: the shared evaluator ctx makes both calls cache
   // hits per graph version, and the primitive result means a store notify
   // whose count is unchanged (every drag pointermove) bails before re-render.
-  const count = useAppStore((s) => {
+  // The LIVE flag rides the same primitive (+LIVE_BIT) rather than a second
+  // per-edge subscription.
+  const packed = useAppStore((s) => {
     // Both the source AND its handle come off the UNWRAPPED edge, never React
     // Flow's `sourceHandleId` prop: unwrapCollapsedGroupEdges rewrites the
     // handle too, and a collapsed group's synthetic socket id matches no
     // registry port — the projection would silently fall back to the whole
-    // vector and draw a plausible-looking, wrong-width ribbon.
+    // vector and draw a plausible-looking, wrong-width ribbon. The same real
+    // source is what makes a Time feeder inside a collapsed frame count.
     const un = getUnwrappedEdge(s.nodes, s.edges, id);
     const e = { source: un?.source ?? source, sourceHandle: un?.sourceHandle ?? sourceHandleId };
     const evaluated = evaluateEdgeSource(e, s.nodes, s.edges, 0);
     const evalLen = evaluated?.length ?? 0;
     const shapeLen = getEdgeOutputShape(e, s.nodes, s.edges);
-    return Math.min(Math.max(evalLen, shapeLen, 1), 4);
+    const width = Math.min(Math.max(evalLen, shapeLen, 1), 4);
+    return width + (getLiveUpstreamSet(s.nodes, s.edges).has(e.source) ? LIVE_BIT : 0);
   });
+  const count = packed % LIVE_BIT;
+  const live = packed >= LIVE_BIT;
   // 1-channel edges flip black ↔ white so they remain visible against the
   // user-picked canvas background. Multi-channel edges keep their RGB(A)
-  // colors — those already read against any background.
+  // colors — those already read against any background. A still wire's
+  // chevrons are drawn in that same canvas ink: a single wire's own colour,
+  // and on a ribbon the one colour that reads across all of its lines.
+  const ink = getContrastColor(nodeEditorBgColor);
   const channelColors =
     count === 1
-      ? [getContrastColor(nodeEditorBgColor)]
+      ? [ink]
       : COUNT_EDGE_COLORS[count] ?? COUNT_EDGE_COLORS[1];
   // Thinner lines when more channels; a selected edge scales the whole ribbon
   // (widths AND offsets, see SELECTED_EDGE_BOOST) so it reads as the same wire,
@@ -380,15 +410,33 @@ export function TypedEdge({
   }
 
   // Center path for the invisible interaction hit area
-  const centerPath = hasWaypoints
-    ? splinePath([
+  const centerPts: Array<[number, number]> | null = hasWaypoints
+    ? [
         [sourceX, sourceY],
         ...waypoints.map((w) => [w.x, w.y] as [number, number]),
         [targetX, targetY],
-      ])
+      ]
+    : null;
+  const centerPath = centerPts
+    ? splinePath(centerPts)
     : radial
       ? getRadialBezierPath({ sourceX, sourceY, radial, targetX, targetY, targetPosition })[0]
       : getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })[0];
+
+  // A STILL wire's direction chevrons: on the CENTRELINE, measured along the
+  // same curve the hit test measures (bezierGeometry), sized to the ribbon and
+  // scaled by the same boost, so a selected or hovered wire's arrows grow with
+  // it. ONE path element per edge however many chevrons it carries.
+  const arrows = live
+    ? ''
+    : chevronPath(
+        arrowMarks(
+          centerPts
+            ? catmullRomToBeziers(centerPts)
+            : [edgeBezier(sourceX, sourceY, radial ?? sourcePosition, targetX, targetY, targetPosition)],
+        ),
+        (ribbonHalfWidth(count) + ARROW_FLARE) * boost,
+      );
 
   const dragStart = useRef<{ x: number; y: number; pointerId: number } | null>(null);
 
@@ -423,18 +471,14 @@ export function TypedEdge({
       // replaced by the connection line.
       setHovered(false);
       // Start a new connection from the source handle so user can reconnect
+      // (The escaped one-copy selectors: ids come out of `.fastshader` files.)
       requestAnimationFrame(() => {
-        const handleEl = document.querySelector(
-          `.react-flow__handle[data-handleid="${sourceHandleId ?? 'out'}"][data-nodeid="${source}"]`,
-        );
-        if (handleEl) {
-          handleEl.dispatchEvent(new MouseEvent('mousedown', {
-            clientX,
-            clientY,
-            bubbles: true,
-            cancelable: true,
-          }));
-        }
+        handleEl(nodeEl(source), 'source', sourceHandleId ?? 'out')?.dispatchEvent(new MouseEvent('mousedown', {
+          clientX,
+          clientY,
+          bubbles: true,
+          cancelable: true,
+        }));
       });
     }
   };
@@ -461,15 +505,27 @@ export function TypedEdge({
           <path
             key={i}
             d={path}
+            className={live ? undefined : 'fs-edge-still'}
             fill="none"
             stroke={lineColor}
             strokeWidth={strokeWidth}
-            strokeDasharray={count > 1 ? RIBBON_DASH : undefined}
             opacity={selected ? 1 : 0.9}
-            style={{ pointerEvents: 'none' }}
+            style={live ? LIVE_PATH_STYLE : STILL_PATH_STYLE}
           />
         );
       })}
+      {arrows && (
+        <path
+          d={arrows}
+          className="fs-edge-still fs-edge-arrows"
+          fill="none"
+          stroke={ink}
+          strokeWidth={ribbonStrokeWidth(1) * boost}
+          strokeLinecap="round"
+          opacity={selected ? 1 : 0.9}
+          style={STILL_PATH_STYLE}
+        />
+      )}
       {hasWaypoints && (
         <EdgeWaypointHandles edgeId={id} waypoints={waypoints} bgColor={nodeEditorBgColor} />
       )}

@@ -13,6 +13,7 @@ import {
   GEOMETRY_ROTATIONS,
   MARCH_WINDOW_GEOMETRY,
   LIGHT_PRESETS,
+  RENDER_MODE_MESSAGE,
   SHADER_SWAP_MESSAGE,
   buildGeoAttr,
   buildPreviewShaderModule,
@@ -34,6 +35,15 @@ import {
 import { shownGeometry, validateGeometry } from './previewGeometryPref';
 import { BOOT_MESH_WAIT_MS, shouldWaitForBootMesh } from './bootMeshWait';
 import { holdsDocument, useColdRebuildKey, useDebounced, useSettledPreview } from './useSettledPreview';
+import { cameraTarget, cameraTooClose, finiteVec3 } from './finiteVec3';
+import { moduleIsTimeVarying, previewRendersContinuously } from './previewRenderMode';
+import {
+  assetFeedBytes,
+  createQuietRebuild,
+  moduleImageTextureBytes,
+  overBudget,
+  type RetainedTally,
+} from './previewMemoryBudget';
 import {
   createPreviewMesh,
   detectMeshKind,
@@ -292,13 +302,15 @@ function loadVec3(key: string, reject?: (p: CameraPosition) => boolean): CameraP
   try {
     const raw = localStorage.getItem(key);
     if (raw) {
-      const p = JSON.parse(raw, safeJsonReviver);
-      if (p && typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number') {
+      // Finite, not merely numbers: a stored `{"x":1e999}` parses to Infinity,
+      // and the turntable's mod360 turns that into NaN (finiteVec3.ts).
+      const p = finiteVec3(JSON.parse(raw, safeJsonReviver));
+      if (p) {
         if (reject?.(p)) {
           try { localStorage.removeItem(key); } catch { /* */ }
           return null;
         }
-        return { x: p.x, y: p.y, z: p.z };
+        return p;
       }
     }
   } catch { /* */ }
@@ -309,7 +321,7 @@ function loadCameraPos(): CameraPosition | null {
   // Reject origin-ish values — a prior bug saved (0,0,0) every frame by
   // reading the camera-entity wrapper instead of the camera itself.
   // Restoring that would place the camera inside the mesh.
-  return loadVec3('fs:previewCameraPos', (p) => Math.hypot(p.x, p.y, p.z) < 1);
+  return loadVec3('fs:previewCameraPos', cameraTooClose);
 }
 
 function loadRotation(): CameraPosition | null {
@@ -467,8 +479,8 @@ export function ShaderPreview() {
    * naming the nodes made every callback of that render keep them, and a
    * memoized one (`handleOpenVR`, …) kept a replaced graph's images reachable
    * long after the history had let go (a heap probe, 2026-10-09: 51.9 MB
-   * against 21.9 MB). Written during render, the `nodesRef` idiom of
-   * EdgeInfoCard, so the document memo reads this render's pair.
+   * against 21.9 MB). Written during render (a ref mirror refreshed on every
+   * render), so the document memo reads this render's pair.
    */
   const settledRef = useRef(settledPreview);
   settledRef.current = settledPreview;
@@ -765,6 +777,12 @@ export function ShaderPreview() {
   const [showStats, setShowStats] = usePersistedState('fs:previewStats', isTrueFlag);
   const statsRef = useRef<HTMLDivElement>(null);
   const showStatsRef = useRef(showStats);
+  /**
+   * The last `continuous` posted as `fs:render-mode` (previewRenderMode.ts),
+   * for the mount-once message handler's replay on fs:preview-ready. Starts
+   * true, the side a fresh document is already on.
+   */
+  const renderContinuousRef = useRef(true);
 
   const timelineRef = useRef<HTMLDivElement>(null);
   const thumbRef = useRef<HTMLDivElement>(null);
@@ -951,9 +969,9 @@ export function ShaderPreview() {
   const sentAssetKeysRef = useRef<Set<string>>(new Set());
   /**
    * Bumped to force a real `srcDoc` rebuild — by the ack watchdog when a swap
-   * goes unanswered, and available to anything else that ever needs the cold
-   * path. It folds into `coldInputsKey` (and so into the document's key) and
-   * into nothing else.
+   * goes unanswered, by the retained-memory budget at a quiet moment, and
+   * available to anything else that ever needs the cold path. It folds into
+   * `coldInputsKey` (and so into the document's key) and into nothing else.
    */
   const [coldGen, setColdGen] = useState(0);
   /** A swap has been in flight longer than HOT_SWAP_PILL_DELAY_MS. */
@@ -976,6 +994,111 @@ export function ShaderPreview() {
     setHotSwapSlow(false);
   }, []);
   useEffect(() => clearHotSwapWait, [clearHotSwapWait]);
+
+  /**
+   * The ack watchdog's body, ONE stable function: `postShaderSwap` arms it,
+   * and the `fs:backend` branch of the message handler re-arms it (see there).
+   * Escalate: `coldGen` folds into the document's cold key, so this rebuilds
+   * for real. The rebuild first settles any edit the debounce still holds
+   * (`useColdRebuildKey`), so the rebuilt document shows the newest code,
+   * including the edit the swap failed to deliver.
+   */
+  const escalateUnackedSwap = useCallback(() => {
+    hotAckTimerRef.current = null;
+    setHotSwapSlow(false);
+    setColdGen((g) => g + 1);
+  }, []);
+
+  // ── Retained-memory budget (previewMemoryBudget.ts) ────────────────────
+  /**
+   * What the LIVE document holds beyond what a fresh one would: every hot swap
+   * imports a module whose pictures and textures stay alive until the document
+   * is thrown away. Reset wherever `sentAssetKeysRef` is re-seeded (a rebuild,
+   * the fresh document's load). Charged by every swap and every geometry post
+   * that makes the stage re-apply the shader.
+   */
+  const retainedRef = useRef<RetainedTally>({ bytes: 0, swaps: 0 });
+  /**
+   * The texture bytes of ONE import of the module the live document runs.
+   * A swap or a re-apply leaves exactly that behind (the outgoing instance's
+   * pictures and textures stay alive with it), so that, never the incoming
+   * module, is what each one charges. Charging the incoming one counted the
+   * module a fresh document would hold anyway: the first document is baked
+   * from the EMPTY previewCode and gets its real module by swap, so a project
+   * whose one module is over budget rebuilt 2 s after every boot and after
+   * every graph replacement (an Open, a GLB "Mesh with Materials") for nothing
+   * (review 2026-10-11).
+   */
+  const runningTextureBytesRef = useRef(0);
+  /** The same for the module the document was BAKED with: what a load leaves it running. */
+  const bakedTextureBytesRef = useRef(0);
+  /** The last edit, swap, re-apply, key, wheel, pointer or orbit move. */
+  const lastActivityRef = useRef(0);
+  /** When the pointer went down in this window; null while it is up. */
+  const pointerDownAtRef = useRef<number | null>(null);
+
+  /**
+   * Past the budget, rebuild the document at the next QUIET moment: no pointer
+   * held, no swap waiting for its ack, 2 s since the last activity
+   * (`createQuietRebuild`). The rebuild is the manual handle `coldGen`, so it
+   * keeps what every cold rebuild keeps (the camera and turntable angle are
+   * restore targets, the tuned uniforms are pushed again on fs:preview-ready)
+   * and needs no message of its own. Each tick asks the tally again, so a
+   * rebuild that happened meanwhile (it resets the tally) stops the timer.
+   * One instance for the life of the panel, reading only refs and a setter.
+   */
+  const [quietRebuild] = useState(() => createQuietRebuild({
+    over: () => overBudget(retainedRef.current),
+    inputs: () => ({
+      lastActivityAt: lastActivityRef.current,
+      pointerDownAt: pointerDownAtRef.current,
+      ackPending: hotAckTimerRef.current !== null,
+    }),
+    rebuild: () => setColdGen((g) => g + 1),
+  }));
+  useEffect(() => () => quietRebuild.cancel(), [quietRebuild]);
+
+  /** Charge one module import (a swap, or a re-apply) to the live document. */
+  const chargeRetained = useCallback((bytes: number) => {
+    const tally = retainedRef.current;
+    tally.bytes += bytes;
+    tally.swaps += 1;
+    lastActivityRef.current = performance.now();
+    if (overBudget(tally)) quietRebuild.arm();
+  }, [quietRebuild]);
+
+  // What "quiet" reads from this window: a held pointer, and the last input.
+  // Capture phase, so a handler that stops propagation cannot hide a press.
+  // Input inside the preview iframe never reaches here; its orbit reports
+  // (fs:camera) and the stage's fs:activity count instead (the message handler).
+  useEffect(() => {
+    const press = () => {
+      const now = performance.now();
+      pointerDownAtRef.current = now;
+      lastActivityRef.current = now;
+    };
+    const release = () => {
+      pointerDownAtRef.current = null;
+      lastActivityRef.current = performance.now();
+    };
+    const touch = () => { lastActivityRef.current = performance.now(); };
+    const blur = () => { pointerDownAtRef.current = null; };
+    const passive = { capture: true, passive: true } as const;
+    window.addEventListener('pointerdown', press, passive);
+    window.addEventListener('pointerup', release, passive);
+    window.addEventListener('pointercancel', release, passive);
+    window.addEventListener('keydown', touch, passive);
+    window.addEventListener('wheel', touch, passive);
+    window.addEventListener('blur', blur);
+    return () => {
+      window.removeEventListener('pointerdown', press, passive);
+      window.removeEventListener('pointerup', release, passive);
+      window.removeEventListener('pointercancel', release, passive);
+      window.removeEventListener('keydown', touch, passive);
+      window.removeEventListener('wheel', touch, passive);
+      window.removeEventListener('blur', blur);
+    };
+  }, []);
 
   useEffect(() => {
     const el = bodyRef.current;
@@ -1017,6 +1140,13 @@ export function ShaderPreview() {
   const splatReportedRef = useRef<Set<number>>(new Set());
   const splatAdvisedRef = useRef<Set<number>>(new Set());
   const cameraPosRef = useRef<CameraPosition | null>(loadCameraPos());
+  /**
+   * The orbit target that goes WITH `cameraPosRef` (a pan moves it), baked
+   * beside it into the next document. Session-only — never stored — so a
+   * reload faces the origin as it always did; what it buys is that a cold
+   * rebuild nobody asked for (the retained-memory budget's) keeps the pan.
+   */
+  const cameraTargetRef = useRef<CameraPosition | null>(null);
   const rotationRef = useRef<CameraPosition | null>(loadRotation());
 
   /**
@@ -1632,6 +1762,23 @@ export function ShaderPreview() {
         // Boot-time renderer report for the WGSL/GLSL toggle. Untrusted like
         // every stage message — only the two known literals are accepted.
         if (data.backend === 'webgpu' || data.backend === 'webgl2') setActiveBackend(data.backend);
+        // The swap watchdog's countdown starts again HERE. The receiver holds
+        // a swap posted before the scene exists and applies it only when boot()
+        // runs, and boot() posts this report right after. The FIRST document's
+        // real module always arrives by swap (it is baked from the empty
+        // previewCode), and so does an edit cut while a rebuilt one boots, so
+        // a countdown armed at the post or the load replay had already spent
+        // the whole boot. Under SwiftShader the boot took 3.5-
+        // 4.7 s and the apply about 4 s more, so the 6 s watchdog fired
+        // mid-apply and built the document twice: first good frame ~15 s
+        // instead of ~7.5 s (review 2026-10-11, 4/4). Restarted, the countdown
+        // measures the apply alone, and a genuinely lost swap still escalates
+        // 6 s after boot. It is only ever RESTARTED, never cleared: the
+        // gen-tagged ack above stays the one proof that a swap landed.
+        if (hotAckTimerRef.current !== null) {
+          window.clearTimeout(hotAckTimerRef.current);
+          hotAckTimerRef.current = window.setTimeout(escalateUnackedSwap, HOT_SWAP_ACK_TIMEOUT_MS);
+        }
         return;
       }
       if (data.type === 'fs:anim') {
@@ -1700,6 +1847,8 @@ export function ShaderPreview() {
         // and gets timed out of active time. Throttled in the stage; the
         // payload is a bare presence signal, never what was done.
         evalLog('activity', { source: 'preview' });
+        // The same presence holds off the memory budget's quiet rebuild.
+        lastActivityRef.current = performance.now();
         return;
       }
       if (data.type === 'fs:stats') {
@@ -1741,7 +1890,13 @@ export function ShaderPreview() {
         // The shader failed: no fs:preview-ready is coming. Drop the overlay so
         // the iframe's error message is readable.
         setCompiling(false);
-        if (typeof data.message === 'string') setPreviewErrorMessage(data.message);
+        // Capped at the overlay's own 2000 characters (tslToPreviewHTML's
+        // error overlay, `.slice(0, 2000)`). The hot-swap receiver posts a
+        // compile error raw, and any module can post this message itself: one
+        // 50M-character message froze the editor for ~2.8 s laying out the
+        // text node (M4 Max; review 2026-10-11). A real error is posted last by
+        // the overlay, already capped, so it reads the same.
+        if (typeof data.message === 'string') setPreviewErrorMessage(data.message.slice(0, 2000));
         return;
       }
       if (data.type === 'fs:preview-ready') {
@@ -1749,6 +1904,15 @@ export function ShaderPreview() {
         // A fresh success clears whatever error the last apply left showing —
         // same condition the iframe's own __fsClearError uses.
         setPreviewErrorMessage(null);
+        // THREE senders, one meaning ("a shader just bound, with its schema's
+        // defaults"): the boot handshake (untagged), a hot swap's ack (tagged
+        // with its gen, checked above), and the stage after a geometry change
+        // made it RE-APPLY the shader (untagged: the teapot's new tessellation,
+        // or a move to or from the teapot). A re-apply rebuilds the uniform map
+        // from the schema, so without the re-push below one Subd step put a
+        // tuned value back to its default in the frame while the overlay still
+        // showed the tuning (review 2026-10-11). An untagged ready never touches
+        // the swap watchdog: only the gen guard above may clear it.
         const win = iframeRef.current?.contentWindow;
         if (!win) return;
         // Re-arm the stats reporter. Every shader edit swaps srcDoc, so the
@@ -1757,6 +1921,9 @@ export function ShaderPreview() {
         // which reads as the toggle being broken. podest replays the same
         // message from applyStateToStage for the same reason.
         if (showStatsRef.current) win.postMessage({ type: 'fs:stats-on', on: true }, '*');
+        // The render mode, for the same reason: a fresh document draws every
+        // frame until told otherwise (previewRenderMode.ts).
+        win.postMessage({ type: RENDER_MODE_MESSAGE, continuous: renderContinuousRef.current }, '*');
         // Uniforms aren't baked into the iframe HTML — shaderloader
         // initialises them from the module schema, so the user's
         // current slider values need to be pushed every time a fresh
@@ -1795,18 +1962,34 @@ export function ShaderPreview() {
           win.postMessage({ type: 'fs:uniform', name, value }, '*');
         }
       } else if (data.type === 'fs:camera') {
-        if (typeof data.x === 'number' && typeof data.y === 'number' && typeof data.z === 'number') {
-          const pos = { x: data.x, y: data.y, z: data.z };
+        // Forgeable (the document runs the loaded shader): finite numbers only,
+        // and never inside radius 1, which the orbit controls' minDistance of 2
+        // cannot reach, the same rule the stored copy obeys on reload.
+        const pos = finiteVec3(data);
+        // The user is orbiting: hold off the memory budget's quiet rebuild.
+        // Stamped BEFORE the radius rule: the orbit controls PAN (enablePan is
+        // on), so a real drag can carry the camera inside radius 1 of the
+        // origin. Such a report is not stored, but it is still a pointer held
+        // inside the frame, which this window cannot see, and a rebuild in the
+        // middle of it would snap the view away under the cursor.
+        if (pos) lastActivityRef.current = performance.now();
+        if (pos && !cameraTooClose(pos)) {
           cameraPosRef.current = pos;
+          // Its pair: kept or dropped together, never a target from another view.
+          cameraTargetRef.current = cameraTarget(data);
           try { localStorage.setItem('fs:previewCameraPos', JSON.stringify(pos)); } catch { /* */ }
         }
       } else if (data.type === 'fs:rotation') {
-        if (typeof data.x === 'number' && typeof data.y === 'number' && typeof data.z === 'number') {
+        // Finite only: a forged NaN here was baked into the next cold rebuild
+        // as `rotation="NaN 0 0"`, and the model vanished until Play or a
+        // reload (finiteVec3.ts).
+        const rot = finiteVec3(data);
+        if (rot) {
           // The ref is updated on EVERY report — it is what the next rebuild
           // and the VR popup read, and it costs nothing. Only the storage
           // write is throttled (see persistRotation): while the turntable
           // spins these arrive five times a second and never stop.
-          rotationRef.current = { x: data.x, y: data.y, z: data.z };
+          rotationRef.current = rot;
           persistRotation();
         }
       }
@@ -1840,6 +2023,7 @@ export function ShaderPreview() {
   const handleReset = useCallback(() => {
     // Camera: clear the saved view AND tell the live iframe to snap home now
     cameraPosRef.current = null;
+    cameraTargetRef.current = null;
     rotationRef.current = null;
     try { localStorage.removeItem('fs:previewCameraPos'); } catch { /* */ }
     try { localStorage.removeItem('fs:previewRotation'); } catch { /* */ }
@@ -1992,6 +2176,8 @@ export function ShaderPreview() {
   useEffect(() => {
     const handler = () => {
       cameraPosRef.current = loadCameraPos();
+      // The imported view carries no target: face the origin, as on a reload.
+      cameraTargetRef.current = null;
       rotationRef.current = loadRotation();
     };
     window.addEventListener('fs:project-imported', handler);
@@ -2154,6 +2340,10 @@ export function ShaderPreview() {
    *   · effLighting                                → fs:lighting
    *   · playing                                    → fs:playing
    *   · uniform values                             → fs:uniform
+   *   · renderContinuous (the module reads time, the turntable, a playing
+   *     clip, a shown splat, the FPS readout, an armed Sound capture)
+   *                                                → fs:render-mode, replayed
+   *                                                  on every fs:preview-ready
    *
    * COLD (must bake into a fresh document — folded into `coldInputsKey`):
    *   · geometryRebuildKey — obj-model/gltf-model plumbing, the GLTF_ANIM
@@ -2163,7 +2353,8 @@ export function ShaderPreview() {
    *     renderer in getAttributes.
    *   · forceWebGL2 — the backend is chosen by the pre-flight BEFORE the scene
    *     exists. There is no runtime move that changes it.
-   *   · coldGen — the ack watchdog's escalation, and the manual handle.
+   *   · coldGen — the ack watchdog's escalation, the retained-memory budget's
+   *     quiet-moment rebuild (previewMemoryBudget.ts), and the manual handle.
    *   · previewModule, but ONLY while HOT_SWAP_ENABLED is off — that is the
    *     switch that returns this to its pre-hot-swap behaviour.
    *
@@ -2244,6 +2435,7 @@ export function ShaderPreview() {
       // survives setting changes (subdivision, lighting, etc.) without
       // joining the dep list (which would cause an infinite rebuild loop).
       initialCameraPosition: cameraPosRef.current,
+      initialCameraTarget: cameraTargetRef.current,
       initialRotation: rotationRef.current,
       // The exact bytes the hot channel will post, so the document's baked
       // module and the channel's idempotency seed cannot differ (see
@@ -2283,6 +2475,15 @@ export function ShaderPreview() {
     runningModuleRef.current = bakedModule;
     // …and holds exactly the boot assets (engine/previewAssetFeed.ts).
     sentAssetKeysRef.current = new Set(bootAssetKeys);
+    // …and nothing a swap left behind: the memory budget starts again, and a
+    // quiet rebuild still waiting finds the tally under budget and stops
+    // (previewMemoryBudget.ts).
+    retainedRef.current = { bytes: 0, swaps: 0 };
+    // What the first swap or re-apply will leave behind: the baked module's
+    // textures, from the nodes it was generated from (this render's pair, as
+    // the memo read it — no render runs between a commit and its effects).
+    bakedTextureBytesRef.current = moduleImageTextureBytes(settledRef.current.nodes, bakedModule);
+    runningTextureBytesRef.current = bakedTextureBytesRef.current;
     // A rebuild supersedes anything the hot channel was still waiting on: the
     // document that would have acked is being thrown away.
     clearHotSwapWait();
@@ -2325,21 +2526,20 @@ export function ShaderPreview() {
     sentAssetKeysRef.current = feed.sent;
     win.postMessage({ type: SHADER_SWAP_MESSAGE, code, gen }, '*');
     runningModuleRef.current = code;
+    // What this import leaves in the live document for good: the OUTGOING
+    // module's textures (one per distinct picture x texture spec), and the
+    // Blob of every payload just posted (previewMemoryBudget.ts). The incoming
+    // module is what a fresh document would hold too, so it is only recorded,
+    // for the next swap or re-apply to charge.
+    chargeRetained(runningTextureBytesRef.current + assetFeedBytes(feed.entries));
+    runningTextureBytesRef.current = moduleImageTextureBytes(codeNodes, code);
 
     hotPillTimerRef.current = window.setTimeout(() => {
       hotPillTimerRef.current = null;
       setHotSwapSlow(true);
     }, HOT_SWAP_PILL_DELAY_MS);
-    hotAckTimerRef.current = window.setTimeout(() => {
-      hotAckTimerRef.current = null;
-      setHotSwapSlow(false);
-      // Escalate. `coldGen` folds into the document's cold key, so this
-      // rebuilds for real — and the rebuild first settles any edit the
-      // debounce still holds (`useColdRebuildKey`), so the rebuilt document
-      // shows the newest code, the edit the swap failed to deliver included.
-      setColdGen((g) => g + 1);
-    }, HOT_SWAP_ACK_TIMEOUT_MS);
-  }, [clearHotSwapWait]);
+    hotAckTimerRef.current = window.setTimeout(escalateUnackedSwap, HOT_SWAP_ACK_TIMEOUT_MS);
+  }, [clearHotSwapWait, escalateUnackedSwap, chargeRetained]);
 
   /**
    * THE HOT SWAP: an edit goes to the LIVE document instead of building a new
@@ -2385,6 +2585,29 @@ export function ShaderPreview() {
     if (statsRef.current) statsRef.current.textContent = showStats ? STATS_PLACEHOLDER : '';
     iframeRef.current?.contentWindow?.postMessage({ type: 'fs:stats-on', on: showStats }, '*');
   }, [showStats]);
+
+  /**
+   * Render on demand (previewRenderMode.ts): may the stage stop drawing every
+   * frame? Continuous while ANY of these can move the picture with no event:
+   * the module reads time, the turntable spins, a clip plays, a splat is shown
+   * (its sort runs per frame), the FPS readout measures, or a Sound capture is
+   * armed. A HOT channel: posted on change and replayed on every
+   * fs:preview-ready, never part of the cold key. The module text is
+   * `previewModule`, the module the live document runs or is about to.
+   */
+  const moduleAnimates = useMemo(() => moduleIsTimeVarying(previewModule), [previewModule]);
+  const renderContinuous = previewRendersContinuously({
+    moduleAnimates,
+    turntable: playing,
+    clipPlaying: animInfo !== null && animPlaying,
+    splatShown: previewGeometry === 'custom' && splatLoaded,
+    stats: showStats,
+    soundArmed: mic.status === 'on' || mic.status === 'starting',
+  });
+  useEffect(() => {
+    renderContinuousRef.current = renderContinuous;
+    iframeRef.current?.contentWindow?.postMessage({ type: RENDER_MODE_MESSAGE, continuous: renderContinuous }, '*');
+  }, [renderContinuous]);
 
   // A rebuild throws the old document away, and what describes it goes too:
   // the animation controls (the new document re-announces via fs:anim, or has
@@ -2466,27 +2689,42 @@ export function ShaderPreview() {
   // switch with only the current-side checked would post a primitive attr into
   // the live model document.
   const prevGeometryRef = useRef(previewGeometry);
+  /** The teapot attribute last posted: the stage drops a repeat of it. */
+  const lastTeapotAttrRef = useRef<string | null>(null);
   useEffect(() => {
-    const prevWasModel = isModelGeometry(prevGeometryRef.current);
+    const prev = prevGeometryRef.current;
+    const prevWasModel = isModelGeometry(prev);
     prevGeometryRef.current = previewGeometry;
     if (isModelGeometry(previewGeometry) || prevWasModel) return;
     const win = iframeRef.current?.contentWindow;
     if (!win) return;
+    // A post that makes the stage RE-APPLY the shader imports the running
+    // module once more, with its pictures, and the instance it replaces stays
+    // behind (previewMemoryBudget.ts): a new tessellation re-emits
+    // model-loaded, and a move to or from the teapot replaces the mesh. A
+    // primitive change keeps its mesh, so it does not.
+    const chargeReapply = () => {
+      chargeRetained(runningTextureBytesRef.current);
+    };
     // The teapot hot-swaps like a primitive — it is tessellated in the
     // document (teapot-mesh), so a slider tick is a re-tessellation in place,
     // not a model rebuild. buildGeoAttr would have answered a SPHERE for it.
     if (isTeapotGeometry(previewGeometry)) {
+      const teapot = buildTeapotAttr(effectiveSubdivision);
       win.postMessage(
         {
           type: 'fs:geometry',
           isObj: false,
-          teapot: buildTeapotAttr(effectiveSubdivision),
+          teapot,
           rotation: GEOMETRY_ROTATIONS.teapot,
         },
         '*',
       );
+      if (!isTeapotGeometry(prev) || teapot !== lastTeapotAttrRef.current) chargeReapply();
+      lastTeapotAttrRef.current = teapot;
       return;
     }
+    if (isTeapotGeometry(prev)) chargeReapply();
     win.postMessage(
       {
         type: 'fs:geometry',
@@ -2500,7 +2738,7 @@ export function ShaderPreview() {
       },
       '*',
     );
-  }, [previewGeometry, effectiveSubdivision, marchWindow]);
+  }, [previewGeometry, effectiveSubdivision, marchWindow, chargeRetained]);
 
   // OBJ model feed (see objTextCache above). By the iframe's load event its
   // top-level fs:obj-model listener is guaranteed installed (all preview
@@ -2536,6 +2774,10 @@ export function ShaderPreview() {
     // a no-op there (it keeps the first URL); skipping one it did not would
     // leave that image black for the life of the document.
     sentAssetKeysRef.current = new Set(bootAssetKeys);
+    // The memory budget likewise: a swap posted before this load never reached
+    // the receiver, so the fresh document holds its boot module alone.
+    retainedRef.current = { bytes: 0, swaps: 0 };
+    runningTextureBytesRef.current = bakedTextureBytesRef.current;
     if (HOT_SWAP_ENABLED && (previewModule !== bakedModule || hotAckTimerRef.current !== null)) {
       const moduleNodes = settledRef.current.nodes;
       postShaderSwap(previewModule, moduleNodes);
@@ -2685,6 +2927,7 @@ export function ShaderPreview() {
       subdivision: effectiveSubdivision,
       customModel,
       initialCameraPosition: cameraPosRef.current,
+      initialCameraTarget: cameraTargetRef.current,
       initialRotation: rotationRef.current,
       xr: true,
       title: shaderName,

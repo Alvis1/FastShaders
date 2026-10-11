@@ -351,8 +351,9 @@ describe('registry parity — the declared sockets ARE the table', () => {
   });
 
   it('no input id collides with an output id', () => {
-    // TypedEdge's disconnect selector matches data-handleid with no
-    // source/target class, so a shared id would pick the wrong socket.
+    // Edge ids are handle STRINGS (generateEdgeId), and a socket lookup by
+    // data-handleid alone cannot tell an input from an output of the same
+    // name, so a shared id would make every such read ambiguous.
     const outs = new Set(def.outputs.map((o) => o.id));
     expect(def.inputs.filter((i) => outs.has(i.id))).toEqual([]);
   });

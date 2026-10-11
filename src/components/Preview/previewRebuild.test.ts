@@ -40,6 +40,9 @@ function documentMemoDeps(): string[] {
     .filter(Boolean);
 }
 
+/** The closing line of `postShaderSwap`: the end marker every slice of its body uses. */
+const POST_SHADER_SWAP_DEPS = '}, [clearHotSwapWait, escalateUnackedSwap, chargeRetained]);';
+
 /** ShaderPreview's code with its comments cut out, for counting identifier uses. */
 function codeOnly(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
@@ -62,7 +65,7 @@ describe('preview rebuild policy: the cold key', () => {
     expect(decl).toContain('previewModule');
     // Hot inputs must never be part of it: each has its own postMessage
     // channel, and rebuilding for one throws the user's camera away.
-    for (const hot of ['bgColor', 'effLighting', 'playing', 'effectiveSubdivision', 'marchWindow']) {
+    for (const hot of ['bgColor', 'effLighting', 'playing', 'effectiveSubdivision', 'marchWindow', 'renderContinuous', 'moduleAnimates']) {
       expect(decl, `${hot} must stay a hot channel`).not.toContain(hot);
     }
   });
@@ -94,6 +97,33 @@ describe('preview rebuild policy: the cold key', () => {
     for (const cold of ['geometryRebuildKey', 'forceWebGL2', 'coldGen', 'previewModule', 'coldInputsKey']) {
       expect(comment).toContain(cold);
     }
+  });
+
+  it('classifies the render mode as HOT: its own message, replayed on ready, never a rebuild', () => {
+    // Render on demand (previewRenderMode.ts). The stage boots continuous and
+    // is told otherwise; rebuilding the document to say so would throw the
+    // camera, the spin phase and `time` away for a flag.
+    const at = SRC.indexOf('WHAT REBUILDS THE DOCUMENT AND WHAT DOES NOT');
+    const comment = SRC.slice(at, SRC.indexOf('const coldInputsKey =', at));
+    const hot = comment.slice(comment.indexOf('HOT ('), comment.indexOf('COLD ('));
+    expect(hot).toContain('renderContinuous');
+    expect(hot).toContain('fs:render-mode');
+    // Posted by an effect keyed on the value alone, and from nowhere that
+    // could rebuild: not the cold key, not the document memo.
+    const effect = SRC.slice(SRC.indexOf('const moduleAnimates = useMemo('));
+    expect(effect.slice(0, effect.indexOf('}, [renderContinuous]);'))).toContain(
+      "iframeRef.current?.contentWindow?.postMessage({ type: RENDER_MODE_MESSAGE, continuous: renderContinuous }, '*');",
+    );
+    expect(documentMemoDeps()).toEqual(['coldDocKey']);
+    const memo = SRC.slice(SRC.indexOf('const [previewHtml, bakedModule, bootAssetKeys] = useMemo('));
+    expect(memo.slice(0, memo.indexOf('}, [coldDocKey]);'))).not.toMatch(/renderContinuous|RENDER_MODE_MESSAGE/);
+    // Replayed on EVERY fs:preview-ready, like fs:stats-on: a fresh document
+    // draws every frame until it is told otherwise.
+    const ready = SRC.slice(SRC.indexOf("if (data.type === 'fs:preview-ready') {"));
+    expect(ready.slice(0, ready.indexOf("} else if (data.type === 'fs:camera') {"))).toContain(
+      "win.postMessage({ type: RENDER_MODE_MESSAGE, continuous: renderContinuousRef.current }, '*');",
+    );
+    expect(SRC).toContain('renderContinuousRef.current = renderContinuous;');
   });
 });
 
@@ -277,7 +307,7 @@ describe('preview rebuild policy: a lost swap must not leave the old picture', (
   it('tracks what the live document runs: seeded on rebuild, advanced on every post', () => {
     expect(SRC).toContain('const runningModuleRef = useRef<string | null>(null);');
     const post = SRC.slice(SRC.indexOf('const postShaderSwap = useCallback('));
-    expect(post.slice(0, post.indexOf('}, [clearHotSwapWait]);'))).toContain('runningModuleRef.current = code;');
+    expect(post.slice(0, post.indexOf(POST_SHADER_SWAP_DEPS))).toContain('runningModuleRef.current = code;');
     const rebuild = SRC.slice(SRC.indexOf('A new srcDoc means a full document reload'));
     expect(rebuild.slice(0, rebuild.indexOf('}, [previewHtml, bakedModule, bootAssetKeys, containerReady'))).toContain(
       'runningModuleRef.current = bakedModule;',
@@ -308,11 +338,74 @@ describe('preview rebuild policy: a lost swap must not leave the old picture', (
     expect(handler.split('clearHotSwapWait()')).toHaveLength(2);
   });
 
-  it('escalates an unanswered swap to a real document rebuild', () => {
-    const at = SRC.indexOf('hotAckTimerRef.current = window.setTimeout(');
+  it('escalates an unanswered swap to a real document rebuild, through ONE stable helper', () => {
+    // The timer's body is `escalateUnackedSwap`, so the swap and the boot
+    // restart below arm the SAME escalation.
+    const at = SRC.indexOf('const escalateUnackedSwap = useCallback(() => {');
     expect(at).toBeGreaterThan(-1);
-    const body = SRC.slice(at, SRC.indexOf('HOT_SWAP_ACK_TIMEOUT_MS)', at));
+    const body = SRC.slice(at, SRC.indexOf('}, []);', at));
+    expect(body).toContain('hotAckTimerRef.current = null;');
+    expect(body).toContain('setHotSwapSlow(false);');
     expect(body).toContain('setColdGen((g) => g + 1)');
+    // Every arm of the ack timer hands it that helper, never an inline body.
+    const arms = [...codeOnly(SRC).matchAll(/hotAckTimerRef\.current = window\.setTimeout\(([^,]*),/g)].map((m) => m[1]);
+    expect(arms).toEqual(['escalateUnackedSwap', 'escalateUnackedSwap']);
+    const post = SRC.slice(SRC.indexOf('const postShaderSwap = useCallback('));
+    expect(post.slice(0, post.indexOf(POST_SHADER_SWAP_DEPS))).toContain(
+      'hotAckTimerRef.current = window.setTimeout(escalateUnackedSwap, HOT_SWAP_ACK_TIMEOUT_MS);',
+    );
+  });
+
+  it('restarts the countdown when the stage reports its backend, i.e. when boot() applies the held swap', () => {
+    // The receiver HOLDS a swap posted before the scene exists and applies it
+    // at boot, right before boot() posts fs:backend. The first document's real
+    // module always arrives by swap (it is baked from the empty previewCode),
+    // so a countdown armed at the post had spent the whole boot: under SwiftShader the 6 s watchdog fired mid-apply and built the
+    // document twice (first good frame ~15 s, ~7.5 s with the restart — review
+    // 2026-10-11, 4/4; a genuinely lost swap still escalated at boot + 6 s).
+    const at = SRC.indexOf("if (data.type === 'fs:backend') {");
+    expect(at).toBeGreaterThan(-1);
+    const branch = SRC.slice(at, SRC.indexOf("if (data.type === 'fs:anim') {", at));
+    expect(codeOnly(branch)).toContain(
+      'if (hotAckTimerRef.current !== null) {\n' +
+      '          window.clearTimeout(hotAckTimerRef.current);\n' +
+      '          hotAckTimerRef.current = window.setTimeout(escalateUnackedSwap, HOT_SWAP_ACK_TIMEOUT_MS);\n' +
+      '        }',
+    );
+    // RESTARTED, never cleared: only the gen-tagged ack proves a swap landed,
+    // so a forged or early fs:backend can postpone the watchdog, not cancel it.
+    expect(codeOnly(branch)).not.toContain('clearHotSwapWait');
+    expect(codeOnly(branch)).not.toContain('hotAckTimerRef.current = null');
+    // Armed only while a swap is waiting: a report with nothing in flight
+    // starts no watchdog of its own.
+    expect(codeOnly(branch).indexOf('if (hotAckTimerRef.current !== null)')).toBeLessThan(
+      codeOnly(branch).indexOf('window.setTimeout(escalateUnackedSwap'),
+    );
+  });
+
+  it('an UNTAGGED fs:preview-ready re-pushes the tuned values and leaves the watchdog alone (contract b)', () => {
+    // After a geometry change makes the stage RE-APPLY the shader (the teapot's
+    // new tessellation, a move to or from the teapot), the stage posts
+    // fs:preview-ready with NO gen. The re-apply rebuilt the uniform map from
+    // the schema, so the tuned values must be pushed again; and since nothing
+    // proves the in-flight swap landed, the watchdog must keep running.
+    const start = SRC.indexOf('const handler = (e: MessageEvent) => {');
+    const end = SRC.indexOf("window.addEventListener('message', handler);", start);
+    const handler = codeOnly(SRC.slice(start, end));
+    // The gen guard sits ABOVE every branch and is skipped for an untagged reply…
+    const guard = handler.indexOf("if (typeof data.hot === 'number') {");
+    const ready = handler.indexOf("if (data.type === 'fs:preview-ready') {");
+    expect(guard).toBeGreaterThan(-1);
+    expect(ready).toBeGreaterThan(guard);
+    expect(handler.slice(guard, handler.indexOf('}', guard))).toContain('clearHotSwapWait();');
+    // …and the ready branch itself reads no gen at all: the same re-push for
+    // the boot handshake, a swap's ack and a re-apply.
+    const branch = handler.slice(ready, handler.indexOf("} else if (data.type === 'fs:camera') {", ready));
+    expect(branch).not.toContain('data.hot');
+    expect(branch).not.toContain('clearHotSwapWait');
+    expect(branch).not.toContain('hotAckTimerRef');
+    expect(branch).toContain('for (const [name, value] of Object.entries(uniformValuesRef.current)) {');
+    expect(branch).toContain("win.postMessage({ type: 'fs:uniform', name, value }, '*');");
   });
 
   it('gives up on the in-flight swap when a rebuild supersedes it', () => {
@@ -350,7 +443,7 @@ describe('preview rebuild policy: a lost swap must not leave the old picture', (
     // The ack timer is exactly "a post not answered yet": armed by every post,
     // cleared by the gen-matched ack and by a rebuild.
     const post = SRC.slice(SRC.indexOf('const postShaderSwap = useCallback('));
-    expect(post.slice(0, post.indexOf('}, [clearHotSwapWait]);'))).toContain('hotAckTimerRef.current = window.setTimeout(');
+    expect(post.slice(0, post.indexOf(POST_SHADER_SWAP_DEPS))).toContain('hotAckTimerRef.current = window.setTimeout(');
     const clear = SRC.slice(SRC.indexOf('const clearHotSwapWait = useCallback('));
     expect(clear.slice(0, clear.indexOf('}, []);'))).toContain('hotAckTimerRef.current = null;');
   });

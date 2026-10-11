@@ -214,11 +214,14 @@ export function imageAssetFor(
       counters.decodes++;
       const d = decodeImageNode(values);
       if (!d) return null;
-      return {
-        src: `data:image/${d.mime};base64,${bytesToBase64(d.bytes)}`,
-        bytes: d.bytes.length,
-        mime: d.mime,
-      };
+      // The re-encode is the contract (a non-canonical payload comes out
+      // canonical). When it is content-equal to the stored payload, which is
+      // the ordinary case, keep the STORED string: the store, the history and
+      // the digest memo above already hold it, so the memo then pins no second
+      // copy (up to ~40 MB on desktop). Identity is unobservable from JS, so no
+      // emitted byte, placeholder hash or cache-size count moves.
+      const canon = `data:image/${d.mime};base64,${bytesToBase64(d.bytes)}`;
+      return { src: canon === raw ? raw : canon, bytes: d.bytes.length, mime: d.mime };
     },
   );
   if (!decoded) return null;
@@ -257,8 +260,11 @@ export function collectImageAssets(nodes: AppNode[]): Map<string, string> {
 
 /**
  * Expand every placeholder back to its real `data:` URL. Call this at the
- * surfaces that RUN or EXPORT the module (preview iframe, XR popup, A-Frame tab,
- * Download Shader) — never for what the TSL editor displays.
+ * surfaces that RUN or EXPORT the module as a standalone document (the XR
+ * popup, Download Shader) — never for what the TSL editor displays. The
+ * sandboxed preview resolves placeholders itself from the per-document asset
+ * feed (engine/previewAssetFeed.ts), and the A-Frame / Three.js tabs build their
+ * pages from the module's schema and displacement flag alone, so neither inlines.
  *
  * Replacement goes through a function so a `$&`/`$1` sequence inside a payload
  * could never be reinterpreted as a substitution pattern.

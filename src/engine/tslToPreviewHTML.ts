@@ -148,6 +148,16 @@ export interface PreviewOptions {
    * `reset()` snaps back there instead of to the saved view.
    */
   initialCameraPosition?: CameraPosition | null;
+  /**
+   * The orbit TARGET to restore WITH that position (ignored without one). The
+   * controls pan (right-drag), which moves the target as well as the camera,
+   * and restoring the position alone turned the view to face the origin from
+   * where the pan had left the camera. That used to need a cold rebuild the
+   * user caused; the retained-memory budget now runs one at a quiet moment
+   * (previewMemoryBudget.ts), so a pan has to survive it. Session-only on the
+   * parent side: nothing stores it, so a reload still faces the origin.
+   */
+  initialCameraTarget?: CameraPosition | null;
   /** Spin parent rotation to restore so the object angle survives iframe rebuilds. */
   initialRotation?: CameraPosition | null;
   /**
@@ -1736,6 +1746,7 @@ const SHADER_HOT_SWAP_SCRIPT = `<script>
  */
 const BRIDGE_SCRIPT_TEMPLATE = `<script>
   window.__savedCameraPos = __SAVED_CAM__;
+  window.__savedCameraTarget = __SAVED_TARGET__;
   // Deferred until the WebGPU pre-flight injects the <a-scene> (scene-slot
   // script in buildPreviewHTML) — every element ref below is captured at
   // callback time, so the scene must exist first.
@@ -1804,9 +1815,13 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
       // and polling must go through the camera child.
       var getCam = function() { return camEl && camEl.getObject3D && camEl.getObject3D("camera"); };
       var saved = window.__savedCameraPos;
+      var savedTarget = window.__savedCameraTarget;
       var cam = getCam();
       if (saved && cam) {
         cam.position.set(saved.x, saved.y, saved.z);
+        // The pan, restored WITH the position it belongs to: without it the
+        // camera stays where the pan left it but turns to face the origin.
+        if (savedTarget && oc.controls.target) oc.controls.target.set(savedTarget.x, savedTarget.y, savedTarget.z);
         try { oc.controls.update(); } catch (e) {}
       }
       // The RESTORE above is what the XR popup needs from this block; the
@@ -1821,8 +1836,15 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
         var p = c && c.position;
         if (p && (p.x !== lx || p.y !== ly || p.z !== lz)) {
           lx = p.x; ly = p.y; lz = p.z;
+          // The orbit target rides along: a pan moves it with the camera (so
+          // a pan always changes the position this compares). Re-read each
+          // time, since orbit-controls builds a new controls object on play().
+          var tg = oc.controls && oc.controls.target;
           try {
-            window.parent.postMessage({ type: "fs:camera", x: p.x, y: p.y, z: p.z }, "*");
+            window.parent.postMessage({
+              type: "fs:camera", x: p.x, y: p.y, z: p.z,
+              tx: tg ? tg.x : 0, ty: tg ? tg.y : 0, tz: tg ? tg.z : 0
+            }, "*");
           } catch (e) {}
         }
       }, 200);
@@ -1930,6 +1952,58 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
       }
     }
 
+    // A shader RE-APPLY that is not a hot swap (a new mesh: the teapot's
+    // model-loaded, a primitive replacing the teapot, a model arriving)
+    // rebuilds the uniform map from the module's schema, so every value the
+    // user tuned is back at its default in here while the parent's overlay
+    // still shows the tuned one. The fix is the boot handshake's: once that
+    // apply's shader-applied fires, post an UNTAGGED fs:preview-ready and
+    // the parent re-pushes the tuned values. Untagged on purpose — only a
+    // gen-tagged ack may clear the parent's hot-swap watchdog. A failed apply
+    // posts nothing (the error overlay reports it).
+    // COUNTED, not one-shot: every re-apply that starts before the last one
+    // lands is answered by its own ready. A quick teapot Subdivision drag
+    // starts several (each step re-tessellates and re-emits model-loaded)
+    // before the first lands, and each apply resets the uniform map again;
+    // a one-shot wait reported only the FIRST, so the later applies put the
+    // tuned values back to the schema's defaults for good (review
+    // 2026-10-11: five steps in a row, shineKeyLevel 1.26 → 0.7 in the frame
+    // while the overlay still read 1.26). An apply that never reports (a
+    // superseded one returns silently) leaves the count up, and the next
+    // shader-applied then answers for it: one extra untagged ready, harmless.
+    // Sandboxed only: the XR popup has no parent, and stays as it was.
+    var __geometryAcksPending = 0;
+    function __geometryAckDone(ok) {
+      if (__geometryAcksPending <= 0) return;
+      __geometryAcksPending -= 1;
+      if (__geometryAcksPending === 0) {
+        entity.removeEventListener("shader-applied", __geometryAckOk);
+        entity.removeEventListener("shader-error", __geometryAckBad);
+      }
+      if (!ok) return;
+      var c = entity.components && entity.components.shader;
+      try {
+        window.parent.postMessage({
+          type: "fs:preview-ready",
+          uniforms: c && c._propertyUniforms ? Object.keys(c._propertyUniforms) : []
+        }, "*");
+      } catch (e) {}
+    }
+    function __geometryAckOk() { __geometryAckDone(true); }
+    function __geometryAckBad() { __geometryAckDone(false); }
+    function __armGeometryAck() {
+      if (!entity || window.parent === window) return;
+      if (__geometryAcksPending === 0) {
+        entity.addEventListener("shader-applied", __geometryAckOk);
+        entity.addEventListener("shader-error", __geometryAckBad);
+      }
+      // Bounded, so a run of applies that never report cannot grow it forever.
+      if (__geometryAcksPending < 32) __geometryAcksPending += 1;
+    }
+    // The loader re-applies on model-loaded by itself (the teapot emits it on
+    // every re-tessellation, a model when it lands), so this only listens.
+    if (entity && window.parent !== window) entity.addEventListener("model-loaded", __armGeometryAck);
+
     var __lastGeometryKey = __INITIAL_GEOMETRY_KEY__;
     function __applyGeometry(payload) {
       var key = JSON.stringify({
@@ -1956,16 +2030,33 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
         entity.setAttribute("fit-bounds", "size: 1.6; regen: false");
         entity.setAttribute("teapot-mesh", payload.teapot);
       } else {
+        // Taken BEFORE the teapot's removal, which drops its mesh.
+        var meshBefore = entity.getObject3D ? entity.getObject3D("mesh") : null;
         entity.removeAttribute("obj-model");
         entity.removeAttribute("teapot-mesh");
         entity.removeAttribute("fit-bounds");
         entity.setAttribute("geometry", payload.geometry);
-        setTimeout(function() {
-          var comp = entity.components && entity.components.shader;
-          if (comp && typeof comp.applyShader === "function") {
-            comp.applyShader();
-          }
-        }, 0);
+        // Re-apply ONLY when the mesh itself changed. A-Frame 1.8's geometry
+        // component REUSES the mesh and swaps only mesh.geometry, keeping the
+        // shader material on it, and loader 0.8 re-welds and rebuilds the
+        // bary corners on that componentchanged. So a Subdivision step, a
+        // Raymarch Window step or a sphere/cube/plane switch needs nothing
+        // more. The unconditional re-apply this replaced re-imported and
+        // recompiled the module on every step, put every tuned uniform back
+        // to its default with no ready to restore it, and leaked one more
+        // copy of each image texture per step (measured 2026-10-11: 7
+        // applies for a 7-stop Subdivision drag). Only a NEW mesh — the one
+        // made when the primitive replaces the teapot — still needs it.
+        var meshAfter = entity.getObject3D ? entity.getObject3D("mesh") : null;
+        if (meshAfter !== meshBefore) {
+          setTimeout(function() {
+            var comp = entity.components && entity.components.shader;
+            if (comp && typeof comp.applyShader === "function") {
+              __armGeometryAck();
+              comp.applyShader();
+            }
+          }, 0);
+        }
       }
       if (payload.rotation) {
         entity.setAttribute("rotation", payload.rotation);
@@ -2258,6 +2349,7 @@ function sandboxPreflightScript(forceWebGL2: boolean): string {
       if (settled) return;
       settled = true;
       if (!adapter) hideGpu();
+      else if (__fsSoftwareAdapter(adapter)) __fsSoftwareRaster = true;
       boot();
     }
     try {
@@ -2265,6 +2357,31 @@ function sandboxPreflightScript(forceWebGL2: boolean): string {
     } catch (e) { go(null); }
     setTimeout(function () { go(null); }, 2000);`;
 }
+
+/**
+ * The sandboxed scene's `renderer` attribute: the backing-store ceiling (see
+ * the comment where the scene tag is built). Never spells `backend:`.
+ */
+export const SANDBOX_RENDERER_ATTR = 'renderer="maxCanvasWidth: 3840; maxCanvasHeight: 2160"';
+/**
+ * The same attribute with MSAA OFF, which the sandboxed boot swaps in when the
+ * renderer is SOFTWARE (owner decision 2026-10-11). A-Frame asks three for
+ * antialias on every non-mobile device, and three then draws the scene into a
+ * 4-sample HalfFloat target before its output pass. On a GPU that is cheap;
+ * on SwiftShader it halved the frame rate of a large pane (41.9 → 20.6 ms per
+ * frame for the demo, 48.8 → 27.7 ms for crumpled-fabric, measured
+ * 2026-10-11), and software rendering is exactly the slow-Windows case —
+ * Basic Render Driver, VMs, Remote Desktop, a blocklisted driver. GPU machines
+ * keep MSAA. Decided at boot, inside the frame, from the renderer the frame
+ * actually got: the WebGL2 probe's unmasked renderer string, or a WebGPU
+ * adapter that is a fallback (CPU) adapter or names a software rasterizer.
+ * A-Frame reads the attribute once, in setupRenderer, which runs while the
+ * injected markup connects — so the swap is made in the markup string before
+ * injection, not on the element after. Keeps the backing-store ceiling.
+ */
+export const SANDBOX_SOFTWARE_RENDERER_ATTR = 'renderer="maxCanvasWidth: 3840; maxCanvasHeight: 2160; antialias: false"';
+/** Renderer / adapter names that mean a software rasterizer. */
+export const SOFTWARE_RENDERER_PATTERN = /SwiftShader|llvmpipe|softpipe|Basic Render|WARP|Software/i;
 
 /**
  * The scene slot and its boot script. The <a-scene> is injected AFTER the
@@ -2282,6 +2399,10 @@ function sandboxPreflightScript(forceWebGL2: boolean): string {
  *    away: browsers cap live contexts (~16). It runs only when this document is
  *    on WebGL2 — a sandbox that reaches boot() there has no navigator.gpu, and
  *    xr always is — so a WebGPU machine is never turned away.
+ *  - `__fsSoftwareRaster` (sandbox only): the same probe reads the unmasked
+ *    renderer name before it releases the context, and the WebGPU pre-flight
+ *    reads its adapter; a software rasterizer gets the scene with MSAA off
+ *    (SANDBOX_SOFTWARE_RENDERER_ATTR).
  *  - `fs:backend` (sandbox only) tells the parent's WGSL/GLSL toggle the truth.
  *    Posted from boot() rather than fs:preview-ready, so it arrives even when
  *    the shader fails to compile.
@@ -2291,6 +2412,26 @@ function sandboxPreflightScript(forceWebGL2: boolean): string {
  *    pre-flight would only delay the scene by up to its 2s timeout.
  */
 function sceneBootScript(sceneHTML: string, xr: boolean, forceWebGL2: boolean): string {
+  // The software-renderer probe and its scene rewrite (SANDBOX_RENDERER_ATTR's
+  // comment) are sandboxed-only: the xr document keeps its exact text.
+  const softwareProbe = xr ? '' : `
+        try {
+          var dbg = c.getExtension("WEBGL_debug_renderer_info");
+          if (__fsIsSoftware(c.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : c.RENDERER))) __fsSoftwareRaster = true;
+        } catch (e) {}`;
+  const softwareHelpers = xr ? '' : `
+    var __fsSoftwareRaster = false;
+    function __fsIsSoftware(name) { return ${SOFTWARE_RENDERER_PATTERN.toString()}.test(String(name || "")); }
+    function __fsSoftwareAdapter(a) {
+      try {
+        var i = a.info || {};
+        return a.isFallbackAdapter === true || i.isFallbackAdapter === true ||
+          __fsIsSoftware([i.vendor, i.architecture, i.device, i.description].join(" "));
+      } catch (e) { return false; }
+    }`;
+  const sceneMarkup = xr
+    ? '__fsSceneHTML'
+    : `(__fsSoftwareRaster ? __fsSceneHTML.replace(${JSON.stringify(SANDBOX_RENDERER_ATTR)}, function () { return ${JSON.stringify(SANDBOX_SOFTWARE_RENDERER_ATTR)}; }) : __fsSceneHTML)`;
   return `<div id="scene-slot"></div>
 <script>
   var __fsSceneHTML = ${JSON.stringify(sceneHTML)};
@@ -2299,11 +2440,11 @@ function sceneBootScript(sceneHTML: string, xr: boolean, forceWebGL2: boolean): 
     if (window.__fsSceneBooted) { fn(); return; }
     window.addEventListener("fs:scene-booted", fn, { once: true });
   };
-  (function () {
+  (function () {${softwareHelpers}
     function __fsHasWebGL2() {
       try {
         var c = document.createElement("canvas").getContext("webgl2");
-        if (!c) return false;
+        if (!c) return false;${softwareProbe}
         var lose = c.getExtension("WEBGL_lose_context");
         if (lose) lose.loseContext();
         return true;
@@ -2314,7 +2455,7 @@ function sceneBootScript(sceneHTML: string, xr: boolean, forceWebGL2: boolean): 
         __fsShowStickyError("This browser cannot draw the 3D preview: no WebGL2 context is available. WebGL2 needs Chrome 56+, Firefox 51+ or Safari 15+, and may be switched off or blocked by the graphics driver.");
         return;
       }
-      document.getElementById("scene-slot").innerHTML = __fsSceneHTML;
+      document.getElementById("scene-slot").innerHTML = ${sceneMarkup};
       window.__fsSceneBooted = true;
       window.dispatchEvent(new Event("fs:scene-booted"));${xr ? '' : `
       try { parent.postMessage({ type: "fs:backend", backend: navigator.gpu ? "webgpu" : "webgl2" }, "*"); } catch (e) {}`}
@@ -2331,6 +2472,115 @@ ${xr ? '    boot();' : sandboxPreflightScript(forceWebGL2)}
   })();
 <\/script>`;
 }
+
+/** The parent → stage message that says whether the stage must draw every frame. */
+export const RENDER_MODE_MESSAGE = 'fs:render-mode';
+/** How long the pacer keeps drawing every frame after something changed. */
+export const RENDER_DIRTY_MS = 1000;
+/** The pacer's floor: an idle stage still draws at least this often. */
+export const RENDER_HEARTBEAT_MS = 500;
+
+/**
+ * Render on demand, for the SANDBOXED editor preview only (owner decision
+ * 2026-10-11). A-Frame drives `scene.render` from `renderer.setAnimationLoop`
+ * on every display frame, and its render() draws even when nothing moved, so
+ * a still shader on a still model cost a steady share of a core for nothing:
+ * 12-16% of one with the editor's wires animating and about 41 points with
+ * them still (M4 Max, 120 Hz; the 2026-10-11 audit).
+ *
+ * On `renderstart` the scene's loop is replaced by a gated one that draws when
+ *  - the parent says the scene is CONTINUOUS (`fs:render-mode`: it knows about
+ *    `time`, the turntable, a playing clip, a splat, the stats readout), and
+ *    the stage assumes so until the first such message arrives;
+ *  - or something changed in the last RENDER_DIRTY_MS (`dirty()`);
+ *  - or RENDER_HEARTBEAT_MS passed since the last frame — a ~2 Hz floor,
+ *    because no regex can prove a module's own JavaScript static, and a
+ *    texture can finish loading at any time.
+ *
+ * `dirty()` fires on every message from the parent (fs:shader, fs:uniform —
+ * Sound's per-frame pump included — fs:geometry, fs:image-assets and the
+ * rest); on shader-applied, shader-error, model-loaded and model-error, which
+ * bubble to the window (the splat runtime emits model-loaded too, so the
+ * script needs no splat-only name — tslToPreviewHTML.test.ts keeps every
+ * non-splat document free of the word); on the scene's rendererresize (so
+ * the bridge's resize kicks too) and the window's resize; on pointer, wheel
+ * and key input in the frame; and on the orbit controls' `change`. Damping
+ * moves the camera only inside a tick, so `change` is what keeps the window
+ * open until the camera settles. The controls object is re-read every frame,
+ * because orbit-controls builds a new one on every play().
+ *
+ * A skipped frame still advances A-Frame's clock (`scene.timer.update()`),
+ * so the frame drawn after an idle stretch hands tick components a
+ * one-frame delta, not the length of the stretch: a clip started from idle
+ * starts where it was, without a jump.
+ *
+ * Unchanged: fs:shot draws its own frame before reading the canvas, and the
+ * boot watchdog reads `renderStarted`, which A-Frame sets before it emits
+ * `renderstart`. The XR popup keeps A-Frame's own loop.
+ */
+const RENDER_PACER_SCRIPT = `<script>
+  (function () {
+    var continuous = true;
+    var until = 0;
+    function now() {
+      return (window.performance && window.performance.now) ? window.performance.now() : Date.now();
+    }
+    function dirty() { until = now() + ${RENDER_DIRTY_MS}; }
+
+    window.addEventListener("message", function (e) {
+      if (e.source !== window.parent) return;
+      var m = e.data;
+      if (m && m.type === "${RENDER_MODE_MESSAGE}" && typeof m.continuous === "boolean") {
+        continuous = m.continuous;
+      }
+      dirty();
+    });
+    ["shader-applied", "shader-error", "model-loaded", "model-error", "resize"].forEach(function (t) {
+      window.addEventListener(t, dirty);
+    });
+    ["pointerdown", "pointerup", "pointercancel", "wheel", "keydown", "keyup"].forEach(function (t) {
+      window.addEventListener(t, dirty, { capture: true, passive: true });
+    });
+    // A hover changes nothing on screen; a drag does.
+    window.addEventListener("pointermove", function (e) { if (e && e.buttons) dirty(); }, { capture: true, passive: true });
+
+    window.__fsWhenSceneBooted(function () {
+      var scene = document.querySelector("a-scene");
+      if (!scene) return;
+      scene.addEventListener("rendererresize", dirty);
+      var camEl = scene.querySelector("[orbit-controls]");
+      var hooked = null;
+      function hookOrbit() {
+        var oc = camEl && camEl.components && camEl.components["orbit-controls"];
+        var c = oc && oc.controls;
+        if (!c || c === hooked || typeof c.addEventListener !== "function") return;
+        hooked = c;
+        c.addEventListener("change", dirty);
+      }
+      function install() {
+        var r = scene.renderer;
+        var render = scene.render;
+        if (!r || typeof r.setAnimationLoop !== "function" || typeof render !== "function") return;
+        var last = -Infinity;
+        var p = r.setAnimationLoop(function (t, frame) {
+          hookOrbit();
+          var n = now();
+          if (continuous || n < until || n - last >= ${RENDER_HEARTBEAT_MS}) {
+            last = n;
+            render(t, frame);
+          } else if (scene.timer && typeof scene.timer.update === "function") {
+            scene.timer.update();
+          }
+        });
+        // A failed renderer init rejects A-Frame's own call too, which the
+        // error overlay already reports; this copy would only repeat it.
+        if (p && typeof p.catch === "function") p.catch(function () {});
+      }
+      if (scene.renderStarted) install();
+      else scene.addEventListener("renderstart", install, { once: true });
+    });
+  })();
+<${''}/script>`;
 
 /**
  * Sub-mesh protocol of a sandboxed model document: what named meshes the model
@@ -2560,6 +2810,7 @@ export function tslToPreviewHTML(
     lighting = 'studio',
     subdivision = 64,
     initialCameraPosition = null,
+    initialCameraTarget = null,
     initialRotation = null,
     xr = false,
     forceWebGL2 = false,
@@ -2886,9 +3137,12 @@ export function tslToPreviewHTML(
   // `backend:`, which is the only token the aframe#5847 patch acts on.
   // The xr scene is deliberately excluded: A-Frame skips the clamp in VR mode
   // anyway, and a headset's framebuffer is the XR session's to size.
+  //
+  // On a SOFTWARE renderer the sandboxed boot swaps this attribute for
+  // SANDBOX_SOFTWARE_RENDERER_ATTR (MSAA off) before it injects the scene.
   const rendererAttr = xr
     ? ' renderer="backend: webgl"'
-    : ' renderer="maxCanvasWidth: 3840; maxCanvasHeight: 2160"';
+    : ` ${SANDBOX_RENDERER_ATTR}`;
   sceneLines.push(`<a-scene${rendererAttr} vr-mode-ui="enabled: ${xr ? 'true' : 'false'}"${xr ? ' fs-xr-stats' : ' fs-stats'} loading-screen="enabled: false" background="color: ${bgColor}">`);
   sceneLines.push('  <a-entity camera="fov: 20; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 8; rotateSpeed: 0.5"></a-entity>');
   // Parent holds the spin (so it tweens cleanly 0→360 on world Y/Z), child
@@ -2922,6 +3176,13 @@ export function tslToPreviewHTML(
 
   lines.push(sceneBootScript(sceneLines.join('\n'), xr, forceWebGL2));
   lines.push('');
+
+  // Render on demand (sandboxed only): see RENDER_PACER_SCRIPT. The XR popup
+  // keeps A-Frame's own every-frame loop.
+  if (!xr) {
+    lines.push(RENDER_PACER_SCRIPT);
+    lines.push('');
+  }
 
   if (isModel && !xr) {
     // Model feed for the sandboxed preview. The parent supplies the model
@@ -2980,6 +3241,12 @@ export function tslToPreviewHTML(
   const savedCamLiteral = initialCameraPosition
     ? JSON.stringify({ x: initialCameraPosition.x, y: initialCameraPosition.y, z: initialCameraPosition.z })
     : 'null';
+  // Only beside a position, and only three FINITE numbers (JSON.stringify
+  // would spell a NaN or an Infinity as null, which the restore skips anyway).
+  const savedTargetLiteral = initialCameraPosition && initialCameraTarget
+    && Number.isFinite(initialCameraTarget.x) && Number.isFinite(initialCameraTarget.y) && Number.isFinite(initialCameraTarget.z)
+    ? JSON.stringify({ x: initialCameraTarget.x, y: initialCameraTarget.y, z: initialCameraTarget.z })
+    : 'null';
 
   // Seed each hot-update handler's last-applied key with the value baked
   // into the initial HTML. The parent posts these same values from its
@@ -3027,6 +3294,7 @@ export function tslToPreviewHTML(
   lines.push(
     BRIDGE_SCRIPT_TEMPLATE
       .replace('__SAVED_CAM__', savedCamLiteral)
+      .replace('__SAVED_TARGET__', savedTargetLiteral)
       .replace('__INITIAL_BG_KEY__', initialBgKey)
       .replace('__INITIAL_LIGHTING_KEY__', initialLightingKey)
       .replace('__INITIAL_PLAYING_KEY__', initialPlayingKey)

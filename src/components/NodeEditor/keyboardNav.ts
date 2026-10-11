@@ -1,4 +1,5 @@
 import type { AppNode, AppEdge } from '@/types';
+import { isCollapsedMember } from '@/utils/groupFrame';
 
 /**
  * Pure decision logic for keyboard navigation of the canvas.
@@ -18,20 +19,15 @@ import type { AppNode, AppEdge } from '@/types';
  * and store work stays in NodeEditor.
  *
  * COLLAPSED MEMBERS. Nodes inside a collapsed group stay in the `nodes` array
- * carrying `className: 'fs-collapsed-member'` and are hidden with `display:
+ * carrying the store's `COLLAPSED_MEMBER_CLASS` and are hidden with `display:
  * none` (so the React component keeps its rAF loops alive). Native tab order
  * skips them because they are not rendered; any cycle computed from the ARRAY
  * must skip them explicitly or the cursor lands on an invisible node.
  */
 
-/** Set by the store when a node is inside a collapsed group. */
-const COLLAPSED_MEMBER_CLASS = 'fs-collapsed-member';
-
+/** Off screen in a collapsed group (or React Flow `hidden`): the one shared reading. */
 export function isNavigable(n: AppNode): boolean {
-  if (n.className?.includes(COLLAPSED_MEMBER_CLASS)) return false;
-  // `hidden` is React Flow's own opt-out; nothing in this app sets it today,
-  // but honouring it costs one term and keeps this honest if something does.
-  return n.hidden !== true;
+  return !isCollapsedMember(n);
 }
 
 /** Centre of a node in ABSOLUTE space. Parent offsets are resolved by walking

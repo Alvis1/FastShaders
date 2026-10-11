@@ -135,7 +135,11 @@ describe('teapot in the preview panel', () => {
 
   it('a slider tick on the teapot hot-swaps its resolution instead of posting a primitive', () => {
     expect(src).toContain('if (isTeapotGeometry(previewGeometry)) {');
-    expect(src).toContain('teapot: buildTeapotAttr(effectiveSubdivision),');
+    // Bound first, so the memory budget can tell a new tessellation from a
+    // repeat the stage drops (previewMemoryBudget.test.ts).
+    expect(src).toContain('const teapot = buildTeapotAttr(effectiveSubdivision);');
+    const post = src.slice(src.indexOf('const teapot = buildTeapotAttr(effectiveSubdivision);'));
+    expect(post.slice(0, post.indexOf("'*',"))).toMatch(/type: 'fs:geometry',\s*isObj: false,\s*teapot,\s*rotation: GEOMETRY_ROTATIONS\.teapot,/);
   });
 
   it('the slider is bound to the stop INDEX, so the sections are equal', () => {

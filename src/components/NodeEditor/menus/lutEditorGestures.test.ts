@@ -146,6 +146,15 @@ describe('LazyNumberField — Escape, IME and its role', () => {
     expect(field).toContain('if (e.nativeEvent.isComposing) return;');
   });
 
+  it('steps on a bare or Shift arrow only — Alt/Ctrl/Cmd+Arrow keep the caret, as in every other number field', () => {
+    // On macOS Cmd/Option+Up/Down move the caret to the field's start or end (with Shift, select to there); this
+    // field stepped the value and wrote an undo entry instead. The condition is the app-wide rule's own spelling
+    // (utils/numberField.ts fieldKeyAction, pinned in numberField.test.ts), so the two cannot drift apart unseen.
+    const rule = "(e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.altKey && !e.ctrlKey && !e.metaKey";
+    expect(field).toContain(`} else if (${rule}) {`);
+    expect(readFileSync(join(__dirname, '../../../utils/numberField.ts'), 'utf8')).toContain(`if (${rule}) {`);
+  });
+
   it('is announced as the spinbutton its arrow keys make it, with its value and range', () => {
     expect(field).toContain('role="spinbutton"');
     expect(field).toContain('aria-valuenow={Number.isFinite(value) ? value : undefined}');

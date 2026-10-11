@@ -388,6 +388,13 @@ export function Toolbar() {
   useDismiss(prefsAt != null, closePrefs, [prefsRef]);
 
   const openPrefs = useCallback((e: React.MouseEvent) => {
+    // Only a right-click on the bar's own DOM. The dialogs this component
+    // mounts (Feedback, SUS, the study finish, Palettes, the export pre-flight)
+    // are portalled to <body> but stay React children of the bar, so React
+    // bubbles THEIR contextmenu here: the native menu was cancelled and the
+    // popover opened unseen under the dialog (measured 2026-10-11). Before
+    // preventDefault, so the native menu survives.
+    if (!e.currentTarget.contains(e.target as Node)) return;
     // Never steal a right-click that already means something else (see
     // prefsClaimedElsewhere for the list and why).
     if (prefsClaimedElsewhere(e.target as HTMLElement | null)) return;

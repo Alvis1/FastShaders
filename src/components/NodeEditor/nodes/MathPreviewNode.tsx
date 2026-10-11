@@ -10,7 +10,7 @@ import { useCostChrome } from './useCostChrome';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { WaveformSvg, applyWaveFrame, type WaveformDynamicRefs } from './WaveformSvg';
-import { appTime } from '@/utils/appClock';
+import { useFrameLoop } from '@/hooks/useFrameLoop';
 import { evaluateEdgeSource, getTargetEdges, getTimeUpstreamSet } from '@/engine/cpuEvaluator';
 import './MathPreviewNode.css';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
@@ -34,10 +34,8 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   if (!def) return null;
   const headerTip = useHeaderTip(def);
 
-  // The animated loop's visibility probe. It has to be an HTML element:
-  // `offsetParent` lives on HTMLElement, so reading it off any of the SVG refs
-  // below would be `undefined` — never null — and the test would silently
-  // never fire.
+  // The element whose visibility gates the animated tick (the plot's wrapper,
+  // which lives as long as the card).
   const plotRef = useRef<HTMLDivElement>(null);
   const curveRef = useRef<SVGPathElement>(null);
   const dropRef = useRef<SVGLineElement>(null);
@@ -73,7 +71,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   //
   // The key needs exactly two facts, each protecting a different thing:
   //   * the X feeder's node id — decides hasConnection (socket vs the inline
-  //     number widget) AND is the rAF loop's evaluation target;
+  //     number widget) AND is the animated tick's evaluation target;
   //   * whether Time is upstream of it — picks the animated branch.
   // The upstream VALUE is deliberately NOT folded in: the static branch
   // renders phase 0 with no readout for a connected input and therefore never
@@ -111,37 +109,22 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   const inputX = valueNum(data.values?.x ?? 0);
 
   // Animated branch: the WaveformSvg's initial render is declarative (it also
-  // fully covers the static branches), and this loop only OVERWRITES the
-  // dynamic attributes via applyWaveFrame — two transform writes + a label
-  // update per frame, instead of the old full 72×72 canvas repaint.
-  useEffect(() => {
-    if (!hasTime) return;
-    let rafId: number;
-
-    const draw = (timestamp: number) => {
-      // Schedule first, so the visibility early-out below still keeps the
-      // loop alive (it is never torn down while the component is mounted).
-      rafId = requestAnimationFrame(draw);
-
-      // Skip the frame entirely while the card is hidden — a member of a
-      // COLLAPSED group is only `display: none`'d (the store keeps it MOUNTED
-      // on purpose so this loop survives the collapse) and rAF is
-      // per-document, so nothing else throttles it. `offsetParent` is null
-      // exactly under `display: none`. Safe to skip because the clock is
-      // ABSOLUTE (utils/appClock), so the first visible frame draws the true
-      // current phase rather than resuming a private epoch — see the fuller
-      // rationale on PreviewNode's loop.
-      if (plotRef.current?.offsetParent === null) return;
-
-      // Shared app clock — every animated surface (this card, the noise
-      // previews, the edge info chip) evaluates the same t per frame, so
+  // fully covers the static branches), and the shared frame ticker
+  // (utils/frameTicker, 15 Hz, skipped while the card is off-screen or
+  // collapsed away) only OVERWRITES the dynamic attributes via applyWaveFrame —
+  // and only the ones whose value moved.
+  useFrameLoop(
+    hasTime,
+    plotRef,
+    () => (t) => {
+      // `t` is the shared app clock — every animated surface (this card, the
+      // noise previews, the edge info chip) evaluates the same t per tick, so
       // their displayed values agree; per-loop epochs made a sin card show
       // sin(48.3) while the freshly-hovered edge chip showed sin(0.15).
-      const t = appTime(timestamp);
-
+      //
       // Evaluate the actual input flowing into this node's X port by walking
       // the upstream graph with the current time. The graph is read FRESH
-      // from the store each frame (PreviewNode does the same): this component
+      // from the store each tick (PreviewNode does the same): this component
       // no longer subscribes to nodes/edges, so a mirror ref would never be
       // refreshed and the waveform WOULD freeze on upstream edits.
       const { nodes, edges } = useAppStore.getState();
@@ -149,16 +132,14 @@ export const MathPreviewNode = memo(function MathPreviewNode({
         ? evaluateEdgeSource({ source: xSource, sourceHandle: xHandle }, nodes, edges, t)?.[0] ?? null
         : null;
       applyWaveFrame(dynamicRefs, func, data.registryType, evaluated ?? t, lastLabelRef);
-    };
-
-    rafId = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(rafId);
-  }, [data.registryType, hasTime, func, xSource, xHandle, dynamicRefs]);
+    },
+    [data.registryType, func, xSource, xHandle, dynamicRefs],
+  );
 
   // Static branches: snap the dynamic attributes to the declared state. A
   // previous animated life leaves imperative writes React's vdom diff cannot
   // see (its old and new vdom agree, so it never re-patches the attributes
-  // the rAF loop moved) — without this, unwiring Time froze the curve at the
+  // the animated tick moved) — without this, unwiring Time froze the curve at the
   // last animated phase instead of returning to phase 0.
   useEffect(() => {
     if (hasTime) return;
@@ -190,7 +171,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
       {/* Waveform plot (SVG — crisp under viewport zoom, unlike the old
           fixed-72px canvas bitmap; also one fewer canvas inside the React
           Flow viewport, which is the surface WebKit's compositing bug bites).
-          Declarative render covers the static branches; the rAF effect above
+          Declarative render covers the static branches; the frame loop above
           overwrites via dynamicRefs when Time is upstream. */}
       <div className="math-preview-node__canvas-wrap" ref={plotRef}>
         <WaveformSvg

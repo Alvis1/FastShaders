@@ -276,7 +276,8 @@ describe('ShaderPreview', () => {
 
   it('posts the feed BEFORE the swap it belongs to, and advances the sent set', () => {
     const at = SRC.indexOf('const postShaderSwap = useCallback(');
-    const body = SRC.slice(at, SRC.indexOf('}, [clearHotSwapWait]);', at));
+    const body = SRC.slice(at, SRC.indexOf('}, [clearHotSwapWait, escalateUnackedSwap, chargeRetained]);', at));
+    expect(body.length, 'postShaderSwap’s closing line moved').toBeLessThan(4000);
     const feed = body.indexOf('planPreviewAssetFeed(sentAssetKeysRef.current, collectImageAssets(codeNodes), code)');
     const post = body.indexOf("win.postMessage({ type: PREVIEW_ASSETS_MESSAGE, entries: feed.entries }, '*')");
     const advance = body.indexOf('sentAssetKeysRef.current = feed.sent;');

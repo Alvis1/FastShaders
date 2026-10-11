@@ -541,7 +541,9 @@ export interface LazyNumberFieldProps {
  * value in the menu. It reads and shows a number through the ONE rule every
  * number field in the app shares (utils/numberField.ts: `.` or `,` typed, a
  * dot shown). ArrowUp/ArrowDown step by `step` (×10 with Shift), as the
- * number input's own keys did, and the input says so as a `spinbutton`.
+ * number input's own keys did, and the input says so as a `spinbutton` — but
+ * never with Alt, Ctrl or Cmd held, which move the caret (the same rule as
+ * `fieldKeyAction`).
  *
  * Escape drops a draft that is not written yet (a non-live field's typed text)
  * and leaves the field — DragNumberInput's convention, which ContextMenu
@@ -607,7 +609,8 @@ export function LazyNumberField({ label, value, min, max, step = 0.01, onPropose
           else if (e.key === 'Escape') {
             setDraft(null);
             e.currentTarget.blur();
-          } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          } else if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.altKey && !e.ctrlKey && !e.metaKey) {
+            // Alt/Ctrl/Cmd+Arrow move the caret (with Shift, select to there): the app-wide rule, fieldKeyAction.
             e.preventDefault();
             const from = parse(draftRef.current ?? formatFieldNumber(value)) ?? value;
             const d = (e.shiftKey ? step * 10 : step) * (e.key === 'ArrowUp' ? 1 : -1);

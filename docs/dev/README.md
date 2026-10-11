@@ -14,7 +14,7 @@ rule in CLAUDE.md looks arbitrary, the answer is in the matching file below.
 |---|---|
 | [platform-and-release.md](platform-and-release.md) | Browser floor, offline/desktop builds, bundle chunks, the generated (gitignored) files and their sync, the submodule + jsdelivr release order, the feedback button |
 | [eval-mode.md](eval-mode.md) | The user-study switch: arms, consent and its text versions, telemetry vocabulary, the package, the upload |
-| [graph-and-store.md](graph-and-store.md) | Sync engine, store, history bracketing, ids, rAF loops, import auto-fit |
+| [graph-and-store.md](graph-and-store.md) | Sync engine, store, history bracketing, ids, the shared frame ticker, import auto-fit |
 | [storage-and-limits.md](storage-and-limits.md) | Every `fs:*` localStorage key, ASCII storage, image payload refs, viewport/scroll memory, cost profiles |
 | [codegen.md](codegen.md) | `graphToCode` / `codeToGraph` contracts, emission rules, alpha, discard, module helpers |
 | [outputs-and-materials.md](outputs-and-materials.md) | Output nodes, one-node-one-material, `parts` / `materialParts`, the active sink, emit order |

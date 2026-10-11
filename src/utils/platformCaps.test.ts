@@ -68,6 +68,7 @@ describe('platform caps: the web profile keeps today\'s numbers', () => {
       imageDecodeCacheChars: 4_000_000,
       originRecords: 32,
       originStoreChars: 24 * MiB,
+      previewRetainedBytes: 256 * MiB,
     });
   });
 
@@ -128,6 +129,15 @@ describe('platform caps: the web profile keeps today\'s numbers', () => {
     expect(WEB_CAPS[capsField(origin, 'MAX_RECORDS', 'imageOriginCache.ts')]).toBe(32);
     expect(WEB_CAPS[capsField(origin, 'MAX_STORE_CHARS', 'imageOriginCache.ts')]).toBe(24 * MiB);
   });
+
+  it('the preview retained-memory budget reads the table, never its own build switch (source pins)', () => {
+    // It used to pick its figure with `PLATFORM_CAPS === DESKTOP_CAPS` beside
+    // two literals of its own, a second web/desktop table.
+    const budget = read('components/Preview/previewMemoryBudget.ts');
+    expect(capsField(budget, 'RETAINED_BYTES_BUDGET', 'previewMemoryBudget.ts')).toBe('previewRetainedBytes');
+    expect(codeOnly(budget)).toContain('return capsFor(desktop).previewRetainedBytes;');
+    expect(codeOnly(budget)).not.toMatch(/\bDESKTOP_CAPS\b|\bWEB_CAPS\b/);
+  });
 });
 
 describe('platform caps: the desktop table is safe by construction', () => {
@@ -143,6 +153,7 @@ describe('platform caps: the desktop table is safe by construction', () => {
       imageDecodeCacheChars: 40_000_000,
       originRecords: 64,
       originStoreChars: 256 * MiB,
+      previewRetainedBytes: 1024 * MiB,
     });
   });
 

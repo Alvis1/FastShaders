@@ -6,6 +6,7 @@ import {
   evaluateNodeRange,
   getTargetEdges,
   getFieldUpstreamSet,
+  portShapeForHandle,
 } from './cpuEvaluator';
 import { makeNode, makeEdge } from '@/test-utils';
 import type { AppNode } from '@/types';
@@ -970,5 +971,26 @@ describe('field gate — a probe point is not a range (the "goes in a range, com
       [makeEdge('u', 'out', 'ds', 'a'), makeEdge('h', 'out', 'ds', 'b')], 0)!;
     expect(d.min[0]).toBe(0);
     expect(d.max[0]).toBeCloseTo(Math.SQRT1_2, 6);
+  });
+});
+
+describe('portShapeForHandle — a malformed dynamicOutputs never throws', () => {
+  // It runs inside TypedEdge's store selector on every render, where a throw
+  // unmounts the app. The restore gate refuses these shapes; this pins the
+  // local guard for any future path that skips it.
+  const dataNode = (dynamicOutputs: unknown): AppNode =>
+    ({ ...makeNode('d', 'dataNode'), data: { ...makeNode('d', 'dataNode').data, dynamicOutputs } }) as AppNode;
+
+  it('reads a well-formed column socket', () => {
+    expect(portShapeForHandle(dataNode([{ id: 'col0', label: 'a', dataType: 'float' }]), 'col0')).toBe(1);
+  });
+
+  it('a non-array or a null entry falls through to the registry instead of throwing', () => {
+    for (const bad of [5, 'col0', { find: 1 }, null, [null], [undefined, { id: 'col0', dataType: 'vec3' }]]) {
+      expect(() => portShapeForHandle(dataNode(bad), 'col0'), JSON.stringify(bad)).not.toThrow();
+    }
+    expect(portShapeForHandle(dataNode([null, { id: 'col0', dataType: 'vec3' }]), 'col0')).toBe(3);
+    // A non-list reads exactly as a node with no list at all: the registry's answer.
+    expect(portShapeForHandle(dataNode({ find: 1 }), 'col0')).toBe(portShapeForHandle(dataNode(undefined), 'col0'));
   });
 });

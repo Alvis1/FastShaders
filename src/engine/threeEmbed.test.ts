@@ -19,6 +19,8 @@ import * as THREE from 'three/webgpu';
 import { buildThreeEmbedHTML, THREE_VERSION } from './tslToThreeHTML';
 import { CDN_BASE, LOADER_FILE, tslToShaderModule } from './tslToShaderModule';
 import { graphToCode } from './graphToCode';
+import { buildAFrameEmbedHTML, hasDisplacement } from './tslToAFrameHTML';
+import { IMAGE_ASSET_PREFIX, inlineImageAssetsFromNodes } from './imageAssets';
 import { collectShaderProperties, marchMaterialSettings } from './exportShader';
 import { findDefaultOutput } from '@/utils/outputMaterials';
 import { makeNode, makeEdge } from '@/test-utils';
@@ -167,7 +169,7 @@ describe('the Three.js embed page', () => {
     const editor = readFileSync(`${REPO}/src/components/CodeEditor/CodeEditor.tsx`, 'utf8');
     expect(editor).toContain("sdfDrives ? { ...rawMaterialSettings, side: 'double' as const } : rawMaterialSettings");
     expect(editor).toContain('return buildThreeEmbedHTML(scriptCode, {');
-    expect(editor).toMatch(/tslToShaderModule\(\s*inlineImageAssetsFromNodes\([\s\S]*?\.nodes\),\s*materialSettings,/);
+    expect(editor).toMatch(/tslToShaderModule\(\s*settledCode,\s*materialSettings,/);
     const code = "import { Fn, vec3 } from 'three/tsl';\n\nconst shader = Fn(() => {\n  return vec3(1, 0, 0);\n});\n\nexport default shader;\n";
     expect(tslToShaderModule(code, { side: 'double' })).toMatch(/\bside: 2\b/);
   });
@@ -376,6 +378,47 @@ function tabModule({ nodes, edges }: Graph): string {
 }
 
 const out = () => makeNode('out', 'output');
+
+describe('the tab pages never needed the image payloads', () => {
+  // CodeEditor builds the A-Frame / Three.js tab module from the PLACEHOLDER
+  // code. It used to inline every `data:` payload first (71–733 ms per settled
+  // edit at the web/desktop caps), yet both builders read only the schema and
+  // `positionNode:`, and a base64 payload holds no `:`. Pinned: each page is
+  // byte-identical either way, on every primitive, displaced or not.
+  const img = (id: string, bytes: string) =>
+    makeNode(id, 'imageNode', {
+      imageB64: `data:image/png;base64,${btoa(bytes)}`,
+      width: 2, height: 2, fileName: `${id}.png`, colorSpace: 'color',
+    });
+  const graphs: Record<string, Graph> = {
+    colour: {
+      nodes: [img('i1', 'abc:positionNode:'), makeNode('p', 'property_float', { name: 'speed', value: 2 }), makeNode('m', 'mul'), out()],
+      edges: [makeEdge('i1', 'out', 'm', 'a'), makeEdge('p', 'out', 'm', 'b'), makeEdge('m', 'out', 'out', 'color')],
+    },
+    displaced: {
+      nodes: [img('i1', 'xyz'), img('i2', 'other'), out()],
+      edges: [makeEdge('i1', 'out', 'out', 'position'), makeEdge('i2', 'alpha', 'out', 'opacity')],
+    },
+  };
+  for (const [name, g] of Object.entries(graphs)) {
+    it(`${name}: the same page from placeholders as from inlined payloads`, () => {
+      const code = graphToCode(g.nodes, g.edges).code;
+      expect(code).toContain(IMAGE_ASSET_PREFIX);
+      const inlined = inlineImageAssetsFromNodes(code, g.nodes);
+      expect(inlined).not.toBe(code);
+      const settings = (findDefaultOutput(g.nodes)?.data as OutputNodeData | undefined)?.materialSettings;
+      const props = collectShaderProperties(g.nodes);
+      const bare = tslToShaderModule(code, settings, props);
+      const full = tslToShaderModule(inlined, settings, props);
+      for (const geometry of ['sphere', 'cube', 'plane'] as const) {
+        const opts = { shaderFile: 'x.js', title: 'X', geometry };
+        expect(buildThreeEmbedHTML(bare, opts), `three ${geometry}`).toBe(buildThreeEmbedHTML(full, opts));
+        expect(buildAFrameEmbedHTML(bare, opts), `aframe ${geometry}`).toBe(buildAFrameEmbedHTML(full, opts));
+      }
+      expect(hasDisplacement(bare)).toBe(name === 'displaced');
+    });
+  }
+});
 
 describe.skipIf(!loaderAvailable(CURRENT_LOADER))('the Three.js page, executed against the served loader', () => {
   it('builds uniform NODES from the schema and applies the page values to them, live', async () => {

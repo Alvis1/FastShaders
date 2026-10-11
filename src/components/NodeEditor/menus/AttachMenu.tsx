@@ -7,7 +7,7 @@ import { valueStr } from '@/utils/valueCoerce';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { isOutputNode, outputMaterials, outputNodes, readModelSignature, sectionLabel } from '@/utils/outputMaterials';
 import { previewableOutputs } from '@/utils/nodePreview';
-import { attachSinks, defaultAttachHandle, socketFeed } from '@/utils/nodeAttach';
+import { attachEmptyReason, attachSinks, defaultAttachHandle, socketFeed } from '@/utils/nodeAttach';
 import { outputOrdinals } from '../nodes/outputNodePlans';
 import { formatSectionLabel } from '../nodes/sectionLabelText';
 import { chipRowStyle, chipStyle, activeChipStyle, chipText } from './PreviewChannelRow';
@@ -111,7 +111,9 @@ export function AttachMenu({ nodeId, onAttach }: { nodeId: string; onAttach: (c:
         <>
           <div className="context-menu__category">{t('Attach', language)}</div>
           <button className="context-menu__item" disabled>
-            {t('No Output on the canvas', language)}
+            {attachEmptyReason(nodes) === 'collapsed'
+              ? t('The Output is inside a collapsed group — expand it to attach', language)
+              : t('No Output on the canvas', language)}
           </button>
         </>
       )}

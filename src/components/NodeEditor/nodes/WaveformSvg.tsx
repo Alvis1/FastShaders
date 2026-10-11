@@ -25,7 +25,7 @@ import {
  * passed — the imperative writer lives in this file and computes every value
  * through the same pure helpers as the JSX, so the two paths cannot drift.
  * (Per-frame React state is deliberately avoided — the established rAF-ref
- * pattern of PreviewNode/MathPreviewNode.)
+ * pattern of PreviewNode/MathPreviewNode, now ticked by utils/frameTicker.)
  */
 
 const ACCENT = '#6C63FF';
@@ -42,10 +42,24 @@ export interface WaveformDynamicRefs {
 }
 
 /**
+ * Write an attribute only when its value moved. Compared against the DOM
+ * itself, not a cache of earlier writes: React patches these same attributes
+ * declaratively, and remounts the readout elements when `showReadout` flips,
+ * so a cache could skip a write the element actually needs. A getAttribute is
+ * a plain read — no layout. On the sin card most per-tick writes were
+ * identical (the visibility pair always; the dot whenever the value sits
+ * still).
+ */
+function setAttr(el: Element, name: string, value: string): void {
+  if (el.getAttribute(name) !== value) el.setAttribute(name, value);
+}
+
+/**
  * Overwrite the dynamic attributes for a new phase. Same semantics as the
  * declarative render: non-finite input/value hides the dot and drop line and
- * degrades the readout to "…". The label (and its pill width) is only
- * touched when the string actually changes — pass `lastLabel` storage.
+ * degrades the readout to "…". Only attributes whose value changed are
+ * written, and the label (and its pill width) is only touched when the string
+ * actually changes — pass `lastLabel` storage.
  */
 export function applyWaveFrame(
   refs: WaveformDynamicRefs,
@@ -58,18 +72,18 @@ export function applyWaveFrame(
   const val = func(phase);
   const finite = Number.isFinite(phase) && Number.isFinite(val);
 
-  curve.current?.setAttribute('transform', `translate(${waveTranslateX(phase)} 0)`);
+  if (curve.current) setAttr(curve.current, 'transform', `translate(${waveTranslateX(phase)} 0)`);
 
   if (dot.current && drop.current) {
     if (finite) {
-      const sy = waveScreenY(val);
-      dot.current.setAttribute('cy', String(sy));
-      drop.current.setAttribute('y2', String(sy));
-      dot.current.setAttribute('visibility', 'visible');
-      drop.current.setAttribute('visibility', 'visible');
+      const sy = String(waveScreenY(val));
+      setAttr(dot.current, 'cy', sy);
+      setAttr(drop.current, 'y2', sy);
+      setAttr(dot.current, 'visibility', 'visible');
+      setAttr(drop.current, 'visibility', 'visible');
     } else {
-      dot.current.setAttribute('visibility', 'hidden');
-      drop.current.setAttribute('visibility', 'hidden');
+      setAttr(dot.current, 'visibility', 'hidden');
+      setAttr(drop.current, 'visibility', 'hidden');
     }
   }
 
@@ -78,8 +92,8 @@ export function applyWaveFrame(
     lastLabel.current = label;
     text.current.textContent = label;
     const pw = waveLabelWidth(label);
-    pill.current.setAttribute('x', String(DOT_CX - pw / 2));
-    pill.current.setAttribute('width', String(pw));
+    setAttr(pill.current, 'x', String(DOT_CX - pw / 2));
+    setAttr(pill.current, 'width', String(pw));
   }
 }
 
@@ -96,7 +110,7 @@ export function WaveformSvg({
   phase: number;
   /** False = curve only (a connected, time-less input shows no dot/readout). */
   showReadout: boolean;
-  /** Live nodes pass refs so their rAF loop can call applyWaveFrame. */
+  /** Live nodes pass refs so their frame loop can call applyWaveFrame. */
   dynamicRefs?: WaveformDynamicRefs;
 }) {
   const pathD = useMemo(() => buildWavePath(func), [func]);

@@ -63,7 +63,6 @@ export interface ProjectTextureSource {
 }
 
 export type TextureSource = ProjectTextureSource | ModelTextureSource;
-export type TextureSourceKind = TextureSource['kind'];
 
 /**
  * A source's identity for de-duplication and for React keys.

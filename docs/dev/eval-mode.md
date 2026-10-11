@@ -10,6 +10,7 @@
 - Eval mode (`…/eval` — the user-study switch, `src/eval/` + `public/eval/index.html`)
 - Consent text versions (`CONSENT_TEXT_VERSION`)
 - Gaussian splats in a study session (2026-09-25)
+- The 2026-10-11 key guards change what a session counts
 
 ---
 
@@ -25,3 +26,7 @@
 ### Gaussian splats in a study session (2026-09-25)
 
 - **Gaussian splats in a study session (2026-09-25)** — a splat FILE is refused on every study entry path: the drop (before the pre-read gate, so no bytes are read), a zip's model entry (`zipModelOutcome`) and the IndexedDB boot restore — so a study document never loads `fs-splat-0.1.js` and the study host never serves it. The Splat Output NODE, however, is offered on the Output tab in study sessions too: the owner chose "always offered" on 2026-09-24 knowing it adds a tile to every participant's palette. With no splat allowed it cannot render, and the preview's notice says why. Nothing new is logged (the `output-activate` chokepoint simply carries `splatOutput` as its node type) and `evalHooks.test.ts` is unchanged.
+
+### The 2026-10-11 key guards change what a session counts
+
+- **No chokepoint was added or moved, but sessions recorded before and after the build carrying these fixes count undos and deletes differently.** Starting with that build, the `undo` and `redo` events no longer fire for Cmd/Ctrl+Z typed in a text field — the Name field (which holds the participant code), a Note, a search box, a settings text input — because that key is now the field's own native undo (`keepsNativeUndo`, graph-and-store.md, History); nor behind an aria-modal dialog, where the handler now stands down. And `node-remove` (with the `edge-disconnect` beside it) with `how: 'delete-key'` no longer fires for x/X typed in the Chromium code panel, whose EditContext input `isTypingTarget` did not recognise until then (canvas-interaction.md, F frames the selection). Before the fix, each of those presses was a REAL graph edit and was logged as one, so the earlier counts are not wrong — the edits they record happened — but they include edits a participant made by accident while typing. Compare the two populations with that in mind.

@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef } from 'react';
 import { useAppStore } from '@/store/useAppStore';
+import { getLiveUpstreamSet } from '@/engine/cpuEvaluator';
 import { linkLabelText } from '@/components/NodeEditor/nodes/sectionLabelText';
 import { nodeEl } from '@/components/NodeEditor/nodeElement';
 import { resolveWireTargets, wireTargetsKey } from './previewWires';
@@ -54,6 +55,10 @@ import './PreviewLink.css';
  * own `onPaneClick` reading the same published endpoints — see previewLinkHit.
  */
 
+/** The still wire's arrowhead marker. One PreviewLink is ever mounted (the
+ *  canvas's), so a fixed document id is unique; PreviewLink.css names it. */
+const ARROW_MARKER_ID = 'fs-preview-link-arrow';
+
 /** Label offset from the pointer, and how close it may come to the pane edge. */
 const LABEL_DX = 14;
 const LABEL_DY = -22;
@@ -96,6 +101,20 @@ export const PreviewLink = memo(function PreviewLink() {
   const pathCount = wires.length;
   const wiresRef = useRef(wires);
   wiresRef.current = wires;
+  // Which wires MARCH: only an Output whose graph changes on its own (fed by
+  // Time or Sound — the same getLiveUpstreamSet the canvas's own wires ask).
+  // A still one is drawn solid with an arrowhead into its rail socket (owner,
+  // 2026-10-11: "marching only animated"). One '1'/'0' per wire in wire order,
+  // a primitive, so a drag notify bails on Object.is; resolveWireTargets is
+  // the memo the wire key above already filled. Written as a data attribute,
+  // never a class: the hover writes `--hot` into the class imperatively, and a
+  // React className update would erase it.
+  const liveKey = useAppStore((s) => {
+    const live = getLiveUpstreamSet(s.nodes, s.edges);
+    let k = '';
+    for (const w of resolveWireTargets(s)) k += live.has(w.id) ? '1' : '0';
+    return k;
+  });
 
   const svgRef = useRef<SVGSVGElement>(null);
   const labelRef = useRef<HTMLDivElement>(null);
@@ -364,8 +383,33 @@ export const PreviewLink = memo(function PreviewLink() {
   return (
     <>
       <svg ref={svgRef} className="preview-link" aria-hidden="true" style={{ opacity: 0 }}>
+        {/* The still wire's arrowhead (PreviewLink.css puts it on the path).
+            A <polyline>, never a <path>: the tick and the hover find the
+            wires by `querySelectorAll('path')` INDEX. In user space, so the
+            hover's thicker stroke does not inflate it; its tip is the wire's
+            end, where the wire meets the rail socket's rim. */}
+        <defs>
+          <marker
+            id={ARROW_MARKER_ID}
+            viewBox="0 0 18 18"
+            refX="15"
+            refY="9"
+            markerWidth="18"
+            markerHeight="18"
+            markerUnits="userSpaceOnUse"
+            orient="auto"
+          >
+            <polyline className="preview-link__arrow" points="3,2 12,9 3,16" />
+          </marker>
+        </defs>
         {Array.from({ length: pathCount }, (_, i) => (
-          <path key={i} className="preview-link__path" fill="none" d="" />
+          <path
+            key={i}
+            className="preview-link__path"
+            data-live={liveKey[i] === '1' ? '' : undefined}
+            fill="none"
+            d=""
+          />
         ))}
       </svg>
       {/* The hover label. Its own HTML element rather than a `title` on the

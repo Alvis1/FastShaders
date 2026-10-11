@@ -21,6 +21,9 @@ describe('selectAllChanges — the A key', () => {
     const nodes = [hidden(makeNode('m1', 'float')), makeNode('g1', 'mul')];
     expect(isSelectableNode(nodes[0])).toBe(false);
     expect(selectAllChanges(nodes)).toEqual([{ type: 'select', id: 'g1', selected: true }]);
+    // The shared reading (utils/groupFrame isCollapsedMember) counts React
+    // Flow's own `hidden` too, as Tab and Attach do.
+    expect(isSelectableNode({ ...makeNode('h', 'float'), hidden: true } as AppNode)).toBe(false);
   });
 
   it('deselects everything once every visible node is selected (the toggle), hidden ones included', () => {

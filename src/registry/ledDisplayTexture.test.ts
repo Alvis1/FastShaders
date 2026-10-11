@@ -19,8 +19,8 @@ import {
   ledDisplayShade,
   ledEmitter,
   ledTileLevel,
-  linearToSrgb,
 } from '@/components/NodeEditor/ledDisplayTile';
+import { linearToSrgb01 } from '@/utils/colorUtils';
 import { getNodeValues } from '@/types';
 import { makeNode, makeEdge } from '@/test-utils';
 import type { AppNode, AppEdge } from '@/types';
@@ -513,9 +513,9 @@ describe('LED Display tile (what the thumbnail draws)', () => {
   });
 
   it('encodes linear light to sRGB, never brighter than the level', () => {
-    expect(linearToSrgb(0.5) * 255).toBeCloseTo(188, 0);
-    expect(linearToSrgb(0)).toBe(0);
-    expect(linearToSrgb(1)).toBeCloseTo(1, 9);
+    expect(linearToSrgb01(0.5) * 255).toBeCloseTo(188, 0);
+    expect(linearToSrgb01(0)).toBe(0);
+    expect(linearToSrgb01(1)).toBeCloseTo(1, 9);
     // The tile stores the ENCODED value: at an emitter's centre it is exactly
     // the encoded level (unencoded, every dim emitter would show far darker
     // than the preview draws it).
@@ -528,7 +528,7 @@ describe('LED Display tile (what the thumbnail draws)', () => {
           // The emitter's centre in tile coordinates (y down).
           const x = ((cx + LED_EMITTERS[i][0] / LED_CELL) / LED_TILE_PIXELS) * 2 - 1;
           const y = 1 - ((cy + LED_EMITTERS[i][1] / LED_CELL) / LED_TILE_PIXELS) * 2;
-          expect(ledDisplayShade(x, y)[i]).toBeCloseTo(linearToSrgb(level * LED_BRIGHTNESS), 6);
+          expect(ledDisplayShade(x, y)[i]).toBeCloseTo(linearToSrgb01(level * LED_BRIGHTNESS), 6);
           checked++;
         }
       }
@@ -544,7 +544,7 @@ describe('LED Display tile (what the thumbnail draws)', () => {
         const shade = ledDisplayShade(x, y);
         for (let i = 0; i < 3; i++) {
           const level = ledTileLevel(i, Math.floor(cellX) + 0.5, Math.floor(cellY) + 0.5);
-          expect(shade[i]).toBeLessThanOrEqual(linearToSrgb(Math.min(level * LED_BRIGHTNESS, 1)) + 1e-9);
+          expect(shade[i]).toBeLessThanOrEqual(linearToSrgb01(Math.min(level * LED_BRIGHTNESS, 1)) + 1e-9);
         }
       }
     }

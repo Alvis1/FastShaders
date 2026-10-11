@@ -1,9 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { COUNT_CARD_COLORS, COUNT_LABELS } from '@/utils/colorUtils';
 import { appTime } from '@/utils/appClock';
+import { useFrameLoop } from '@/hooks/useFrameLoop';
 import { evaluateEdgeRange, getEdgeOutputShape, getTimeUpstreamSet, type RangeResult } from '@/engine/cpuEvaluator';
 import './EdgeInfoCard.css';
+
+/**
+ * Same bounds, channel for channel — a tick that would re-render the chip to
+ * the numbers it already shows (speed 0, a clamped or settled value) is
+ * skipped. Exported for the test.
+ */
+export function sameRange(a: RangeResult | null, b: RangeResult | null): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.min.length !== b.min.length || a.max.length !== b.max.length) return false;
+  for (let i = 0; i < a.min.length; i++) if (!Object.is(a.min[i], b.min[i])) return false;
+  for (let i = 0; i < a.max.length; i++) if (!Object.is(a.max[i], b.max[i])) return false;
+  return true;
+}
 
 interface EdgeInfoCardProps {
   sourceId: string;
@@ -28,11 +43,7 @@ export function EdgeInfoCard({
   const targetNode = nodes.find((n) => n.id === targetId);
 
   const [range, setRange] = useState<RangeResult | null>(null);
-
-  const nodesRef = useRef(nodes);
-  const edgesRef = useRef(edges);
-  nodesRef.current = nodes;
-  edgesRef.current = edges;
+  const cardRef = useRef<HTMLDivElement>(null);
 
   // Through the shared ctx, which walks the UNWRAPPED edges: passing the raw
   // store array here (as this did) is the trap getUnwrappedEdges' contract
@@ -46,29 +57,46 @@ export function EdgeInfoCard({
     setRange(evaluateEdgeRange({ source: sourceId, sourceHandle }, nodes, edges, 0));
   }, [sourceId, sourceHandle, nodes, edges, isTimeDriven]);
 
-  // Animated (time-driven) range: the rAF loop reads fresh graph state via
-  // nodesRef/edgesRef, so its deps EXCLUDE nodes/edges — listing them would
-  // tear down and re-create the loop on every unrelated drag frame (new array
-  // identity). Only sourceId / isTimeDriven actually change what to animate.
-  useEffect(() => {
-    if (!isTimeDriven) return;
-    let rafId: number;
-
-    const tick = (timestamp: number) => {
-      // Shared app clock — NOT an epoch minted at mount: this card mounts on
-      // hover, so a private clock restarted at ~0 every time the user pointed
-      // at the edge, and the chip showed sin(0.15) beside a sin card whose
-      // own loop (same private-epoch pattern) was at sin(48.3). All animated
-      // surfaces now evaluate the same t per frame and agree.
-      const t = appTime(timestamp);
-      const next = evaluateEdgeRange({ source: sourceId, sourceHandle }, nodesRef.current, edgesRef.current, t);
-      setRange(next);
-      rafId = requestAnimationFrame(tick);
-    };
-
-    rafId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafId);
-  }, [sourceId, sourceHandle, isTimeDriven]);
+  // Animated (time-driven) range, on the shared frame ticker
+  // (utils/frameTicker, 15 Hz — the same frames as the labels and cards it
+  // describes; skipped while the chip is off-screen). The tick reads fresh
+  // graph state from the store, so the deps EXCLUDE nodes/edges — listing them
+  // would tear down and re-create the loop on every unrelated drag frame (new
+  // array identity). Only the source socket / isTimeDriven change what to
+  // animate.
+  useFrameLoop(
+    isTimeDriven,
+    cardRef,
+    () => {
+      // `t` is the shared app clock — NOT an epoch minted at mount: this card
+      // mounts when its wire is selected, so a private clock restarted at ~0
+      // every time, and the chip showed sin(0.15) beside a sin card whose own
+      // loop was at sin(48.3). All animated surfaces now evaluate the same t
+      // per tick and agree.
+      const rangeAt = (t: number) => {
+        const { nodes: n, edges: e } = useAppStore.getState();
+        return evaluateEdgeRange({ source: sourceId, sourceHandle }, n, e, t);
+      };
+      // The chip mounts on selection: show a value at once rather than "…"
+      // for up to one tick. (A plain update — this runs inside the effect,
+      // where flushSync cannot commit.)
+      let shown = rangeAt(appTime());
+      setRange(shown);
+      return (t) => {
+        const next = rangeAt(t);
+        if (sameRange(next, shown)) return;
+        shown = next;
+        // Commit INSIDE the tick. A plain setState from a frame callback is
+        // rendered by React's scheduler in a LATER task, after this frame has
+        // painted, so the chip wrote on a frame of its own — 15 extra canvas
+        // writes a second, each paying the layerization pass the ticker exists
+        // to share (graph-150 with a Time wire selected: 2.5 -> 4.0 ms/frame
+        // at 1x, 56% -> 90% busy at 4x).
+        flushSync(() => setRange(next));
+      };
+    },
+    [sourceId, sourceHandle, isTimeDriven],
+  );
 
   if (!sourceNode || !targetNode) return null;
 
@@ -105,6 +133,7 @@ export function EdgeInfoCard({
 
   return (
     <div
+      ref={cardRef}
       className="edge-info-card"
       style={{
         transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,

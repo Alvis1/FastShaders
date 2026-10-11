@@ -46,6 +46,32 @@ export const GROUP_BADGE_CLEARANCE = 14;
 export const EST_NODE_W = 160;
 export const EST_NODE_H = 60;
 
+/**
+ * The className the store's collapse writes on every member of a collapsed
+ * group. A CLASS, not React Flow's `hidden`: `display: none` keeps the member's
+ * component mounted, so its preview rAF loops keep running under the pill.
+ */
+export const COLLAPSED_MEMBER_CLASS = 'fs-collapsed-member';
+
+/**
+ * Whether a node is off screen inside a collapsed group: it has no handle to
+ * land a wire on, nothing to select, focus or frame, and the pill stands in
+ * for it. The ONE reading for every surface that asks (Attach, A, Tab and the
+ * arrows, drag-connect, make-room) — `nodeAttach` once asked `hidden` alone,
+ * which no collapse sets, and offered a collapsed Output whose wire never drew.
+ *
+ * React Flow's own `hidden` counts too: nothing in the app sets it on a node
+ * today, but a node it hides is just as unreachable. It is read the way React
+ * Flow reads it, as a TRUTHINESS test (`!node.hidden`, @xyflow/react): a file
+ * can store `hidden: 1`, React Flow hides that node, and an `=== true` test
+ * here would offer it to Attach again (nodeAttach asked `!n.hidden` before
+ * this helper existed). Truthiness never coerces, so it cannot throw. `typeof`
+ * because a className comes out of a `.fastshader` and need not be a string.
+ */
+export function isCollapsedMember(node: Pick<AppNode, 'className' | 'hidden'>): boolean {
+  return (typeof node.className === 'string' && node.className.includes(COLLAPSED_MEMBER_CLASS)) || Boolean(node.hidden);
+}
+
 /** A node's box: measured, else authored, else the estimate above. */
 export function measuredNodeSize(node: AppNode): { w: number; h: number } {
   const n = node as AppNode & {

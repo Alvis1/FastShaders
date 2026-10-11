@@ -14,6 +14,7 @@
  * emitters per pixel, several colours, some dark ones.
  */
 import { perlin2D } from '@/utils/noisePreview';
+import { linearToSrgb01 } from '@/utils/colorUtils';
 import { clamp01 } from './tilePreview';
 
 /** The three emitter centres of one display pixel, in emitter radii — the cell
@@ -52,12 +53,6 @@ export function ledEmitter(channel: number, level: number, qx: number, qy: numbe
   return level * disc * LED_BRIGHTNESS;
 }
 
-/** Linear light to the sRGB value the canvas stores (the preview encodes the
- *  shader's linear output the same way), so a dim emitter shows as dim. */
-export function linearToSrgb(v: number): number {
-  return v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
-}
-
 /** One tile pixel, for `renderPixels`: tile coordinates -1..1 with y DOWN. */
 export function ledDisplayShade(x: number, y: number): [number, number, number] {
   // The texture's UV runs 0..1 with v UP.
@@ -71,7 +66,9 @@ export function ledDisplayShade(x: number, y: number): [number, number, number] 
   const rgb: [number, number, number] = [0, 0, 0];
   for (let i = 0; i < 3; i++) {
     // LINEAR drive: each emitter shines with its own channel, nothing more.
-    rgb[i] = linearToSrgb(clamp01(ledEmitter(i, ledTileLevel(i, centreX, centreY), qx, qy)));
+    // Encoded to the sRGB value the canvas stores (the preview encodes the
+    // shader's linear output the same way), so a dim emitter shows as dim.
+    rgb[i] = linearToSrgb01(clamp01(ledEmitter(i, ledTileLevel(i, centreX, centreY), qx, qy)));
   }
   return rgb;
 }

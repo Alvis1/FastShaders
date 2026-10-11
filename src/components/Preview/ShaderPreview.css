@@ -328,8 +328,12 @@
   pointer-events: auto;
 }
 
-/* Frosted pills like the canvas's cost pill — one shared rule, since nothing
-   differs between the three but their contents. */
+/* Opaque pills — one shared rule, since nothing differs between the three but
+   their contents. NOT frosted glass (owner, 2026-10-11, with the canvas's cost
+   pill): a backdrop blur over the live 3D view re-blurs every frame the scene
+   moves, and the cost is non-additive — only removing EVERY backdrop filter in
+   the app bought the measured +19–42% fps under software compositing. The
+   panel token flips with the theme, so no dark override is needed. */
 .shader-preview__bottom-controls,
 .shader-preview__anim-controls,
 .shader-preview__display-controls {
@@ -337,28 +341,21 @@
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
-  background: rgba(255, 255, 255, 0.85);
+  background: var(--bg-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-md);
   box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
 }
 
 /* Holds the right edge when no timeline is rendered to take up the slack (no
    animation, or a primitive geometry). With a timeline present the flex:1
-   sibling has already eaten the free space, so this contributes nothing. */
+   sibling has already eaten the free space, so this contributes nothing.
+   Empty on desktop builds once VR is compiled out and fullscreen is the lone
+   child — but never actually empty, so no :empty guard is needed. */
 .shader-preview__display-controls {
   margin-left: auto;
 }
 
-/* Empty on desktop builds once VR is compiled out and fullscreen is the lone
-   child — but never actually empty, so no :empty guard is needed. */
-:root[data-theme="dark"] .shader-preview__bottom-controls,
-:root[data-theme="dark"] .shader-preview__anim-controls,
-:root[data-theme="dark"] .shader-preview__display-controls {
-  background: rgba(70, 74, 81, 0.85);
-}
 
 /* ── Model animation scrubber ─────────────────────────────────────────────
    The thumb is the pill's own box at half scale, sliding along a bare line.
@@ -407,7 +404,7 @@
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
 }
 
-/* Same frosted box as the button groups, half their height. `left` is written
+/* Same opaque box as the button groups, half their height. `left` is written
    imperatively per report — never here — so the resting position is the clip
    start until the first frame lands. */
 .shader-preview__timeline-thumb {
@@ -417,19 +414,13 @@
   width: var(--fs-anim-thumb);
   height: var(--fs-anim-thumb);
   transform: translate(-50%, -50%);
-  background: rgba(255, 255, 255, 0.85);
+  background: var(--bg-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
   box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   /* The track owns the pointer (it captures the gesture), so the thumb must
      not intercept the pointerdown that starts a scrub on top of it. */
   pointer-events: none;
-}
-
-:root[data-theme="dark"] .shader-preview__timeline-thumb {
-  background: rgba(70, 74, 81, 0.85);
 }
 
 /* A clip with no root translation has nothing to pin — kept visible (the
@@ -823,21 +814,13 @@
   max-height: calc(100% - 65px);
   overflow-y: auto;
   overscroll-behavior: contain;
-  background: rgba(255, 255, 255, 0.92);
+  /* Opaque, like the bottom bar's pills (see there): no backdrop blur. */
+  background: var(--bg-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
   box-shadow: var(--shadow-md);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
   font-size: 10px;
   color: var(--text-primary);
-}
-
-/* Dark theme: the overlay floats over the 3D viewport with a hardcoded
-   near-white fill and --text-primary text, which flips to light → unreadable.
-   Give it a dark translucent panel. */
-:root[data-theme="dark"] .shader-preview__uniforms {
-  background: rgba(60, 64, 70, 0.94);
 }
 
 /* Bakes the tuned values into the graph. Sits above the rows it acts on, and

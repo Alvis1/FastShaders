@@ -18,10 +18,12 @@ import { resolve } from 'node:path';
 import { makeNode } from '@/test-utils';
 import type { AppNode } from '@/types';
 import {
+  COLLAPSED_MEMBER_CLASS,
   MIN_GROUP_H,
   absoluteNodePosition,
   groupFrameSize,
   growGroupFrames,
+  isCollapsedMember,
 } from './groupFrame';
 import { groupFrameSize as storeGroupFrameSize } from '@/store/useAppStore';
 
@@ -149,5 +151,50 @@ describe('growGroupFrames', () => {
     const nodes = [group('g', 300, 100), child('a', 200, 'g'), child('b', 500, 'g')];
     const out = growGroupFrames(nodes, new Set(['a', 'b']), 20);
     expect(groupFrameSize(out[0]).h).toBe(520);
+  });
+});
+
+describe('isCollapsedMember — the ONE reading of "off screen in a collapsed group"', () => {
+  const node = (extra: Partial<AppNode>) => ({ ...makeNode('n', 'color'), ...extra }) as AppNode;
+
+  it('the store\'s class, or React Flow\'s hidden', () => {
+    expect(isCollapsedMember(node({ className: COLLAPSED_MEMBER_CLASS }))).toBe(true);
+    expect(isCollapsedMember(node({ hidden: true }))).toBe(true);
+    expect(isCollapsedMember(node({}))).toBe(false);
+    expect(isCollapsedMember(node({ className: 'something-else', hidden: false }))).toBe(false);
+  });
+
+  it('reads `hidden` as React Flow does — truthiness — so a file\'s `hidden: 1` is not offered back', () => {
+    // React Flow hides on `!node.hidden`; a file can store any JSON there. An
+    // `=== true` reading put a node React Flow does not draw back into Attach
+    // (nodeAttach asked `!n.hidden` before the helper), and Tab and A with it.
+    for (const v of [1, 'yes', {}, []]) {
+      expect(isCollapsedMember(node({ hidden: v as unknown as boolean })), JSON.stringify(v)).toBe(true);
+    }
+    for (const v of [0, '', null, undefined, false]) {
+      expect(isCollapsedMember(node({ hidden: v as unknown as boolean })), String(v)).toBe(false);
+    }
+  });
+
+  it('survives a className a hand-edited file made a non-string', () => {
+    expect(isCollapsedMember(node({ className: 7 as unknown as string }))).toBe(false);
+    expect(isCollapsedMember(node({ className: { includes: () => true } as unknown as string }))).toBe(false);
+  });
+
+  it('the store WRITES the constant, and every surface ASKS the helper', () => {
+    // A respelled class string is how Attach came to ask `hidden` alone while
+    // A, Tab and drag-connect asked the class: five readings, one of them wrong.
+    expect(src('../store/useAppStore.ts')).toContain('className: COLLAPSED_MEMBER_CLASS }');
+    for (const rel of [
+      './nodeAttach.ts',
+      '../components/NodeEditor/selectAll.ts',
+      '../components/NodeEditor/keyboardNav.ts',
+      '../components/NodeEditor/NodeEditor.tsx',
+      '../store/useAppStore.ts',
+    ]) {
+      const code = src(rel).replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
+      expect(code, rel).not.toContain("'fs-collapsed-member'");
+    }
+    expect(src('./nodeAttach.ts')).toContain('!isCollapsedMember(n)');
   });
 });

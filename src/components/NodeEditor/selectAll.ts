@@ -5,8 +5,8 @@
  * NodeEditor is one line and the rule is node-env testable.
  *
  * "Every node" means every node the user can SEE: a member hidden inside a
- * collapsed group (the `fs-collapsed-member` className — the Groups
- * convention, not React Flow's `hidden`) is represented on screen by the
+ * collapsed group (`isCollapsedMember`, utils/groupFrame — the store's
+ * className, or React Flow's `hidden`) is represented on screen by the
  * pill, and selecting the pill is what selecting the group means. Selecting
  * the invisible members too would let Delete remove nodes nobody could see
  * were selected. Group frames and notes ARE nodes and are included: React
@@ -20,12 +20,13 @@
  */
 import type { NodeChange } from '@xyflow/react';
 import type { AppNode } from '@/types';
+import { isCollapsedMember } from '@/utils/groupFrame';
 
 export type SelectChange = Extract<NodeChange<AppNode>, { type: 'select' }>;
 
 /** Whether the node is on screen and therefore part of "all". */
 export function isSelectableNode(node: AppNode): boolean {
-  return !(node.className ?? '').includes('fs-collapsed-member');
+  return !isCollapsedMember(node);
 }
 
 /**

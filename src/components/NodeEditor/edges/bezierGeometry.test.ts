@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { Position } from '@xyflow/react';
 import {
   bezierControlOffset,
@@ -9,7 +10,19 @@ import {
   splinePath,
   insertWaypointOrdered,
   distancePointToSpline,
+  edgeBezier,
+  bezierMarkAt,
+  arrowMarks,
+  chevronPath,
+  ribbonHalfWidth,
+  ribbonStrokeWidth,
+  RIBBON_GAP,
+  ARROW_SPACING,
+  ARROW_MIN_ARC,
+  ARROW_MAX,
+  type BezierSegment,
 } from './bezierGeometry';
+import * as geometry from './bezierGeometry';
 
 describe('bezierControlOffset', () => {
   it('is half the forward distance', () => {
@@ -167,5 +180,168 @@ describe('distancePointToSpline', () => {
 
   it('reports a large distance far from the routed path', () => {
     expect(distancePointToSpline(line, 1000, 400)).toBeGreaterThan(300);
+  });
+});
+
+/* ---------------- a STILL wire's direction chevrons ---------------- */
+
+/** A straight segment written as a cubic (controls at the thirds). */
+const straight = (x0: number, y0: number, x1: number, y1: number): BezierSegment => [
+  x0, y0, x0 + (x1 - x0) / 3, y0 + (y1 - y0) / 3, x0 + (2 * (x1 - x0)) / 3, y0 + (2 * (y1 - y0)) / 3, x1, y1,
+];
+
+describe('edgeBezier — the one curve the renderer, the hit test and the chevrons share', () => {
+  it('is cardinal at both ends for an ordinary edge (React Flow\'s controls)', () => {
+    const seg = edgeBezier(0, 0, Position.Right, 400, 120, Position.Left);
+    expect(seg).toEqual([
+      0, 0,
+      ...cardinalControlPoint(Position.Right, 0, 0, 400, 120),
+      ...cardinalControlPoint(Position.Left, 400, 120, 0, 0),
+      400, 120,
+    ]);
+  });
+
+  it('takes a unit RADIAL exit for a color-circle source', () => {
+    const seg = edgeBezier(0, 0, [0, 1], 300, 200, Position.Left);
+    expect(seg.slice(2, 4)).toEqual(radialControlPoint(0, 0, 0, 1, 300, 200));
+    expect(seg.slice(4, 6)).toEqual(cardinalControlPoint(Position.Left, 300, 200, 0, 0));
+  });
+
+  it('the drop-on-edge hit test and the chevrons CALL it rather than re-deriving the controls (source pins)', () => {
+    // The env is node and both callers are .tsx, so the guard reads source:
+    // a hit test that picks its own control points can drift from what draws,
+    // and then what highlights is no longer what snaps.
+    const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8');
+    const editor = read('../NodeEditor.tsx');
+    const hit = editor.slice(editor.indexOf('function findNearestEdge('), editor.indexOf('function findContainingGroup('));
+    expect(hit).toContain('edgeBezier(s.x, s.y, exit, t.x, t.y, t.position)');
+    expect(hit).not.toMatch(/\b(?:cardinal|radial)ControlPoint\(/);
+    expect(read('./TypedEdge.tsx')).toContain('edgeBezier(sourceX, sourceY, radial ?? sourcePosition, targetX, targetY, targetPosition)');
+  });
+});
+
+describe('arrowMarks', () => {
+  it('puts ONE chevron on the midpoint of a short wire, pointing source → target', () => {
+    const marks = arrowMarks([straight(0, 0, 100, 0)]);
+    expect(marks).toHaveLength(1);
+    expect(marks[0].x).toBeCloseTo(50, 1);
+    expect(marks[0].y).toBeCloseTo(0, 6);
+    expect(marks[0].ux).toBeCloseTo(1, 6);
+    expect(marks[0].uy).toBeCloseTo(0, 6);
+  });
+
+  it('points backwards on a wire drawn right-to-left — direction is the PARAMETER\'s, not the screen\'s', () => {
+    const [m] = arrowMarks([straight(200, 0, 100, 0)]);
+    expect(m.ux).toBeCloseTo(-1, 6);
+  });
+
+  it('draws none on a wire too short to read, and never throws on a non-finite endpoint', () => {
+    expect(arrowMarks([straight(0, 0, ARROW_MIN_ARC - 1, 0)])).toEqual([]);
+    expect(arrowMarks([straight(0, 0, ARROW_MIN_ARC + 1, 0)])).toHaveLength(1);
+    expect(arrowMarks([straight(0, 0, Number.NaN, 0)])).toEqual([]);
+    expect(arrowMarks([straight(0, 0, Infinity, 0)])).toEqual([]);
+    expect(arrowMarks([])).toEqual([]);
+  });
+
+  it('keeps an ODD count, so the middle one always sits on the midpoint', () => {
+    for (const len of [40, 150, 259, 261, 400, 700, 1300, 2600]) {
+      const marks = arrowMarks([straight(0, 0, len, 0)]);
+      expect(marks.length % 2, `len ${len}`).toBe(1);
+      expect(marks[(marks.length - 1) / 2].x, `len ${len}`).toBeCloseTo(len / 2, 0);
+    }
+  });
+
+  it('spaces them about ARROW_SPACING apart, evenly along the ARC LENGTH', () => {
+    for (const len of [400, 700, 1300, 2600]) {
+      const marks = arrowMarks([straight(0, 0, len, 0)]);
+      const gap = len / marks.length;
+      expect(gap, `len ${len}`).toBeGreaterThan(ARROW_SPACING * 0.66);
+      expect(gap, `len ${len}`).toBeLessThan(ARROW_SPACING * 2);
+      for (let i = 1; i < marks.length; i++) {
+        expect(marks[i].x - marks[i - 1].x).toBeCloseTo(gap, 0);
+      }
+    }
+  });
+
+  it('measures arc, not parameter: a curve whose speed varies still gets even spacing', () => {
+    // A backward-exit S-curve: the parameter crawls through the bends and races
+    // along the straight, so equal-t marks would bunch up.
+    const seg = edgeBezier(0, 0, Position.Right, -300, 500, Position.Left);
+    const marks = arrowMarks([seg], 60);
+    expect(marks.length).toBeGreaterThanOrEqual(5);
+    const steps = marks.slice(1).map((m, i) => Math.hypot(m.x - marks[i].x, m.y - marks[i].y));
+    const lo = Math.min(...steps), hi = Math.max(...steps);
+    // Chords under-read arcs on the bends, so allow a little slack.
+    expect(hi / lo).toBeLessThan(1.35);
+  });
+
+  it('walks a waypoint spline across its segment seams', () => {
+    const segs = [straight(0, 0, 300, 0), straight(300, 0, 300, 300)];
+    const marks = arrowMarks(segs, 100);
+    // 600 px of arc at ~100 px → an odd count, the middle one on the seam corner.
+    expect(marks.length % 2).toBe(1);
+    const mid = marks[(marks.length - 1) / 2];
+    expect(mid.x).toBeCloseTo(300, 0);
+    expect(mid.y).toBeCloseTo(0, 0);
+    // Marks past the seam follow the SECOND segment downwards.
+    const last = marks[marks.length - 1];
+    expect(last.x).toBeCloseTo(300, 3);
+    expect(last.uy).toBeCloseTo(1, 3);
+  });
+
+  it('caps the count at ARROW_MAX however long the wire — a hostile length is a hang otherwise', () => {
+    // Restored node positions need only be FINITE and waypoints may span
+    // ±1e6, so a `.fastshader` can make ONE wire astronomically long. Uncapped,
+    // a node at x = 1e12 asked a single render for ~8e9 chevrons.
+    expect(ARROW_MAX % 2).toBe(1);
+    for (const len of [1e5, 1e6, 1e12, 1e300]) {
+      const t0 = performance.now();
+      const marks = arrowMarks([straight(0, 0, len, 0)]);
+      expect(marks, `len ${len}`).toHaveLength(ARROW_MAX);
+      // Still evenly spread, the middle one still on the midpoint.
+      expect(marks[(ARROW_MAX - 1) / 2].x / len, `len ${len}`).toBeCloseTo(0.5, 6);
+      expect(performance.now() - t0, `len ${len}`).toBeLessThan(250);
+    }
+    // 64 waypoints zig-zagging across the whole sanitized box (edgeExtras).
+    const pts: Array<[number, number]> = [[0, 0]];
+    for (let i = 0; i < 64; i++) pts.push(i % 2 ? [1e6, -1e6] : [-1e6, 1e6]);
+    pts.push([0, 0]);
+    expect(arrowMarks(catmullRomToBeziers(pts))).toHaveLength(ARROW_MAX);
+    // A degenerate spacing lands on the cap or on nothing — never in the loop.
+    expect(arrowMarks([straight(0, 0, 400, 0)], 0)).toHaveLength(ARROW_MAX);
+    expect(arrowMarks([straight(0, 0, 400, 0)], Number.NaN)).toEqual([]);
+  });
+
+  it('falls back to the chord where the derivative vanishes', () => {
+    const seg: BezierSegment = [0, 0, 0, 0, 100, 0, 100, 0];
+    expect(bezierMarkAt(seg, 0).ux).toBeCloseTo(1, 6);
+  });
+});
+
+describe('chevronPath', () => {
+  it('writes every chevron as one subpath of ONE path — the element count does not grow with them', () => {
+    const marks = arrowMarks([straight(0, 0, 800, 0)]);
+    const d = chevronPath(marks, 4);
+    expect(d.match(/M/g)).toHaveLength(marks.length);
+    expect(d.match(/L/g)).toHaveLength(marks.length * 2);
+    expect(chevronPath([], 4)).toBe('');
+  });
+
+  it('opens BEHIND the mark and points AHEAD of it along the tangent', () => {
+    const d = chevronPath([{ x: 10, y: 20, ux: 1, uy: 0 }], 4, 6);
+    // arm (7, 24) → tip (13, 20) → arm (7, 16)
+    expect(d).toBe('M7,24L13,20L7,16');
+  });
+});
+
+describe('ribbon geometry', () => {
+  it('half-width covers the outer line\'s own stroke', () => {
+    expect(ribbonHalfWidth(1)).toBeCloseTo(ribbonStrokeWidth(1) / 2, 9);
+    expect(ribbonHalfWidth(4)).toBeCloseTo(1.5 * RIBBON_GAP + ribbonStrokeWidth(4) / 2, 9);
+    for (let c = 2; c <= 4; c++) expect(ribbonHalfWidth(c)).toBeGreaterThan(ribbonHalfWidth(c - 1));
+  });
+
+  it('retires the ribbon dash — it never rendered (React Flow\'s CSS dash beat the attribute)', () => {
+    expect('RIBBON_DASH' in geometry).toBe(false);
   });
 });

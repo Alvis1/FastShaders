@@ -77,8 +77,7 @@ export function srgbToLinear01(c: number): number {
 }
 
 /** Linear-light channel → sRGB-encoded (0-1): the exact inverse of srgbToLinear01. Non-finite → 0, clamped.
- *  The ONE copy (gltfImportPlan's hex, Color Ramp's stop colours); NodeEditor/ledDisplayTile.ts still keeps
- *  a private one, left for its owner to fold. */
+ *  The ONE copy (gltfImportPlan's hex, Color Ramp's stop colours, the LED Display tile). */
 export function linearToSrgb01(c: number): number {
   if (!Number.isFinite(c)) return 0;
   const v = c < 0 ? 0 : c > 1 ? 1 : c;

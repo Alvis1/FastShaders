@@ -30,7 +30,8 @@ import { rotatePt, normalizeDeg, snapDeg, rotateTransform, projectOnSegment, nea
 import { tokenizePath, fmtN, serializePath, segStart, pathSegEnds, degradeCurve, pathSpans, insertIntoPath, insertIntoPoly, canInsertInto } from './glyphPath';
 import { GLYPH_PALETTE, normalizePaintValue, normalizePaintNumber, displayPaintNumber, summarizePaint } from './glyphPaint';
 import { isTypingTarget } from '@/utils/isTypingTarget';
-import { RIBBON_DASH, RIBBON_GAP, ribbonStrokeWidth } from '@/components/NodeEditor/edges/bezierGeometry';
+import { ARROW_FLARE, RIBBON_GAP, arrowMarks, chevronPath, ribbonHalfWidth, ribbonStrokeWidth } from '@/components/NodeEditor/edges/bezierGeometry';
+import { downloadBlob } from '@/utils/downloadBlob';
 
 /* ---------------- registry data (live imports — see bridge.tsx) ---------------- */
 const NODES = ND.designerNodes();
@@ -112,7 +113,7 @@ function updateLangBtn() {
 const LINE_COUNT = ND.TYPE_CHANNELS;
 /* per-channel edge colors — the REAL TypedEdge table (1-ch flips vs canvas) */
 const COUNT_EDGE_COLORS = ND.COUNT_EDGE_COLORS;
-/* Edge stubs draw TypedEdge's ribbon (gap, widths, dash: edges/bezierGeometry). */
+/* Edge stubs draw TypedEdge's STILL wire (gap, widths, chevrons: edges/bezierGeometry). */
 const STUB_LEN = 64;
 
 /* ---------------- helpers ---------------- */
@@ -2475,7 +2476,12 @@ function layoutOverlays() {
   renderEdges();
 }
 
-/* ---------------- edge stubs (mirrors TypedEdge multi-channel rendering) ---------------- */
+/* ---------------- edge stubs (mirror TypedEdge's STILL wire) ----------------
+   Solid parallel channel lines plus ONE direction chevron in the canvas ink —
+   the look of a wire whose source does not change on its own, which is what a
+   design preview is. (A LIVE canvas wire marches instead; a stub never does.)
+   The chevron comes from the same arc-length helper the canvas uses, on the
+   stub's straight line written as a cubic. */
 function rAFEdges() { requestAnimationFrame(renderEdges); }
 function renderEdges() {
   const wrap = el('nodeWrap'); const node = wrap.querySelector('.node-base'); if (!node) return;
@@ -2488,13 +2494,17 @@ function renderEdges() {
   let out = '';
   const p = previewFor(state.type);
   const line = (x0, y0, x1, y1, ch) => {
-    const colors = ch === 1 ? [contrast(ui.bg)] : (COUNT_EDGE_COLORS[ch] || ['#000']);
+    const ink = contrast(ui.bg);
+    const colors = ch === 1 ? [ink] : (COUNT_EDGE_COLORS[ch] || ['#000']);
     const w = ribbonStrokeWidth(ch);
     const half = (ch - 1) / 2; let s = '';
     for (let i = 0; i < ch; i++) {
       const off = (i - half) * RIBBON_GAP;
-      s += '<line x1="' + x0 + '" y1="' + (y0 + off) + '" x2="' + x1 + '" y2="' + (y1 + off) + '" stroke="' + colors[i] + '" stroke-width="' + w + '"' + (ch > 1 ? ' stroke-dasharray="' + RIBBON_DASH + '"' : '') + ' opacity="0.9"/>';
+      s += '<line x1="' + x0 + '" y1="' + (y0 + off) + '" x2="' + x1 + '" y2="' + (y1 + off) + '" stroke="' + colors[i] + '" stroke-width="' + w + '" stroke-linecap="round" opacity="0.9"/>';
     }
+    const seg = [x0, y0, x0 + (x1 - x0) / 3, y0 + (y1 - y0) / 3, x0 + (2 * (x1 - x0)) / 3, y0 + (2 * (y1 - y0)) / 3, x1, y1];
+    const arrows = chevronPath(arrowMarks([seg]), ribbonHalfWidth(ch) + ARROW_FLARE);
+    if (arrows) s += '<path d="' + arrows + '" fill="none" stroke="' + ink + '" stroke-width="' + ribbonStrokeWidth(1) + '" stroke-linecap="round" opacity="0.9"/>';
     return s;
   };
   wrap.querySelectorAll('.typed-handle[data-port]').forEach((sock) => {
@@ -3295,7 +3305,7 @@ async function doSaveDesigns(types, label) {
       + ' * MERGE the listed entries into src/components/NodeEditor/nodes/glyphs/customGlyphs.ts —\n'
       + ' * do NOT replace the file wholesale.\n'
       + ' */\n';
-    downloadFile('customGlyphs.ts', stamp + fileContent(savedGlyphs));
+    downloadBlob(new Blob([stamp + fileContent(savedGlyphs)], { type: 'text/plain' }), 'customGlyphs.ts');
     toast('Downloaded customGlyphs.ts — MERGE the entries listed in its header into src/.../glyphs/ (link the folder or run the dev server to save in place).');
   }
 }
@@ -3305,7 +3315,6 @@ async function saveAll() {
   if (!t.length) { toast('No unsaved changes.'); return; }
   await doSave(t, t.length + ' node' + (t.length > 1 ? 's' : ''));
 }
-function downloadFile(name, text) { const b = new Blob([text], { type: 'text/plain' }); const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); }
 
 /* ---------------- design ops: copy / paste / reset ----------------
    Copy/paste transfers the LAYOUT design (justify, scale, dx/dy, width,

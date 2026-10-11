@@ -1408,8 +1408,10 @@ export const ShaderNode = memo(function ShaderNode({
                 {/* Connected input → show the value(s) on the edge next to its socket */}
                 {row.input && inputConnected && (() => {
                   const info = graphInfo.labelByHandle.get(row.input!.id) ?? null;
+                  // reserveWidth: in a row the label sizes the node, so a
+                  // ticking value must not resize it (LiveEdgeValue).
                   return info ? (
-                    <LiveEdgeValue className="shader-node__edge-val" {...info} />
+                    <LiveEdgeValue className="shader-node__edge-val" reserveWidth {...info} />
                   ) : null;
                 })()}
                 {/* Slider range input */}

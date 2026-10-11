@@ -111,4 +111,19 @@ describe('trackpadScroll — the consumers that must keep asking', () => {
     expect(tb).toMatch(/isTypingTarget\(el, \{ anyInputType: true \}\)/);
     expect(tb).toMatch(/closest\('\.toolbar__export-wrap/);
   });
+
+  it('answers only a right-click on the bar\'s own DOM, never one bubbled out of a portalled dialog', () => {
+    // The dialogs Toolbar mounts are portalled to <body> but stay its React
+    // children, so their contextmenu bubbles to openPrefs; prefsClaimedElsewhere
+    // reads the DOM and never matches a portalled node. Measured 2026-10-11: a
+    // right-click on the Feedback dialog's title lost its native menu and
+    // opened the prefs popover under the dialog. The containment test must come
+    // FIRST, ahead of preventDefault, or the native menu is already gone.
+    const tb = read('components/Layout/Toolbar.tsx');
+    const body = tb.slice(tb.indexOf('const openPrefs = useCallback('));
+    const guard = body.indexOf('if (!e.currentTarget.contains(e.target as Node)) return;');
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(body.indexOf('e.preventDefault();'));
+    expect(guard).toBeLessThan(body.indexOf('if (prefsClaimedElsewhere(e.target'));
+  });
 });

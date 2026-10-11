@@ -12,12 +12,17 @@ import { Position } from '@xyflow/react';
 export const BEZIER_CURVATURE = 0.25;
 
 /** The multi-channel RIBBON, shared by the canvas wire (TypedEdge) and the
- *  Node Designer's edge stubs: the gap between channel lines, the dash a
- *  multi-channel line wears, and the stroke width per channel count. */
+ *  Node Designer's edge stubs: the gap between channel lines and the stroke
+ *  width per channel count. (The old `4 0.5` ribbon dash never rendered on the
+ *  canvas: React Flow's `.animated` 5px dash is CSS and beat the attribute.) */
 export const RIBBON_GAP = 3.5 / 3;
-export const RIBBON_DASH = '4 0.5';
 export function ribbonStrokeWidth(count: number): number {
   return count >= 4 ? 0.8 : count >= 3 ? 1 : count >= 2 ? 1.2 : 1.5;
+}
+
+/** Half the drawn width of a `count`-channel ribbon, outer line edge included. */
+export function ribbonHalfWidth(count: number): number {
+  return ((count - 1) / 2) * RIBBON_GAP + ribbonStrokeWidth(count) / 2;
 }
 
 /**
@@ -69,6 +74,134 @@ export function cardinalControlPoint(
 
 /** One cubic bezier segment as a flat tuple [p0x,p0y, c1x,c1y, c2x,c2y, p3x,p3y]. */
 export type BezierSegment = [number, number, number, number, number, number, number, number];
+
+/**
+ * The cubic a waypoint-free edge draws: the target always enters along its
+ * cardinal side; the source leaves along its cardinal side, or along a unit
+ * RADIAL `[rx, ry]` (a color-circle source). The same two control points
+ * React Flow's getBezierPath and TypedEdge's radial path use.
+ */
+export function edgeBezier(
+  sx: number, sy: number,
+  exit: Position | readonly [number, number],
+  tx: number, ty: number,
+  targetPosition: Position,
+): BezierSegment {
+  const [c1x, c1y] = typeof exit === 'string'
+    ? cardinalControlPoint(exit, sx, sy, tx, ty)
+    : radialControlPoint(sx, sy, exit[0], exit[1], tx, ty);
+  const [c2x, c2y] = cardinalControlPoint(targetPosition, tx, ty, sx, sy);
+  return [sx, sy, c1x, c1y, c2x, c2y, tx, ty];
+}
+
+/* ---------------- direction chevrons (a STILL wire's arrows) ---------------- */
+
+/** Flow px of arc per chevron, roughly — the count is rounded to an ODD number
+ *  so one always sits on the midpoint and the rest pair off around it. */
+export const ARROW_SPACING = 130;
+/** A wire with less arc than this carries no chevron: it would be all arrow. */
+export const ARROW_MIN_ARC = 36;
+/** How far a chevron's arms reach past the ribbon's own edge, each side. */
+export const ARROW_FLARE = 2.75;
+/** The most chevrons ONE wire carries, however long — odd, so the midpoint
+ *  rule holds; past it the spacing simply grows. Wire length is adversarial:
+ *  a restored node position need only be FINITE (graphShape) and a waypoint
+ *  may sit anywhere in ±1e6 (edgeExtras), so uncapped a hostile `.fastshader`
+ *  asked ONE render for millions of chevrons (64 waypoints inside the
+ *  sanitized box: 1.4M; a node at x = 1e12: ~8e9, a loop that never ends) —
+ *  a hung tab that the autosave brings back on every reload. 63 still spaces
+ *  an 8,000 px wire at ARROW_SPACING. */
+export const ARROW_MAX = 63;
+
+/** A chevron's anchor: a point on the curve and the unit tangent there,
+ *  pointing source → target. */
+export interface ArrowMark { x: number; y: number; ux: number; uy: number }
+
+/** Chords per segment for the arc-length table. 16 keeps the spacing within
+ *  a pixel or two on any edge the canvas draws, and costs nothing. */
+const ARC_STEPS = 16;
+
+/** Derivative of one axis of a cubic bezier at t (unnormalized). */
+function cubicSlope(p0: number, p1: number, p2: number, p3: number, t: number): number {
+  const mt = 1 - t;
+  return 3 * mt * mt * (p1 - p0) + 6 * mt * t * (p2 - p1) + 3 * t * t * (p3 - p2);
+}
+
+/** Point and unit tangent of one segment at parameter t. A vanishing
+ *  derivative (a control point sitting on its endpoint) falls back to the
+ *  chord, so the mark still points somewhere sensible. */
+export function bezierMarkAt(seg: BezierSegment, t: number): ArrowMark {
+  const [p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y] = seg;
+  const x = cubicAt(p0x, c1x, c2x, p3x, t);
+  const y = cubicAt(p0y, c1y, c2y, p3y, t);
+  let dx = cubicSlope(p0x, c1x, c2x, p3x, t);
+  let dy = cubicSlope(p0y, c1y, c2y, p3y, t);
+  let len = Math.hypot(dx, dy);
+  if (!(len > 1e-9)) { dx = p3x - p0x; dy = p3y - p0y; len = Math.hypot(dx, dy) || 1; }
+  return { x, y, ux: dx / len, uy: dy / len };
+}
+
+/**
+ * Where a still wire's chevrons go: evenly along the ARC LENGTH of the chain
+ * `segs` (one segment, or a waypoint spline's several), an odd count about
+ * `spacing` apart so the middle one always sits on the midpoint, none on an
+ * arc shorter than `minArc`, and never more than ARROW_MAX. Never throws: a
+ * non-finite endpoint yields [].
+ */
+export function arrowMarks(
+  segs: readonly BezierSegment[],
+  spacing: number = ARROW_SPACING,
+  minArc: number = ARROW_MIN_ARC,
+): ArrowMark[] {
+  // Cumulative chord length at the end of every chord, segment after segment.
+  const cum: number[] = [];
+  let total = 0;
+  for (const [p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y] of segs) {
+    let px = p0x, py = p0y;
+    for (let i = 1; i <= ARC_STEPS; i++) {
+      const t = i / ARC_STEPS;
+      const x = cubicAt(p0x, c1x, c2x, p3x, t);
+      const y = cubicAt(p0y, c1y, c2y, p3y, t);
+      total += Math.hypot(x - px, y - py);
+      cum.push(total);
+      px = x; py = y;
+    }
+  }
+  if (!(total >= minArc) || !Number.isFinite(total)) return [];
+  // Both operands odd, so the min is too. (A huge or infinite quotient — a
+  // hostile length, a zero spacing — lands on the cap, never in the loop.)
+  const n = Math.min(ARROW_MAX, 2 * Math.max(0, Math.round((total / spacing - 1) / 2)) + 1);
+  const marks: ArrowMark[] = [];
+  let j = 0;
+  for (let k = 0; k < n; k++) {
+    const s = (total * (k + 0.5)) / n;
+    while (j < cum.length - 1 && cum[j] < s) j++;
+    // A chord starts where the previous one ended — across a segment seam too.
+    const before = j === 0 ? 0 : cum[j - 1];
+    const within = cum[j] > before ? (s - before) / (cum[j] - before) : 0;
+    const seg = Math.floor(j / ARC_STEPS);
+    const t = ((j % ARC_STEPS) + Math.min(Math.max(within, 0), 1)) / ARC_STEPS;
+    marks.push(bezierMarkAt(segs[seg], t));
+  }
+  return marks;
+}
+
+/**
+ * ONE path `d` holding every chevron as its own subpath: an open `>` centred
+ * on each mark, its tip `depth / 2` ahead along the tangent and its arms
+ * `half` to either side `depth / 2` behind. One element per wire, however
+ * many chevrons it carries.
+ */
+export function chevronPath(marks: readonly ArrowMark[], half: number, depth: number = half): string {
+  const r = (v: number) => Math.round(v * 100) / 100;
+  const a = depth / 2;
+  let d = '';
+  for (const { x, y, ux, uy } of marks) {
+    const bx = x - ux * a, by = y - uy * a;
+    d += `M${r(bx - uy * half)},${r(by + ux * half)}L${r(x + ux * a)},${r(y + uy * a)}L${r(bx + uy * half)},${r(by - ux * half)}`;
+  }
+  return d;
+}
 
 /**
  * Convert a poly-line of points into a chain of smooth cubic bezier segments

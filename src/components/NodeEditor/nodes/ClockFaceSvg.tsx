@@ -9,16 +9,17 @@ import { CLOCK_SIZE, CLOCK_R, clockTicks, clockHandAngle } from '@/utils/clockFa
  * viewport (the WebKit overlap-compositing minefield).
  *
  * Animation contract (the WaveformSvg pattern): the initial render is
- * declarative from `phase`; the live node passes `handRef` and its rAF loop
- * overwrites ONLY the hand's rotation via `applyClockFrame` — both paths
- * compute the angle through the same `clockHandAngle`, so they cannot drift.
+ * declarative from `phase`; the live node passes `handRef` and its frame loop
+ * (utils/frameTicker) overwrites ONLY the hand's rotation via
+ * `applyClockFrame` — both paths compute the angle through the same
+ * `clockHandAngle`, so they cannot drift.
  */
 
 const C = CLOCK_SIZE / 2;
 const HAND_LEN = CLOCK_R - 6;
 const TICKS = clockTicks();
 
-/** Per-frame hand update — one rotate-transform write. */
+/** Per-tick hand update — one rotate-transform write. */
 export function applyClockFrame(handRef: RefObject<SVGGElement>, phase: number): void {
   handRef.current?.setAttribute('transform', `rotate(${clockHandAngle(phase)} ${C} ${C})`);
 }
@@ -29,7 +30,7 @@ export function ClockFaceSvg({
 }: {
   /** Hand position in seconds (one sweep per 60; 0 = 12 o'clock). */
   phase: number;
-  /** The live node's rAF loop rotates the hand through this. */
+  /** The live node's frame loop rotates the hand through this. */
   handRef?: RefObject<SVGGElement>;
 }) {
   return (

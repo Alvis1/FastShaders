@@ -14,7 +14,14 @@
  *
  * What counts, and why each one:
  *   · INPUT — but only the types that actually take a character (see below).
- *   · TEXTAREA — Monaco's input is a textarea, so this covers the code panel.
+ *   · TEXTAREA — Monaco's input in Safari and Firefox.
+ *   · An element with an EditContext — Monaco's input in CHROMIUM (Chrome,
+ *     Edge, the Windows desktop build's WebView2). Monaco 0.55 turns its
+ *     `editContext` option on by default, and there it types through a plain
+ *     `div.native-edit-context` carrying an EditContext: no textarea, no
+ *     contentEditable. Missing it meant (measured 2026-10-11) that typing x in
+ *     the code panel deleted the selected node, Cmd/Ctrl+V pasted nodes, and
+ *     Option+Arrow moved focus to another pane.
  *   · SELECT — a `<select>` swallows plain letters as type-to-search and
  *     Backspace/Delete as a native no-op. The settings menus' mode pickers and
  *     the Sound node's source picker are ordinary focusable controls, so this
@@ -30,7 +37,8 @@
  * the matched INPUT's `type` has to be inspected afterwards, which a single
  * selector cannot express; and this module is unit-tested under vitest's
  * `node` environment, where there is no DOM at all — the walk takes plain
- * `{ tagName, type, parentElement }` objects.
+ * `{ tagName, type, parentElement }` objects. (No selector could match the
+ * EditContext case anyway: it is a property, not an attribute.)
  */
 
 /**
@@ -41,6 +49,10 @@ export interface TypingTargetLike {
   tagName?: string;
   type?: string;
   isContentEditable?: boolean;
+  /** Chromium only; `null` when none is attached, absent where unsupported. */
+  editContext?: unknown;
+  /** The reflected `role` attribute (read by `keepsNativeUndo` only). */
+  role?: string | null;
   parentElement?: TypingTargetLike | null;
 }
 
@@ -126,7 +138,34 @@ export function isTypingTarget(
         // the property at all (SVG) must not end the walk, hence `=== true`
         // rather than a truthiness test that would also stop on `undefined`.
         if (el.isContentEditable === true) return true;
+        // Chromium's Monaco input (see the header). `!= null`: the property is
+        // `null` on every element nothing attached a context to, and absent
+        // in engines without the API.
+        if (el.editContext != null) return true;
     }
   }
   return false;
+}
+
+/**
+ * Whether Cmd/Ctrl+Z at `target` belongs to the FIELD, as its own native text
+ * undo, rather than to the graph's history (useSyncEngine's undo handler).
+ *
+ * Every typing target keeps its own undo (Cmd+Z in the toolbar's shader Name
+ * field used to undo the last GRAPH edit and suppress the field's), with two
+ * exceptions that keep graph undo as before:
+ *   · a NUMBER field (`role="spinbutton"`: NumberField, LazyNumberField). Its
+ *     edits are graph edits (a node value, one history entry per commit), so
+ *     Cmd+Z there undoes the value it just changed.
+ *   · a SELECT. It has no text to undo, and the mode it just picked is a graph
+ *     edit whose focus stays on the select.
+ * Only the target itself is read for those two: a keydown's target is the
+ * focused element, which is the field.
+ */
+export function keepsNativeUndo(target: EventTarget | TypingTargetLike | null | undefined): boolean {
+  if (!isTypingTarget(target)) return false;
+  // isTypingTarget answered true, so `target` is an element with a tagName.
+  const el = target as TypingTargetLike;
+  if (el.role === 'spinbutton') return false;
+  return String(el.tagName).toUpperCase() !== 'SELECT';
 }

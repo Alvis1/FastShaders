@@ -19,6 +19,7 @@ import { useHeaderTip } from './headerTip';
 // param to a grey ellipsis.
 import { useWiredLabels } from './ShaderNode';
 import { LiveEdgeValue } from './LiveEdgeValue';
+import { useFrameLoop } from '@/hooks/useFrameLoop';
 import { SOUND_DEFAULT_VALUES } from '@/utils/soundSettings';
 import { readSoundLevels, subscribeSound, getSoundStatus } from '@/utils/soundSession';
 import { portLabel } from '@/i18n';
@@ -100,37 +101,36 @@ export const SoundNode = memo(function SoundNode({ id, data, selected }: NodePro
   // anything?" without the preview panel being open at all.
   const status = useSyncExternalStore(subscribeSound, getSoundStatus, getSoundStatus);
   // The loop exists only while a capture is live or starting: an idle Sound
-  // node runs no rAF callback at all.
+  // node puts nothing on the frame ticker. While live, the meter steps on the
+  // shared ticker's frames (utils/frameTicker, 15 Hz) and is skipped — the
+  // analyser read with it — while off-screen or collapsed away.
   const live = status === 'on' || status === 'starting';
   const meterRef = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    const el = meterRef.current;
-    if (!live || !el) return;
-    let raf = 0;
-    // Last transform actually written, so a meter parked at one value costs
-    // nothing.
-    let drawn: string | null = null;
-    const tick = () => {
-      raf = requestAnimationFrame(tick);
-      // Hidden — a member of a COLLAPSED group is only `display: none`'d (the
-      // store keeps it MOUNTED on purpose) and rAF is per-document, so nothing
-      // else throttles this loop. `offsetParent` is null exactly under
-      // `display: none`, and skipping also skips the analyser read below.
-      if (el.offsetParent === null) return;
-      // scaleX rather than width: transform-only, so the compositor handles it
-      // and a 60 Hz meter never triggers layout inside the viewport.
-      const next = `scaleX(${readSoundLevels().level.toFixed(3)})`;
-      if (next === drawn) return;
-      drawn = next;
-      el.style.transform = next;
-    };
-    raf = requestAnimationFrame(tick);
-    return () => {
-      cancelAnimationFrame(raf);
-      // Back to rest, so a stopped meter never freezes at its last reading.
-      el.style.transform = 'scaleX(0)';
-    };
-  }, [live]);
+  // Visibility is asked of the meter's TRACK, not the fill: the fill rests at
+  // scaleX(0), and the observer measures the transformed box.
+  const meterTrackRef = useRef<HTMLDivElement>(null);
+  useFrameLoop(
+    live,
+    meterTrackRef,
+    () => {
+      // Last transform actually written, so a meter parked at one value costs
+      // nothing.
+      let drawn: string | null = null;
+      return () => {
+        const el = meterRef.current;
+        if (!el) return;
+        // scaleX rather than width: transform-only, so the compositor handles
+        // it and the meter never triggers layout inside the viewport.
+        const next = `scaleX(${readSoundLevels().level.toFixed(3)})`;
+        if (next === drawn) return;
+        drawn = next;
+        el.style.transform = next;
+      };
+    },
+    [],
+    // Back to rest, so a stopped meter never freezes at its last reading.
+    { onStop: () => { const fill = meterRef.current; if (fill) fill.style.transform = 'scaleX(0)'; } },
+  );
 
   return (
     <div
@@ -202,6 +202,7 @@ export const SoundNode = memo(function SoundNode({ id, data, selected }: NodePro
 
 
         <div
+          ref={meterTrackRef}
           className={`shader-node__level-meter${status === 'on' ? '' : ' shader-node__level-meter--idle'}`}
           style={{ top: SOUND_METER_TOP, height: MIC_METER_H, left: MIC_PAD_X, right: MIC_PAD_X }}
         >

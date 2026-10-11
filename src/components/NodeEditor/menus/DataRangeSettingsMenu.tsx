@@ -235,7 +235,7 @@ export function DataRangeSettingsMenu({ nodeId }: DataRangeSettingsMenuProps) {
             boxSizing: 'border-box',
             fontFamily: 'var(--font-mono)',
             resize: 'vertical',
-            ...(formulaError ? { borderColor: 'var(--color-error, #d33)' } : null),
+            ...(formulaError ? { borderColor: '#d33' } : null),
           }}
         />
       </div>
@@ -246,7 +246,7 @@ export function DataRangeSettingsMenu({ nodeId }: DataRangeSettingsMenuProps) {
             ...labelStyle,
             display: 'block',
             paddingTop: 0,
-            color: 'var(--color-error, #d33)',
+            color: '#d33',
           }}
         >
           {t(ERROR_TEXT[formulaError.code], language)}

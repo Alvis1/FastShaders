@@ -1,9 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { makeNode, makeEdge } from '@/test-utils';
+import { HISTORY_IDLE, makeNode, makeEdge } from '@/test-utils';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { useAppStore, cancelPendingGraphSave } from '@/store/useAppStore';
 import type { AppNode } from '@/types';
-import { attachSinks, defaultAttachHandle, socketFeed } from './nodeAttach';
+import { COLLAPSED_MEMBER_CLASS } from './groupFrame';
+import { attachEmptyReason, attachSinks, defaultAttachHandle, socketFeed } from './nodeAttach';
 
 /**
  * Attach (utils/nodeAttach.ts): Ctrl/⌘+click a node, or its menu's Attach row,
@@ -50,9 +52,13 @@ describe('attachSinks', () => {
     expect(ids(attachSinks(nodes, march))).toEqual(['rm', 'o1', 'o2', 'sp']);
   });
 
-  it('leaves out a sink hidden inside a collapsed group — it has no handle to land on', () => {
+  it('leaves out a sink React Flow hides — it has no handle to land on', () => {
     const nodes = [makeNode('out', 'output'), { ...sink('rm', 'raymarchOutput'), hidden: true } as AppNode];
     expect(ids(attachSinks(nodes, []))).toEqual(['out']);
+    // …read as React Flow reads it, by truthiness: a file's `hidden: 1` hides
+    // the node on the canvas, so it must not come back here either.
+    const truthy = [makeNode('out', 'output'), { ...sink('rm', 'raymarchOutput'), hidden: 1 } as unknown as AppNode];
+    expect(ids(attachSinks(truthy, []))).toEqual(['out']);
   });
 
   it('every sink type offers its registry inputs', () => {
@@ -60,6 +66,99 @@ describe('attachSinks', () => {
     for (const s of attachSinks(nodes, [])) {
       expect(s.sockets).toBe(NODE_REGISTRY.get(String(s.node.data.registryType))!.inputs);
     }
+  });
+});
+
+describe('attachSinks — a sink inside a group the STORE collapsed', () => {
+  // Reached through the real collapse action, not a hand-set `hidden: true`:
+  // the collapse marks members with a CLASS and never sets `hidden`, so the
+  // old hand-set case passed while the app offered the collapsed Output
+  // (measured 2026-10-11: a pick wrote `emissive: color1` through a wire that
+  // never drew, React Flow error 008).
+  beforeEach(() => {
+    // The collapse's phase 2 runs on the next frame; there is none under node.
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      cb(0);
+      return 0;
+    });
+    useAppStore.setState({
+      nodes: [makeNode('out', 'output'), makeNode('m', 'mul'), sink('rm', 'raymarchOutput')],
+      edges: [],
+      past: [],
+      future: [],
+      ...HISTORY_IDLE,
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  afterAll(() => {
+    cancelPendingGraphSave();
+    useAppStore.setState({ nodes: [], edges: [], past: [], future: [], ...HISTORY_IDLE });
+  });
+
+  it('is left out while collapsed and offered again once expanded', () => {
+    const store = useAppStore.getState();
+    const groupId = store.groupSelection(['out', 'm'])!;
+    expect(groupId).toBeTruthy();
+    expect(ids(attachSinks(useAppStore.getState().nodes, []))).toEqual(['out', 'rm']);
+
+    useAppStore.getState().toggleGroupCollapsed(groupId);
+    const collapsed = useAppStore.getState().nodes;
+    const out = collapsed.find((n) => n.id === 'out')!;
+    // The shape the bug lived in: a class, no `hidden`.
+    expect(out.className).toBe(COLLAPSED_MEMBER_CLASS);
+    expect(out.hidden).toBeUndefined();
+    expect(ids(attachSinks(collapsed, useAppStore.getState().edges))).toEqual(['rm']);
+
+    useAppStore.getState().toggleGroupCollapsed(groupId);
+    expect(ids(attachSinks(useAppStore.getState().nodes, useAppStore.getState().edges))).toEqual(['out', 'rm']);
+  });
+
+  it('an empty list says the Output is in a collapsed group, not that there is none', () => {
+    useAppStore.setState({ nodes: [makeNode('out', 'output'), makeNode('m', 'mul'), makeNode('c', 'color')] });
+    const groupId = useAppStore.getState().groupSelection(['out', 'm'])!;
+    useAppStore.getState().toggleGroupCollapsed(groupId);
+    const collapsed = useAppStore.getState().nodes;
+    expect(attachSinks(collapsed, useAppStore.getState().edges)).toEqual([]);
+    expect(attachEmptyReason(collapsed)).toBe('collapsed');
+    // Expanded again, the Output is offered and nothing is hidden.
+    useAppStore.getState().toggleGroupCollapsed(groupId);
+    expect(attachEmptyReason(useAppStore.getState().nodes)).toBe('none');
+  });
+});
+
+describe('attachEmptyReason', () => {
+  it('no sink at all is "none"', () => {
+    expect(attachEmptyReason([makeNode('n', 'noise')])).toBe('none');
+    expect(attachEmptyReason([])).toBe('none');
+  });
+
+  it('a sink React Flow hides is not "inside a collapsed group" — no group sets `hidden`', () => {
+    expect(attachEmptyReason([{ ...makeNode('out', 'output'), hidden: true } as AppNode])).toBe('none');
+  });
+
+  it('a non-sink inside a collapsed group does not count; a junk className cannot throw', () => {
+    expect(attachEmptyReason([{ ...makeNode('m', 'mul'), className: COLLAPSED_MEMBER_CLASS } as AppNode])).toBe('none');
+    expect(
+      attachEmptyReason([{ ...makeNode('out', 'output'), className: { includes: 1 } } as unknown as AppNode]),
+    ).toBe('none');
+    expect(attachEmptyReason([{ ...sink('rm', 'raymarchOutput'), className: COLLAPSED_MEMBER_CLASS } as AppNode])).toBe(
+      'collapsed',
+    );
+  });
+
+  it('the menu words both answers, in English and Latvian', () => {
+    const menu = readFileSync(new URL('../components/NodeEditor/menus/AttachMenu.tsx', import.meta.url), 'utf8');
+    const COLLAPSED = 'The Output is inside a collapsed group — expand it to attach';
+    expect(menu).toContain("attachEmptyReason(nodes) === 'collapsed'");
+    expect(menu).toContain(`t('${COLLAPSED}', language)`);
+    expect(menu).toContain("t('No Output on the canvas', language)");
+    const lv = JSON.parse(readFileSync(new URL('../i18n/lv.json', import.meta.url), 'utf8')) as {
+      ui: Record<string, string>;
+    };
+    expect(typeof lv.ui[COLLAPSED]).toBe('string');
+    expect(lv.ui[COLLAPSED]).not.toBe(COLLAPSED);
   });
 });
 

@@ -6,7 +6,6 @@ import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { registerTSLLanguage } from './tslLanguage';
 import { tslToShaderModule, type PropertyInfo } from '@/engine/tslToShaderModule';
-import { inlineImageAssetsFromNodes } from '@/engine/imageAssets';
 import { collectShaderProperties, shaderBaseName } from '@/engine/exportShader';
 import { buildAFrameEmbedHTML, bundledModelForPage, readPreviewGeometry, type AFrameBundledModel } from '@/engine/tslToAFrameHTML';
 import { exportFormatFor, exportModelChoice, exportModelFile } from '@/engine/exportModel';
@@ -118,10 +117,8 @@ export function CodeEditor() {
   // ── Node-derived inputs, without a whole-array subscription ──────────────
   // `s.nodes` gets a NEW identity on every drag pointermove, so subscribing to
   // it re-rendered this whole panel (both Monaco element trees) at pointer rate
-  // AND re-fired the scriptCode memo below — which, with the A-Frame tab open
-  // and an embedded image, is ~6 ms of string work per frame per 600K payload
-  // (~18 ms at three images: more than a whole 60 Hz frame, for a read-only
-  // display tab). Same two conversions the 3D preview already uses.
+  // AND re-fired the scriptCode memo below, a whole module rebuild per frame for
+  // a read-only display tab. Same two conversions the 3D preview already uses.
   //
   // Material settings: a narrow reference selector. A position/selection-only
   // notify replaces the node OBJECT but keeps its `.data` — and therefore its
@@ -220,19 +217,16 @@ export function CodeEditor() {
   }, [requestCodeSync]);
 
   // Only compute export code when that tab is active; catch errors to avoid blank tabs.
-  // The module is built with its image placeholders expanded back to their
-  // `data:` payloads (the TSL tab above keeps the short references), but neither
-  // page below shows it: `buildAFrameEmbedHTML` and `buildThreeEmbedHTML` read
-  // only its schema rows and its `positionNode:` test, and load the module by
-  // file name.
-  //
-  // Nodes are read IMPERATIVELY, and `settledCode` may run up to CODE_SETTLE_MS
-  // behind them: a placeholder whose node no longer holds its key is left
-  // verbatim (imageAssets.ts), which changes nothing either page reads. That
-  // is why this memo needs no settled {code, nodes} pair, unlike ShaderPreview,
-  // whose sandboxed document RESOLVES every key its module names
-  // (components/Preview/settledPreview.ts). Everything the module
-  // reads that the generated code does NOT carry —
+  // The module keeps its image PLACEHOLDERS (never inlined here): neither page
+  // below shows it — `buildAFrameEmbedHTML` and `buildThreeEmbedHTML` read only
+  // its schema rows and its `positionNode:` test, and load the module by file
+  // name — and a base64 payload holds no `:`, so inlining could not change
+  // either read. It used to inline, which cost 71 ms (three images at the web
+  // cap) to 733 ms (desktop) of main thread per settled edit while a tab was
+  // open, for bytes nobody saw (threeEmbed.test.ts pins the pages identical
+  // either way). With no payload resolved, no nodes are read, so this memo
+  // needs no settled {code, nodes} pair (components/Preview/settledPreview.ts).
+  // Everything the module reads that the generated code does NOT carry —
   // materialSettings (graphToCode never emits the DEFAULT material's settings;
   // an added material's four keys ride inside `parts` in the code itself) and
   // the declared property list
@@ -270,7 +264,7 @@ export function CodeEditor() {
     if (activeTab !== 'script' && activeTab !== 'three') return '';
     try {
       return tslToShaderModule(
-        inlineImageAssetsFromNodes(settledCode, useAppStore.getState().nodes),
+        settledCode,
         materialSettings,
         properties,
         materialPartsMirror,

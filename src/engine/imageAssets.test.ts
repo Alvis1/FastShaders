@@ -46,6 +46,20 @@ describe('imageAssetFor', () => {
     // 0x00, whose canonical encoding is "AA==".
     const a = imageAssetFor('img1', { ...valid, imageB64: 'data:image/png;base64,AB==' });
     expect(a!.src).toBe('data:image/png;base64,AA==');
+    // Unpadded is atob-valid too, and also comes out canonical.
+    const b = imageAssetFor('img1', { ...valid, imageB64: 'data:image/webp;base64,YWJjZA' });
+    expect(b!.src).toBe('data:image/webp;base64,YWJjZA==');
+  });
+
+  it('a canonical payload is memoized as the STORED string, never a second copy', () => {
+    // String identity cannot be observed from JS, so this pins the content
+    // and the source shape: the memo's re-encode is compared against `raw`
+    // and the stored string is kept when they agree (up to ~40 MB of
+    // duplicate payload on desktop otherwise).
+    const raw = `data:image/png;base64,${btoa('canonical bytes')}`;
+    expect(imageAssetFor('img9', { ...valid, imageB64: raw })!.src).toBe(raw);
+    const src = readFileSync(resolve(__dirname, 'imageAssets.ts'), 'utf8');
+    expect(src).toMatch(/src: canon === raw \? raw : canon/);
   });
 
   it('hashes the payload, so swapping bytes changes the key', () => {

@@ -3,6 +3,7 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { isOutputNode, outputsInEmitOrder } from '@/utils/outputMaterials';
 import { activeSink, isSinkNode } from '@/utils/sdfPartition';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { COLLAPSED_MEMBER_CLASS, isCollapsedMember } from '@/utils/groupFrame';
 import { previewableOutputs, type NodePreviewTarget } from '@/utils/nodePreview';
 
 /**
@@ -39,11 +40,14 @@ export interface AttachSink {
  *
  * HIDDEN sinks are left out: a member of a collapsed group has no handle on
  * the canvas, and a wire landed on one would sit in the store, emit, and never
- * draw. A sink the registry does not know (cannot happen from the app, can
- * from a hand-edited file) has no socket list and is left out too.
+ * draw. The collapse marks members with a CLASS, not `hidden`, so this asks
+ * the one shared reading (`isCollapsedMember`); asking `hidden` alone offered
+ * a collapsed Output, and a pick wrote a wire nobody could see or remove. A
+ * sink the registry does not know (cannot happen from the app, can from a
+ * hand-edited file) has no socket list and is left out too.
  */
 export function attachSinks(nodes: readonly AppNode[], edges: readonly AppEdge[]): AttachSink[] {
-  const visible = nodes.filter((n) => isSinkNode(n) && !n.hidden);
+  const visible = nodes.filter((n) => isSinkNode(n) && !isCollapsedMember(n));
   if (visible.length === 0) return [];
   const active = activeSink(nodes, unwrapCollapsedGroupEdges(nodes as AppNode[], edges as AppEdge[]));
   const plain = outputsInEmitOrder(visible.filter(isOutputNode));
@@ -59,6 +63,23 @@ export function attachSinks(nodes: readonly AppNode[], edges: readonly AppEdge[]
     if (def && def.inputs.length > 0) out.push({ node, sockets: def.inputs });
   }
   return out;
+}
+
+/**
+ * Why `attachSinks` came back EMPTY, for the list's one disabled row:
+ * `'collapsed'` when a sink is still on the canvas but sits inside a collapsed
+ * group (the list leaves those out — a wire into one would never draw), so the
+ * row can say to expand the group rather than claim there is no Output at all;
+ * `'none'` otherwise. Asks the collapse's own CLASS, not `isCollapsedMember`,
+ * because that also counts React Flow's `hidden`, which no group sets — a
+ * hidden sink is not "inside a collapsed group". Only meaningful when the list
+ * is empty; it does not re-check that.
+ */
+export function attachEmptyReason(nodes: readonly AppNode[]): 'none' | 'collapsed' {
+  const inCollapsedGroup = nodes.some(
+    (n) => isSinkNode(n) && typeof n.className === 'string' && n.className.includes(COLLAPSED_MEMBER_CLASS),
+  );
+  return inCollapsedGroup ? 'collapsed' : 'none';
 }
 
 /**

@@ -37,6 +37,7 @@ import {
   GROUP_BADGE_CLEARANCE,
   EST_NODE_W,
   EST_NODE_H,
+  COLLAPSED_MEMBER_CLASS,
   groupFrameSize,
   measuredNodeSize,
 } from '@/utils/groupFrame';
@@ -2242,7 +2243,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setDrawings: (drawings) => set({ drawings }),
 
   setDrawColor: (color) => {
-    const c = /^#[0-9a-fA-F]{6}$/.test(color) ? color.toLowerCase() : get().drawColor;
+    const c = HEX6.test(color) ? color.toLowerCase() : get().drawColor;
     saveString('fs:drawColor', c);
     set({ drawColor: c });
   },
@@ -3539,7 +3540,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
             // Use a className instead of `hidden: true` so the React component
             // stays mounted — that keeps preview rAF loops running while the
             // group is collapsed (animated noise/math/clock previews don't pause).
-            return { ...rest, className: 'fs-collapsed-member' } as AppNode;
+            return { ...rest, className: COLLAPSED_MEMBER_CLASS } as AppNode;
           }
           return n;
         }),

@@ -539,9 +539,12 @@ describe('the bare canvas keys stay on the canvas', () => {
   it('requires the press to land on the canvas, not merely outside a text field', () => {
     // Reported 2026-09-09: typing in the code panel and pressing Space opened
     // the Add-node menu. `isTypingTarget` was already first in this handler and
-    // still missed it — Monaco keeps the caret in a <textarea> but its keydown
-    // surfaces from a SIBLING div in the same subtree, so the ancestor walk
-    // finds no text control. Space was merely the visible symptom: `a` and `f`
+    // still missed it. The 09-09 diagnosis (a textarea with keydown from a
+    // sibling div) was wrong for Chromium, corrected 2026-10-11: Monaco 0.55
+    // types there through a `div.native-edit-context` carrying an EditContext,
+    // and that div IS the keydown target — no textarea, no contentEditable.
+    // isTypingTarget counts an EditContext now; this allow-list stays as
+    // defence in depth. Space was merely the visible symptom: `a` and `f`
     // leaked identically, selecting every node and re-framing the view while
     // the user watched the other pane.
     expect(nodeEditor).toContain('const onCanvas = target ? canvasRef.current?.contains(target) === true : true;');

@@ -41,6 +41,10 @@ export interface PlatformCaps {
    *  (imageOriginCache.ts). */
   readonly originRecords: number;
   readonly originStoreChars: number;
+  /** Bytes a run of hot swaps may leave behind in the live preview document
+   *  before a quiet cold rebuild frees them (`RETAINED_BYTES_BUDGET`,
+   *  components/Preview/previewMemoryBudget.ts). */
+  readonly previewRetainedBytes: number;
 }
 
 /** Today's browser numbers, unchanged by Phase 6 (platformCaps.test.ts pins them). */
@@ -53,6 +57,8 @@ export const WEB_CAPS: PlatformCaps = Object.freeze({
   imageDecodeCacheChars: 4_000_000,
   originRecords: 32,
   originStoreChars: 24 * 1024 * 1024,
+  // The figure the owner approved (review 2026-10-11).
+  previewRetainedBytes: 256 * 1024 * 1024,
 });
 
 /** The desktop room (research doc §5.1; owner default 4). Revisit after the
@@ -72,6 +78,14 @@ export const DESKTOP_CAPS: PlatformCaps = Object.freeze({
   // first (~42 records at 256M).
   originRecords: 64,
   originStoreChars: 256 * 1024 * 1024,
+  // 4x the web budget, for three reasons. (1) The desktop webview's GPU
+  // process serves this app alone; a browser's is shared with every tab.
+  // (2) The project image budget above is about 10x the web one, so one
+  // desktop module can hold about 10x the textures — at 256 MiB a full desktop
+  // project would rebuild after every edit or two. (3) It stays within what was
+  // measured safe: 1.08 GB retained after 50 edits at 2048x2048 drew no device
+  // loss on a real GPU; on an 8 GB laptop 1 GiB is an eighth of memory.
+  previewRetainedBytes: 1024 * 1024 * 1024,
 });
 
 /** The table for a build. Pure, so a test can ask for either. */

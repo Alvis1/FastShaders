@@ -24,7 +24,6 @@ import { COLORMAPS, type ColormapDef } from './colormapData';
 import { valueStr } from './valueCoerce';
 import { srgbToLinear01 } from './colorUtils';
 
-export type { ColormapDef, ColormapKind } from './colormapData';
 export { COLORMAPS } from './colormapData';
 
 /** Perceptually uniform, colour-vision-safe, and the community's default. */

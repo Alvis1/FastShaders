@@ -21,6 +21,7 @@ import type { AppNode } from '@/types';
 import { generateEdgeId } from '@/utils/idGenerator';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { previewGraph, resolveNodePreview } from '@/utils/nodePreview';
+import { keepsNativeUndo } from '@/utils/isTypingTarget';
 
 
 export function useSyncEngine() {
@@ -47,6 +48,13 @@ export function useSyncEngine() {
     const handleKeyDown = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
       if (!mod || e.key.toLowerCase() !== 'z') return;
+      // The graph is behind an open dialog: its keys are not the canvas's
+      // (the guard useKeyboardNav and NodeEditor's accelerators use). Measured
+      // 2026-10-11: Cmd+Z in the Feedback dialog's textarea undid the graph.
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      // A text field keeps its own native undo; a number field and a select
+      // keep graph undo (utils/isTypingTarget `keepsNativeUndo` says why).
+      if (keepsNativeUndo(e.target)) return;
 
       const active = document.activeElement;
       if (active?.closest('.monaco-editor')) return;

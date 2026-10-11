@@ -84,40 +84,28 @@
   outline-offset: 2px;
 }
 
+/* An OPAQUE plate, not frosted glass (owner, 2026-10-11, every floating panel
+   at once): a backdrop blur re-blurs whatever moves beneath it every frame,
+   and the cost is non-additive — removing the preview overlays' blur alone
+   bought +6–8% fps under software compositing, removing ALL of them +19–42%.
+   `--bg-raised` flips with the theme, so no dark override is needed. */
 .node-editor__cost-overlay .cost-bar {
   padding: var(--space-2);
-  background: rgba(255, 255, 255, 0.85);
-  /* The `-webkit-` twin is not optional: unprefixed `backdrop-filter` only
-     landed in Safari 18, while `-webkit-backdrop-filter` has worked since
-     Safari 9 — and the macOS desktop build is WKWebView, which follows the
-     host OS Safari version. Without it this pill drew a flat plate on every
-     pre-macOS-15 machine while the preview pane's overlays a few hundred
-     pixels away (ShaderPreview.css, which always paired them) stayed frosted.
-     Keep the two together wherever a backdrop filter is added. */
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: var(--bg-raised);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-md);
   box-shadow: var(--shadow-float);
 }
 
-/* Dark theme: the frosted cost pill floats over the dark canvas, so its
-   near-white fill would read as a bright blob — darken it to a translucent
-   panel while keeping the blur/border. */
-:root[data-theme="dark"] .node-editor__cost-overlay .cost-bar {
-  background: rgba(78, 83, 91, 0.85);
-}
-
 /* Softer dashes: React Flow's `.animated` edges get `stroke-dasharray: 5`
    from its own stylesheet, which renders as hard-cornered rectangles. Round
-   caps take the corners off.
-
-   Excluded on purpose:
-   - `.react-flow__edge-interaction` — the invisible fat hit path.
-   - any path carrying an INLINE `stroke-dasharray` — that's TypedEdge's
-     multi-channel pattern (`4 0.5`), whose 0.5px gap is narrower than the cap
-     radius, so rounding it would close the gaps and read as a solid line. */
-.node-editor .react-flow__edge.animated path:not(.react-flow__edge-interaction):not([stroke-dasharray]) {
+   caps take the corners off (and the arms of a still wire's chevrons).
+   `.react-flow__edge-interaction` — the invisible fat hit path — is excluded.
+   NB a STILL wire (TypedEdge's LIVE_BIT) opts out of that dash and its march
+   INLINE (`STILL_PATH_STYLE`), never with a rule here: TypedEdge is also drawn
+   by node-editor.html's GraphModal, which has no `.node-editor` ancestor and
+   does not load this file, so a rule here left its still wires marching. */
+.node-editor .react-flow__edge.animated path:not(.react-flow__edge-interaction) {
   stroke-linecap: round;
 }
 

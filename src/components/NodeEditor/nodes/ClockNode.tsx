@@ -21,8 +21,12 @@ import { edgeValueLabel } from './ShaderNode';
 // unwrapped edge names the REAL producer, so a feeder inside a collapsed group
 // still shows its number instead of a grey ellipsis.
 import { getTargetEdges } from '@/engine/cpuEvaluator';
+import { useFrameLoop } from '@/hooks/useFrameLoop';
 import './ClockNode.css';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
+
+/** Largest dt (s) one hand tick may integrate — see the clamp below. */
+const MAX_HAND_DT = 0.25;
 
 export const ClockNode = memo(function ClockNode({
   id,
@@ -36,10 +40,8 @@ export const ClockNode = memo(function ClockNode({
   const headerTip = useHeaderTip(def);
 
   const handRef = useRef<SVGGElement>(null);
-  // The rAF loop's visibility probe. It has to be an HTML element:
-  // `offsetParent` lives on HTMLElement, so reading it off `handRef` (an
-  // SVGGElement) would be `undefined` — never null — and the test would
-  // silently never fire.
+  // The element whose visibility gates the hand's tick (the face's wrapper,
+  // which lives as long as the card).
   const faceRef = useRef<HTMLDivElement>(null);
   const varName = useAppStore((s) => s.nodeVarNames[id]);
   const language = useAppStore((s) => s.language);
@@ -86,7 +88,7 @@ export const ClockNode = memo(function ClockNode({
     // speedEdgeKey is the change signal; the graph is read imperatively above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, speedEdgeKey]);
-  // Ride a ref so a live speed edit is picked up WITHOUT restarting the rAF
+  // Ride a ref so a live speed edit is picked up WITHOUT restarting the frame
   // loop (a restart would reset the phase and jump the hand).
   const speedRef = useRef(speed);
   speedRef.current = speed;
@@ -96,54 +98,58 @@ export const ClockNode = memo(function ClockNode({
   // frame, and `Date.now() / 1000 * speed` lands on an unrelated `% 60` residue
   // for each of those values.
   const phaseRef = useRef(0);
+  // The integrator's dt tracker — the shared app-clock reading of the last
+  // tick, NOT an epoch: the hand shows the RATE time flows at, and
+  // integrating dt × speed is what keeps it continuous while the user scrubs
+  // speed (app time × speed lands on an unrelated % 60 residue every
+  // pointermove frame — the hand would teleport). A ref, because the hidden
+  // callback below must move it too.
+  const lastTRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    let rafId: number;
-    // `last` is a dt tracker for the integrator, NOT a clock epoch — this
-    // hand deliberately does NOT read the shared appClock: it shows the RATE
-    // time flows at, and integrating dt × speed is what keeps it continuous
-    // while the user scrubs speed (a wall-clock × speed lands on an unrelated
-    // % 60 residue every pointermove frame — the hand would teleport).
-    let last: number | null = null;
-    // Last phase actually WRITTEN to the hand, so a fixed point of the
-    // integrator costs nothing. At speed 0 — a real setting, since the number
-    // is editable on the node — `dt * 0` leaves the phase alone, so the
-    // identical rotate() string was being written 60×/s forever.
-    let drawnPhase: number | null = null;
-    const draw = (ts: number) => {
-      // Schedule first, so the visibility early-out below still keeps the loop
-      // alive (deps stay [], so it is never torn down while mounted).
-      rafId = requestAnimationFrame(draw);
-      if (last === null) last = ts;
-      // Hidden — a member of a COLLAPSED group is only `display: none`'d (the
-      // store keeps it MOUNTED on purpose) and rAF is per-document, so nothing
-      // else throttles this. `offsetParent` is null exactly under
-      // `display: none`. Keep `last` moving across the invisible span: the
-      // hand shows the RATE time flows at, not absolute time, so it simply
-      // resumes where it stopped, and an honest dt on the first visible frame
-      // is better than one the clamp below has to flatten.
-      if (faceRef.current?.offsetParent === null) { last = ts; return; }
-      // Clamp dt: a backgrounded tab hands back a multi-second delta on resume,
-      // which at a high multiplier would spin the hand through hundreds of turns.
-      const dt = Math.min(Math.max((ts - last) / 1000, 0), 0.1);
-      last = ts;
-      phaseRef.current = (phaseRef.current + dt * speedRef.current) % 60;
-      // One rotate-transform write per frame — the face itself is the shared
-      // ClockFaceSvg (geometry in utils/clockFace), so the asset tile shows
-      // the identical picture. Compare the PHASE rather than the formatted
-      // angle: it is the integrator's own state, so speed 0 is an exact
-      // no-op, and it costs one number compare otherwise.
-      if (phaseRef.current !== drawnPhase) {
-        drawnPhase = phaseRef.current;
-        applyClockFrame(handRef, phaseRef.current);
-      }
-    };
-
-    rafId = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(rafId);
-    // Deps stay [] on purpose — speed rides speedRef, so the loop never restarts
-    // and the hand's phase survives a scrub.
-  }, []);
+  // On the shared frame ticker (utils/frameTicker, 15 Hz), so the hand steps
+  // on the same frames as every other animated surface.
+  useFrameLoop(
+    true,
+    faceRef,
+    () => {
+      lastTRef.current = null;
+      // Last phase actually WRITTEN to the hand, so a fixed point of the
+      // integrator costs nothing. At speed 0 — a real setting, since the
+      // number is editable on the node — `dt * 0` leaves the phase alone, so
+      // the identical rotate() string was being written every frame forever.
+      let drawnPhase: number | null = null;
+      return (t) => {
+        const last = lastTRef.current ?? t;
+        lastTRef.current = t;
+        // Clamp dt: a backgrounded tab hands back a multi-second delta on
+        // resume, which at a high multiplier would spin the hand through
+        // hundreds of turns. The bound sits well above one tick (66.7 ms), so
+        // a loaded machine ticking late still integrates its true dt.
+        const dt = Math.min(Math.max(t - last, 0), MAX_HAND_DT);
+        phaseRef.current = (phaseRef.current + dt * speedRef.current) % 60;
+        // One rotate-transform write per tick — the face itself is the shared
+        // ClockFaceSvg (geometry in utils/clockFace), so the asset tile shows
+        // the identical picture. Compare the PHASE rather than the formatted
+        // angle: it is the integrator's own state, so speed 0 is an exact
+        // no-op, and it costs one number compare otherwise.
+        if (phaseRef.current !== drawnPhase) {
+          drawnPhase = phaseRef.current;
+          applyClockFrame(handRef, phaseRef.current);
+        }
+      };
+    },
+    // Deps stay [] on purpose — speed rides speedRef, so the loop never
+    // restarts and the hand's phase survives a scrub.
+    [],
+    {
+      // Off-screen or collapsed away: keep the dt tracker moving across the
+      // invisible span, so the hand simply resumes where it stopped — it
+      // shows the RATE time flows at, not absolute time — and the first
+      // visible tick gets an honest dt rather than one the clamp has to
+      // flatten.
+      onHidden: (t) => { lastTRef.current = t; },
+    },
+  );
 
   return (
     <div

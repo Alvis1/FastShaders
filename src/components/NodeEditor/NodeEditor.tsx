@@ -39,7 +39,7 @@ import { previewableOutputs, PREVIEW_KEEP_SELECTOR } from '@/utils/nodePreview';
 import { nodeTypes, edgeTypes } from './flowTypes';
 import { CONNECTION_RADIUS } from './nodes/connectionReveal';
 import { clearSocketTapTooltip } from './handles/TypedHandle';
-import { cardinalControlPoint, radialControlPoint, distancePointToCubicBezier, distancePointToSpline, splinePath } from './edges/bezierGeometry';
+import { edgeBezier, distancePointToCubicBezier, distancePointToSpline, splinePath } from './edges/bezierGeometry';
 import { addEdgeWaypoint } from './edges/edgeWaypoints';
 import { DrawingLayer } from './DrawingLayer';
 import { DrawToolbar } from './DrawToolbar';
@@ -108,7 +108,7 @@ import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import { findSingletonNode } from './singletonNodes';
 import { nodeEl, handleEl } from './nodeElement';
-import { groupFrameSize } from '@/utils/groupFrame';
+import { groupFrameSize, isCollapsedMember } from '@/utils/groupFrame';
 import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { isTypingTarget } from '@/utils/isTypingTarget';
@@ -445,7 +445,7 @@ function connectTargetBoxes(draggedId: string, allNodes: AppNode[], edges: AppEd
   for (const other of allNodes) {
     if (other.id === draggedId) continue;
     if (other.type === 'group' || other.type === 'note') continue;
-    if ((other.className ?? '').includes('fs-collapsed-member')) continue;
+    if (isCollapsedMember(other)) continue;
     boxes.push(nodeVisualBox(other, allNodes, edges));
   }
   return boxes;
@@ -467,7 +467,7 @@ function makeRoomBoxes(
   const out: CascadeBox[] = [];
   for (const n of allNodes) {
     if (n.type === 'group' || n.type === 'note') continue;
-    if ((n.className ?? '').includes('fs-collapsed-member')) continue;
+    if (isCollapsedMember(n)) continue;
     const box = nodeVisualBox(n, allNodes, edges);
     if (n.id === placedId) {
       box.x = placedAbs.x;
@@ -544,17 +544,14 @@ function findNearestEdge(
     } else {
       // Color nodes are circles whose output rides the perimeter and exits along
       // the radial (TypedEdge's getRadialBezierPath) — everything else uses the
-      // cardinal exit. Match whichever this edge is actually drawn with.
-      let c1x: number, c1y: number;
+      // cardinal exit. Match whichever this edge is actually drawn with, through
+      // `edgeBezier`, the ONE curve the renderer and the chevrons also call, so
+      // the "never fork the curve" rule holds by construction.
       const rdx = s.localCx - (srcNode.measured?.width ?? 28) / 2;
       const rdy = s.localCy - (srcNode.measured?.height ?? 28) / 2;
       const rlen = Math.hypot(rdx, rdy);
-      if (srcNode.type === 'color' && rlen > 1e-3) {
-        [c1x, c1y] = radialControlPoint(s.x, s.y, rdx / rlen, rdy / rlen, t.x, t.y);
-      } else {
-        [c1x, c1y] = cardinalControlPoint(s.position, s.x, s.y, t.x, t.y);
-      }
-      const [c2x, c2y] = cardinalControlPoint(t.position, t.x, t.y, s.x, s.y);
+      const exit = srcNode.type === 'color' && rlen > 1e-3 ? ([rdx / rlen, rdy / rlen] as const) : s.position;
+      const [, , c1x, c1y, c2x, c2y] = edgeBezier(s.x, s.y, exit, t.x, t.y, t.position);
       // Reject on the control hull before paying for the solve. A cubic bezier
       // lies inside the convex hull of its four control points, so a curve
       // whose control AABB is further than `bestDist` from the probe cannot
@@ -1304,6 +1301,11 @@ export function NodeEditor() {
       // node IS an `<input type="range">`, so Delete there means "delete this
       // node", not "do nothing".
       if (isTypingTarget(e.target)) return;
+      // …and nothing reaches the graph behind an open dialog (useKeyboardNav's
+      // guard, verbatim). Four dialogs handle only Escape and focus a plain
+      // panel div, so with one open Cmd+D duplicated and Backspace deleted the
+      // selection behind it (measured 2026-10-11).
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
 
       // Esc leaves draw mode (before any accelerator).
       if (e.key === 'Escape' && useAppStore.getState().drawToolActive) {
@@ -2998,12 +3000,19 @@ export function NodeEditor() {
     const onKey = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return;
       // An ALLOW-list: the press must land on the canvas or nowhere (body).
-      // Monaco's keydown surfaces from a sibling of its textarea, so the typing
-      // guard alone let these keys leak out of the code panel.
+      // In Chromium Monaco types through a div carrying an EditContext, which
+      // the typing guard did not know until 2026-10-11, so these keys leaked
+      // out of the code panel. The guard counts it now; this stays as defence
+      // in depth, since a deny-list only excludes the surfaces someone knew of.
       const target = e.target instanceof Element ? e.target : null;
       const onCanvas = target ? canvasRef.current?.contains(target) === true : true;
       const unfocused = target === document.body || target === document.documentElement;
       if (!onCanvas && !unfocused) return;
+      // `body` is also where focus falls when a focused element inside an open
+      // dialog goes away, so the allow-list alone lets A select every node and
+      // Space open the Add-node menu (stealing the dialog's focus) behind it
+      // (measured 2026-10-11, Feedback dialog). The accelerators' guard, verbatim.
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key.toLowerCase();
       if (key === 'a' && !e.shiftKey) {

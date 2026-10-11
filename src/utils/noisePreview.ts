@@ -132,10 +132,11 @@ function sampleNoise(type: NoiseType, nx: number, ny: number): number {
  * Render one greyscale noise thumbnail.
  *
  * `reuse` is an optional scratch buffer for callers that redraw on a clock —
- * PreviewNode's animated cards run this at 30 Hz per node, and a fresh
+ * PreviewNode's animated cards run this on the shared 15 Hz frame ticker
+ * (utils/frameTicker), and a fresh
  * `ImageData` per frame is 4·size² bytes of garbage each time (36 KB at the
  * 96 px preview size, so four animated cards minted ~4 MB/s for the collector
- * to sweep). Passing the previous buffer back in reuses it; anything of the
+ * to sweep at the old 30 Hz). Passing the previous buffer back in reuses it; anything of the
  * wrong shape (or nothing at all) allocates, so the 5-argument call sites are
  * untouched.
  *

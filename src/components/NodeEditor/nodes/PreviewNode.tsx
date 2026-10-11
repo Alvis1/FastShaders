@@ -6,7 +6,7 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
 import { CAT_HEX } from '@/utils/colorUtils';
 import { useCostChrome } from './useCostChrome';
-import { appTime } from '@/utils/appClock';
+import { useFrameLoop } from '@/hooks/useFrameLoop';
 import { evaluateEdgeSource, getTargetEdges, getTimeUpstreamSet } from '@/engine/cpuEvaluator';
 import { TypedHandle } from '../handles/TypedHandle';
 import { renderNoisePreview, type NoiseType, type TimeInputs } from '@/utils/noisePreview';
@@ -17,34 +17,27 @@ import { NodeTitle } from './NodeTitle';
 import { useHeaderTip } from './headerTip';
 
 const PREVIEW_SIZE = 96;
-/**
- * Redraw budget for the ANIMATED thumbnail, in ms between frames.
+/*
+ * FRAME RATE of the ANIMATED thumbnail: the shared ticker's 15 Hz
+ * (utils/frameTicker), on the same frames as every other animated surface.
  *
  * Every redraw is a full PREVIEW_SIZE² CPU noise field plus a `resolveValues`
  * walk of the upstream graph. MEASURED per call at 96 px on an M-series Mac:
- * cellNoise 0.08 ms, perlin 0.12–0.19, voronoi 0.30–0.35, fBm 0.29–0.40. Four
- * animated fBm/Voronoi cards — an ordinary state once a Time node feeds a
- * noise-driven shader — therefore ate ~1.6 ms of every 16.7 ms frame, on a
- * low-end machine several times that, to animate 96-pixel thumbnails of a
- * shader the preview iframe is already rendering for real.
+ * cellNoise 0.08 ms, perlin 0.12–0.19, voronoi 0.30–0.35, fBm 0.29–0.40 (taken
+ * while every call also minted a fresh 36 KB ImageData; the tick now hands
+ * `noiseBufRef` back to renderNoisePreview, which reuses one buffer per card).
+ * Four animated fBm/Voronoi cards — an ordinary state once a Time node feeds
+ * a noise-driven shader — ate ~1.6 ms of every 16.7 ms frame at 60 Hz.
  *
- * Those numbers were taken while every call ALSO minted a fresh 36 KB
- * ImageData. It no longer does — the loop hands `noiseBufRef` back to
- * renderNoisePreview, which reuses one buffer per card — so the garbage is
- * gone (~4 MB/s across four cards) but the noise field is not, and the budget
- * below still earns its keep.
+ * This card ran its own 30 Hz budget until 2026-10-11, judged the floor below
+ * which a translating pattern reads as stepping. The owner traded that for
+ * the shared 15 Hz: the noise field is a small part of the cost — any frame
+ * that writes to the canvas pays Chrome's whole-canvas layerization pass —
+ * and only every surface writing on the same few frames buys it back.
  *
- * 30 Hz halves that. It is imperceptible here because the field drifts at
- * `time * 0.4` units against a 4-unit window, i.e. ~1/150 of the picture
- * between redraws — and it is deliberately NOT lower: these thumbnails ARE the
- * app's live feedback about a noise field, and below ~24 Hz a smoothly
- * translating pattern starts to read as stepping rather than flowing.
- *
- * The TIME the field is sampled at is untouched (still the shared appClock),
- * so a throttled card still agrees with every other animated surface on the
- * frames it does draw.
+ * The TIME the field is sampled at is still the shared appClock, so the card
+ * agrees with every other animated surface on the frames it draws.
  */
-const ANIMATED_FRAME_MS = 1000 / 30;
 /** Registry types this preview node can render — all MaterialX noise variants. */
 const NOISE_TYPES = new Set<string>([
   'perlin', 'perlinVec3',
@@ -99,8 +92,8 @@ export const PreviewNode = memo(function PreviewNode({
   // Scratch pixel buffer for the thumbnail, ONE per card for the life of the
   // component. renderNoisePreview overwrites every byte of it and
   // putImageData copies it into the canvas synchronously, so the same buffer
-  // can serve every frame of the animated loop — see the ANIMATED_FRAME_MS
-  // note. It lives in a ref rather than inside either effect so re-arming the
+  // can serve every tick of the animated loop — see the FRAME RATE note. It
+  // lives in a ref rather than inside either effect so re-arming the
   // loop (a dependency change: a new registryType, edited values, a fresh
   // timeInputs identity) reuses the buffer instead of allocating another, and
   // so the static and animated effects — which are mutually exclusive on
@@ -174,9 +167,9 @@ export const PreviewNode = memo(function PreviewNode({
   // getTimeInputs allocates a fresh object, so rebuild it from getState() only
   // when the folded key actually changes. The JSON.stringify second stage then
   // stabilizes the *reference* by CONTENT: inputsKey also
-  // changes on upstream VALUE edits, and handing the rAF effect a fresh (but
-  // equal) object each time would tear the animation loop down and reset its
-  // clock to t=0 on every scrub frame.
+  // changes on upstream VALUE edits, and handing the animated loop a fresh
+  // (but equal) object each time would tear it down and re-arm it on every
+  // scrub frame.
   const timeInputsRaw = useMemo(() => {
     const { nodes, edges } = useAppStore.getState();
     return getTimeInputs(id, nodes, edges);
@@ -218,7 +211,7 @@ export const PreviewNode = memo(function PreviewNode({
   // Static (non-time-driven) noise preview: one-shot render. Keyed on the
   // folded inputsKey (not nodes/edges identity) so the thumbnail refreshes
   // when an upstream value changes but NOT on every drag frame; the arrays are
-  // read imperatively at render time. Plain putImageData — no rAF loop.
+  // read imperatively at render time. Plain putImageData — no frame loop.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !NOISE_TYPES.has(data.registryType) || hasAnyTime) return;
@@ -237,78 +230,53 @@ export const PreviewNode = memo(function PreviewNode({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.registryType, data.values, inputsKey, hasAnyTime]);
 
-  // Animated (time-driven) noise preview: the rAF loop reads fresh graph state
-  // straight from the store each frame (this component no longer subscribes to
-  // nodes/edges at all), so its deps stay stable across unrelated drags and
-  // the loop never tears down mid-animation. The remaining deps (registryType,
-  // the stabilized timeInputs, this node's own values) change only on real
-  // edits to this node's upstream.
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !NOISE_TYPES.has(data.registryType) || !hasAnyTime) return;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return;
-
-    let rafId: number;
-    let lastDraw = -Infinity;
-
-    const draw = (timestamp: number) => {
-      // Schedule FIRST, so every early-out below still keeps the loop alive —
-      // the loop is never torn down while the component is mounted, and the
-      // component deliberately stays mounted inside a collapsed group.
-      rafId = requestAnimationFrame(draw);
-
-      // Nothing culls a node in this editor: React Flow renders every one
-      // (`onlyRenderVisibleElements` is left at its default false), and a
-      // member of a COLLAPSED group is hidden purely in CSS — the store sets
-      // `fs-collapsed-member` → `display: none` and keeps the component
-      // MOUNTED on purpose, so this loop survives the collapse. rAF is
-      // per-document, so nothing throttles a hidden element's callback
-      // either: collapsing a frame full of animated noise cards — the one
-      // gesture that looks like it should reduce cost — used to buy back
-      // exactly zero CPU.
-      //
-      // `offsetParent` is null exactly under `display: none` (one property
-      // read, and it is taken BEFORE this callback's own writes so it cannot
-      // be the read half of a write/read layout thrash). Skipping is safe
-      // because the clock is ABSOLUTE (utils/appClock): the first visible
-      // frame draws the field at the time it really is, not at a resumed
-      // private epoch, so an expanded group is instantly in step with every
-      // other animated surface. NB this must NOT be added to the static
-      // one-shot effect above — that one has no later frame to catch up on,
-      // and a hidden canvas keeps its bitmap, so drawing into it is exactly
-      // what makes the thumbnail correct the moment the group expands.
-      if (canvas.offsetParent === null) return;
-
-      // Redraw budget — see ANIMATED_FRAME_MS.
-      if (timestamp - lastDraw < ANIMATED_FRAME_MS) return;
-      lastDraw = timestamp;
-
-      // Shared app clock (utils/appClock) — a private per-loop epoch made
-      // every animated surface disagree with every other; one epoch also
-      // lets cpuEvaluator's per-time cache buckets be shared across
-      // surfaces within a frame.
-      const t = appTime(timestamp);
-
-      const { nodes, edges } = useAppStore.getState();
-      const resolved = resolveValues(nodes, edges, t);
-      const imageData = renderNoisePreview(
-        data.registryType as NoiseType,
-        PREVIEW_SIZE,
-        resolved,
-        t,
-        timeInputs,
-        noiseBufRef.current,
-      );
-      // Keep whatever came back: the first call (or one after PREVIEW_SIZE
-      // ever changed) allocates, every later one hands the same buffer back.
-      noiseBufRef.current = imageData;
-      ctx.putImageData(imageData, 0, 0);
-    };
-
-    rafId = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(rafId);
-  }, [data.registryType, data.values, hasAnyTime, timeInputs]);
+  // Animated (time-driven) noise preview, on the shared frame ticker
+  // (utils/frameTicker — see the FRAME RATE note at the top of this file).
+  // The tick reads fresh graph state straight from the store (this component
+  // no longer subscribes to nodes/edges at all), so its deps stay stable
+  // across unrelated drags and the loop never tears down mid-animation. The
+  // remaining deps (registryType, the stabilized timeInputs, this node's own
+  // values) change only on real edits to this node's upstream.
+  //
+  // Nothing culls a node in this editor: React Flow renders every one
+  // (`onlyRenderVisibleElements` is left at its default false), and a member
+  // of a COLLAPSED group is hidden purely in CSS and stays MOUNTED. The ticker
+  // skips this card while its canvas is off-screen or `display: none` —
+  // collapsing a frame full of animated noise cards used to buy back exactly
+  // zero CPU. NB that skip must NOT reach the static one-shot effect above:
+  // it has no later frame to catch up on, and a hidden canvas keeps its
+  // bitmap, so drawing into it is exactly what makes the thumbnail correct
+  // the moment the group expands.
+  useFrameLoop(
+    NOISE_TYPES.has(data.registryType) && hasAnyTime,
+    canvasRef,
+    () => {
+      // willReadFrequently: see the static effect above.
+      const ctx = canvasRef.current?.getContext('2d', { willReadFrequently: true }) ?? null;
+      return (t) => {
+        if (!ctx) return;
+        // `t` is the shared app clock (utils/appClock) — a private per-loop
+        // epoch made every animated surface disagree with every other; one
+        // epoch also lets cpuEvaluator's per-time cache buckets be shared
+        // across surfaces within a tick.
+        const { nodes, edges } = useAppStore.getState();
+        const resolved = resolveValues(nodes, edges, t);
+        const imageData = renderNoisePreview(
+          data.registryType as NoiseType,
+          PREVIEW_SIZE,
+          resolved,
+          t,
+          timeInputs,
+          noiseBufRef.current,
+        );
+        // Keep whatever came back: the first call (or one after PREVIEW_SIZE
+        // ever changed) allocates, every later one hands the same buffer back.
+        noiseBufRef.current = imageData;
+        ctx.putImageData(imageData, 0, 0);
+      };
+    },
+    [data.registryType, data.values, hasAnyTime, timeInputs],
+  );
 
   return (
     <div

@@ -254,9 +254,18 @@ export const FRESNEL_HANDLE_TO_MEMBER = new Map<string, string>([['out', 'x'], [
  *  sample); the other half of `OWN_MEMBER_TO_HANDLE.get('colorRamp')`. */
 export const COLOR_RAMP_HANDLE_TO_MEMBER = new Map<string, string>([['out', 'rgb'], ['alpha', 'a']]);
 
-/** Sources whose sockets are members of ONE emitted call, so a Split fed by one
- *  must read per SOURCE SOCKET (resolveEdgeRef's split branch). */
-const SPLIT_SOCKET_AWARE: ReadonlySet<string> = new Set(['fresnel', 'colorRamp', 'toHsl']);
+/** Sources whose output sockets are NOT the bare variable, so a Split fed by one
+ *  must read per SOURCE SOCKET (resolveEdgeRef's split branch): members of ONE
+ *  emitted call (Fresnel, Color Ramp, toHsl, the Texture node's channels in wide
+ *  mode) or variables of their own (Sound's `sound1_bass`, Data Viz's `value`
+ *  `_dataviz1_t`, the Data node's `data1_col0`). Without the entry the Split read
+ *  the bare name: Image Alpha → Split.x was red, Data Viz Value → Split.x the
+ *  ramp's red, and Sound/Data → Split named a variable nothing declares. A
+ *  source whose socket IS the bare name (every `out`, a narrow image) still
+ *  emits `<bare>.<comp>`, byte-identical. */
+const SPLIT_SOCKET_AWARE: ReadonlySet<string> = new Set([
+  'fresnel', 'colorRamp', 'toHsl', 'imageNode', 'soundNode', 'dataviz', 'dataNode',
+]);
 
 /**
  * `#rrggbb` → the `0xrrggbb` literal the colour constructors take.
@@ -2610,9 +2619,9 @@ function resolveEdgeRef(
     const splitInputEdge = inEdge(gidx, sourceNode.id, 'v');
     const bare = splitInputEdge ? varNames.get(splitInputEdge.source) : undefined;
     if (splitInputEdge && bare) {
-      // Sources that address their OWN sockets as members of one emitted call (Fresnel .x/.y, Color Ramp .rgb/.a,
-      // RGB-to-HSL .x/.y/.z) are read per SOURCE SOCKET (CLAUDE.md, "Edge VALUES"): a scalar socket is its own .x
-      // and has no .y/.z/.w (null — the consumer reads as unwired); a vector socket swizzles the bare variable.
+      // Sources whose sockets are not the bare variable (SPLIT_SOCKET_AWARE: members of one emitted call, or
+      // variables of their own) are read per SOURCE SOCKET (CLAUDE.md, "Edge VALUES"): a scalar socket is its own
+      // .x and has no .y/.z/.w (null — the consumer reads as unwired); a vector socket swizzles the bare variable.
       // Every other source keeps the bare-variable text, byte-identical.
       const src = gidx.nodeById.get(splitInputEdge.source);
       if (src && SPLIT_SOCKET_AWARE.has(src.data.registryType)) {

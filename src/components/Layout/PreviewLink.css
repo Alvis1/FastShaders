@@ -25,15 +25,34 @@
   stroke: var(--node-cost-text, #000);
   stroke-width: 4.5;
   stroke-linecap: butt;
-  /* Bold, closely-spaced dashes flowing toward the preview imply "the Output
-     feeds the view". */
-  stroke-dasharray: 6 3;
   opacity: 0.8;
   /* Hard offset, no blur — the app-wide shadow idiom. It was a 2px GLOW, which
      is the one thing the technical style has no room for; the contrast token
      stays, so the halo still flips with the canvas the wire is drawn on. */
   filter: drop-shadow(1px 1px 0 var(--node-cost-text-shadow, rgba(0, 0, 0, 0.35)));
+  /* STILL by default — solid, with an arrowhead into the rail socket. A
+     marching path repaints the canvas every frame (~1 ms/frame on its own),
+     so only a wire whose Output's graph changes on its own marches
+     (`data-live`, PreviewLink.tsx — the canvas wires' own rule). */
+  marker-end: url(#fs-preview-link-arrow);
+}
+
+/* LIVE: bold, closely-spaced dashes flowing toward the preview imply "the
+   Output feeds the view", and the flow says it is changing. */
+.preview-link__path[data-live] {
+  stroke-dasharray: 6 3;
+  marker-end: none;
   animation: preview-link-flow 0.9s linear infinite;
+}
+
+/* The arrowhead, in the wire's own ink. Its halo comes from the path's own
+   filter, which renders the marker as part of the path. */
+.preview-link__arrow {
+  fill: none;
+  stroke: var(--node-cost-text, #000);
+  stroke-width: 3;
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
 }
 
 /* The wire under the pointer. It cannot be a `:hover` rule — the layer is
@@ -95,8 +114,10 @@
   }
 }
 
+/* Same selector as the LIVE rule above: a bare `.preview-link__path` here
+   would lose to it on specificity and leave the freeze to reset.css alone. */
 @media (prefers-reduced-motion: reduce) {
-  .preview-link__path {
+  .preview-link__path[data-live] {
     animation: none;
   }
 }

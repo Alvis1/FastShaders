@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isTypingTarget, type TypingTargetLike } from './isTypingTarget';
+import { isTypingTarget, keepsNativeUndo, type TypingTargetLike } from './isTypingTarget';
 
 /**
  * vitest runs under `environment: 'node'` — there is no DOM here, which is
@@ -23,9 +23,10 @@ const nest = (child: TypingTargetLike, ...ancestors: TypingTargetLike[]): Typing
 
 describe('isTypingTarget', () => {
   it('counts the three text-taking tags', () => {
-    // TEXTAREA covers Monaco (its input is a textarea) and SELECT is not
-    // theoretical: the Audio Input node puts a real one on a canvas node, and
-    // a select swallows plain letters as type-to-search.
+    // TEXTAREA covers Monaco in Safari and Firefox (Chromium is the EditContext
+    // case below) and SELECT is not theoretical: the Audio Input node puts a
+    // real one on a canvas node, and a select swallows plain letters as
+    // type-to-search.
     expect(isTypingTarget(el('INPUT'))).toBe(true);
     expect(isTypingTarget(el('TEXTAREA'))).toBe(true);
     expect(isTypingTarget(el('SELECT'))).toBe(true);
@@ -74,6 +75,20 @@ describe('isTypingTarget', () => {
     expect(isTypingTarget(nest(el('SPAN'), el('DIV'), el('SECTION')))).toBe(false);
   });
 
+  it('counts an element with an EditContext — Monaco\'s input in Chromium', () => {
+    // Monaco 0.55 types through `div.native-edit-context` there: no textarea,
+    // no contentEditable, only an attached EditContext. Measured 2026-10-11 in
+    // real Chrome: x in the code panel deleted the selected node and Cmd+V
+    // pasted nodes, because this predicate answered "not typing".
+    expect(isTypingTarget(el('DIV', { editContext: {} }))).toBe(true);
+    // A press on a child of such a host counts too (the ordinary ancestor walk).
+    expect(isTypingTarget(nest(el('SPAN'), el('DIV', { editContext: {} })))).toBe(true);
+    // `null` is what every element without a context reports in Chromium, and
+    // the property is absent elsewhere: both stay "not typing".
+    expect(isTypingTarget(el('DIV', { editContext: null }))).toBe(false);
+    expect(isTypingTarget(el('DIV'))).toBe(false);
+  });
+
   it('lets an editable ancestor outrank a textless input', () => {
     // The question is whether the press lands anywhere text is being entered,
     // so a checkbox does not end the walk.
@@ -103,5 +118,32 @@ describe('isTypingTarget', () => {
     // Everything else is unchanged by the option.
     expect(isTypingTarget(el('BUTTON'), { anyInputType: true })).toBe(false);
     expect(isTypingTarget(el('SELECT'), { anyInputType: true })).toBe(true);
+  });
+});
+
+describe('keepsNativeUndo — whose Cmd/Ctrl+Z is it?', () => {
+  it('a text field keeps its own undo, the code panel included', () => {
+    // Measured 2026-10-11: Cmd+Z in the toolbar's Name field brought back a
+    // deleted node and the field's own text undo never ran.
+    expect(keepsNativeUndo(el('INPUT', { type: 'text' }))).toBe(true);
+    expect(keepsNativeUndo(el('TEXTAREA'))).toBe(true);
+    expect(keepsNativeUndo(el('DIV', { editContext: {} }))).toBe(true);
+    expect(keepsNativeUndo(nest(el('SPAN'), el('DIV', { isContentEditable: true })))).toBe(true);
+  });
+
+  it('a number field and a select keep GRAPH undo, as before', () => {
+    // NumberField and LazyNumberField are text inputs announced as spinbuttons;
+    // their edits are node values, so Cmd+Z undoes the value just changed.
+    expect(keepsNativeUndo(el('INPUT', { type: 'text', role: 'spinbutton' }))).toBe(false);
+    expect(keepsNativeUndo(el('SELECT'))).toBe(false);
+    expect(keepsNativeUndo(el('select'))).toBe(false);
+  });
+
+  it('everything that is not a typing target leaves the press to the graph', () => {
+    expect(keepsNativeUndo(el('DIV'))).toBe(false);
+    expect(keepsNativeUndo(el('INPUT', { type: 'checkbox' }))).toBe(false);
+    expect(keepsNativeUndo(el('INPUT', { type: 'range' }))).toBe(false);
+    expect(keepsNativeUndo(null)).toBe(false);
+    expect(keepsNativeUndo({} as TypingTargetLike)).toBe(false);
   });
 });

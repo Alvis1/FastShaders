@@ -24,9 +24,11 @@
  * Sandboxed preview documents ONLY. The sandbox's URL allowlist admits blob:
  * and data: alone and its opaque origin could not fetch from the app anyway,
  * which is why the bytes arrive as messages — the same route Phase 3's mesh
- * decoders take. The XR popup, the A-Frame and Three.js tabs and the export
- * still inline the `data:` URLs (`inlineImageAssetsFromNodes`): they are
- * top-level or standalone documents with no parent to feed them.
+ * decoders take. The XR popup and the export still inline the `data:` URLs
+ * (`inlineImageAssetsFromNodes`): they are top-level or standalone documents
+ * with no parent to feed them. The A-Frame and Three.js tabs inline nothing:
+ * their pages read only the module's schema and displacement flag and load
+ * the shader by file name.
  *
  * The document is disposable, so its object URLs die with it: nothing revokes
  * a per-key URL, and a key is never re-minted (the placeholder carries the

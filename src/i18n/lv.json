@@ -600,6 +600,7 @@
     "Attach to {name}": "Pievienot mezglam “{name}”",
     "From socket": "No ligzdas",
     "No Output on the canvas": "Uz audekla nav izvades",
+    "The Output is inside a collapsed group — expand it to attach": "Izvade ir sakļautā grupā — izvērsiet grupu, lai pievienotu",
     "Attached — click to detach": "Pievienots — noklikšķiniet, lai atvienotu",
     "Replaces the wire from {name}": "Aizstāj savienojumu no {name}",
     "Show one of this texture’s channels on the 3D preview in place of the Output’s wiring — click the lit one to stop. Alt/⌥+click the node previews its Color.": "Rādīt vienu no šīs tekstūras kanāliem 3D priekšskatījumā Output mezgla savienojumu vietā — noklikšķiniet uz iedegtā, lai beigtu. Alt/⌥+klikšķis uz mezgla rāda tās krāsu.",

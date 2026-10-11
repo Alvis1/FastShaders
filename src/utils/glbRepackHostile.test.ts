@@ -129,8 +129,13 @@ describe('hostile texts', () => {
     const r = repackGlb(input({ projectText, slots, moduleAssets: [{ key: KEY, src: SRC, name: nasty }] }));
     if (!r.ok) throw new Error(JSON.stringify(r.refusal));
     checkContainer(r.bytes, input().moduleText, projectText);
-    const back = extractProjectState(projectText);
-    expect(back?.project.graph.nodes.map((n) => n.id)).toEqual(['__proto__', 'constructor', '"', '*/', '</script>']);
+    // The repack carries the `"` id byte-exactly (above), but an IMPORT refuses
+    // it: React Flow interpolates node ids into unescaped selectors, and a `"`
+    // there blanked the whole app (utils/graphShape.ts, SELECTOR_UNSAFE). The
+    // block then opens as a plain script. Every other hostile id still reads back.
+    expect(extractProjectState(projectText)).toBeNull();
+    const back = extractProjectState(project(nodes.filter((n) => n.id !== '"')));
+    expect(back?.project.graph.nodes.map((n) => n.id)).toEqual(['__proto__', 'constructor', '*/', '</script>']);
   });
 });
 

@@ -13,11 +13,19 @@ import { resolve } from 'node:path';
 const SRC = readFileSync(resolve(__dirname, 'ShaderPreview.tsx'), 'utf8');
 
 describe('previewErrorMessage: captured from fs:preview-error, cleared on success', () => {
-  it('fs:preview-error sets it from the posted message', () => {
+  it('fs:preview-error sets it from the posted message, capped at the overlay’s own 2000 characters', () => {
     const at = SRC.indexOf("data.type === 'fs:preview-error'");
     expect(at).toBeGreaterThan(-1);
     const block = SRC.slice(at, SRC.indexOf("data.type === 'fs:preview-ready'", at));
-    expect(block).toMatch(/setPreviewErrorMessage\(data\.message\)/);
+    // Any module can post this message, and the hot-swap receiver posts a
+    // compile error raw: one 50M-character message froze the editor ~2.8 s
+    // laying out the text node (review 2026-10-11). Never stored uncapped.
+    expect(block).toMatch(/setPreviewErrorMessage\(data\.message\.slice\(0, 2000\)\)/);
+    expect(block).not.toMatch(/setPreviewErrorMessage\(data\.message\)/);
+    // The SAME number the iframe's own overlay caps its text at, so a real
+    // error reads identically on both copies.
+    const STAGE = readFileSync(resolve(__dirname, '../../engine/tslToPreviewHTML.ts'), 'utf8');
+    expect(STAGE).toContain('String(msg == null ? "Unknown error" : msg).slice(0, 2000)');
   });
 
   it('fs:preview-ready (every success, boot and hot-swap alike) clears it', () => {
