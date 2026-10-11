@@ -12,7 +12,7 @@
  * Pure data (no React, no CSS imports) so it stays node-env testable.
  */
 import { getAllDefinitions, getFlowNodeType, growsOperands, NODE_REGISTRY } from '@/registry/nodeRegistry';
-import complexityData from '@/registry/complexity.json';
+import { freshNodeCost, getBaseCosts } from '@/utils/nodeCost';
 import { CAT_HEX, getTypeColor, getCostColor, getCostScale, getContrastColor, COUNT_EDGE_COLORS } from '@/utils/colorUtils';
 import { useAppStore } from '@/store/useAppStore';
 import type { NodeCategory, NodeDefinition, TSLDataType } from '@/types';
@@ -54,8 +54,20 @@ export function definitionOf(type: string): NodeDefinition | undefined {
   return NODE_REGISTRY.get(type);
 }
 
-/** Live per-node GPU cost (complexity.json — the same file the app prices from). */
-export const NODE_COSTS: Record<string, number> = complexityData.costs as Record<string, number>;
+/**
+ * The price the designer prints (its cost row) and scales its overlays by (its
+ * px-per-unit): a FRESH node's, per type (utils/nodeCost.ts `freshNodeCost`,
+ * which the stage card in bridge.tsx reads too) — the number the palette tile
+ * and the Add-node menu show for the same node, so a fresh RGB Curves node is
+ * its identity form (1) here as well, never its table entry (40, the price of
+ * a node that bakes). Null prototype: indexed by type.
+ */
+export const NODE_COSTS: Readonly<Record<string, number>> = Object.freeze(
+  Object.assign(
+    Object.create(null) as Record<string, number>,
+    Object.fromEntries(Object.keys(getBaseCosts()).map((type) => [type, freshNodeCost(type) ?? 0])),
+  ),
+);
 
 export function categoryHex(cat: string): string {
   return CAT_HEX[cat as NodeCategory] ?? CAT_HEX.unknown;
@@ -81,7 +93,7 @@ export const contrastColor = getContrastColor;
  *  glyph-less — dx/dy means CSS px here vs glyph-space units on glyph nodes —
  *  so the designer refuses to author an svg for them (and glyphCoverage.test.ts
  *  would fail if one were saved anyway). */
-export const ART_NODE_TYPES = new Set<string>(['colormap', 'colorRamp']);
+export const ART_NODE_TYPES = new Set<string>(['colormap', 'colorRamp', 'rgbCurves']);
 
 /** Default channel count per socket data type (preview-state seeding only). */
 export const TYPE_CHANNELS: Record<string, number> = {

@@ -67,6 +67,7 @@ import {
 } from './gltfCompression';
 import { MAX_INVENTORY_MESHES, isUsableMeshName } from './meshInventory';
 import { predictSceneMeshes, type GltfSceneGraph, type PredictedMesh } from './gltfNaming';
+import { PICTURE_EXTENSIONS, trailingExtensionRe } from './pictureExtensions';
 import {
   SIGNATURE_MATERIALS_MAX,
   SIGNATURE_NAME_MAX,
@@ -244,6 +245,11 @@ export interface GltfModelReport {
   samplers: GltfSampler[];
   /** The default scene's Mesh objects, in traversal order (instances counted). */
   sceneMeshes: GltfSceneMesh[];
+  /** How many of `sceneMeshes` carry TEXCOORD_0 — GLTFLoader's `uv`, which
+   *  glTF stores v-down. The preview generates spherical UVs (three's v-up)
+   *  for the rest, so only all of them means the model is drawn on its OWN UVs
+   *  (`GltfPreviewFacts.uv0`). */
+  sceneMeshesWithUv0: number;
   /** Every predicted name is certain. */
   namingExact: boolean;
   /** Predicted name → the material indices of every default-scene mesh carrying
@@ -714,9 +720,13 @@ function read(bytes: Uint8Array, kind: 'glb' | 'gltf'): GltfModelReport {
 
   // 17. Usage over the default scene's Mesh primitives, instances counted.
   const uvSeen: (number[] | null)[] = materials.map(() => null);
+  let sceneMeshesWithUv0 = 0;
   for (const sm of predicted.meshes) {
-    if (sm.material === null) continue;
     const prim = meshes[sm.mesh].prims[sm.primitive];
+    // Counted BEFORE the default-material skip: the preview samples `uv()` on
+    // every drawn primitive, whatever its material.
+    if (prim.uvSets.includes(0)) sceneMeshesWithUv0++;
+    if (sm.material === null) continue;
     const u = materials[sm.material].usage;
     u.primitives++;
     if (prim.tangents) u.withTangents++;
@@ -751,6 +761,7 @@ function read(bytes: Uint8Array, kind: 'glb' | 'gltf'): GltfModelReport {
     images,
     samplers,
     sceneMeshes: predicted.meshes,
+    sceneMeshesWithUv0,
     namingExact: predicted.exact,
     meshNameIndex: nameIndex,
     extensionsUsed,
@@ -1071,13 +1082,23 @@ export function mirrorNamesByMaterial(m: GltfModelReport): Map<number, string[]>
 
 const FILE_EXTENSION: Readonly<Record<string, string>> = { png: '.png', jpeg: '.jpg', webp: '.webp' };
 
+/** ONE trailing picture extension, any case: what a name that is already a
+ *  file name ends with ('myF-pink.png'). Every extension the drop filter takes
+ *  by name — the ONE list it reads too (utils/pictureExtensions.ts), so a name
+ *  a drop stored never comes back doubled — plus `ktx2`, a glTF image no file
+ *  brings in. Not a general extension: 'photo.final' keeps its dot. */
+const PICTURE_EXTENSION = trailingExtensionRe([...PICTURE_EXTENSIONS, 'ktx2']);
+
 /** A file-name stem: letters, digits, `.`, `_`, `-` only, no `..`, trimmed of
- *  leading/trailing `-`/`.`, at most 48 code points. */
-function fileStem(s: string): string {
-  const cleaned = s
+ *  leading/trailing `-`/`.`, at most 48 code points. `dropPictureExtension`
+ *  removes ONE trailing `PICTURE_EXTENSION` after the cleaning and BEFORE the
+ *  cap, so a long name loses its extension, never a cut-off piece of it. */
+function fileStem(s: string, dropPictureExtension = false): string {
+  let cleaned = s
     .replace(/[^\p{L}\p{N}._-]/gu, '-')
     .replace(/\.{2,}/g, '.')
     .replace(/^[-.]+|[-.]+$/g, '');
+  if (dropPictureExtension) cleaned = cleaned.replace(PICTURE_EXTENSION, '');
   return Array.from(cleaned).slice(0, 48).join('').replace(/[-.]+$/, '');
 }
 
@@ -1085,6 +1106,19 @@ function fileStem(s: string): string {
  * The display file name for an extracted image (it becomes the Image node's
  * `fileName`): the image's name, else a texture's, else `<model>-image-<i>`,
  * cleaned to a safe stem, with the SNIFFED format's extension.
+ *
+ * A name that already ends in a picture extension loses ONE first. A
+ * FastShaders single-GLB export writes each picture under the name its card
+ * shows, extension included (engine/glbExportPlan.ts), so "Mesh with
+ * Materials" over that export used to name the picture 'myF-pink.png.png'.
+ * Which extensions count is the drop filter's own list (`PICTURE_EXTENSION`)
+ * and the export names a picture from its bytes, so neither a name the filter
+ * took ('photo.jfif') nor one only a MIME type vouched for ('cat.heic') comes
+ * back doubled. The extension is always the sniffed one, as
+ * `displayImageFileName` has it ('cat.png' holding WebP bytes reads
+ * 'cat.webp'). Every reader of a model picture's name calls
+ * this one function (the import's encoder, the picker's listing and the
+ * pick's re-parse check), so they keep agreeing.
  */
 export function gltfImageFileName(m: GltfModelReport, image: number, modelName: string): string {
   const img = isIndex(image, m.images.length) ? m.images[image] : null;
@@ -1092,7 +1126,7 @@ export function gltfImageFileName(m: GltfModelReport, image: number, modelName: 
     m.textures.find((t) => t.extract.image === image && t.name) ??
     m.textures.find((t) => t.name && (t.sources.core === image || t.sources.webp === image || t.sources.avif === image));
   const modelStem = fileStem(modelName.split(/[/\\]/).pop()!.replace(/\.[^./\\]+$/, '')) || 'model';
-  const stem = fileStem(img?.name || tex?.name || `${modelStem}-image-${image}`) || `image-${image}`;
+  const stem = fileStem(img?.name || tex?.name || `${modelStem}-image-${image}`, true) || `image-${image}`;
   const ext = img ? (own(FILE_EXTENSION, img.format) as string | undefined) : undefined;
   return stem + (ext ?? '.bin');
 }
@@ -1104,12 +1138,24 @@ export function gltfImageFileName(m: GltfModelReport, image: number, modelName: 
  * once `createPreviewMesh` computes it): the signature and, per usable
  * predicted mesh name, the glTF material indices of its primitives (the
  * default material left out, a name with none left out, at most
- * MAX_INVENTORY_MESHES names) and whether the name is certain. Strings and
- * numbers only — no view into the file survives.
+ * MAX_INVENTORY_MESHES names) and whether the name is certain; and whether the
+ * drawn primitives carry their own TEXCOORD_0 (`uv0`). Strings and numbers
+ * only — no view into the file survives.
  */
 export interface GltfPreviewFacts {
   signature: readonly string[];
   meshMaterials: ReadonlyMap<string, { materials: readonly number[]; certain: boolean }>;
+  /**
+   * Do the default scene's Mesh primitives (instances counted) carry their
+   * OWN TEXCOORD_0 — GLTFLoader's `uv`, which glTF stores v-down? 'all',
+   * 'some' or 'none' ('none' when nothing is drawn); a primitive without it
+   * gets the preview's generated spherical UVs, which run v-up like three's
+   * primitives. Read only by `previewShowsGltfUvs` (utils/pictureOrientation.ts):
+   * a picture added from a file over 'all' is stored the glTF way. Optional, so
+   * a facts object built without it reads as unknown, which that predicate
+   * treats as no own UVs.
+   */
+  uv0?: 'all' | 'some' | 'none';
 }
 
 /**
@@ -1134,7 +1180,10 @@ export function gltfPreviewFactsOrRefusal(
     const materials = e.materials.filter((mat): mat is number => mat !== null);
     if (materials.length > 0) meshMaterials.set(name, { materials, certain: e.certain });
   }
-  return { facts: { signature: r.model.signature.materials.slice(), meshMaterials }, compression: r.model.compression };
+  const drawn = r.model.sceneMeshes.length;
+  const withUv0 = r.model.sceneMeshesWithUv0;
+  const uv0 = drawn > 0 && withUv0 === drawn ? 'all' : withUv0 > 0 ? 'some' : 'none';
+  return { facts: { signature: r.model.signature.materials.slice(), meshMaterials, uv0 }, compression: r.model.compression };
 }
 
 /** The facts for a model's bytes: undefined for OBJ (not a glTF), null when

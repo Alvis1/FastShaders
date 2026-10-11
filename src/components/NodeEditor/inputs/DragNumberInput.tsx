@@ -1,5 +1,7 @@
-import { useState, useRef, useCallback, useEffect, type KeyboardEvent } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { useAppStore } from '@/store/useAppStore';
+import { NumberField } from '@/components/inputs/NumberField';
+import { formatFieldNumber, parseFieldNumber } from '@/utils/numberField';
 import './DragNumberInput.css';
 
 interface DragNumberInputProps {
@@ -50,8 +52,8 @@ export function DragNumberInput({
 
   // Enter edit mode
   const startEdit = useCallback(() => {
-    // The compact variant is width:auto (sizes to its value text), and a
-    // number <input>'s INTRINSIC width is far wider than that text — so
+    // The compact variant is width:auto (sizes to its value text), and an
+    // <input>'s INTRINSIC width is far wider than that text — so
     // swapping the span for the input grew the whole widget and, with it,
     // the node frame (the Time node visibly expanded the moment its speed
     // box was clicked). Lock the input to the span's measured footprint:
@@ -59,15 +61,17 @@ export function DragNumberInput({
     // viewport zoom transform. The frame stays put while typing; overlong
     // text scrolls inside the input.
     setEditWidth(valueRef.current?.offsetWidth ?? null);
-    setEditText(String(roundTo(value, 4)));
+    // A dot whatever the locale, 4 places (ParamRow's EDIT_DECIMALS guard
+    // knows this rounding); a junk value opens EMPTY rather than as "NaN".
+    setEditText(formatFieldNumber(value, 4));
     setEditing(true);
   }, [value]);
 
-  // Commit edit
+  // Commit edit — `.` or `,` typed (utils/numberField.ts).
   const commitEdit = useCallback(() => {
     setEditing(false);
-    const num = parseFloat(editText);
-    if (!isNaN(num)) onChange(num);
+    const num = parseFieldNumber(editText);
+    if (num !== null) onChange(num);
   }, [editText, onChange]);
 
   // Cancel edit
@@ -86,14 +90,6 @@ export function DragNumberInput({
     dragRef.current.bracketed = false;
     useAppStore.getState().endInteraction();
   }, []);
-
-  const handleEditKey = useCallback(
-    (e: KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === 'Enter') commitEdit();
-      if (e.key === 'Escape') cancelEdit();
-    },
-    [commitEdit, cancelEdit],
-  );
 
   // Focus input when entering edit mode
   useEffect(() => {
@@ -193,18 +189,24 @@ export function DragNumberInput({
       </button>
 
       {editing ? (
-        <input
+        // The app's number field (components/inputs/NumberField.tsx): a dot
+        // whatever the locale, arrows step the draft by `step`, and a focused
+        // field steps on the wheel only where nothing else takes it — on a node
+        // the wheel still zooms the canvas. Enter and blur commit; Escape
+        // cancels (the unmount commits nothing).
+        <NumberField
           ref={inputRef}
           className="drag-num__edit"
-          type="number"
           // Compact only: the chrome variant's 90px frame already fixes the
           // footprint (its input flexes inside it).
           style={compact && editWidth != null ? { width: editWidth } : undefined}
-          value={editText}
-          onChange={(e) => setEditText(e.target.value)}
-          onKeyDown={handleEditKey}
-          onBlur={commitEdit}
+          text={editText}
+          onText={setEditText}
+          value={value}
           step={step}
+          onEnter={commitEdit}
+          onEscape={cancelEdit}
+          onBlur={commitEdit}
         />
       ) : (
         <span

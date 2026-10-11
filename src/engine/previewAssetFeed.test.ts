@@ -9,8 +9,11 @@
  * and `atob` (node 22 has all three; nothing is stubbed on the global, every
  * object is passed in as a parameter). The source pins hold the three surfaces
  * to the contract: the document bakes and resolves, the hot swap resolves at
- * its mint, ShaderPreview posts the feed before the swap and re-seeds it on a
- * fresh document, and the XR popup still inlines.
+ * its mint, ShaderPreview posts the feed before the swap, re-seeds it on a
+ * fresh document and plans it ONLY from the nodes the module was generated
+ * from, and the XR popup still inlines. The race that last rule closes is run
+ * end to end, in the real document's boot scripts, by
+ * components/Preview/settledPreview.test.ts.
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -258,8 +261,10 @@ describe('ShaderPreview', () => {
   });
 
   it('bakes the boot list into the document and seeds the sent set from it', () => {
+    // From the nodes the BAKED module was generated from (the settled pair),
+    // not the live store — see the negative pin below.
     expect(SRC).toContain(
-      'const boot = planPreviewAssetFeed(new Set(), collectImageAssets(useAppStore.getState().nodes), previewModule);',
+      'const boot = planPreviewAssetFeed(new Set(), collectImageAssets(moduleNodes), previewModule);',
     );
     expect(SRC).toContain('imageAssets: boot.entries,');
     expect(SRC).toContain('return [tslToPreviewHTML(debouncedPreviewCode, options), previewModule, boot.sent] as const;');
@@ -272,7 +277,7 @@ describe('ShaderPreview', () => {
   it('posts the feed BEFORE the swap it belongs to, and advances the sent set', () => {
     const at = SRC.indexOf('const postShaderSwap = useCallback(');
     const body = SRC.slice(at, SRC.indexOf('}, [clearHotSwapWait]);', at));
-    const feed = body.indexOf('planPreviewAssetFeed(sentAssetKeysRef.current, collectImageAssets(useAppStore.getState().nodes), code)');
+    const feed = body.indexOf('planPreviewAssetFeed(sentAssetKeysRef.current, collectImageAssets(codeNodes), code)');
     const post = body.indexOf("win.postMessage({ type: PREVIEW_ASSETS_MESSAGE, entries: feed.entries }, '*')");
     const advance = body.indexOf('sentAssetKeysRef.current = feed.sent;');
     const swap = body.indexOf("win.postMessage({ type: SHADER_SWAP_MESSAGE, code, gen }, '*')");
@@ -287,7 +292,32 @@ describe('ShaderPreview', () => {
     const body = SRC.slice(at, SRC.indexOf('if (!isModelGeometry(previewGeometry)) return;', at));
     const seed = body.indexOf('sentAssetKeysRef.current = new Set(bootAssetKeys);');
     expect(seed).toBeGreaterThan(-1);
-    expect(body.indexOf('postShaderSwap(previewModule)')).toBeGreaterThan(seed);
+    expect(body.indexOf('postShaderSwap(previewModule, moduleNodes)')).toBeGreaterThan(seed);
+  });
+
+  it('NEVER plans a feed from the live store: only from the nodes the module was generated from', () => {
+    // The 2026-10-08 race (components/Preview/settledPreview.ts): the module is
+    // DEBOUNCED and the live nodes run ahead of it, so a cold rebuild inside
+    // the debounce baked the previous module with a boot list planned from
+    // nodes that no longer held its key — `img.src = "fs-asset:…"`,
+    // ERR_UNKNOWN_URL_SCHEME and the 1x1 black fallback on the new model.
+    expect(SRC).not.toContain('collectImageAssets(useAppStore.getState().nodes)');
+    const calls = [...SRC.matchAll(/collectImageAssets\(([^)]*)\)/g)].map((m) => m[1]);
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    // The settled pair's nodes, under their two names: `moduleNodes` in the three
+    // closures that plan a feed (each reads it from `settledRef` when it runs, so
+    // no closure keeps an old graph alive), `codeNodes` inside postShaderSwap —
+    // whose every caller hands it `moduleNodes`, the nodes of exactly the module it posts.
+    for (const arg of calls) expect(['moduleNodes', 'codeNodes']).toContain(arg);
+    const plans = [...SRC.matchAll(/planPreviewAssetFeed\(([^;]*)\);/g)].map((m) => m[1]);
+    expect(plans).toHaveLength(2);
+    for (const plan of plans) expect(plan).not.toContain('getState()');
+    const posts = [...SRC.matchAll(/postShaderSwap\(([^)]*)\)/g)].map((m) => m[1]);
+    expect(posts).toEqual(['previewModule, moduleNodes', 'previewModule, moduleNodes']);
+    // ONE source for the pair: the settled value, cut from one store state.
+    expect(SRC.split('const moduleNodes = settledRef.current.nodes;')).toHaveLength(4);
+    expect(SRC).toContain('settledRef.current = settledPreview;');
+    expect(SRC).toContain('const debouncedPreviewCode = settledPreview.code;');
   });
 
   it('the XR popup still inlines the payloads (a top-level document has no parent to feed it)', () => {

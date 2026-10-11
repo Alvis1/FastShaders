@@ -19,7 +19,7 @@ import { CATEGORIES } from '@/registry/nodeCategories';
 import { CAT_HEX, getContrastColor } from '@/utils/colorUtils';
 import { splitAliases, joinAliases } from '@/registry/descriptionSplice';
 import { getCitation, CITATIONS, type Citation } from '@/registry/citations';
-import complexityData from '@/registry/complexity.json';
+import { freshNodeCost } from '@/utils/nodeCost';
 import type { AppNode, AppEdge, NodeCategory, NodeDefinition } from '@/types';
 import type { BuiltinTexture } from '@/registry/builtinTextures';
 // The content browser's own tiles — reused verbatim so the previews here are the
@@ -127,7 +127,6 @@ const rowId = (r: { kind: Kind; key: string }) => `${r.kind}:${r.key}`;
 
 /** Build the single-node graph a node row's modal shows. Mirrors codeToGraph's createNode. */
 function singleNodeGraph(def: NodeDefinition): AppNode[] {
-  const costs = complexityData.costs as Record<string, number>;
   return [
     {
       id: `preview-${def.type}`,
@@ -136,7 +135,8 @@ function singleNodeGraph(def: NodeDefinition): AppNode[] {
       data: {
         registryType: def.type,
         label: def.label,
-        cost: costs[def.type] ?? 0,
+        // A fresh node's price, as node creation stamps it (utils/nodeCost.ts freshNodeCost).
+        cost: freshNodeCost(def.type) ?? 0,
         // initialNodeValues, not the bare registry defaults — otherwise this
         // preview shows the LEGACY mode while the palette tile beside it drops
         // a node in the new one (noise range flag).

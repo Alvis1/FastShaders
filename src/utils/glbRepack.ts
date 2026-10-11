@@ -272,6 +272,19 @@ export function safeImageName(v: unknown): string {
     .trim();
 }
 
+/**
+ * A WebP slot's PNG/JPEG FALLBACK is a picture of its own format, so it is
+ * written under the slot's name with ITS extension: the slot's name ends in
+ * '.webp' (glbExportPlan names a picture after the bytes it holds), and a
+ * viewer would otherwise list PNG bytes as '….webp'. A name with no picture
+ * extension is kept as it is, and anything else goes to `safeImageName`
+ * untouched. Never longer than the slot's name, so `safeImageName`'s
+ * 48-character cut cannot land in the new extension.
+ */
+function fallbackImageName(name: unknown, mime: RepackFallback['mime']): unknown {
+  return typeof name === 'string' ? name.replace(/\.(?:png|jpe?g|webp)$/i, mime === 'image/png' ? '.png' : '.jpg') : name;
+}
+
 /** Any `extensions` on a buffer or bufferView outside meshopt (or not an object). */
 function hasForeignBufferExtension(doc: Obj): boolean {
   for (const key of ['buffers', 'bufferViews']) {
@@ -795,7 +808,7 @@ function layoutGlbRepack(input: RepackInput): Layout {
       if (input.webpMode === 'fallback') {
         if (fb) {
           fallbackImage.set(s.src, baseImageCount + imageEntries.length);
-          imageEntries.push({ part: place(fb.bytes), mime: fb.mime, name: safeImageName(s.name) });
+          imageEntries.push({ part: place(fb.bytes), mime: fb.mime, name: safeImageName(fallbackImageName(s.name, fb.mime)) });
           fallbackBytes += fb.bytes.length;
         } else {
           fallbackMissing++;

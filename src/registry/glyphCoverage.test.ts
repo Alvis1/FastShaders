@@ -46,6 +46,14 @@ const DELIBERATELY_GLYPHLESS = new Set([
   // nodeArtStyle — which relies on this exemption: art nodes have no glyph,
   // so dx/dy can mean CSS px here without colliding with glyph-space units.
   'colormap',
+  // Color Ramp draws its real ramp — its stops in linear light — as ART, like
+  // colormap (ColorRampArt's .shader-node__ramp-strip on every surface);
+  // nodeArtStyle relies on it being glyphless (2026-10-09).
+  'colorRamp',
+  // RGB Curves: its art is its live curves (CurvesArt's .shader-node__curves-art
+  // on every surface); with a glyph and two inputs it would also be an operator
+  // card, which draws no art (2026-10-09).
+  'rgbCurves',
   // The Image node draws its THUMBNAIL — or, with no image, the dashed
   // 'No image' slot every NodeVisual surface draws — which is strictly more
   // informative than an icon. Unlike the colormap ramp it is PAYLOAD, not

@@ -25,6 +25,7 @@
 - Helper VARIANTS — one def, several emitted helpers, chosen by `values.mode`
 - Raymarch Output (`raymarchOutput`, 2026-09-03) — surface AND volume marcher in ONE node
 - The march partition is shared with the Splat Output (2026-09-25)
+- A Fresnel (or any Normal) in the colour chain sees the window proxy, not the marched surface
 
 ---
 
@@ -48,3 +49,7 @@
 ### The march partition is shared with the Splat Output (2026-09-25)
 
 - **The march partition is shared with the Splat Output (2026-09-25)** — `marchPartition` now runs over a generalised `ScopeSpec` (`{ handle, sockets, params: { name, roots }[], constants?, implicitRoots? }`), so one scope may serve several sockets and several parameter names; `MARCH_SCOPES` is restated with one socket and one `p`/`dir` parameter each and the march emits BYTE-IDENTICALLY (raymarchOutput, sdfPartition and every byte-stability suite ran unchanged). `isCustomSink` (march OR splat) is what the sink sites ask; march-only behaviour — the window sphere, the double side, the per-step cost — still asks `isMarchOutput`. Two things differ for the splat and must not leak back into the march: a splat scope binds implicit geometry defaults and position-derived roots to the splat centre (`implicitRoots`, `SPLAT_CONSTANTS`), and a feeder emitted into two splat Fns parses back as ONE node where the march's still parses back as two. A module-scope setup line (a DataTexture / LUT bake) is now declared ONCE even when its node is emitted into two scopes — it used to be declared twice, a SyntaxError, in a march whose colormap fed two per-step sockets. See `docs/dev/splats.md`.
+
+### A Fresnel (or any Normal) in the colour chain sees the window proxy, not the marched surface
+
+- **A Fresnel (or any Normal) in an SDF Output colour chain evaluates on the window proxy, not the marched surface** (2026-10-08, a documented LIMIT, not a bug to fix in passing). March scopes declare no `implicitRoots`, so an unwired Fresnel's `normalWorld`/`positionWorld` arguments stay the bare globals, the node stays in the FLAT body, and it reads the window sphere's normal — a rim on the proxy, not on the field's surface. The splat scope is the opposite case: it binds `n`/`pw` (splats.md). Giving the march a surface normal means a gradient of the field per step, i.e. a real feature, and it would also have to agree with the "scene lights never reach a marched surface" rule. A Fresnel → march param or Field wire itself survives Apply (`resolveRefExpr`, codegen.md).

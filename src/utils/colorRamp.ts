@@ -1,4 +1,5 @@
 import { unitToken, hexToken, splitRecords, formatUnit, POINT_LIST_MAX_RECORDS } from './pointListCodec';
+import { field, readerMemo, roundUnit } from './lutReader';
 import { halfTable, fetchHalf, rangeHalf, FS_LUT_SIZE } from './lutTable';
 import { srgbToLinear01, linearToSrgb01 } from './colorUtils';
 
@@ -45,8 +46,12 @@ export interface ColorRamp {
   readonly stops: readonly RampStop[];
   readonly interp: RampInterp;
   readonly canonical: string;
-  /** A stored value was present but unreadable — the default stands in, and the code says so. */
-  readonly rejected: boolean;
+  /** `values.stops` was present but unreadable: the DEFAULT black→white stops stand in, and the code says so.
+   *  Reported apart from `rejectedInterp` (there is no combined flag): a junk `interp` leaves the stops alone, and
+   *  one word for both printed "stored ramp unreadable - default used" over a ramp whose stops were kept. */
+  readonly rejectedStops: boolean;
+  /** `values.interp` was present but not an interpolation: Linear stands in, the stored stops are kept. */
+  readonly rejectedInterp: boolean;
 }
 
 /** §A5 grammar: exactly three tokens per record, ALL-OR-NOTHING, stable-sorted by position (a tie keeps its input
@@ -76,49 +81,46 @@ export function formatRampStops(stops: readonly RampStop[]): string {
 
 const freezeStops = (stops: readonly RampStop[]): readonly RampStop[] => Object.freeze(stops.map((s) => Object.freeze({ ...s })));
 
-/** The memo key, built ONLY from strings: `String(v)` or a template literal of `v` throws on `{toString:1}`, a
- *  Symbol or a throwing `Symbol.toPrimitive` — in render, where nothing catches it. */
-const part = (v: unknown): string => (typeof v === 'string' ? 's:' + v : 't:' + typeof v);
-const MEMO_MAX = 64;
-const memo = new Map<string, ColorRamp>();
+const memo = readerMemo<ColorRamp>();
 
-/** Reads a property of an untrusted `values` without coercing either side. */
-function field(values: unknown, key: string): unknown {
-  return typeof values === 'object' && values !== null ? (values as Record<string, unknown>)[key] : undefined;
-}
-
-/** THE reader (codegen, CPU, card, editor). Total on `unknown`. stops: undefined/'' → default, not rejected;
- *  non-string or unreadable → default + rejected; interp: exact vocabulary else 'linear' (+ rejected when a key
- *  was present and wrong). `stops` is ALWAYS the parse of `canonical` — the ROUNDED stops — so every surface sees
- *  exactly the ramp the GPU bakes from the emitted string. Memoised on a string-only key (bounded). */
+/** THE reader (codegen, CPU, card, editor, price). Total on `unknown`. stops: undefined/'' → default, not rejected;
+ *  non-string or unreadable → default + rejectedStops; interp: exact vocabulary else 'linear' (+ rejectedInterp
+ *  when a key was present and wrong). `stops` is ALWAYS the parse of `canonical` — the ROUNDED stops — so every
+ *  surface sees exactly the ramp the GPU bakes from the emitted string. Memoised on the injective string-only key
+ *  of utils/lutReader.ts (bounded). */
 export function readColorRamp(values: unknown): ColorRamp {
   const rawStops = field(values, 'stops');
   const rawInterp = field(values, 'interp');
-  const key = part(rawStops) + '\u0000' + part(rawInterp);
-  const hit = memo.get(key);
-  if (hit) return hit;
-
-  let rejected = false;
-  let canonical = DEFAULT_RAMP_STOPS;
-  if (rawStops !== undefined && rawStops !== '') {
-    const parsed = parseRampStops(rawStops);
-    if (parsed) canonical = formatRampStops(parsed);
-    else rejected = true;
-  }
-  let interp: RampInterp = 'linear';
-  if (rawInterp !== undefined) {
-    if (isRampInterp(rawInterp)) interp = rawInterp;
-    else rejected = true;
-  }
-  const ramp: ColorRamp = Object.freeze({
-    stops: freezeStops(parseRampStops(canonical) ?? []),
-    interp,
-    canonical,
-    rejected,
+  return memo([rawStops, rawInterp], () => {
+    let rejectedStops = false;
+    let canonical = DEFAULT_RAMP_STOPS;
+    if (rawStops !== undefined && rawStops !== '') {
+      const parsed = parseRampStops(rawStops);
+      if (parsed) canonical = formatRampStops(parsed);
+      else rejectedStops = true;
+    }
+    let interp: RampInterp = 'linear';
+    let rejectedInterp = false;
+    if (rawInterp !== undefined) {
+      if (isRampInterp(rawInterp)) interp = rawInterp;
+      else rejectedInterp = true;
+    }
+    return Object.freeze({
+      stops: freezeStops(parseRampStops(canonical) ?? []),
+      interp,
+      canonical,
+      rejectedStops,
+      rejectedInterp,
+    });
   });
-  if (memo.size >= MEMO_MAX) memo.clear();
-  memo.set(key, ramp);
-  return ramp;
+}
+
+/** The key `fsLut.make` caches this ramp's baked table under — spelled exactly as FS_COLOR_RAMP_LINES computes it
+ *  from the two strings graphToCode emits (`'ramp ' + mode + ' ' + stops`), so equal ramps share ONE texture.
+ *  graphToCode counts the texture budget by it; lutHelpers.test.ts runs the emitted helper and finds its texture
+ *  under this key, for every ramp of its corpus. */
+export function rampTableKey(ramp: ColorRamp): string {
+  return `ramp ${ramp.interp} ${ramp.canonical}`;
 }
 
 interface LinearStop {
@@ -278,9 +280,8 @@ export function linearToHex(rgb: readonly number[]): string {
 }
 
 // ─── Editor ops — pure; every output goes through formatRampStops before it reaches the store ───
-
-/** A position as the canonical string will hold it, so an op's returned index survives the round trip. */
-const roundUnit = (n: number): number => Number(formatUnit(n));
+// Positions and alpha are rounded as the canonical string holds them (`roundUnit`), so an op's returned index
+// survives the round trip.
 
 /** Insert `stop` before the first stop with a GREATER position (after any it ties with). */
 function insertSorted(stops: readonly RampStop[], stop: RampStop): { stops: RampStop[]; index: number } {
@@ -301,7 +302,9 @@ export function addStopAt(ramp: ColorRamp, pos: number): { stops: RampStop[]; in
 }
 
 /** The [+] button: midway to the left neighbour (the right one for the first stop; with one stop, towards the far
- *  end of the bar). null at the cap. */
+ *  end of the bar). When that midpoint would land ON a stop as the canonical string rounds it (the gap is under
+ *  two 1e-4 steps), it goes to the middle of the WIDEST free gap instead — Blender halves at float precision, but
+ *  here repeated presses piled 17 stops onto 0.0001, indistinguishable on the bar. null at the cap. */
 export function insertStopNear(ramp: ColorRamp, sel: number): { stops: RampStop[]; index: number } | null {
   const stops = ramp.stops;
   if (stops.length === 0) return null;
@@ -311,7 +314,24 @@ export function insertStopNear(ramp: ColorRamp, sel: number): { stops: RampStop[
   if (stops.length === 1) pos = here <= 0.5 ? (here + 1) / 2 : here / 2;
   else if (i === 0) pos = (here + stops[1].pos) / 2;
   else pos = (stops[i - 1].pos + here) / 2;
+  if (stops.some((s) => s.pos === roundUnit(pos))) pos = widestGapMiddle(stops);
   return addStopAt(ramp, pos);
+}
+
+/** The middle of the widest gap between neighbouring stops or a stop and an end of the bar (the first one wins a
+ *  tie). With at most 32 stops in [0, 1] that gap is ≥ 1/33, so its middle never rounds onto a stop. */
+function widestGapMiddle(stops: readonly RampStop[]): number {
+  const edges = [0, ...stops.map((s) => s.pos), 1];
+  let best = 0;
+  let mid = 0.5;
+  for (let k = 1; k < edges.length; k++) {
+    const gap = edges[k] - edges[k - 1];
+    if (gap > best) {
+      best = gap;
+      mid = (edges[k] + edges[k - 1]) / 2;
+    }
+  }
+  return mid;
 }
 
 /** null at one stop (a ramp needs one) or for an index that is not a stop. */
@@ -326,6 +346,14 @@ export function moveStop(stops: readonly RampStop[], i: number, pos: number): { 
   if (!Number.isInteger(i) || i < 0 || i >= stops.length) return { stops: [...stops], index: 0 };
   const moved = { ...stops[i], pos: roundUnit(pos) };
   return insertSorted(stops.filter((_, k) => k !== i), moved);
+}
+
+/** Where stop `i` sits after `moveStop` took the stop at `from` to index `to` (removed, then re-inserted): the
+ *  editor follows a pressed marker through a Position commit that re-sorted the list under it. */
+export function indexAfterMove(i: number, from: number, to: number): number {
+  if (i === from) return to;
+  const j = i > from ? i - 1 : i;
+  return j >= to ? j + 1 : j;
 }
 
 /** Mirror the ramp: pos → 1 − pos, order reversed (so a tie — a hard edge — stays a hard edge, mirrored). */

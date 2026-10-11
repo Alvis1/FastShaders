@@ -21,6 +21,7 @@ import { resolutionLadder } from '@/utils/imageCodec';
 import { resizeEncodedImage, encodeImageFile, isSvgFile, type ImageConvertMode } from '@/utils/imageImport';
 import { imageDropReport, type ConvertNoteReason } from '@/utils/imageImportNote';
 import { pickTextureValues, withImagePayload, type TextureSource } from '@/utils/textureSources';
+import { replacementPictureOrientation } from '@/utils/pictureOrientation';
 import type { ModelTextureSource } from '@/utils/modelTextureSources';
 import { readGltfModel, gltfImageFileName, slotColorSpace } from '@/utils/gltfReader';
 import { encodeGltfImages } from '@/utils/gltfTextureEncode';
@@ -45,12 +46,14 @@ const rowButtonStyle = { ...fieldStyle, width: 'auto', cursor: 'pointer' } as co
  * EXISTING node instead of a new one: the same `encodeImageFile` (EXIF strip,
  * device texture cap, per-image budget, the convert-or-keep choice), the same
  * `resolveImageDrop` (a power-of-two snap ships only with its stashed
- * original), and the same announcements — a per-image refusal, the device
- * downscale notice and the import note's budget lines. What differs is what a
- * drop cannot have: the payload REPLACES this node's, so the project budget is
- * checked per instance through `imageCharsReplacing`, only when the file GROWS
- * the payload, and a refusal raises `image-pick-cap` (a toggle; there is no
- * drop point for "Add anyway" to place a node at).
+ * original), the same orientation rule (`filePictureOrientation`: the glTF way
+ * over a glTF model's own UVs — `replacementPictureOrientation`, which keeps
+ * the node's own when its Flip Y is ticked), and the same announcements — a per-image
+ * refusal, the device downscale notice and the import note's budget lines.
+ * What differs is what a drop cannot have: the payload REPLACES this node's,
+ * so the project budget is checked per instance through `imageCharsReplacing`,
+ * only when the file GROWS the payload, and a refusal raises `image-pick-cap`
+ * (a toggle; there is no drop point for "Add anyway" to place a node at).
  *
  * A module function, not a closure over the menu's render: the menu can close
  * or MOVE to another node mid-encode, and a notice's `proceed` can run long
@@ -102,7 +105,16 @@ async function fillImageNodeFromFile(
   if (!live || live.data.registryType !== 'imageNode') return;
   const liveVals = getNodeValues(live);
   const currentUrl = typeof liveVals.imageB64 === 'string' ? liveVals.imageB64 : '';
-  if (currentUrl === payload.dataUrl && liveVals.fileName === file.name) return;
+  // "Match the model" (utils/pictureOrientation.ts): over a glTF model's own
+  // UVs the picture is stored the glTF way — decided now, from the LIVE store —
+  // unless this node's Flip Y is ticked, which keeps the node's own frame.
+  // The same file again is a no-op only while that answer is unchanged too.
+  const orientation = replacementPictureOrientation(store, liveVals);
+  if (
+    currentUrl === payload.dataUrl &&
+    liveVals.fileName === file.name &&
+    readImageUvMapping(liveVals).orientation === (orientation ?? 'app')
+  ) return;
   if (
     !ignore &&
     payload.dataUrl.length > currentUrl.length &&
@@ -121,6 +133,7 @@ async function fillImageNodeFromFile(
       width: payload.width,
       height: payload.height,
       fileName: file.name,
+      orientation,
       ...(origin ? { originId: origin.originId, srcWidth: origin.srcWidth, srcHeight: origin.srcHeight } : {}),
     }),
   });
@@ -626,7 +639,9 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
     const live = store.nodes.find((n) => n.id === nodeId);
     if (!live || live.data.registryType !== 'imageNode') return;
     const liveVals = getNodeValues(live);
-    const next = pickTextureValues(liveVals, src);
+    // Read only for a payload its holders store BOTH ways: it brings no
+    // orientation, so the pick decides it as "From file…" would.
+    const next = pickTextureValues(liveVals, src, replacementPictureOrientation(store, liveVals));
     if (!next) return;
     const currentUrl = typeof liveVals.imageB64 === 'string' ? liveVals.imageB64 : '';
     if (
@@ -910,7 +925,7 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
           <div style={rowStyle}>
             <span
               style={labelStyle}
-              title={t('Turns the picture about its own centre. A positive angle turns it counter-clockwise on the Sphere, Plane, Cube, Teapot and Bunny, and clockwise on most imported models — the sign three.js and glTF use (with positive Tile X and Tile Y). With different Tile X and Tile Y the turned picture is stretched along the surface, as in glTF.', language)}
+              title={t('Turns the picture about its own centre. A positive angle turns it counter-clockwise on the Sphere, Plane, Cube, Utah Teapot, Stanford Bunny and OBJ models, and clockwise on glTF/GLB models with their own UVs — the sign three.js and glTF use (with positive Tile X and Tile Y). With different Tile X and Tile Y the turned picture is stretched along the surface, as in glTF.', language)}
             >
               {t('Rotation (°)', language)}
             </span>

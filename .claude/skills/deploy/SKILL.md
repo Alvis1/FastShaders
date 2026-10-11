@@ -33,6 +33,8 @@ caches the 404.
 
 1. Commit inside `a-frame-shaderloader/` and push `master` **from the MAIN checkout's submodule**.
    A worktree's `--shared` submodule has the main checkout as `origin`, so its push is refused.
+   Work committed on a side branch (e.g. `fastshaders-0.8`) must reach `master` too, since jsdelivr serves
+   `@master`. Fast-forward it: `git -C a-frame-shaderloader push origin <sha>:refs/heads/master`.
 2. Loaders 0.4/0.5/0.6 are FROZEN. The only change allowed to 0.8.x after its first push is an additive one.
 3. Purge **every changed file** under `js/` and verify each one:
    ```bash
@@ -41,14 +43,22 @@ caches the 404.
    curl -sL "https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/$f" | shasum -a 256
    shasum -a 256 "a-frame-shaderloader/$f"      # must match
    ```
-4. Start vite once (or `npx vite build`) so `fs-vendor-sync` refreshes `public/js/`. Never hand-edit the copies.
+4. Nothing to copy: every vite start (dev, build or test) regenerates the gitignored `public/js/` from the
+   checked-out submodule (`scripts/sync-generated.mjs`). Never hand-edit the copies.
 
 ## 2. Commit the parent
 
-Stage what belongs to the release, including the submodule pointer bump and the synced `public/js/`.
-Run `npm test` again. `release.yml` checks out the RECORDED pointer, and `vendorSync.test.ts` fails
-before any binary builds if the pointer and the copies disagree. Commit and end the message
-with the attribution trailer.
+Stage what belongs to the release, including the submodule pointer bump. `public/js/` is generated and
+gitignored: never stage it, and never follow git's "use -f" hint. Run `npm test` again, commit (end the
+message with the attribution trailer), and only THEN run:
+```bash
+bash scripts/check-submodule.sh
+```
+`release.yml` builds from the RECORDED pointer, and with the copies untracked nothing in CI notices an
+un-bumped one, so this script is the gate (`npm version` also runs it as `preversion`). It refuses a
+checkout that differs from the pointer HEAD commits (a bump that is only staged fails, which is why it
+runs after the commit), uncommitted changes under the submodule's `js/`, and a recorded commit that is
+not on the submodule's `master` (what jsdelivr serves).
 
 ## 3. Release pipeline (Pages + macOS/Windows binaries)
 

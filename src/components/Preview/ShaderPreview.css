@@ -1003,13 +1003,6 @@
   color: var(--text-primary);
   text-align: center;
   outline: none;
-  -moz-appearance: textfield;
-}
-
-.shader-preview__uniform-bound::-webkit-outer-spin-button,
-.shader-preview__uniform-bound::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
 }
 
 .shader-preview__uniform-bound:hover,

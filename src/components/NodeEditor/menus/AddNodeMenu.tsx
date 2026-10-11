@@ -20,10 +20,8 @@ import { getCostTextColor } from '@/utils/colorUtils';
 import { initialNodeValues } from '@/utils/newNodeValues';
 import { getRecentNodeTypes, noteNodeUsed } from './recentNodes';
 import { hiddenOptionalCategories } from '@/registry/optionalCategories';
-import { getBaseCosts } from '@/utils/costTable';
+import { freshNodeCost } from '@/utils/nodeCost';
 import { evalTask } from '@/eval/evalTask';
-
-const COSTS = getBaseCosts();
 
 /** Selected nodes eligible for grouping: not groups, not notes (annotations). */
 const isGroupable = (n: AppNode) => !!n.selected && n.type !== 'group' && n.type !== 'note';
@@ -144,7 +142,7 @@ export function AddNodeMenu() {
       x: contextMenu.x,
       y: contextMenu.y,
     });
-    const cost = COSTS[def.type] ?? 0;
+    const cost = freshNodeCost(def.type) ?? 0;
     const nodes = useAppStore.getState().nodes;
 
     // A singleton type already on the canvas is not added twice — the row
@@ -385,7 +383,7 @@ export function AddNodeMenu() {
     // The Recent section reuses this row but under a `recent:`-prefixed key so
     // it's a distinct focus stop from the same def down in its category.
     const key = keyOverride ?? def.type;
-    const cost = COSTS[def.type] ?? 0;
+    const cost = freshNodeCost(def.type) ?? 0;
     // displayDescription strips the `Also: …` alias tail — that tail is search
     // fodder for nodeMatchRank, never UI text, and the inline line printed it.
     const desc = def.description

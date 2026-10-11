@@ -24,11 +24,14 @@ import { renderArt, hasBuiltinGlyph, type GlyphDesign } from '@/components/NodeE
 import { CUSTOM_GLYPHS } from '@/components/NodeEditor/nodes/glyphs/customGlyphs';
 import { formatCategoryLabel, type Language } from '@/i18n';
 import { getCostColor, getCostScale, getContrastColor } from '@/utils/colorUtils';
+import { freshNodeCost } from '@/utils/nodeCost';
 import { useAppStore } from '@/store/useAppStore';
-import { definitionOf, NODE_COSTS, categoryHex } from './ndData';
+import { definitionOf, categoryHex } from './ndData';
 
 export type { PortPreviewState, GlyphDesign };
-// One import surface for designerApp.ts: the data layer rides along.
+// One import surface for designerApp.ts: the data layer rides along — its
+// NODE_COSTS (a fresh node's price per type) is the one the stage card below
+// prices by too, so the card and the overlays drawn around it agree.
 export * from './ndData';
 
 /** The saved designs, as the running app sees them. Used as the designer's
@@ -85,7 +88,7 @@ function NdPreview(p: NdPreviewInput) {
   });
   const def = definitionOf(p.type);
   if (!def) return null;
-  const cost = NODE_COSTS[def.type] ?? 0;
+  const cost = freshNodeCost(def.type) ?? 0;
   const costColor = getCostColor(cost, costColorLow, costColorHigh);
   return (
     <NodeVisual

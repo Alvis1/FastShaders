@@ -137,6 +137,19 @@ describe('registry defaults and evaluator fallbacks agree', () => {
     expect(res![1]).toBe(0);
   });
 
+  it('colorRamp declares fac = 0.5 (Blender); a bare node is the default ramp at 0.5 — linear mid-grey, opaque', () => {
+    declares('colorRamp', 'fac', 0.5);
+    const res = evalBare('colorRamp');
+    expect(res).not.toBeNull();
+    expect(res!.map((v) => +v.toFixed(3))).toEqual([0.5, 0.5, 0.5, 1]);
+  });
+
+  it('rgbCurves declares color = 1 and fac = 1 (Blender); a bare node is identity on white', () => {
+    declares('rgbCurves', 'color', 1);
+    declares('rgbCurves', 'fac', 1);
+    expect(evalBare('rgbCurves')).toEqual([1, 1, 1]);
+  });
+
   it('the already-correct ones stay correct', () => {
     declares('pow', 'base', 1);
     declares('pow', 'exp', 1);

@@ -125,12 +125,18 @@ export const ORIGIN_ID_RE = /^[0-9a-f]{8,64}$/;
  * `origin` carries the stash id + pre-snap dimensions, so "was snapped" and
  * "can be reverted" cannot drift apart. `colorSpace` 'color' = sRGB texture;
  * 'data' = linear non-mipmapped, toggled in the node settings menu.
+ * `orientation` 'gltf' stores a file's picture the glTF way — the two file
+ * paths pass `filePictureOrientation` (utils/pictureOrientation.ts: added over
+ * a glTF model's own UVs); anything else writes no key, so such a node is
+ * byte-identical to one built before the parameter existed. The GLB import
+ * passes nothing here and writes its own through `gltfTextureValues`.
  */
 export function makeImageNodeFromEncode(
   encoded: { dataUrl: string; width: number; height: number },
   cost: number,
   fileName: string,
   origin?: ImageOriginInfo,
+  orientation?: 'gltf',
 ): ShaderNodeData {
   return {
     registryType: 'imageNode',
@@ -142,6 +148,7 @@ export function makeImageNodeFromEncode(
       height: encoded.height,
       fileName,
       colorSpace: 'color',
+      ...(orientation === 'gltf' ? { orientation: 'gltf' } : {}),
       ...(origin?.originId ? { originId: origin.originId } : {}),
       ...(origin?.srcWidth && origin?.srcHeight
         ? { srcWidth: origin.srcWidth, srcHeight: origin.srcHeight }

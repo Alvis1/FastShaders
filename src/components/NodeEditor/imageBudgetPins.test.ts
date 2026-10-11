@@ -61,7 +61,7 @@ describe('an image drop reports ONCE', () => {
     expect(EDITOR).toMatch(
       /const dropId = generateId\(\);\s*const reports: ImageDropReport\[\] = \[\];/,
     );
-    expect(EDITOR).toContain('placeImageFile(q.img, q.x, q.y, q.ghostId, choice, dropId)');
+    expect(EDITOR).toContain('placeImageFile(q.img, q.x, q.y, q.ghostId, choice, dropId, droppedModelOrientation)');
     expect(EDITOR).toMatch(
       /reports\.push\(r\);\s*\}\s*useAppStore\.getState\(\)\.showImageDropReports\(dropId, reports\);/,
     );

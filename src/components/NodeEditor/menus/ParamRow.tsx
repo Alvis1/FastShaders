@@ -22,8 +22,8 @@ interface ParamRowProps {
 }
 
 /** The decimal places DragNumberInput's edit field shows (`startEdit`:
- *  `String(roundTo(value, 4))`); Enter or a blur commits that text whether or
- *  not anything was typed. */
+ *  `formatFieldNumber(value, 4)`, utils/numberField.ts); Enter or a blur
+ *  commits that text whether or not anything was typed. */
 const EDIT_DECIMALS = 4;
 
 /**

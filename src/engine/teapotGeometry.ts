@@ -13,11 +13,16 @@
  *    A-Frame component there), and `loadTeapot()` evaluates the SAME text in
  *    node for the tests and for `scripts/sync-generated.mjs`. One tessellator,
  *    three consumers, no hand-mirrored twin to drift.
- *  - That script imports this module under plain Node's type stripping (it
- *    writes the untracked `public/models/teapot.obj` at every dev/build/test
- *    start), so this file and `teapotData.ts` keep RELATIVE `.ts` imports only:
- *    no `@/` alias, no enum, namespace or parameter property.
- *    `teapotGeometry.test.ts` pins it.
+ *  - That script imports this module under plain Node's type stripping to write
+ *    the untracked `public/models/teapot.obj`, at a dev/build/test start whose
+ *    content stamp is stale (a fresh checkout, or one of the script's
+ *    TEAPOT_INPUTS changed), so this file and `teapotData.ts` may use only
+ *    erasable TypeScript: relative imports that spell `.ts` (no `@/` alias),
+ *    `import type` for a type-only name, no enum, namespace or parameter
+ *    property. No test can pin that (a breach fails the start before any test
+ *    runs); the start's error names the rule instead. A module this file starts
+ *    importing must join TEAPOT_INPUTS too, or editing it would leave the OBJ
+ *    stale (`syncGenerated.test.ts` fails until it is listed).
  *  - The mesh is built INSIDE the iframe rather than posted in as OBJ text. The
  *    built-in models ride the `fs:obj-model` feed as text and that was the
  *    obvious route, but at the default resolution the teapot is 118k vertices /

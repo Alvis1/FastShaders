@@ -92,7 +92,11 @@ it came from.
 
 **Properties** — one row per uniform the loaded shader exposes: a number box, a
 slider and editable min/max bounds (colour properties get a colour picker). The
-bounds are remembered per name; the values ride the session record.
+bounds are remembered per name; the values ride the session record. The number
+boxes show a dot whatever the system's language and take `.` or `,` (the
+editor's rule, `src/utils/numberField.ts`); a value that is not a number puts
+the box back, and a stored bound that is not a pair of finite numbers is
+guessed afresh.
 
 ## Presentation mode
 

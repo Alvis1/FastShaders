@@ -11,11 +11,12 @@
  * below pins exactly what it pinned — which channel each material wires, from
  * which feeder, with which stored values and settings — read off that node.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { buildGltfSectionGraph, gltfTextureNodeKey, SECTION_PORT_ORDER } from './gltfSectionBuilder';
 import { graphToCode } from './graphToCode';
+import { loadUnknownExpressionValidator } from './unknownExpression';
 import { codeToGraph } from './codeToGraph';
 import { encodeRequests } from '@/utils/gltfImportPlan';
 import { encodeGltfImages, type GltfEncodedImage } from '@/utils/gltfTextureEncode';
@@ -31,6 +32,14 @@ import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import { aiGlb, allSlotsGlb, blenderGlb, fakeEncoder, fakeStash, readOk, scanGlb } from './gltfImportFixtures';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import type { GltfModelReport } from '@/utils/gltfReader';
+
+// The `unknown`-node expression validator parses with @babel/parser, which is
+// loaded ON DEMAND (engine/unknownExpression), and codegen FAILS CLOSED until it
+// lands: the apply∘apply pins below are written against the loaded validator
+// (`normalMap(image3)` round-trips verbatim), so wait for it once. Without this
+// the suite passed only when an earlier test in the worker had finished the
+// load — a shuffled run emitted the `float(0)` fallback and failed.
+beforeAll(() => loadUnknownExpressionValidator());
 
 async function encodeAll(m: GltfModelReport, materials: number[]): Promise<Map<number, GltfEncodedImage>> {
   const { requests } = encodeRequests(m, materials);

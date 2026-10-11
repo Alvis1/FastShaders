@@ -67,8 +67,17 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     }
   },
   "fresnel": {
-    "svg": "<g transform=\"translate(28 28)\"><circle cx=\"0\" cy=\"0\" r=\"16\" fill=\"#FFFFFF\" stroke=\"#2B2B2B\" stroke-width=\"1.4\"/><circle cx=\"-3\" cy=\"-2\" r=\"8\" fill=\"none\" stroke=\"#B4B7C0\" stroke-width=\"0.6\"/><path d=\"M 0 -16 A 16 16 0 0 1 0 16\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"3\" stroke-linecap=\"round\"/><line x1=\"-27\" y1=\"0\" x2=\"-19.5\" y2=\"0\" stroke=\"#8A8F9C\" stroke-width=\"1\"/><polygon points=\"-18 0 -21 -2 -21 2\" fill=\"#8A8F9C\"/></g>",
-    "scale": 1.2
+    "svg": "<g transform=\"translate(28 28)\"><circle cx=\"0\" cy=\"0\" r=\"16\" fill=\"#FFFFFF\" stroke=\"#F57C00\" stroke-width=\"2.4\"></circle><circle cx=\"0\" cy=\"0\" r=\"12.74\" fill=\"none\" stroke=\"#B4B7C0\" stroke-width=\"0.6\"></circle></g>",
+    "scale": 1.2,
+    "dx": 0.5,
+    "dy": -2.5,
+    "width": 47,
+    "height": 71,
+    "sockets": {
+      "ior": 8,
+      "normal": 24,
+      "out": 24
+    }
   },
   "normalLocal": {
     "svg": "<path d=\"M 19.17 19.94 L 25.29 19.47 L 34.75 28 L 26.94 37.84 L 20.81 38.29 L 11.32 29.67 L 19.17 19.94 Z\" fill=\"#FFFFFF\" stroke=\"none\" stroke-width=\"1.4\"></path>\n\n<g transform=\"translate(28 28)\"><g fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.4\" stroke-linejoin=\"round\"><rect x=\"-9.63\" y=\"-1.93\" width=\"13.13\" height=\"12.93\" transform=\"rotate(40.33 -0.88 -3.91)\"></rect><path d=\"M -8.83 -8.07 L -2.71 -8.53 L 7.3 -0.02 L 1.18 0.43 M 7.3 -0.02 L -1.06 9.84 L -7.19 10.29\"></path></g></g>\n\n<g transform=\"translate(28 28)\"><line x1=\"-0.83\" y1=\"-4.14\" x2=\"5\" y2=\"-11\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></line><polygon points=\"0.66 -12.06 6.75 -6.88 8.23 -14.81\" fill=\"#F57C00\"></polygon></g>\n\n<g transform=\"translate(28 28)\"><line x1=\"0.47\" y1=\"4.97\" x2=\"7.73\" y2=\"10.29\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></line><polygon points=\"8.48 5.89 3.75 12.33 11.77 13.24\" fill=\"#F57C00\"></polygon></g>\n\n<g transform=\"translate(28 28)\"><line x1=\"-7.69\" y1=\"1.06\" x2=\"-16.68\" y2=\"1.67\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></line><polygon points=\"-14.42 5.53 -14.96 -2.45 -21.69 2.03\" fill=\"#F57C00\"></polygon></g>",
@@ -632,9 +641,10 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     }
   },
   "brightContrast": {
-    "svg": "<g transform=\"translate(28 28)\"><line x1=\"-20\" y1=\"14\" x2=\"20\" y2=\"14\" stroke=\"#B4B7C0\" stroke-width=\"0.6\"/><line x1=\"-14\" y1=\"14\" x2=\"14\" y2=\"-14\" stroke=\"#8A8F9C\" stroke-width=\"0.8\" stroke-dasharray=\"1.4 1.4\"/><path d=\"M-14 14 L-7 14 L8.5 -17\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><circle cx=\"0\" cy=\"0\" r=\"1.8\" fill=\"#2B2B2B\"/></g>",
-    "scale": 1.6,
-    "dy": -1,
+    "svg": "<g transform=\"translate(28 28)\"><line x1=\"-19.6\" y1=\"8.1\" x2=\"18.55\" y2=\"8.1\" stroke=\"#B4B7C0\" stroke-width=\"0.6\"></line><line x1=\"-19.6\" y1=\"8.1\" x2=\"18.55\" y2=\"0.2\" stroke=\"#8A8F9C\" stroke-width=\"0.8\" stroke-dasharray=\"1.4 1.4\"></line><path d=\"M -19.6 8.1 L -3.89 8.1 L 16.31 -4.01\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><circle cx=\"4.3\" cy=\"3.26\" r=\"2.02\" fill=\"#2B2B2B\"></circle></g>",
+    "scale": 1.8,
+    "dx": 0.5,
+    "dy": -2.5,
     "width": 50,
     "height": 77,
     "sockets": {

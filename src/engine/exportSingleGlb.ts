@@ -30,7 +30,9 @@
  */
 import { useAppStore } from '@/store/useAppStore';
 import { isEvalMode } from '@/eval/evalMode';
-import { getNodeValues } from '@/types';
+import { getNodeValues, type AppNode } from '@/types';
+import { displayImageFileName } from '@/utils/imageNode';
+import { plainStr } from '@/utils/valueCoerce';
 import { readGltfModel } from '@/utils/gltfReader';
 import { isSplatKind } from '@/utils/splatSniff';
 import {
@@ -165,11 +167,37 @@ function generatorName(): string | undefined {
   return /^[0-9A-Za-z.+-]{1,64}$/.test(v) ? `FastShaders ${v}` : undefined;
 }
 
-/** The display name of the node owning asset `key` (for `asset-too-large`). */
-function nameForAssetKey(plan: GlbExportPlan, detail: string): string | undefined {
+/**
+ * Each written picture's name AS ITS CARD SHOWS IT, by canonical src — for the
+ * lines that name one (a texture with no KTX2 copy, an image too large to
+ * embed). The plan's `name` is the name the FILE keeps (glbExportPlan's
+ * `exportImageName`: ASCII, at most 48 characters), which read 'att ls.png'
+ * for 'attēls.png' and nothing at all for '照片.jpg'. A card with no name row
+ * names nothing, and the line falls back to the file's name (or reads
+ * unnamed). The first named node holding a payload names it, as the zip's
+ * image entries do. File-supplied text: `quoted()` (utils/glbExportCopy.ts)
+ * neutralises its control and bidi characters and caps its length.
+ */
+function cardLabels(nodes: readonly AppNode[]): Map<string, string> {
+  const labels = new Map<string, string>();
+  for (const n of nodes) {
+    if (n.data.registryType !== 'imageNode') continue;
+    const v = getNodeValues(n);
+    const src = imageAssetFor(n.id, v)?.src;
+    if (!src || labels.has(src)) continue;
+    // The card's own expression (ShaderNode's file-name row).
+    const label = plainStr(v.fileName) ? displayImageFileName(v.fileName, src) : '';
+    if (label) labels.set(src, label);
+  }
+  return labels;
+}
+
+/** The name of the picture behind asset `key`, as its card shows it (for `asset-too-large`). */
+function nameForAssetKey(plan: GlbExportPlan, detail: string, labels: ReadonlyMap<string, string>): string | undefined {
   if (!detail.startsWith('asset:')) return undefined;
   const key = detail.slice('asset:'.length);
-  return plan.moduleAssets.find((a) => a.key === key)?.name || undefined;
+  const a = plan.moduleAssets.find((x) => x.key === key);
+  return (a && (labels.get(a.src) || a.name)) || undefined;
 }
 
 /**
@@ -209,6 +237,7 @@ export async function prepareSingleGlb(
   const planned = planGlbExport(graph.nodes, graph.edges, moduleText, read.model.signature);
   if (!planned.ok) return { ok: false, reason: planned.reason };
   const plan = planned.plan;
+  const labels = cardLabels(graph.nodes);
 
   const base = prepareRepackBase(read.model, plan.indexMaterials);
   if (!base.ok) return { ok: false, reason: base.refusal.reason, detail: base.refusal.detail };
@@ -254,7 +283,7 @@ export async function prepareSingleGlb(
     ok: false,
     reason: refusal.reason,
     detail: refusal.detail,
-    name: nameForAssetKey(plan, refusal.detail),
+    name: nameForAssetKey(plan, refusal.detail, labels),
   });
 
   // The file WITHOUT KTX2 copies is measured first whatever happens: it is the
@@ -283,6 +312,8 @@ export async function prepareSingleGlb(
     for (const t of [...perTexture.keys()].sort((a, b) => a - b)) {
       if (opts.signal?.aborted) return { ok: false, reason: 'aborted' };
       const s = perTexture.get(t) as RepackSlot;
+      // A skipped texture is reported by the name its card shows (`cardLabels`).
+      const name = labels.get(s.src) || s.name;
       // The SIZE gate runs BEFORE the decode, never after. `encodeKtx2Checked`
       // refuses an over-4096 texture, but only once the whole bitmap is RGBA8
       // in memory — an 8192² payload is ~0.75 GB, retained in `pixelsFor` for
@@ -298,7 +329,7 @@ export async function prepareSingleGlb(
         sizeRefusal = e.ok ? null : e.reason;
       }
       if (!dims || sizeRefusal !== null) {
-        ktx2Skipped.push({ name: s.name, reason: sizeRefusal ?? 'encode-failed' });
+        ktx2Skipped.push({ name, reason: sizeRefusal ?? 'encode-failed' });
       } else {
         if (!pixelsFor.has(s.src)) {
           let px: Ktx2Pixels | null = null;
@@ -311,7 +342,7 @@ export async function prepareSingleGlb(
         }
         const px = pixelsFor.get(s.src) ?? null;
         if (!px) {
-          ktx2Skipped.push({ name: s.name, reason: 'encode-failed' });
+          ktx2Skipped.push({ name, reason: 'encode-failed' });
         } else {
           // The sampler the repacker writes IS the mip decision (a data map is
           // unmipmapped, a colour image trilinear), so it is read from there
@@ -321,7 +352,7 @@ export async function prepareSingleGlb(
           const r = await encodeKtx2Checked(opts.ktx2.encoder, req, opts.signal);
           if (r.ok) ktx2Sources.set(t, r.bytes);
           else if (r.reason === 'aborted') return { ok: false, reason: 'aborted' };
-          else ktx2Skipped.push({ name: s.name, reason: r.reason });
+          else ktx2Skipped.push({ name, reason: r.reason });
         }
       }
       done++;

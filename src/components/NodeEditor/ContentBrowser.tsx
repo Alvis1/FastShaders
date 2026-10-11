@@ -24,7 +24,7 @@ import { assetText, formatCategoryLabel, t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
 import type { NodeCategory, NodeDefinition } from '@/types';
 import { CAT_HEX } from '@/utils/colorUtils';
-import { getBaseCosts } from '@/utils/costTable';
+import { freshNodeCost } from '@/utils/nodeCost';
 import { ScrollArrow, useScrollArrows } from '@/components/Layout/ScrollArrows';
 import './ContentBrowser.css';
 
@@ -63,7 +63,6 @@ const displayCategories = [
 ].filter((c) =>
   c.id === 'texture' ? !allTexturesHidden : !categoryEmptiedByHiding(c.id),
 );
-const costs = getBaseCosts();
 
 /** Pseudo-category id for the user's saved-group library. */
 type BrowserCategory = NodeCategory | 'all' | 'saved';
@@ -676,8 +675,11 @@ export const ContentBrowser = memo(function ContentBrowser() {
     // and the GPU price is the one number every node tile already shows. (The
     // Noise tab was the only tab sorted this way; the rest kept registry order,
     // which is authoring order and means nothing to a reader.) Sorting a copy
-    // keeps `allDefs`' identity stable for the other branches.
-    defs = [...defs].sort((a, b) => (costs[a.type] ?? 50) - (costs[b.type] ?? 50));
+    // keeps `allDefs`' identity stable for the other branches. The key is
+    // `freshNodeCost` — what the tile prints — never the raw table: RGB Curves'
+    // entry (40) prices a node that BAKES, while its tile prints 1, and the
+    // strip sorted it after the 15s.
+    defs = [...defs].sort((a, b) => (freshNodeCost(a.type) ?? 50) - (freshNodeCost(b.type) ?? 50));
     if (!q) return defs;
     const scoped = rankDefs(defs);
     // Fallback: if the active category has no matches, broaden to all node defs

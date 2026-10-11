@@ -103,7 +103,7 @@ import { PreviewLink } from '@/components/Layout/PreviewLink';
 import { PreviewRail } from '@/components/Layout/PreviewRail';
 import { RAIL_ADD_OUTPUT_EVENT, RAIL_FOCUS_EVENT, focusRequestId } from '@/components/Layout/previewRailEvents';
 import { getCostScale, canvasInkColor } from '@/utils/colorUtils';
-import { nodeCostPoints, imageNodeCost, getCost, getBaseCosts } from '@/utils/nodeCost';
+import { nodeCostPoints, imageNodeCost, getCost, getBaseCosts, freshNodeCost } from '@/utils/nodeCost';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import { findSingletonNode } from './singletonNodes';
@@ -124,6 +124,8 @@ import {
   resolveImageDrop,
 } from '@/utils/imageNode';
 import { stashImageOrigin } from '@/utils/imageOriginCache';
+import { filePictureOrientation } from '@/utils/pictureOrientation';
+import { droppedModelPictureOrientation } from '@/utils/droppedModelOrientation';
 import { isImageChannelHandle } from '@/utils/imageChannels';
 import { importNoteLineText, importNoteHasConvertLine, importNoteLifetimeMs } from '@/utils/importNote';
 import { fillTemplate } from '@/utils/fillTemplate';
@@ -2382,7 +2384,7 @@ export function NodeEditor() {
 
       const def = NODE_REGISTRY.get(payload.nodeType);
       if (!def) return;
-      const cost = getBaseCosts()[def.type] ?? 0;
+      const cost = freshNodeCost(def.type) ?? 0;
       const currentNodes = useAppStore.getState().nodes;
 
       // A singleton type that is already on the canvas is not added twice —
@@ -2566,6 +2568,8 @@ export function NodeEditor() {
       ghostId: string,
       mode: ImageConvertMode,
       dropId: string,
+      /** Set when the drop also carried a model: the orientation decided against THAT model. */
+      droppedModelOrientation: Promise<'gltf' | undefined> | null = null,
     ): Promise<ImageDropReport | null> => {
       const position = screenToFlowPosition({ x: clientX, y: clientY });
       if (isSvgFile(file)) {
@@ -2602,6 +2606,12 @@ export function NodeEditor() {
           }
           return null;
         }
+
+        // "Match the model" for a picture that came WITH a model: stored for
+        // that model, decided from its own bytes (utils/droppedModelOrientation.ts)
+        // — awaited here, before the budget check, so the check and the add
+        // below stay one synchronous step.
+        const withModel = droppedModelOrientation ? { orientation: await droppedModelOrientation } : null;
 
         // Stash the pre-snap payload BEFORE anything can bail out: the record
         // is content-keyed, so writing it for a drop the user later cancels
@@ -2650,15 +2660,26 @@ export function NodeEditor() {
           });
           return null;
         }
-        // The creation-time snapshot (`data.cost`, read by layoutEngine's
-        // footprint); the live badge prices through nodeCostPoints, which
-        // applies the same size rule.
+        // The creation-time snapshot (`data.cost`); the live badge — and the
+        // footprint layoutEngine reserves for the card — price through
+        // nodeCostPoints, which applies the same size rule, so the snapshot
+        // agrees with both from the start.
         const cost = imageNodeCost(getCost('imageNode'), payload.width, payload.height);
+        // "Match the model": over a glTF model's own UVs the picture is
+        // stored the glTF way — decided now, from the LIVE store (the `store`
+        // above is the pre-encode snapshot), and never revisited; a picture
+        // dropped WITH a model was decided against that model above.
         addNode({
           id: generateId(),
           type: 'shader',
           position,
-          data: makeImageNodeFromEncode(payload, cost, file.name, origin),
+          data: makeImageNodeFromEncode(
+            payload,
+            cost,
+            file.name,
+            origin,
+            withModel ? withModel.orientation : filePictureOrientation(useAppStore.getState()),
+          ),
         } as AppNode);
         // Device-aware downscale notice (informational; the node is already
         // placed). Only when the source exceeded the target headset's texture
@@ -2826,6 +2847,11 @@ export function NodeEditor() {
         let slot = 0;
         // As on the preview, only the first model is used.
         if (models.length > 0) requestPreviewModelLoad(models[0]);
+        // Pictures in the same drop are stored for THIS model, not the one on
+        // screen: the preview shows it only after its own read — a textured GLB
+        // only after its dialog — long after they are encoded.
+        const droppedModelOrientation =
+          models.length > 0 && images.length > 0 ? droppedModelPictureOrientation(models[0]) : null;
         for (const csv of csvs) {
           const off = STEP * slot++;
           placeCsvFile(csv, event.clientX + off, event.clientY + off);
@@ -2867,7 +2893,7 @@ export function NodeEditor() {
             const dropId = generateId();
             const reports: ImageDropReport[] = [];
             for (const q of queued) {
-              const r = await placeImageFile(q.img, q.x, q.y, q.ghostId, choice, dropId);
+              const r = await placeImageFile(q.img, q.x, q.y, q.ghostId, choice, dropId, droppedModelOrientation);
               if (r) reports.push(r);
             }
             useAppStore.getState().showImageDropReports(dropId, reports);

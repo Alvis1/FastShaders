@@ -22,6 +22,9 @@ import type { AppNode, AppEdge, MaterialSettings, OutputMaterial } from '@/types
 import { isUsableMeshName, MATERIAL_NAME_MAX, MAX_INVENTORY_MESHES } from './meshInventory';
 // Type-only: the facts' shape. The reader itself is never imported here.
 import type { GltfPreviewFacts } from './gltfReader';
+// The ONE glTF-kind predicate. previewMesh never imports this module, so this
+// is not a cycle.
+import { isGltfKind } from './previewMesh';
 import {
   GLTF_MATERIAL_INDEX_MAX,
   MAX_INDEX_MATERIALS,
@@ -596,8 +599,7 @@ const loadedGltfCache = new WeakMap<object, LoadedModel>();
  */
 export function loadedModelOf(pm: unknown): LoadedModel {
   if (!pm || typeof pm !== 'object') return LOADED_NONE;
-  const kind: unknown = (pm as { kind?: unknown }).kind;
-  if (kind !== 'glb' && kind !== 'gltf') return LOADED_NOT_GLTF;
+  if (!isGltfKind((pm as { kind?: unknown }).kind)) return LOADED_NOT_GLTF;
   const facts: unknown = (pm as { gltf?: unknown }).gltf;
   if (!facts || typeof facts !== 'object') return LOADED_UNKNOWN;
   const cached = loadedGltfCache.get(facts);

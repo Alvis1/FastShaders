@@ -62,9 +62,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Clean up BEFORE asserting (`isolate: false`): a failed expect ends the hook,
+  // and the spy on URL.createObjectURL would ride into whichever file the
+  // worker runs next. `mockRestore` clears the calls, so they are copied first.
+  const objectUrlCalls = objectUrl.mock.calls.slice();
   vi.unstubAllGlobals();
-  expect(objectUrl).not.toHaveBeenCalled();
   objectUrl.mockRestore();
+  expect(objectUrlCalls, 'the reader touched URL.createObjectURL').toEqual([]);
   for (const fn of Object.values(NETWORK)) expect(fn).not.toHaveBeenCalled();
 });
 
@@ -690,6 +694,38 @@ describe('gltfImageFileName', () => {
     expect(capped.startsWith('a.b')).toBe(true);
     expect(capped.length).toBe(48 + '.png'.length);
     expect(gltfImageFileName(m, 99, 'm.glb')).toBe('m-image-99.bin');
+  });
+
+  it('a name that is already a FILE name loses ONE picture extension first, so the sniffed one is never doubled', () => {
+    // A FastShaders single-GLB export writes each Image node's fileName,
+    // extension included, as the glTF image name: "Mesh with Materials" over
+    // that export named the picture 'myF-pink.png.png' (2026-10-09).
+    const named: [string, number, string][] = [
+      // [image name, bufferView (1 PNG, 2 JPEG, 3 WebP), expected]
+      ['myF-pink.png', 1, 'myF-pink.png'],
+      ['photo.final.png', 1, 'photo.final.png'],
+      ['photo.final', 1, 'photo.final.png'],
+      ['Body_diffuse', 2, 'Body_diffuse.jpg'],
+      ['SCAN.JPG', 2, 'SCAN.jpg'],
+      ['name.jpeg ', 2, 'name.jpg'],
+      ['w.WebP', 3, 'w.webp'],
+      // The SNIFFED format names the file, as displayImageFileName has it.
+      ['cat.png', 3, 'cat.webp'],
+      ['anim.gif', 1, 'anim.png'],
+      ['tex.KTX2', 1, 'tex.png'],
+      ['pic.avif', 1, 'pic.png'],
+      // ONE extension only.
+      ['a.png.png', 1, 'a.png.png'],
+      // Taken off BEFORE the 48-code-point cap, never a cut-off piece of it.
+      [`${'x'.repeat(46)}.png`, 1, `${'x'.repeat(46)}.png`],
+    ];
+    const m = okModel(glb({
+      images: [...named.map(([name, bufferView]) => ({ bufferView, name })), { bufferView: 3 }],
+      textures: [{ source: named.length, name: 'albedo.png' }],
+    }, [PNG, JPEG, WEBP]));
+    named.forEach(([name, , expected], i) => expect(gltfImageFileName(m, i, 'scan.glb'), name).toBe(expected));
+    // A texture's name is the same kind of name.
+    expect(gltfImageFileName(m, named.length, 'scan.glb')).toBe('albedo.webp');
   });
 });
 

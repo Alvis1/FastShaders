@@ -11,7 +11,10 @@
  * (colour space, filter, flips, tile/offset/rotation, the UV set, the green
  * flip) stay as they are: they describe how THIS node samples the picture.
  * Only `orientation`, a fact about the bytes, moves with the payload
- * (`withImagePayload`).
+ * (`withImagePayload`) — the holders' common value. A payload its holders
+ * store BOTH ways (one file added under two models, utils/pictureOrientation.ts)
+ * has none to bring: it is still ONE cell, and the pick decides it as "From
+ * file…" would (`pickTextureValues`), never by which holder comes first.
  *
  * Provenance (`originId`, `srcWidth`/`srcHeight`) moves WITH the payload,
  * because the original cache behind Revert and the Resolution ladder is
@@ -48,8 +51,13 @@ export interface ProjectTextureSource {
   readonly originId?: string;
   readonly srcWidth?: number;
   readonly srcHeight?: number;
-  /** The holder's row order — a glTF-sourced picture's first row is the TOP. */
-  readonly orientation?: 'gltf';
+  /**
+   * The HOLDERS' row order: `'gltf'` when every holder stores it the glTF way
+   * (a glTF-sourced picture's first row is the TOP), absent when none does,
+   * `'mixed'` when they disagree. A mixed payload has no orientation of its
+   * own to bring, so a pick decides it (`pickTextureValues`).
+   */
+  readonly orientation?: 'gltf' | 'mixed';
   /** The Image nodes holding this payload, in document order. */
   readonly holderIds: readonly string[];
 }
@@ -107,7 +115,10 @@ function originIdOf(v: unknown): string | null {
  * Each group's record comes from ONE provenance holder: the first holder
  * carrying a valid `originId`; else the first carrying a valid
  * `srcWidth`/`srcHeight` pair; else the first holder. Dimensions, file name and
- * provenance all come from that same node.
+ * provenance all come from that same node. The ORIENTATION is the one field
+ * read from every holder (`holdersOrientation`): taken from the provenance
+ * holder alone, a payload stored both ways went to a pick with whichever
+ * orientation came first in document order.
  */
 export function projectTextureSources(nodes: readonly AppNode[]): ProjectTextureSource[] {
   const groups = new Map<string, AppNode[]>();
@@ -135,6 +146,7 @@ export function projectTextureSources(nodes: readonly AppNode[]): ProjectTexture
     const v = getNodeValues(holder);
     const originId = originIdOf(v.originId);
     const pair = pairOf(holder);
+    const orientation = holdersOrientation(holders);
     out.push({
       kind: 'project',
       dataUrl,
@@ -143,18 +155,28 @@ export function projectTextureSources(nodes: readonly AppNode[]): ProjectTexture
       fileName: valueStr(v.fileName),
       ...(originId !== null ? { originId } : {}),
       ...(pair ?? {}),
-      ...(v.orientation === 'gltf' ? { orientation: 'gltf' as const } : {}),
+      ...(orientation ? { orientation } : {}),
       holderIds: holders.map((n) => n.id),
     });
   }
   return out;
 }
 
+/** What every holder's `orientation` says, read exactly as the texture spec
+ *  reads it (`=== 'gltf'`): `'gltf'` from all, nothing from none, else mixed. */
+function holdersOrientation(holders: readonly AppNode[]): 'gltf' | 'mixed' | undefined {
+  let gltf = 0;
+  for (const n of holders) if (getNodeValues(n).orientation === 'gltf') gltf++;
+  return gltf === 0 ? undefined : gltf === holders.length ? 'gltf' : 'mixed';
+}
+
 /**
  * Combine source lists, de-duplicated by {@link textureSourceKey}. The FIRST
  * list to name a key wins its record; for a PROJECT source the holders of
- * later duplicates are appended (distinct, in order), which is the only field
- * where a second sighting adds anything.
+ * later duplicates are appended (distinct, in order), and a sighting whose
+ * orientation disagrees makes the record `'mixed'`. Holders and orientation
+ * describe EVERY holder rather than one, so they are the only fields a second
+ * sighting adds to.
  *
  * Order matters at the call site: project sources come first, so a model
  * texture the import already turned into an Image node is offered as the node
@@ -164,6 +186,7 @@ export function projectTextureSources(nodes: readonly AppNode[]): ProjectTexture
 export function mergeTextureSources(...lists: ReadonlyArray<readonly TextureSource[]>): TextureSource[] {
   const first = new Map<string, TextureSource>();
   const holders = new Map<string, string[]>();
+  const mixed = new Set<string>();
   for (const list of lists) {
     for (const s of list) {
       const key = textureSourceKey(s);
@@ -173,25 +196,29 @@ export function mergeTextureSources(...lists: ReadonlyArray<readonly TextureSour
         if (s.kind === 'project') holders.set(key, [...new Set(s.holderIds)]);
         continue;
       }
-      if (s.kind !== 'project') continue;
+      if (s.kind !== 'project' || seen.kind !== 'project') continue;
       const ids = holders.get(key);
       if (!ids) continue;
       for (const id of s.holderIds) if (!ids.includes(id)) ids.push(id);
+      if (s.orientation !== seen.orientation) mixed.add(key);
     }
   }
-  return [...first.values()].map((s) =>
-    s.kind === 'project' ? { ...s, holderIds: holders.get(textureSourceKey(s))! } : s,
-  );
+  return [...first.values()].map((s) => {
+    if (s.kind !== 'project') return s;
+    const key = textureSourceKey(s);
+    return { ...s, ...(mixed.has(key) ? { orientation: 'mixed' as const } : {}), holderIds: holders.get(key)! };
+  });
 }
 
 /**
  * A cheap subscription key for the open grid (the two-step selector: subscribe
  * to this string, rebuild the list from `getState()` only when it changes).
  * No hashing: per Image node its id, payload length and last 32 characters,
- * dimensions and file-name length. A position-only edit — every drag frame —
- * leaves it unchanged. It can in principle miss a change (two edits hitting
- * the same length and tail); the grid is then stale until the next change, and
- * a pick from it still writes a validated payload.
+ * dimensions, file-name length and orientation (a cell's orientation is what a
+ * pick writes, and "From file…" can change it alone). A position-only edit —
+ * every drag frame — leaves it unchanged. It can in principle miss a change
+ * (two edits hitting the same length and tail); the grid is then stale until
+ * the next change, and a pick from it still writes a validated payload.
  */
 export function textureSourcesKey(nodes: readonly AppNode[]): string {
   const parts: string[] = [];
@@ -199,7 +226,8 @@ export function textureSourcesKey(nodes: readonly AppNode[]): string {
     if (n.data?.registryType !== 'imageNode') continue;
     const v = getNodeValues(n);
     const url = typeof v.imageB64 === 'string' ? v.imageB64 : '';
-    parts.push(`${n.id}:${url.length}:${url.slice(-32)}:${valueStr(v.width)}x${valueStr(v.height)}:${valueStr(v.fileName).length}`);
+    const orient = v.orientation === 'gltf' ? ':gltf' : '';
+    parts.push(`${n.id}:${url.length}:${url.slice(-32)}:${valueStr(v.width)}x${valueStr(v.height)}:${valueStr(v.fileName).length}${orient}`);
   }
   return parts.join('|');
 }
@@ -223,8 +251,10 @@ export interface ImagePayloadFields {
  * cannot drift. Every other value is kept; the previous payload's provenance
  * is DELETED and only `p`'s own is written, so a stale `originId` can never
  * point Revert at the picture that was replaced. `orientation` is the same
- * kind of fact — a model texture's rows are top-first, a file drop's are not —
- * so a photo loaded after a model pick is never uploaded flipped. The colour
+ * kind of fact — a model texture's rows are top-first, and so are a file's
+ * only when it was added over a glTF model's own UVs (`filePictureOrientation`,
+ * utils/pictureOrientation.ts, which "From file…" passes) — so a photo loaded
+ * after a model pick never inherits the previous picture's. The colour
  * space is NOT: it follows the wiring (a normal map switches on connect) and
  * is the user's setting to keep.
  */
@@ -253,8 +283,16 @@ export function withImagePayload(
 }
 
 /**
- * The values a pick of `src` gives the node, or null when the node already
+ * The values a pick of `picked` gives the node, or null when the node already
  * holds exactly that payload (nothing to write, no undo entry).
+ *
+ * `fileOrientation` is what "From file…" would store for a picture written
+ * into this node NOW (`replacementPictureOrientation`, utils/pictureOrientation.ts:
+ * the model on screen, or the node's own under a ticked Flip Y). It is read
+ * only for a `'mixed'` source — the same file added under two models, so the
+ * holders disagree and the bytes bring no orientation of their own; the pick
+ * then decides it the way loading that file would. Any other source brings
+ * its holders' orientation, whatever is on screen.
  *
  * PROJECT sources only, and the type says so: a 'model' source has no payload
  * to copy — it has to be encoded first, and the fields that come back from the
@@ -264,8 +302,13 @@ export function withImagePayload(
  */
 export function pickTextureValues(
   current: Readonly<Record<string, string | number>>,
-  src: ProjectTextureSource,
+  picked: ProjectTextureSource,
+  fileOrientation: 'gltf' | undefined,
 ): Record<string, string | number> | null {
+  const src: ImagePayloadFields = {
+    ...picked,
+    orientation: picked.orientation === 'mixed' ? fileOrientation : picked.orientation,
+  };
   if (current.imageB64 === src.dataUrl) return null;
   return withImagePayload(current, src);
 }

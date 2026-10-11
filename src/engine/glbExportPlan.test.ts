@@ -16,16 +16,19 @@ import {
   planGlbExport,
   type GlbExportPlan,
 } from './glbExportPlan';
-import { FS_ASSET_KEY_RE, IMAGE_ASSET_KEY_RE } from './glbShaderContract';
+import { FS_ASSET_KEY_RE, FS_PROJECT_BEGIN, FS_PROJECT_END, IMAGE_ASSET_KEY_RE } from './glbShaderContract';
 import { imageAssetFor } from './imageAssets';
+import { graphToCode } from './graphToCode';
 import { IMAGE_CHANNEL_COMPONENTS } from '@/utils/imageChannels';
 import { gltfTextureValues, gltfUvMatrix, readImageUvMapping } from '@/utils/imageUvMapping';
-import { samplerFor } from '@/utils/glbRepack';
+import { prepareRepackBase, repackGlb, safeImageName, samplerFor } from '@/utils/glbRepack';
+import { displayImageFileName } from '@/utils/imageNode';
+import { modelTextureSources } from '@/utils/modelTextureSources';
 import { buildGltfSectionGraph } from './gltfSectionBuilder';
 import { encodeRequests } from '@/utils/gltfImportPlan';
 import { encodeGltfImages } from '@/utils/gltfTextureEncode';
 import { PNG_COLOR, blenderGlb, fakeEncoder, fakeStash, glbOf, readOk } from './gltfImportFixtures';
-import { canonicalSrc, fakeWebp, makeEdge, makeNode, makeRealPng } from '@/test-utils';
+import { canonicalSrc, fakeWebp, makeEdge, makeNode, makeRealPng, repackBaseGlb } from '@/test-utils';
 import { getNodeValues, type AppEdge, type AppNode } from '@/types';
 
 const SIG = ['Body', 'Glass', 'Trim'];
@@ -391,6 +394,119 @@ describe('moduleAssets', () => {
       const a = imageAssetFor(id, { imageB64: PNG_T, width: 2, height: 2 })!;
       expect(a.key).toMatch(IMAGE_ASSET_KEY_RE);
       expect(a.key).toMatch(FS_ASSET_KEY_RE);
+    }
+  });
+});
+
+/* ── the written image name ──────────────────────────────────────────────── */
+
+describe('the written image NAME is the one the card shows, so export → "Mesh with Materials" never doubles it', () => {
+  const BASE = readOk(repackBaseGlb({ materials: SIG }));
+
+  /** Export ONE picture into material 0's base colour, then read the file back as the import does. */
+  async function roundTrip(fileName: string | null, src: string) {
+    const pic = tex('P', src);
+    const values = (pic.data as { values: Record<string, string | number> }).values;
+    if (fileName === null) delete values.fileName;
+    else values.fileName = fileName;
+    const nodes = [out([{ gltfMaterialIndex: 0 }, { gltfMaterialIndex: 1 }]), pic];
+    const edges = [makeEdge('P', 'out', 'out', 'm1:color')];
+    const moduleText = graphToCode(nodes, edges).code;
+    const p = plan(nodes, edges, moduleText, BASE.signature);
+    const base = prepareRepackBase(BASE, p.indexMaterials);
+    if (!base.ok) throw new Error('base: ' + JSON.stringify(base.refusal));
+    const r = repackGlb({
+      base: base.model,
+      indexMaterials: p.indexMaterials,
+      slots: p.slots,
+      payloads: p.payloads,
+      fallbacks: new Map(),
+      moduleText,
+      moduleAssets: p.moduleAssets,
+      projectText: `${FS_PROJECT_BEGIN}\n{}\n${FS_PROJECT_END}`,
+      webpMode: 'fallback',
+    });
+    if (!r.ok) throw new Error('repack: ' + JSON.stringify(r.refusal));
+    const m = readOk(r.bytes);
+    const ref = m.materials[0].slots.find((s) => s.slot === 'baseColor');
+    const extract = ref ? m.textures[ref.texture].extract : null;
+    if (!extract || extract.status !== 'ok') throw new Error('the picture is not in material 0');
+    // "Mesh with Materials": the import's own encoder and builder.
+    const { requests } = encodeRequests(m, [0]);
+    const enc = await encodeGltfImages(m, requests, {
+      modelName: 'golden.glb',
+      maxDim: null,
+      deviceMaxDim: 2048,
+      ignoreLimits: false,
+      budgetChars: Infinity,
+      encode: fakeEncoder([]),
+      stash: fakeStash(),
+    });
+    const built = buildGltfSectionGraph(m, { materials: [0], encoded: enc.encoded });
+    return {
+      planned: p.slots[0].name,
+      asset: p.moduleAssets.find((a) => a.src === src)?.name,
+      written: m.images[extract.image].name,
+      rebuilt: built.nodes.filter((n) => n.data.registryType === 'imageNode').map((n) => getNodeValues(n).fileName),
+      listed: modelTextureSources(m, 'golden.glb').find((s) => s.image === extract.image)?.fileName,
+      card: displayImageFileName(fileName, src),
+    };
+  }
+
+  it('a name the drop filter took, or only a MIME type vouched for, comes back as the card showed it', async () => {
+    const cases: [string, string, string][] = [
+      // [stored file name, payload, the name every surface ends with]
+      ['myF-pink.png', PNG_N, 'myF-pink.png'],
+      ['photo.jfif', PNG_N, 'photo.png'],
+      ['scan.bmp', PNG_N, 'scan.png'],
+      ['icon.ico', PNG_N, 'icon.png'],
+      ['old.tiff', PNG_N, 'old.png'],
+      ['x.pjpeg', PNG_N, 'x.png'],
+      // Accepted by its MIME type alone (Safari), so no list can know it.
+      ['cat.heic', PNG_N, 'cat.png'],
+      ['scan', PNG_N, 'scan.png'],
+      // The bytes name the format, as on the card: a drop re-encodes.
+      ['IMG_0001.JPG', WEBP_E, 'IMG_0001.webp'],
+    ];
+    for (const [stored, src, expected] of cases) {
+      const r = await roundTrip(stored, src);
+      expect(r, stored).toEqual({ planned: expected, asset: expected, written: expected, rebuilt: [expected], listed: expected, card: expected });
+    }
+  });
+
+  it('past the file’s name cap the STEM is cut, never the extension', async () => {
+    // The repacker's own cut: through '….png' it wrote '….p', read back as '….p.png'.
+    const CAP = safeImageName('x'.repeat(200)).length;
+    const cases: [string, string, string][] = [
+      [`${'x'.repeat(46)}.png`, PNG_N, '.png'],
+      [`${'y'.repeat(45)}.jpeg`, WEBP_E, '.webp'],
+    ];
+    for (const [stored, src, ext] of cases) {
+      const r = await roundTrip(stored, src);
+      const expected = stored.slice(0, CAP - ext.length) + ext;
+      expect(expected).toHaveLength(CAP);
+      expect(r, stored).toMatchObject({ planned: expected, asset: expected, written: expected, rebuilt: [expected], listed: expected });
+    }
+  });
+
+  it('a node without a name — or with nothing the file can hold — is written unnamed and read back under the model’s', async () => {
+    for (const unnamed of [null, '', '   ', '照片.jpg', '...']) {
+      const r = await roundTrip(unnamed, PNG_N);
+      expect(r.planned, String(unnamed)).toBe('');
+      // No `name` key in the file; the reader reports that as ''.
+      expect(r.written, String(unnamed)).toBe('');
+      // Never 'png.png' — what '照片.jpg' came back as, sanitised to '.jpg'.
+      expect(r.rebuilt[0], String(unnamed)).toMatch(/^golden-image-\d+\.png$/);
+    }
+  });
+
+  it('never throws on a tampered name, and reads a non-string as NO name, as the card does', () => {
+    // The card shows 'image.png' for each of these; a coercing read wrote '42.png', 'true.png', 'a.png'.
+    for (const fileName of [{ toString: 1 }, 42, true, ['a.png']]) {
+      const pic = tex('P', PNG_N, { fileName: fileName as unknown as string });
+      const p = plan([out([{ gltfMaterialIndex: 0 }]), pic], [makeEdge('P', 'out', 'out', 'm1:color')]);
+      expect(p.slots[0].name, JSON.stringify(fileName)).toBe('');
+      expect(displayImageFileName(fileName, PNG_N), JSON.stringify(fileName)).toBe('image.png');
     }
   });
 });

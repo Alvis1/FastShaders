@@ -33,6 +33,7 @@ import {
 } from './subdivisionSteps';
 import { shownGeometry, validateGeometry } from './previewGeometryPref';
 import { BOOT_MESH_WAIT_MS, shouldWaitForBootMesh } from './bootMeshWait';
+import { holdsDocument, useColdRebuildKey, useDebounced, useSettledPreview } from './useSettledPreview';
 import {
   createPreviewMesh,
   detectMeshKind,
@@ -90,6 +91,8 @@ import { isImageChannelHandle } from '@/utils/imageChannels';
 import { platformWebGL2Reason } from '@/utils/feedbackReport';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { fullscreenElement } from '@/components/inputs/colorPickerModel';
+import { NumberField } from '@/components/inputs/NumberField';
+import { formatFieldNumber, parseFieldNumber } from '@/utils/numberField';
 import { AnimClipMenu } from './AnimClipMenu';
 import { useLongPress } from '@/hooks/useLongPress';
 import {
@@ -109,11 +112,16 @@ type FsElement = HTMLElement & { webkitRequestFullscreen?: () => Promise<void> |
 type FsDocument = Document & { webkitExitFullscreen?: () => Promise<void> | void };
 
 /**
- * Number input that buffers in-progress text as a string so the user can type
- * partial values like "-" or "1e" without the controlled-input round-trip
- * snapping the field back to the previous numeric value. Commits on every
- * successful parse and re-syncs from the prop on blur or when the prop changes
- * outside of editing.
+ * A uniform slider's min or max: the app's number field (a dot whatever the
+ * locale, `.` or `,` typed — components/inputs/NumberField.tsx). The draft
+ * buffers in-progress text so the user can type partial values like "-" or
+ * "1e" without the controlled-input round-trip snapping the field back to the
+ * previous numeric value. Commits on every successful parse; Enter, Escape
+ * (which also leaves the field) and blur drop the draft, so the field shows the
+ * stored bound again — and, with no draft open, follows the prop as it
+ * changes. Arrows and a focused field's wheel step by 1, as the number input's
+ * `step="any"` did. A bound is a preview preference, not graph state: no
+ * history.
  */
 function BoundInput({
   value,
@@ -126,30 +134,22 @@ function BoundInput({
   title: string;
   className?: string;
 }) {
-  const [draft, setDraft] = useState(String(value));
-  const editingRef = useRef(false);
-  useEffect(() => {
-    if (!editingRef.current) setDraft(String(value));
-  }, [value]);
+  const [draft, setDraft] = useState<string | null>(null);
   return (
-    <input
-      type="number"
+    <NumberField
       className={className}
-      value={draft}
-      step="any"
       title={title}
-      onFocus={() => { editingRef.current = true; }}
-      onChange={(e) => {
-        setDraft(e.target.value);
-        const n = parseFloat(e.target.value);
-        if (!isNaN(n)) onCommit(n);
+      value={value}
+      step={1}
+      text={draft ?? formatFieldNumber(value)}
+      onText={(text) => {
+        setDraft(text);
+        const n = parseFieldNumber(text);
+        if (n !== null) onCommit(n);
       }}
-      onBlur={() => {
-        editingRef.current = false;
-        const n = parseFloat(draft);
-        if (isNaN(n)) setDraft(String(value));
-        else setDraft(String(n));
-      }}
+      onEnter={() => setDraft(null)}
+      onEscape={(e) => e.currentTarget.blur()}
+      onBlur={() => setDraft(null)}
     />
   );
 }
@@ -287,47 +287,6 @@ const ROTATION_PERSIST_MS = 2000;
  * before the release, and reaching the toolbar costs far more than this.
  */
 const SLIDER_PERSIST_MS = 300;
-
-/**
- * Trailing-debounce a value: the first value is adopted immediately (so initial
- * paint isn't delayed) and each subsequent change waits for `delayMs` of quiet.
- */
-function useDebounced<T>(value: T, delayMs: number): T {
-  const [settled, setSettled] = useState(value);
-  useEffect(() => {
-    if (Object.is(value, settled)) return;
-    const id = setTimeout(() => setSettled(value), delayMs);
-    return () => clearTimeout(id);
-  }, [value, settled, delayMs]);
-  return settled;
-}
-
-/**
- * The store's `previewCode`, trailing-debounced like `useDebounced` but fed by
- * a store SUBSCRIPTION rather than a selector: `previewCode` moves per
- * pointermove during a value scrub, and a selector re-rendered this whole panel
- * at that rate only for the debounce to discard it.
- */
-function useSettledPreviewCode(delayMs: number): string {
-  const [settled, setSettled] = useState(() => useAppStore.getState().previewCode);
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    // Nothing seen yet, so the first call always arms: it covers a change that
-    // landed between the first render and this subscription.
-    let seen: string | undefined;
-    const arm = () => {
-      const code = useAppStore.getState().previewCode;
-      if (code === seen) return;
-      seen = code;
-      clearTimeout(timer);
-      timer = setTimeout(() => setSettled(code), delayMs);
-    };
-    arm();
-    const unsubscribe = useAppStore.subscribe(arm);
-    return () => { unsubscribe(); clearTimeout(timer); };
-  }, [delayMs]);
-  return settled;
-}
 
 function loadVec3(key: string, reject?: (p: CameraPosition) => boolean): CameraPosition | null {
   try {
@@ -480,13 +439,39 @@ function liveAudioSettingsKey(s: { nodes: AppNode[]; edges: AppEdge[] }): string
 
 export function ShaderPreview() {
   /**
-   * The settled form of the generated TSL, and the ONLY form this panel
-   * renders from: it is the module the iframe is actually running, so the
-   * Uniforms overlay describes the shader on screen, and the raw `previewCode`
-   * advances per pointermove during a value scrub (see the hook). The one
-   * reader of the raw value, `handleOpenVR`, takes it at the gesture.
+   * The generated TSL SETTLED, together with the nodes it was generated from
+   * (settledPreview.ts tells the race, the rule and the measurements), and the
+   * ONLY form this panel renders from: it is the module the iframe is actually
+   * running, so the Uniforms overlay describes the shader on screen.
+   * Trailing-debounced, and the first code after a whole-graph replacement
+   * settles at once. Fed by a store SUBSCRIPTION, not a selector: the raw
+   * `previewCode` moves per pointermove during a value scrub, and a selector
+   * re-rendered this whole panel at that rate only for the debounce to discard
+   * it. The one reader of the raw value, `handleOpenVR`, takes it at the
+   * gesture. `settlePendingPreview` is the cold rebuild's (`useColdRebuildKey`).
    */
-  const debouncedPreviewCode = useSettledPreviewCode(PREVIEW_REBUILD_DEBOUNCE_MS);
+  const { settled: settledPreview, settlePending: settlePendingPreview } = useSettledPreview({
+    getState: useAppStore.getState,
+    subscribe: useAppStore.subscribe,
+    delayMs: PREVIEW_REBUILD_DEBOUNCE_MS,
+    events: window,
+  });
+  const debouncedPreviewCode = settledPreview.code;
+  /**
+   * The settled pair for the three CLOSURES that plan an asset feed from its
+   * nodes (the document memo, the hot swap, the load-time replay), each
+   * reading it when it RUNS: those nodes are the ONE source the feed plans from
+   * (the previewModule comment says why never the live store). Read through
+   * this ref and never named by a closure: every closure created in one render
+   * shares ONE context holding each variable any of them names, so a closure
+   * naming the nodes made every callback of that render keep them, and a
+   * memoized one (`handleOpenVR`, …) kept a replaced graph's images reachable
+   * long after the history had let go (a heap probe, 2026-10-09: 51.9 MB
+   * against 21.9 MB). Written during render, the `nodesRef` idiom of
+   * EdgeInfoCard, so the document memo reads this render's pair.
+   */
+  const settledRef = useRef(settledPreview);
+  settledRef.current = settledPreview;
   const shaderName = useAppStore((s) => s.shaderName);
   const language = useAppStore((s) => s.language);
   const previewMesh = useAppStore((s) => s.previewMesh);
@@ -691,9 +676,11 @@ export function ShaderPreview() {
    * The whole rule, and the bug it closes, is in bootMeshWait.ts.
    *
    * Derived per render, never captured: a drop landing during the hold ends it
-   * through `previewMesh` without waiting for the cap.
+   * through `previewMesh` without waiting for the cap. The gates read
+   * `waitingForBootMesh` (below `coldDocKey`), which also holds the first
+   * document while its cold key is being adopted (`holdsDocument`).
    */
-  const waitingForBootMesh = shouldWaitForBootMesh(
+  const bootMeshHeld = shouldWaitForBootMesh(
     bootGeometryWasCustom(),
     previewMesh !== null,
     bootMeshSettled,
@@ -799,7 +786,8 @@ export function ShaderPreview() {
    * Which clip to play. Held in a REF, not persisted: an index means nothing
    * across models (clip 3 of a walk cycle is clip 3 of nothing in the next
    * file), so it survives a shader-edit rebuild — where the same model
-   * reloads — and resets with `geometryRebuildKey` alongside the playhead.
+   * reloads — and resets with the playhead when a document is built for
+   * another `geometryRebuildKey`.
    * The rendered value comes from `animInfo.clip`, i.e. from what the stage
    * says it is actually playing, so the tick can never point at a clip the
    * component clamped away.
@@ -964,7 +952,8 @@ export function ShaderPreview() {
   /**
    * Bumped to force a real `srcDoc` rebuild — by the ack watchdog when a swap
    * goes unanswered, and available to anything else that ever needs the cold
-   * path. It is a dep of the previewHtml memo and of nothing else.
+   * path. It folds into `coldInputsKey` (and so into the document's key) and
+   * into nothing else.
    */
   const [coldGen, setColdGen] = useState(0);
   /** A swap has been in flight longer than HOT_SWAP_PILL_DELAY_MS. */
@@ -2048,26 +2037,30 @@ export function ShaderPreview() {
   // is classified above `coldDocKey` — see docs/dev/preview-and-runtime.md.
 
   /**
-   * The code's debounce, for the material settings: `updateSettings` mints a
-   * BRAND-NEW settings object per call (`{ ...settings, ...patch }` in
-   * ShaderSettingsMenu), and the Alpha Clip threshold is an
-   * `<input type="range">` whose onChange fires per pointermove. Material
-   * settings reach the module only through `buildShaderModule`'s option, never
-   * through `previewCode`, so `debouncedPreviewCode` could not cover them.
+   * The module's SECOND debounced input, the material settings:
+   * `updateSettings` mints a BRAND-NEW settings object per call
+   * (`{ ...settings, ...patch }` in ShaderSettingsMenu), and the Alpha Clip
+   * threshold is an `<input type="range">` whose onChange fires per
+   * pointermove. The default material's settings reach the module only through
+   * `buildShaderModule`'s option, never through `previewCode`, so
+   * `debouncedPreviewCode` could not cover them.
    *
-   * Debounced as a KEY, not as the object: the memo below reads the LIVE
-   * `materialSettings` at memo time (the `cameraPosRef`/`rotationRef` idiom
-   * two dozen lines down) and only lists the settled key in its deps, so a
-   * rebuild triggered by something else still bakes the current settings and
-   * nothing has to be reconstructed out of JSON. The key is stringified from
-   * a small flat object; `updateSettings` spreads, so an existing key keeps
-   * its position and only a real change moves the string.
+   * Debounced as a KEY, not as the object: the module memo below reads the
+   * LIVE `materialSettings` whenever it recomputes and lists only this settled
+   * key in its deps, so nothing has to be reconstructed out of JSON. A cold
+   * rebuild FLUSHES it together with the code (`settleColdRebuild` below):
+   * before that, a cold key inside 200 ms of a settings edit baked the
+   * PREVIOUS Transparent / Side / Alpha clip / Flat / displacement mode into
+   * the fresh document until the swap corrected it. The key is stringified
+   * from a small flat object; `updateSettings` spreads, so an existing key
+   * keeps its position and only a real change moves the string.
    */
   const materialSettingsKey = useMemo(
     () => JSON.stringify(materialSettings ?? null),
     [materialSettings],
   );
-  const debouncedMaterialSettingsKey = useDebounced(materialSettingsKey, PREVIEW_REBUILD_DEBOUNCE_MS);
+  const [debouncedMaterialSettingsKey, settleMaterialSettings] =
+    useDebounced(materialSettingsKey, PREVIEW_REBUILD_DEBOUNCE_MS);
 
   // Dropped meshes key on their id so re-dropping a file (same name, new
   // bytes) still forces a fresh document — the feed only ever applies to the
@@ -2096,8 +2089,9 @@ export function ShaderPreview() {
    * uniforms and `time` itself survive an edit.
    *
    * `materialSettings` is read LIVE while only its debounced KEY is in the dep
-   * list — the same idiom the memo below uses, and for the same reason: the
-   * Alpha Clip slider mints a new settings object per pointermove.
+   * list (the Alpha Clip slider mints a new settings object per pointermove);
+   * a cold rebuild flushes that key first, so the document it bakes carries
+   * the current settings.
    *
    * Image payloads ride the generated code as short `fs-asset:` placeholders
    * (engine/imageAssets.ts) and are NOT expanded into this module: the module
@@ -2106,12 +2100,24 @@ export function ShaderPreview() {
    * per key per document (engine/previewAssetFeed.ts — the boot list baked in
    * the document memo below, later keys posted by `postShaderSwap` right
    * before the `fs:shader` they belong to). A scrub therefore posts the small
-   * placeholder module, not megabytes of `data:` URLs per edit. Nodes are read
-   * imperatively at those two sites because subscribing to `s.nodes` would
-   * re-render this panel on every drag frame; that is safe because the
-   * placeholder embeds a payload hash, so swapping an image always changes
-   * `previewCode`, the module and the key. The XR popup still inlines
-   * (`inlineImageAssetsFromNodes` at the gesture): a top-level document has no
+   * placeholder module, not megabytes of `data:` URLs per edit.
+   *
+   * Both sites plan those payloads from `moduleNodes`, the nodes THIS module
+   * was generated from (settled with its code as one value, settledPreview.ts,
+   * and read through `settledRef`), and never from the live store. A key is
+   * `<node id>-<payload hash>`, so it exists only on the nodes its code came
+   * from, and the live nodes run ahead of a debounced module: a cold rebuild
+   * inside the debounce (Mesh with Materials swaps the model in the same tick
+   * it replaces the graph) baked the PREVIOUS module with a boot list planned
+   * from nodes that no longer held its key, and the document ran
+   * `img.src = "fs-asset:…"`, which is
+   * ERR_UNKNOWN_URL_SCHEME plus ~100 ms of the 1x1 black fallback on the new
+   * model (2026-10-08). The payload hash in the key proves an image change
+   * always changes the code; it never proved the code had caught up with the
+   * nodes. Still no `s.nodes` selector: the pair is cut inside the store
+   * subscription and committed only when the code moves, so a drag frame
+   * re-renders nothing. The XR popup still inlines (`inlineImageAssetsFromNodes`
+   * at the gesture, code and nodes read together): a top-level document has no
    * parent to feed it.
    */
   // The Output's loader-0.6 MIRROR plan — the index sections' GLTFLoader mesh
@@ -2137,6 +2143,8 @@ export function ShaderPreview() {
    *
    * HOT (delivered to the live document, never rebuilds it):
    *   · debouncedPreviewCode        → the module text            → fs:shader
+   *   · moduleNodes (settled WITH the code) → its image payloads
+   *                                   → fs:image-assets, just before that fs:shader
    *   · debouncedMaterialSettingsKey→ the module text (it is a
    *                                   buildShaderModule option)  → fs:shader
    *   · previewGeometry (primitives + marchSphere) → fs:geometry
@@ -2147,7 +2155,7 @@ export function ShaderPreview() {
    *   · playing                                    → fs:playing
    *   · uniform values                             → fs:uniform
    *
-   * COLD (must bake into a fresh document — these are the memo's deps):
+   * COLD (must bake into a fresh document — folded into `coldInputsKey`):
    *   · geometryRebuildKey — obj-model/gltf-model plumbing, the GLTF_ANIM
    *     script's presence, the model feed's expected key and the mesh
    *     inventory key are all decided at emit time; and swapping a live scene
@@ -2164,16 +2172,44 @@ export function ShaderPreview() {
    *   · previewGeometry / marchWindow / playing / bgColor / effLighting /
    *     effectiveSubdivision / previewMesh — hot, and listing them would
    *     rebuild the document to emit HTML the running one already matches.
+   *   · moduleNodes (through `settledRef`) — the nodes previewModule was
+   *     generated from, for the boot asset list; it only ever moves together
+   *     with the code it belongs to.
    *   · cameraPosRef / rotationRef — restore targets, read at rebuild time;
    *     listing them would rebuild on every reported camera move, forever.
    *
-   * `coldDocKey` folds the COLD list into one string, and is the document
-   * memo's ONLY dependency — so the classification above is enforceable:
-   * previewRebuild.test.ts fails if a dep appears that this comment does not
-   * name.
+   * `coldInputsKey` folds the COLD list into one string. Nothing is keyed on
+   * it directly: the document is keyed on `coldDocKey`, that string ADOPTED by
+   * `useColdRebuildKey` only after `settleColdRebuild` has committed both of
+   * the module's debounced inputs (the newest pair the debounce has cut, still
+   * held or committed by its timer but not yet rendered, and the material
+   * settings' key), and only once every effect of the commit that moved it has
+   * run. So EVERY cold rebuild — by any input above or a future one — bakes
+   * the newest code there is, including the code a graph edit in that same
+   * commit produced (the graph→code pass is one of those effects): a Raymarch
+   * Output starting or stopping to drive while a model is shown moves
+   * `geometryRebuildKey` in the very render of the edit. (An edit, then a
+   * Model switch or the WGSL/GLSL toggle inside the 200 ms, rebuilt with the
+   * PREVIOUS module: the old picture on the new document for up to ~100 ms,
+   * measured 2026-10-09.) Code cut in a LATER commit reaches the fresh
+   * document by swap, like any edit. `coldDocKey` is the document memo's ONLY
+   * dependency and the iframe's `key`, so the
+   * classification above is enforceable: previewRebuild.test.ts fails if a dep
+   * appears that this comment does not name, or if anything but
+   * `useColdRebuildKey` reads `coldInputsKey`.
    */
-  const coldDocKey = `${geometryRebuildKey}|${forceWebGL2 ? 1 : 0}|${coldGen}`
+  const coldInputsKey = `${geometryRebuildKey}|${forceWebGL2 ? 1 : 0}|${coldGen}`
     + (HOT_SWAP_ENABLED ? '' : `|${previewModule}`);
+  const settleColdRebuild = useCallback(() => {
+    settlePendingPreview();
+    settleMaterialSettings();
+  }, [settlePendingPreview, settleMaterialSettings]);
+  const [coldDocKey, coldRebuildPending] = useColdRebuildKey(coldInputsKey, settleColdRebuild);
+  // The document hold the iframe and both effects below gate on: the boot
+  // mesh read, and, before any document is up (`runningModuleRef` is seeded by
+  // the first attach and never null again), a pending cold rebuild, so a boot
+  // with a dropped model still builds ONE document (`holdsDocument`).
+  const waitingForBootMesh = holdsDocument(bootMeshHeld, coldRebuildPending, runningModuleRef.current !== null);
 
   /**
    * The document, plus the module it was BAKED with.
@@ -2185,10 +2221,11 @@ export function ShaderPreview() {
    * code moved, `bakedModule` is the previous one and the effect posts.
    */
   const [previewHtml, bakedModule, bootAssetKeys] = useMemo(() => {
-    // The payloads the boot module references, baked into the document so its
-    // resolver maps them before the boot blob is minted; `boot.sent` seeds
-    // what the hot channel must not re-send to this document.
-    const boot = planPreviewAssetFeed(new Set(), collectImageAssets(useAppStore.getState().nodes), previewModule);
+    // The payloads the boot module references, from the nodes it was generated
+    // from (see previewModule), baked so the resolver maps them before the boot
+    // blob is minted; `boot.sent` seeds what the hot channel must not re-send.
+    const moduleNodes = settledRef.current.nodes;
+    const boot = planPreviewAssetFeed(new Set(), collectImageAssets(moduleNodes), previewModule);
     const options: PreviewOptions = {
       geometry: previewGeometry,
       marchWindow: marchWindow ?? 1,
@@ -2269,17 +2306,21 @@ export function ShaderPreview() {
    *
    * Stable identity (it touches only refs and setters), because the iframe's
    * load handler calls it too — see the replay there.
+   *
+   * `codeNodes` are the nodes `code` was generated from (the settled pair's,
+   * `moduleNodes` at both call sites): its `fs-asset:` keys live on them.
    */
-  const postShaderSwap = useCallback((code: string) => {
+  const postShaderSwap = useCallback((code: string, codeNodes: AppNode[]) => {
     const win = iframeRef.current?.contentWindow;
     if (!win) return;
     clearHotSwapWait();
     const gen = ++hotGenRef.current;
     // The payloads this module references that the document has not received
     // go FIRST (postMessage is FIFO per target), so the resolver knows every
-    // key by the time the swap mints its blob. Nodes read imperatively — see
-    // the previewModule comment.
-    const feed = planPreviewAssetFeed(sentAssetKeysRef.current, collectImageAssets(useAppStore.getState().nodes), code);
+    // key by the time the swap mints its blob. Planned from `codeNodes`, never
+    // the live store, which may already hold the NEXT graph — see the
+    // previewModule comment.
+    const feed = planPreviewAssetFeed(sentAssetKeysRef.current, collectImageAssets(codeNodes), code);
     if (feed.entries.length > 0) win.postMessage({ type: PREVIEW_ASSETS_MESSAGE, entries: feed.entries }, '*');
     sentAssetKeysRef.current = feed.sent;
     win.postMessage({ type: SHADER_SWAP_MESSAGE, code, gen }, '*');
@@ -2292,9 +2333,10 @@ export function ShaderPreview() {
     hotAckTimerRef.current = window.setTimeout(() => {
       hotAckTimerRef.current = null;
       setHotSwapSlow(false);
-      // Escalate. `coldGen` is a dep of the document memo, so this rebuilds
-      // for real — and because the memo re-bakes with the CURRENT module, the
-      // rebuilt document shows the edit that the swap failed to deliver.
+      // Escalate. `coldGen` folds into the document's cold key, so this
+      // rebuilds for real — and the rebuild first settles any edit the
+      // debounce still holds (`useColdRebuildKey`), so the rebuilt document
+      // shows the newest code, the edit the swap failed to deliver included.
       setColdGen((g) => g + 1);
     }, HOT_SWAP_ACK_TIMEOUT_MS);
   }, [clearHotSwapWait]);
@@ -2316,8 +2358,15 @@ export function ShaderPreview() {
     // running, and arm the ack watchdog against a document that cannot ack.
     if (!containerReady || waitingForBootMesh) return;
     if (previewModule === runningModuleRef.current) return;
-    postShaderSwap(previewModule);
+    // This render's pair: no render runs between a commit and its effects.
+    const moduleNodes = settledRef.current.nodes;
+    postShaderSwap(previewModule, moduleNodes);
     return clearHotSwapWait;
+    // The settled pair is deliberately NOT a dep: every dep above SUPERSEDES
+    // the swap in flight, and the nodes alone do not: two codes can build the
+    // SAME module (buildShaderModule re-assembles what it parses), and a
+    // re-run for the nodes would run the cleanup, cancelling the in-flight
+    // swap's ack watchdog, then bail without arming a new one.
   }, [previewModule, bakedModule, containerReady, waitingForBootMesh, postShaderSwap, clearHotSwapWait]);
 
   /**
@@ -2350,8 +2399,23 @@ export function ShaderPreview() {
 
   // The remembered playhead is only meaningful for the model it was measured
   // on, so it resets when the MODEL changes — not when the shader does, which
-  // is the whole point of remembering it.
-  useEffect(() => { animTimeRef.current = 0; animClipRef.current = 0; }, [geometryRebuildKey]);
+  // is the whole point of remembering it. Decided when a document is BUILT for
+  // another model, never on the live `geometryRebuildKey`: the cold key is
+  // adopted a commit after it moves (useColdRebuildKey), a task later when the
+  // move is not a discrete event (an async drop or import), and until then the
+  // OUTGOING document is still attached and still reporting its own playhead.
+  // A reset on the live key let those reports back in, so the next model
+  // started at the previous one's time (a scripted drop over a playing clip,
+  // 5 of 7 runs, review 2026-10-10). In the render that builds a document,
+  // `geometryRebuildKey` names the model it was built for.
+  const playheadModelRef = useRef(geometryRebuildKey);
+  useEffect(() => {
+    if (playheadModelRef.current === geometryRebuildKey) return;
+    playheadModelRef.current = geometryRebuildKey;
+    animTimeRef.current = 0;
+    animClipRef.current = 0;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewHtml]);
 
   // Hot-update channels: push appearance changes to the running iframe
   // instead of triggering an iframe rebuild. Idempotency is enforced on
@@ -2455,7 +2519,15 @@ export function ShaderPreview() {
     // watchdog gave up seconds later. By `load` the listener is guaranteed
     // installed (the same guarantee the model feed relies on). Idempotent: if
     // the post DID land, the receiver recognises its own bytes and acks
-    // without re-applying.
+    // without re-applying. It goes BEFORE the model below, so a model's first
+    // shaded frame already runs the module the panel holds.
+    //
+    // Replayed when the module moved past the baked one, AND whenever a swap
+    // is still waiting for its ack: a post that carried the BAKED module back
+    // (an edit and its undo inside the boot window) was lost just the same,
+    // and nothing else answers its wait, so the "Compiling shader…" pill stood
+    // over a correct picture until the watchdog rebuilt the document for
+    // nothing. The replay draws a real gen-tagged ack instead.
     //
     // The asset feed is re-seeded with the boot list FIRST: a feed posted
     // between the srcDoc swap and this load may have gone to the previous
@@ -2464,7 +2536,10 @@ export function ShaderPreview() {
     // a no-op there (it keeps the first URL); skipping one it did not would
     // leave that image black for the life of the document.
     sentAssetKeysRef.current = new Set(bootAssetKeys);
-    if (HOT_SWAP_ENABLED && previewModule !== bakedModule) postShaderSwap(previewModule);
+    if (HOT_SWAP_ENABLED && (previewModule !== bakedModule || hotAckTimerRef.current !== null)) {
+      const moduleNodes = settledRef.current.nodes;
+      postShaderSwap(previewModule, moduleNodes);
+    }
     if (!isModelGeometry(previewGeometry)) return;
     if (previewGeometry === 'custom') {
       // Dropped mesh: no fetch — post the stored payload. The exact
@@ -2942,7 +3017,10 @@ export function ShaderPreview() {
           // boot paints the mesh solid red), and — only on a boot that expects
           // a dropped model — until the cache read has settled, so this iframe
           // is never handed a document that is about to be replaced
-          // mid-navigation (bootMeshWait.ts).
+          // mid-navigation (bootMeshWait.ts). The second hold also covers a
+          // cold rebuild still being adopted before the FIRST document is up
+          // (`holdsDocument`): the mesh landing lifts the read's hold a commit
+          // before its own document is baked.
           srcDoc={containerReady && !waitingForBootMesh ? previewHtml : undefined}
           onLoad={handleIframeLoad}
           title={t('Shader Preview', language)}

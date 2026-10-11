@@ -348,3 +348,125 @@
   font-size: var(--font-size-sm);
   color: var(--text-secondary);
 }
+
+/* ===== Color Ramp editor (menus/ColorRampSettings.tsx) =====
+   A section of the node settings menu. Flat technical style: square corners,
+   a hard offset instead of a blur. The bar's SVG — and ONLY the SVG — takes
+   `touch-action: none` (inline), so a finger still scrolls the menu list
+   everywhere else. */
+.context-menu .fs-lut-editor {
+  width: 236px;
+  padding: 0 var(--space-3);
+  box-sizing: content-box;
+}
+.fs-lut-editor__toolbar,
+.fs-lut-editor__stepper {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) 0;
+}
+.fs-lut-editor__stepper {
+  justify-content: space-between;
+}
+.fs-lut-editor__btn {
+  min-width: 24px;
+  height: 22px;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: 0;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+.fs-lut-editor__btn:hover {
+  background: var(--bg-surface-hover);
+}
+/* aria-disabled, never `disabled`: the button keeps its tooltip, which is
+   where the limit it hit is announced. */
+.fs-lut-editor__btn[aria-disabled='true'] {
+  opacity: 0.4;
+  cursor: default;
+}
+.fs-lut-editor__select {
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+}
+.fs-lut-editor__count {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+.fs-lut-editor__bar {
+  position: relative;
+  width: 236px;
+  height: 40px;
+  margin: var(--space-1) 0;
+}
+.fs-lut-editor__strip {
+  display: block;
+  box-sizing: border-box;
+  width: 236px;
+  height: 24px;
+  border: 1px solid var(--border-default);
+  border-radius: 0;
+  pointer-events: none;
+}
+.fs-lut-editor__hit {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+}
+.fs-lut-editor__marker {
+  cursor: ew-resize;
+  outline: none;
+}
+.fs-lut-editor__marker-body {
+  stroke: var(--text-primary);
+}
+.fs-lut-editor__marker-shadow {
+  fill: var(--text-primary);
+}
+/* Keyboard focus shows on the marker itself (the default ring would outline
+   the whole 24×40 hit box). */
+.fs-lut-editor__marker:focus-visible .fs-lut-editor__marker-body {
+  stroke: var(--border-focus);
+}
+/* RGB Curves: the channel tabs, and the plot (CurvesArt at 236×200 with the
+   point layer on the same svg). The border sits on the BOX, not the svg, so
+   the svg's rect is exactly the plot the pointer maths divides. */
+.fs-lut-editor__tab[aria-pressed='true'] {
+  background: var(--bg-surface-hover);
+  border-color: var(--text-primary);
+}
+.fs-lut-editor__plotbox {
+  width: 236px;
+  height: 200px;
+  margin: var(--space-1) 0;
+  outline: 1px solid var(--border-default);
+  outline-offset: -1px;
+}
+.fs-lut-editor__plot {
+  display: block;
+  cursor: crosshair;
+}
+.fs-lut-editor__plot:focus {
+  outline: none;
+}
+/* The editor's NON-active channel strokes (CurvesArt) are readings — their hue never changes — but at the light
+   theme's 55 % a blue curve all but vanished on the dark plot (~1.2:1). Dark mode lifts the OPACITY only. */
+:root[data-theme="dark"] .fs-lut-editor__plot .fs-curves__inactive {
+  stroke-opacity: 0.9;
+}
+.fs-lut-editor__plot:focus-visible {
+  outline: 1px solid var(--border-focus);
+  outline-offset: -1px;
+}
+.fs-lut-editor__point {
+  cursor: move;
+}
+.fs-lut-editor__point-body {
+  fill: var(--bg-input);
+  stroke: var(--text-primary);
+}

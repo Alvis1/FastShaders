@@ -18,6 +18,8 @@ import {
 // belt-and-braces rather than the mechanism.
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { fullscreenElement, placePopover, pickPortalHost } from '@/components/inputs/colorPickerModel';
+import { NumberField } from '@/components/inputs/NumberField';
+import { formatFieldNumber, parseFieldNumber } from '@/utils/numberField';
 import { formatSplatCount } from '@/utils/previewMesh';
 import './CostBar.css';
 
@@ -145,7 +147,7 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
     // has its own contextmenu handling — neither may see this press.
     e.preventDefault();
     e.stopPropagation();
-    setCapDraft(String(maxBudget));
+    setCapDraft(formatFieldNumber(maxBudget));
     setCapPos(null);                         // re-measured below; never a stale frame
     setCapMenuAt({ x: e.clientX, y: e.clientY });
   }, [maxBudget]);
@@ -153,7 +155,9 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
   const closeCapMenu = useCallback(() => setCapMenuAt(null), []);
 
   const commitCap = useCallback(() => {
-    const n = Math.round(Number(capDraft.trim()));
+    // `.` or `,` typed (utils/numberField.ts) — a bare Number() refused the
+    // comma and took "0x10".
+    const n = Math.round(parseFieldNumber(capDraft) ?? NaN);
     if (Number.isFinite(n) && n >= 1) {
       // Typing the device's OWN number clears the override instead of storing
       // a redundant one — otherwise the ✎ mark would claim a custom cap that
@@ -185,13 +189,21 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
       { width: window.innerWidth, height: window.innerHeight },
     ));
   }, [capMenuAt, capHost]);
+  // Focus once the popover is SHOWN, so typing goes straight into the field: it
+  // stays `visibility: hidden` until measured (`capPos`), and a hidden input
+  // refuses focus — focusing in that frame left the text looking selected
+  // while every key went to the page (measured 2026-10-10). `capPos` is set
+  // once per open, after the host resolved and the box mounted.
+  useEffect(() => {
+    if (!capMenuAt || !capPos) return;
+    const input = capInputRef.current;
+    if (input) { input.focus(); input.select(); }
+  }, [capMenuAt, capPos]);
   useEffect(() => {
     // `capHost` is a dependency because the popover does not exist until the
     // host resolves: on the FIRST open this effect would otherwise run against
-    // an unmounted box and the input would never take focus.
+    // an unmounted box.
     if (!capMenuAt || !capHost) return;
-    const input = capInputRef.current;
-    if (input) { input.focus(); input.select(); }
     const onDown = (e: PointerEvent) => {
       if (!capBoxRef.current?.contains(e.target as Node)) closeCapMenu();
     };
@@ -757,17 +769,20 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
         >
           <div className="cost-cap-menu__title">{t('Point cap', language)}</div>
           <div className="cost-cap-menu__row">
-            <input
+            {/* The app's number field: whole points, so a digits-only keypad
+                (the cap is never below 1); arrows and the wheel step by 10,
+                ×10 with Shift. Enter or Set commits; Escape and a press
+                outside close without one. */}
+            <NumberField
               ref={capInputRef}
               className="cost-cap-menu__input"
-              type="number"
+              integer
               min={1}
               step={10}
-              value={capDraft}
-              onChange={(e) => setCapDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') { e.preventDefault(); commitCap(); }
-              }}
+              value={maxBudget}
+              text={capDraft}
+              onText={setCapDraft}
+              onEnter={(e) => { e.preventDefault(); commitCap(); }}
               aria-label={t('Point cap', language)}
             />
             <span className="cost-cap-menu__unit">{t('pts', language)}</span>

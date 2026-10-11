@@ -13,6 +13,8 @@ import { SoundNodeSettings } from './SoundNodeSettings';
 import { NoiseNodeSettings } from './NoiseNodeSettings';
 import { WireframeNodeSettings } from './WireframeNodeSettings';
 import { DataNodeStats } from './DataColumnStats';
+import { ColorRampSettings } from './ColorRampSettings';
+import { RgbCurvesSettings } from './RgbCurvesSettings';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
 import { modeOf } from '@/engine/moduleHelpers';
 
@@ -134,6 +136,15 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
           domain control is expressed in normalized units, so without the real
           ranges here the user is tuning against numbers they cannot see. */}
       {node.data.registryType === 'dataNode' && <DataNodeStats nodeId={nodeId} />}
+
+      {/* Color Ramp: the stops and the interpolation (values.stops /
+          values.interp — never defaultValues, the row list). Its own component
+          for its hooks; gestures are lazily bracketed — see ColorRampSettings. */}
+      {node.data.registryType === 'colorRamp' && <ColorRampSettings nodeId={nodeId} />}
+
+      {/* RGB Curves: the four curves and Extend (values.curveC/R/G/B /
+          values.extend), the same lazily bracketed gestures — see RgbCurvesSettings. */}
+      {node.data.registryType === 'rgbCurves' && <RgbCurvesSettings nodeId={nodeId} />}
 
       {/* The TSL (or, for Brightness/Contrast, the formula) a node expands
           to, read-only and unlabelled. Only nodes whose maths is out of sight

@@ -99,6 +99,8 @@ describe('meshDecoders: the preview pushes the bytes (ShaderPreview, source)', (
   const start = src.indexOf('const handleIframeLoad = useCallback(');
   // `bootAssetKeys` joined the deps with the image-asset feed (GLB Phase 6 S3):
   // the load handler re-seeds the feed's sent set from the boot list.
+  // The settled nodes its replay plans from are read through `settledRef` when it
+  // runs, so they are not a dep (components/Preview/settledPreview.ts).
   const end = src.indexOf(
     '}, [previewGeometry, previewMesh, previewModule, bakedModule, bootAssetKeys, postShaderSwap, language, showDropNotice]);',
     start,

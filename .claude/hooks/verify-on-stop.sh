@@ -16,14 +16,21 @@ input=$(cat)
 cd "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null || exit 0
 git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 
-# Fingerprint: HEAD + tracked changes + untracked (non-ignored) file contents.
-# CLAUDE.md and docs/dev are part of it on purpose — seven suites pin claims
-# read from them through src/projectDocs.ts.
+# Fingerprint: HEAD + tracked changes + untracked (non-ignored) file contents,
+# the same three for every checked-out submodule. CLAUDE.md and docs/dev are
+# part of it on purpose — the suites that import src/projectDocs.ts pin claims
+# read from them. The submodule part is NOT optional: the superproject's diff
+# renders a dirty a-frame-shaderloader as one unchanging "-dirty" line, and
+# since public/js/ became generated + gitignored no tracked file mirrors the
+# loader, so a second loader edit (even a syntax error) skipped every run.
 fingerprint=$(
   {
     git rev-parse HEAD 2>/dev/null
     git diff HEAD --binary 2>/dev/null
     git ls-files --others --exclude-standard -z 2>/dev/null | xargs -0 shasum 2>/dev/null
+    git submodule foreach --quiet --recursive \
+      'echo "$displaypath"; git rev-parse HEAD; git diff HEAD --binary; git ls-files --others --exclude-standard -z | xargs -0 shasum' \
+      2>/dev/null
   } | shasum | cut -d' ' -f1
 )
 stamp="$(git rev-parse --git-path fs-verify-green 2>/dev/null)"

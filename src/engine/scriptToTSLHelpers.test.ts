@@ -59,4 +59,36 @@ describe('scriptToTSL keeps every module helper the module declares', () => {
     expect(r.errors).toEqual([]);
     expect(r.nodes.map((x) => x.data.registryType).sort()).toEqual(['float', 'output']);
   });
+
+  it('a .js with a Color Ramp keeps fsLut AND fsColorRamp, and parses back to the node with its stops', () => {
+    const stops = '0 #ff0000 1,0.5 #0000ff 0.25';
+    const code = graphToCode(
+      [makeNode('c', 'colorRamp', { fac: 0.3, stops, interp: 'constant' }), makeNode('out', 'output')],
+      [makeEdge('c', 'out', 'out', 'color'), makeEdge('c', 'alpha', 'out', 'opacity')],
+    ).code;
+    const back = roundTrip(code);
+    expect(back.split('const fsLut = (() => {')).toHaveLength(2);
+    expect(back.split('const fsColorRamp = (fac, stops, interp) => {')).toHaveLength(2);
+    const r = codeToGraph(back);
+    expect(r.errors).toEqual([]);
+    const ramp = r.nodes.find((x) => x.data.registryType === 'colorRamp')!;
+    expect(ramp).toBeDefined();
+    expect((ramp.data as { values: Record<string, unknown> }).values).toMatchObject({ fac: 0.3, stops, interp: 'constant' });
+    expect(r.edges.map((e) => `${e.sourceHandle}->${e.targetHandle}`).sort()).toEqual(['alpha->opacity', 'out->color']);
+  });
+
+  it('a .js with RGB Curves keeps fsLut AND fsRgbCurves, and parses back to the node with its curves', () => {
+    const curveC = '0 0,0.25 0.15,0.75 0.85,1 1';
+    const code = graphToCode(
+      [makeNode('k', 'rgbCurves', { color: 0.4, fac: 0.8, curveC, extend: 'horizontal' }), makeNode('out', 'output')],
+      [makeEdge('k', 'out', 'out', 'color')],
+    ).code;
+    const back = roundTrip(code);
+    expect(back.split('const fsLut = (() => {')).toHaveLength(2);
+    expect(back.split('const fsRgbCurves = (col, fac, curveC, curveR, curveG, curveB, extend) => {')).toHaveLength(2);
+    const r = codeToGraph(back);
+    expect(r.errors).toEqual([]);
+    const k = r.nodes.find((x) => x.data.registryType === 'rgbCurves')!;
+    expect((k.data as { values: Record<string, unknown> }).values).toEqual({ color: 0.4, fac: 0.8, curveC, extend: 'horizontal' });
+  });
 });

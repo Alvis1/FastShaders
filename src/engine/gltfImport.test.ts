@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } 
 import { HISTORY_IDLE, stubLocalStorage } from '@/test-utils';
 import { buildGlbImport, glbImportShaderName, type BuildGlbImportOptions } from './gltfImport';
 import { graphToCode } from './graphToCode';
+import { loadUnknownExpressionValidator } from './unknownExpression';
 import { codeToGraph } from './codeToGraph';
 import { tslToShaderModule } from './tslToShaderModule';
 import { inlineImageAssetsFromNodes } from './imageAssets';
@@ -41,6 +42,14 @@ import { glbImportReportLines } from '@/utils/glbImportReport';
 import { importNoteLineText } from '@/utils/importNote';
 import type { AppNode } from '@/types';
 import { PNG_COLOR, aiGlb, blenderGlb, fakeEncoder, fakeStash, glbOf, hugeTextureGlb, manyMaterialsGlb, readOk, scanGlb, type FakeEncodeCall } from './gltfImportFixtures';
+
+// The `unknown`-node expression validator parses with @babel/parser, which is
+// loaded ON DEMAND (engine/unknownExpression), and codegen FAILS CLOSED until it
+// lands: the apply∘apply rows below are written against the loaded validator
+// (`normalMap(image3)` round-trips verbatim), so wait for it once. Without this
+// the suite passed only when an earlier test in the worker had finished the
+// load — a shuffled run emitted the `float(0)` fallback and failed.
+beforeAll(() => loadUnknownExpressionValidator());
 
 function opts(bytes: Uint8Array, over: Partial<BuildGlbImportOptions> = {}, calls: FakeEncodeCall[] = []): BuildGlbImportOptions {
   return {

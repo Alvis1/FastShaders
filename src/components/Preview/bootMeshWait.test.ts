@@ -66,7 +66,11 @@ describe('ShaderPreview consults the hold', () => {
     // finds no cached mesh holds its document for the full cap.
     const at = SRC.indexOf('const [bootMeshSettled, setBootMeshSettled]');
     expect(at).toBeGreaterThan(-1);
-    const effect = SRC.slice(at, SRC.indexOf('const waitingForBootMesh', at));
+    // Ends at the boot-mesh hold the effect feeds (`waitingForBootMesh`, ~1,500
+    // lines further down, combines it with a pending cold rebuild).
+    const end = SRC.indexOf('const bootMeshHeld', at);
+    expect(end).toBeGreaterThan(at);
+    const effect = SRC.slice(at, end);
     expect(effect).toContain('if (useAppStore.getState().previewMesh) { setBootMeshSettled(true); return; }');
     expect(effect).toContain('BOOT_MESH_WAIT_MS');
     expect(effect).toContain('.finally(');

@@ -167,7 +167,8 @@ describe('every image texture goes through the planner', () => {
   it('graphToCode builds no Texture and decodes no image itself', () => {
     expect(CODEGEN).not.toContain('new globalThis.THREE.Texture(');
     expect(CODEGEN).not.toContain('imageAssetFor(');
-    expect(CODEGEN).toContain('imagePlanner.place(node.id, nv)');
+    // Placed with its own values — or, sampled only as a sky, without its glTF orientation (imageSampledOnlyAsSky).
+    expect(CODEGEN).toMatch(/imagePlanner\.place\(\s*node\.id,\s*mapping\.orientation === 'gltf' && imageSampledOnlyAsSky\(gidx, node\.id, dirRef !== null\) \? withoutOrientation\(nv\) : nv,\s*\)/);
   });
 
   it('the Environment channel reads the placement, not a second decode', () => {

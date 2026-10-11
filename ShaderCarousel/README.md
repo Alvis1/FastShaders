@@ -292,8 +292,9 @@ context.md            design rationale + paper-section mapping
 
 `components/three/a-frame-180-a-01.min.js` (from the `a-frame-shaderloader`
 submodule) and `lib/three/*.min.js` (from `node_modules/three/build`) are
-written by `scripts/sync-generated.mjs` at every dev/build/test start and pinned
-by a drift test; neither is committed. Edit the sources, never these copies.
+written by `scripts/sync-generated.mjs` at every dev/build/test start, which
+overwrites a hand edit and deletes any other file in those two folders;
+neither is committed. Edit the sources, never these copies.
 
 ## Deployment
 

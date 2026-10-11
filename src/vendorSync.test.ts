@@ -14,10 +14,14 @@ import { createHash } from 'crypto';
  * submodule pointer's bytes (`scripts/check-submodule.sh` stops a release or a
  * host deploy whose pointer was not committed).
  *
- * This suite fails on DRIFT — a copy that differs from the source (e.g. a hand
- * edit to `public/js/a-frame-shaderloader-0.8.js`, which the next start would
- * silently overwrite). Edit the submodule source, never a copy. A missing
- * source fails too: the sync already refuses to start without the submodule.
+ * A hand edit to a copy never reaches this suite under `npm test`: the start's
+ * sync overwrites it before any test runs (only a `vitest` watch session can
+ * see one made since it started). What it pins is the TABLES and what the sync
+ * made of them: every copy is its source byte for byte (a row the sync dropped
+ * or misplaced), the script's rows equal COPIES, every file the submodule ships
+ * is copied or excused, and a dropped one stays dropped. Edit the submodule
+ * source, never a copy. A missing source fails too: the sync already refuses to
+ * start without the submodule.
  */
 const ROOT = path.resolve(__dirname, '..');
 const SRC = path.join(ROOT, 'a-frame-shaderloader/js');

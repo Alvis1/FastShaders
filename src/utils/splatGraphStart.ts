@@ -15,7 +15,7 @@
  */
 import type { AppNode, ShaderNodeData } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import { getBaseCosts } from './costTable';
+import { freshNodeCost } from './nodeCost';
 import { generateId } from './idGenerator';
 import { initialNodeValues } from './newNodeValues';
 import { ACTIVE_OUTPUT_KEY, SPLAT_OUTPUT_TYPE, isSplatOutput } from './sdfPartition';
@@ -37,7 +37,7 @@ export function splatStarterNode(): AppNode {
     data: {
       registryType: def.type,
       label: def.label,
-      cost: getBaseCosts()[def.type] ?? 0,
+      cost: freshNodeCost(def.type) ?? 0,
       values: initialNodeValues(def, []),
       [ACTIVE_OUTPUT_KEY]: true,
     } as ShaderNodeData,

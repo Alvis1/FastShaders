@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { autoLayout, estimateNodeSize } from './layoutEngine';
+import { autoLayout, estimateNodeSize, measuredSize } from './layoutEngine';
 import { makeNode, makeEdge } from '@/test-utils';
 import { COLOR_NODE_SIZE } from '@/components/NodeEditor/nodes/ColorNode';
 import type { AppNode, AppEdge } from '@/types';
 import { getCostScale } from '@/utils/colorUtils';
+import { getCost } from '@/utils/costTable';
+import { nodeCostPoints } from '@/utils/nodeCost';
 import { edgePortRailHeight } from '@/components/NodeEditor/nodes/edgePorts';
 
 /** Top edge of a node in the laid-out graph. */
@@ -151,6 +153,55 @@ describe('estimateNodeSize', () => {
   });
 });
 
+describe('estimateNodeSize — art drawn above the rows', () => {
+  it('a Color Ramp reserves its strip on top of its rows', () => {
+    const ramp = estimateNodeSize(makeNode('c', 'colorRamp'));
+    // Two rows (Factor+Color, Alpha), no glyph, + the 18px strip (.shader-node__ramp-strip 12 + margins).
+    expect(ramp.height).toBeGreaterThanOrEqual(20 + 2 * 16 + 8 + 18);
+  });
+
+  it('an RGB Curves node reserves its 62px curves art on top of its rows', () => {
+    const curves = estimateNodeSize(makeNode('k', 'rgbCurves'));
+    // Two rows (Color in+out, Factor), no glyph, + .shader-node__curves-art 56 + margins.
+    expect(curves.height).toBeGreaterThanOrEqual(20 + 2 * 16 + 8 + 62);
+  });
+
+  it('a type out of a file named after an Object.prototype member has a FINITE footprint', () => {
+    for (const type of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+      const s = estimateNodeSize(makeNode('x', type));
+      expect(Number.isFinite(s.width) && Number.isFinite(s.height), type).toBe(true);
+    }
+  });
+});
+
+describe('a card is laid out at the price it is DRAWN at', () => {
+  // ShaderNode prices itself LIVE (`nodeCostPoints`), while `data.cost` is a
+  // creation snapshot nothing restamps. Sized by the snapshot, an RGB Curves
+  // node dropped from the palette (1) and then bent (drawn at 40) was reserved
+  // ~20px short, and Organize put the next card's cost badge on top of it.
+  const withCost = (n: AppNode, cost: number): AppNode => {
+    (n.data as { cost: number }).cost = cost;
+    return n;
+  };
+  const bent = (cost: number) => withCost(makeNode('k', 'rgbCurves', { curveC: '0 0,0.25 0.15,0.75 0.85,1 1' }), cost);
+  const measured = (n: AppNode): AppNode => Object.assign(n, { measured: { width: 100, height: 80 } });
+
+  it('a bent RGB Curves node is reserved at its baking price, whatever its snapshot says', () => {
+    const drawn = getCostScale(nodeCostPoints(bent(1), []));
+    expect(drawn).toBeGreaterThan(getCostScale(1));
+    expect(estimateNodeSize(bent(1))).toEqual(estimateNodeSize(bent(40)));
+    expect(measuredSize(measured(bent(1)))).toEqual({ width: 100 * drawn, height: 80 * drawn });
+  });
+
+  it('a card drawn from its snapshot (Preview, Clock, MathPreview, Sound) keeps it — that is what its component draws', () => {
+    const perlin = (cost: number) => withCost(makeNode('p', 'perlin'), cost);
+    expect(estimateNodeSize(perlin(80)).width).toBeCloseTo(111 * getCostScale(80), 5);
+    expect(estimateNodeSize(perlin(0)).width).toBeCloseTo(111, 5);
+    const asPreview = (n: AppNode): AppNode => Object.assign(n, { type: 'preview' });
+    expect(measuredSize(measured(asPreview(perlin(80))))).toEqual({ width: 100 * getCostScale(80), height: 80 * getCostScale(80) });
+  });
+});
+
 describe('estimateNodeSize — the Output node', () => {
   const output = (data: Record<string, unknown> = {}) => {
     const n = makeNode('o', 'output');
@@ -194,8 +245,10 @@ describe('estimateNodeSize — the Image node', () => {
   // 8px padding. The ROW_H term is GONE: the node draws no port rows since
   // 2026-09-19 — its sockets ride the card's border — so the body is the
   // picture, floored by the rail those sockets need (`edgePortRailHeight`,
-  // read from the renderer's own module, never restated here).
-  const s = getCostScale(0);
+  // read from the renderer's own module, never restated here). The card is
+  // scaled by the price it is DRAWN at — its live price, which for a node with
+  // no stored resolution is the table entry — never the `data.cost` snapshot.
+  const s = getCostScale(getCost('imageNode'));
   const RAIL = edgePortRailHeight(6, 5); // the Image node's 6 inputs / 5 outputs
   const withImage = (id = 'i') =>
     makeNode(id, 'imageNode', { imageB64: 'data:image/png;base64,AAAA', fileName: 'x.png' });

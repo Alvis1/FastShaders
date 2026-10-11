@@ -131,7 +131,8 @@ describe('imageTextureSpec: the ONE normaliser', () => {
   it('the texture planner reads colour space, filter and wrap through it, and codegen reads them nowhere else', () => {
     // graphToCode's image branch places each node through the planner
     // (engine/imageTexturePlan.ts), which is where the spec is read now.
-    expect(CODEGEN).toContain('imagePlanner.place(node.id, nv)');
+    // (A picture sampled only as a sky is placed without its glTF orientation — imageSampledOnlyAsSky.)
+    expect(CODEGEN).toMatch(/imagePlanner\.place\(\s*node\.id,\s*mapping\.orientation === 'gltf' && imageSampledOnlyAsSky\(gidx, node\.id, dirRef !== null\) \? withoutOrientation\(nv\) : nv,\s*\)/);
     expect(PLAN).toContain("from '@/utils/imageTextureSpec'");
     expect(PLAN).toContain('readImageTextureSpec(values)');
     for (const src of [CODEGEN, PLAN]) {

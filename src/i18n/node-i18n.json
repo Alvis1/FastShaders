@@ -72,6 +72,7 @@
     "toHsl": "RGB uz HSL",
     "brightContrast": "Spilgtums/kontrasts",
     "colorRamp": "Krāsu josla",
+    "rgbCurves": "RGB līknes",
     "sdCircle": "Riņķis",
     "sdBox": "Kaste",
     "sdTorus": "Tors",

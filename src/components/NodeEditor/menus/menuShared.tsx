@@ -10,6 +10,8 @@ import { generateId } from '@/utils/idGenerator';
 import { exceedsImageBudget, imageNodesForNotice } from '@/utils/imageNode';
 import { resetNodeValues, isAtDefaultValues, hasResettableValues } from '@/utils/resetNodeValues';
 import { previewableOutputs } from '@/utils/nodePreview';
+import { clampFieldNumber, formatFieldNumber, parseFieldNumber } from '@/utils/numberField';
+import { NumberField } from '@/components/inputs/NumberField';
 
 /**
  * Shared building blocks for the per-node right-click settings menus
@@ -125,7 +127,14 @@ interface NumberRowProps {
  * snapping the field back and recompiling the shader mid-edit. Local edit
  * state holds the transient text so the field can be cleared and retyped; the
  * store only sees finite numbers, and the display reverts to the committed
- * value on blur.
+ * value on Enter, Escape (which also leaves the field, so the menu's NEXT
+ * Escape closes it) or blur.
+ *
+ * The app's number field (components/inputs/NumberField.tsx): it shows a dot
+ * whatever the locale and takes `.` or `,` — an `<input type="number">` drew
+ * this menu's values as `0,5958` on a Latvian machine. A typed number is held
+ * to `min`/`max` like a step is: they are the setting's domain (the radius
+ * floor, midpoint's 0.01–0.99), which typing used to walk straight past.
  */
 export function NumberRow({ label, value, onCommit, step = 0.05, min, max }: NumberRowProps) {
   const [editText, setEditText] = useState<string | null>(null);
@@ -135,8 +144,8 @@ export function NumberRow({ label, value, onCommit, step = 0.05, min, max }: Num
   // entries. Bracket the burst so a typed edit is ONE entry; the bracket
   // lives HERE rather than at the four call sites (Stripes / Data Viz /
   // Colormap / Data Range) for the same reason this module exists.
-  // Two consequences worth knowing: a spinner-arrow click also opens the
-  // 600 ms window (one click, one change event), and a sibling control
+  // Two consequences worth knowing: an arrow-key or wheel step also opens the
+  // 600 ms window (one step, one commit), and a sibling control
   // touched inside that window folds into the same entry — e.g. changing
   // Data Range's mode select right after typing a bound, which also
   // unmounts this row (the hook's unmount effect closes the bracket).
@@ -144,20 +153,23 @@ export function NumberRow({ label, value, onCommit, step = 0.05, min, max }: Num
   return (
     <div style={rowStyle}>
       <label style={labelStyle}>{label}</label>
-      <input
-        type="number"
+      <NumberField
+        aria-label={label || undefined}
         step={step}
         min={min}
         max={max}
-        value={editText ?? String(value)}
-        onChange={(e) => {
-          const raw = e.target.value;
+        value={value}
+        text={editText ?? formatFieldNumber(value)}
+        onText={(raw) => {
           setEditText(raw);
-          const n = Number(raw);
+          const n = clampFieldNumber(parseFieldNumber(raw) ?? NaN, min, max);
           // bracket() before onCommit: beginInteraction must snapshot the
-          // pre-edit state, not the first typed value.
-          if (raw !== '' && Number.isFinite(n)) { bracket(); onCommit(n); }
+          // pre-edit state, not the first typed value. A step at a bound never
+          // gets here: the field reports only a step that changes its text.
+          if (Number.isFinite(n)) { bracket(); onCommit(n); }
         }}
+        onEnter={() => { setEditText(null); closeBracket(); }}
+        onEscape={(e) => e.currentTarget.blur()}
         onBlur={() => { setEditText(null); closeBracket(); }}
         style={fieldStyle}
       />

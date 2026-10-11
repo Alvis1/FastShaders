@@ -825,7 +825,13 @@
     });
   }
 
-  function loadBounds() { try { return JSON.parse(localStorage.getItem("fs:viewerBounds") || "{}") || {}; } catch (e) { return {}; } }
+  // A plain object only: stored junk ("5", "[]") would make `state.bounds[name] = …` throw under "use strict".
+  function loadBounds() {
+    try {
+      var o = JSON.parse(localStorage.getItem("fs:viewerBounds") || "{}");
+      return o && typeof o === "object" && !Array.isArray(o) ? o : {};
+    } catch (e) { return {}; }
+  }
   function saveBounds() { try { localStorage.setItem("fs:viewerBounds", JSON.stringify(state.bounds)); } catch (e) {} }
 
   // Small persisted-preference readers (all guarded — private-mode / disabled
@@ -2236,6 +2242,28 @@
   }
 
   // ── Uniform sliders ─────────────────────────────────────────────────
+  // The number fields are TEXT inputs on the editor's one rule
+  // (src/utils/numberField.ts): they SHOW a dot whatever the locale and TAKE
+  // "." or ",". The number inputs they replace drew "0,5" on a Latvian machine.
+  // A twin, held to the editor's by src/podestNumberFields.test.ts.
+  function parseFieldNumber(raw) {
+    var s = String(raw).trim().replace(",", ".");
+    if (!/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(s)) return null;
+    var n = Number(s);
+    return isFinite(n) ? n : null;
+  }
+  function formatFieldNumber(n, decimals) {
+    if (typeof n !== "number" || !isFinite(n)) return "";
+    var f = Math.pow(10, decimals === undefined ? 6 : decimals);
+    var scaled = n * f;
+    return String(Math.abs(scaled) < 9007199254740991 ? Math.round(scaled) / f : n);
+  }
+  // A stored pair (fs:viewerBounds is adversarial input) is used only when both
+  // ends are finite numbers; anything else is guessed afresh.
+  function validBounds(b) {
+    return !!b && typeof b === "object" && typeof b.min === "number" && typeof b.max === "number" &&
+      isFinite(b.min) && isFinite(b.max);
+  }
   function guessBounds(def) {
     var d = Number(def) || 0, min = 0, max = 1;
     if (d < 0) { min = Math.min(-1, d * 2); max = Math.max(1, -d); }
@@ -2285,16 +2313,20 @@
       var current = Object.prototype.hasOwnProperty.call(state.values, name) && typeof state.values[name] === "number"
         ? state.values[name] : def;
       state.values[name] = current;
-      var b = (Object.prototype.hasOwnProperty.call(state.bounds, name) && state.bounds[name]) || guessBounds(def);
+      var stored = Object.prototype.hasOwnProperty.call(state.bounds, name) ? state.bounds[name] : null;
+      var b = validBounds(stored) ? stored : guessBounds(def);
       state.bounds[name] = b;
 
+      // Text fields that may go negative: the full keyboard on iOS (its decimal
+      // keypad has no minus key), and no autocorrect or capitalisation.
+      var NUM = 'type="text" inputmode="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"';
       var row = document.createElement("div");
       row.className = "u-row";
       row.innerHTML =
         '<div class="u-head"><span class="u-name" title="' + esc(name) + '">' + esc(name) + '</span>' +
-        '<input class="u-val" type="number" step="any" /></div>' +
+        '<input class="u-val" ' + NUM + ' /></div>' +
         '<input class="u-slider" type="range" />' +
-        '<div class="u-bounds"><input class="u-min" type="number" step="any" /><span>min · max</span><input class="u-max" type="number" step="any" /></div>';
+        '<div class="u-bounds"><input class="u-min" ' + NUM + ' /><span>min · max</span><input class="u-max" ' + NUM + ' /></div>';
 
       var valInput = row.querySelector(".u-val");
       var slider = row.querySelector(".u-slider");
@@ -2307,25 +2339,33 @@
         state.values[name] = v;
         saveSession();   // debounced — a scrub writes once, not per frame
         post({ type: "fs:uniform", name: name, value: v });
-        valInput.value = Number(v.toFixed(4));
+        valInput.value = formatFieldNumber(v, 4);
         if (!fromSlider) slider.value = v;
       }
       syncRange();
-      minInput.value = b.min; maxInput.value = b.max;
+      minInput.value = formatFieldNumber(b.min); maxInput.value = formatFieldNumber(b.max);
       slider.value = current;
-      valInput.value = Number(current.toFixed ? current.toFixed(4) : current);
+      valInput.value = formatFieldNumber(current, 4);
       // Push the restored/current value into the freshly-applied shader.
       post({ type: "fs:uniform", name: name, value: current });
 
+      // A commit re-shows the field in the dot form; one that is not a number
+      // puts the field back to what it stands for.
       slider.addEventListener("input", function () { setValue(parseFloat(slider.value), true); });
-      valInput.addEventListener("change", function () { setValue(parseFloat(valInput.value), false); });
+      valInput.addEventListener("change", function () {
+        var v = parseFieldNumber(valInput.value);
+        if (v === null) { valInput.value = formatFieldNumber(state.values[name], 4); return; }
+        setValue(v, false);
+      });
       minInput.addEventListener("change", function () {
-        var m = parseFloat(minInput.value); if (isNaN(m)) return;
-        b.min = m; state.bounds[name] = b; saveBounds(); syncRange(); slider.value = state.values[name];
+        var m = parseFieldNumber(minInput.value);
+        if (m !== null) { b.min = m; state.bounds[name] = b; saveBounds(); syncRange(); slider.value = state.values[name]; }
+        minInput.value = formatFieldNumber(b.min);
       });
       maxInput.addEventListener("change", function () {
-        var m = parseFloat(maxInput.value); if (isNaN(m)) return;
-        b.max = m; state.bounds[name] = b; saveBounds(); syncRange(); slider.value = state.values[name];
+        var m = parseFieldNumber(maxInput.value);
+        if (m !== null) { b.max = m; state.bounds[name] = b; saveBounds(); syncRange(); slider.value = state.values[name]; }
+        maxInput.value = formatFieldNumber(b.max);
       });
 
       uniformsEl.appendChild(row);

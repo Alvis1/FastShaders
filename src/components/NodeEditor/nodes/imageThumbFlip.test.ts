@@ -69,7 +69,8 @@ describe('the Image node card shows Nearest filtering', () => {
     // through the ONE texture-spec normaliser.
     expect(SHADER_NODE).toMatch(/const nearestThumb = data\.values\?\.filter === 'nearest';/);
     expect(SHADER_NODE).toMatch(/nearestThumb \? \{ imageRendering: 'pixelated' as const \}/);
-    expect(GRAPH_TO_CODE).toMatch(/imagePlanner\.place\(node\.id, nv\)/);
+    // (A picture sampled only as a sky is placed without its glTF orientation — graphToCode imageSampledOnlyAsSky.)
+    expect(GRAPH_TO_CODE).toMatch(/imagePlanner\.place\(\s*node\.id,\s*mapping\.orientation === 'gltf' && imageSampledOnlyAsSky\(gidx, node\.id, dirRef !== null\) \? withoutOrientation\(nv\) : nv,\s*\)/);
     expect(IMAGE_PLAN).toMatch(/const spec = readImageTextureSpec\(values\);/);
     expect(IMAGE_PLAN).toMatch(/const nearest = spec\.nearest;/);
     expect(TEXTURE_SPEC).toMatch(/const nearest = values\.filter === 'nearest';/);

@@ -61,7 +61,8 @@
   background: rgba(var(--node-ink-rgb), 0.04);
 }
 
-/* Edit mode: real text input */
+/* Edit mode: a TEXT input (components/inputs/NumberField.tsx), so there are no
+   native spin buttons to hide — the ◂ ▸ arrows and the arrow keys step it. */
 .drag-num__edit {
   width: 100%;
   height: 100%;
@@ -73,13 +74,6 @@
   color: var(--text-primary);
   text-align: center;
   padding: 0 2px;
-  -moz-appearance: textfield;
-}
-
-.drag-num__edit::-webkit-inner-spin-button,
-.drag-num__edit::-webkit-outer-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
 }
 
 /* Compact = the ON-NODE variant, so the on-node look lives HERE, never on an

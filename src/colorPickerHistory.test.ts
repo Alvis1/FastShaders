@@ -127,6 +127,12 @@ const SITES: { file: string; history: 'bracket' | 'none'; count: number; why: st
     why: 'ink colour -> setDrawColor: localStorage + set(), no pushHistory (strokes ride history; the pen colour does not)',
   },
   {
+    file: 'components/NodeEditor/menus/ColorRampSettings.tsx',
+    history: 'none',
+    count: 1,
+    why: 'the stop colour is graph content but must bracket LAZILY: the picker brackets before onPick on every path, so a pick of the current colour would cost an empty entry and clear redo — useLazyIdleWrite (lutEditorGestures.tsx) brackets only a write that changes the canonical stops, on the same useHistoryBracket idle close',
+  },
+  {
     file: 'components/Layout/CostBar.tsx',
     history: 'none',
     count: 2,

@@ -74,6 +74,13 @@ describe('the helper-argument hook', () => {
     expect(quote(call.arguments[1])).toBe('"y"');
     expect(quote(call.arguments[0])).toBe(`"${'x'.repeat(80)}…"`);
     expect(quote(t.identifier('noPosition'))).toBe('"argument"');
+    // A string literal: its VALUE, quoted once and JSON-escaped (the source text already holds its quotes).
+    const lit = `g("0 #zz 1</b>", "${'s'.repeat(100)}", 'a\\nb')`;
+    const litCall = (parse(lit, { sourceType: 'module' }).program.body[0] as t.ExpressionStatement).expression as t.CallExpression;
+    const q = argReporter(litCall, lit, []).quote;
+    expect(q(litCall.arguments[0])).toBe('"0 #zz 1</b>"');
+    expect(q(litCall.arguments[1])).toBe(`"${'s'.repeat(80)}…"`);
+    expect(q(litCall.arguments[2])).toBe('"a\\nb"');
     warn('m');
     expect(errors).toEqual([{ message: 'm', line: 1, severity: 'warning' }]);
   });

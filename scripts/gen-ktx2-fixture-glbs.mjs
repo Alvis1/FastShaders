@@ -33,7 +33,9 @@ const UASTC_SHA256 = '21b6912cae1f074ae3eda1b751f43c36eafc7eb83f3af71f85bba2ccba
 
 /* ── a 40x40 solid-magenta PNG (RGB8) ─────────────────────────────────────── */
 
-// Our own CRC-32: zlib.crc32 is Node >= 22.2 and CI runs Node 20.
+// Our own CRC-32, written while CI still ran Node 20 (zlib.crc32 is Node >= 22.2).
+// The floor is 22.6 now (package.json engines, CI's node-version 22), so
+// zlib.crc32 would do as well: the same standard CRC, the same bytes.
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
   for (let n = 0; n < 256; n++) {

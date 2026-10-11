@@ -51,6 +51,10 @@
     "colorRamp": {
       "ref": "Blender Foundation. Blender, Color Ramp shader node — BKE_colorband_evaluate and BKE_colorband_evaluate_table_rgba (source/blender/blenkernel/intern/colorband.cc), key_curve_position_weights (key.cc): Linear, Constant, Ease, B-Spline and Cardinal (fc = 0.71) over a 257-entry table. Reproduced with RGB colour mode.",
       "url": "https://projects.blender.org/blender/blender/src/branch/main/source/blender/blenkernel/intern/colorband.cc"
+    },
+    "rgbCurves": {
+      "ref": "Blender Foundation. Blender, RGB Curves shader node — curvemap_make_table, calchandle_curvemap and BKE_curvemapping_compute_slopes (source/blender/blenkernel/intern/colortools.cc), BKE_curve_correct_bezpart and BKE_curve_forward_diff_bezier (curve.cc), evaluated as curves_combined_rgb (gpu_shader_common_curves). Reproduced with auto handles; end slopes clamped to ±1e4.",
+      "url": "https://projects.blender.org/blender/blender/src/branch/main/source/blender/blenkernel/intern/colortools.cc"
     }
   },
   "textures": {

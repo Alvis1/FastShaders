@@ -8,7 +8,9 @@
  *                    the texture is uploaded unflipped (`Texture.flipY =
  *                    false`, GLTFLoader's own choice). That is ALL it
  *                    changes: the UV chain, the Flips and the turn's sign
- *                    read the same in both orientations;
+ *                    read the same in both orientations (and a picture
+ *                    sampled only as a SKY ignores it at emission —
+ *                    graphToCode's `imageSampledOnlyAsSky`);
  *   - `normalGreen`  exactly `'flip'`: the Output's normal-map decode flips its
  *                    green axis, GLTFLoader's `normalScale.y *= -1` for a
  *                    primitive without TANGENT;
@@ -39,8 +41,11 @@
  * `turnSignOf`, the one the reader uses), `withPictureRotation` (the menu's
  * Rotation row), `withoutLegacyTransform` (its "Older transform" Clear; both also used
  * by the restore fold), and `withImagePayload` (utils/textureSources.ts), which
- * moves `orientation` with the bytes. No menu sets `orientation`, and nothing
- * writes an `xf*` key. Every key comes out of a `.fastshader`
+ * moves `orientation` with the bytes. A picture from a FILE gets `'gltf'` only
+ * when added over a glTF model's own UVs (`filePictureOrientation`,
+ * utils/pictureOrientation.ts — through `withImagePayload`, or
+ * `makeImageNodeFromEncode` for a new node). No menu ROW sets `orientation`,
+ * and nothing writes an `xf*` key. Every key comes out of a `.fastshader`
  * and is adversarial, so every read is EXACT: an absent, junk or
  * default-valued key means today's emission, byte for byte. Numbers are read
  * only as real numbers — `Number(true)` is 1, `Number(null)`, `Number('')` and

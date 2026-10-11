@@ -37,7 +37,8 @@ describe('pickTexture — one click, one undo entry', () => {
   it('writes exactly once and never awaits', () => {
     expect(count(body, 'updateNodeData(')).toBe(1);
     expect(body).not.toMatch(/\bawait\b/);
-    expect(body).toMatch(/const next = pickTextureValues\(liveVals, src\);\s*if \(!next\) return;/);
+    // The third argument decides a payload its holders store BOTH ways ('mixed') as "From file…" would.
+    expect(body).toMatch(/const next = pickTextureValues\(liveVals, src, replacementPictureOrientation\(store, liveVals\)\);\s*if \(!next\) return;/);
   });
 
   it('re-reads the LIVE node (the menu can outlive it)', () => {

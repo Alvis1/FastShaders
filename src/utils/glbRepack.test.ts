@@ -245,6 +245,24 @@ describe('round trip through the trusted-side reader', () => {
     for (const n of names) expect(n).toMatch(/^[A-Za-z0-9._ -]{1,48}$/);
     expect(names).toContain('only-module.png');
   });
+
+  it("a WebP slot's fallback is named for its OWN format, never '….webp'", () => {
+    const named = (name: string, fb: RepackFallback) => {
+      const r = ok(input(base, {
+        slots: [slot(0, 'baseColor', SRC.D, { name })],
+        fallbacks: new Map([[SRC.D, fb]]),
+      }));
+      const doc = docOf(r.bytes);
+      const ref = read(r.bytes).materials[0].slots.find((s) => s.slot === 'baseColor')!;
+      const tex = (doc.textures as Doc[])[ref.texture];
+      const images = doc.images as Doc[];
+      return [images[((tex.extensions as Doc).EXT_texture_webp as Doc).source as number].name, images[tex.source as number].name];
+    };
+    expect(named('photo.webp', { mime: 'image/png', bytes: FB_D })).toEqual(['photo.webp', 'photo.png']);
+    expect(named('photo.webp', { mime: 'image/jpeg', bytes: JPEG_C })).toEqual(['photo.webp', 'photo.jpg']);
+    // A name with no picture extension is the slot's own.
+    expect(named('scan', { mime: 'image/png', bytes: FB_D })).toEqual(['scan', 'scan']);
+  });
 });
 
 describe('the WebP modes', () => {

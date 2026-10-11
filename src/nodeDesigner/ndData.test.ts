@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { designerNodes, NODE_COSTS, TYPE_CHANNELS, definitionOf } from './ndData';
 import { getAllDefinitions, getFlowNodeType } from '@/registry/nodeRegistry';
+import { freshNodeCost } from '@/utils/nodeCost';
 
 /**
  * The designer's node list is DERIVED from the registry (this is what killed
@@ -9,7 +10,8 @@ import { getAllDefinitions, getFlowNodeType } from '@/registry/nodeRegistry';
  *  - the filter is exactly the ShaderNode-rendered rule (a designer that
  *    listed live-canvas nodes would let you author glyphs nothing renders);
  *  - the tuple shape the ported app logic indexes ([id, dataType]);
- *  - costs come from the same complexity.json the app prices from.
+ *  - costs are a FRESH node's price (`freshNodeCost`), the number the app's
+ *    palette tile prints for the same node.
  */
 describe('ndData — designer node list derives from the live registry', () => {
   const nodes = designerNodes();
@@ -38,10 +40,13 @@ describe('ndData — designer node list derives from the live registry', () => {
     }
   });
 
-  it('prices from complexity.json (every designable node resolves a number)', () => {
+  it('prices every designable node as a fresh node of it (freshNodeCost), never by the raw table', () => {
     for (const n of nodes) {
       expect(typeof (NODE_COSTS[n.type] ?? 0), n.type).toBe('number');
+      expect(NODE_COSTS[n.type] ?? 0, n.type).toBe(freshNodeCost(n.type) ?? 0);
     }
+    // RGB Curves is why: its table entry (40) prices a node that BAKES; a fresh one is the identity form.
+    expect(NODE_COSTS.rgbCurves).toBe(1);
   });
 
   it('channel seeding covers every socket data type in the designable set', () => {

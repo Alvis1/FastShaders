@@ -23,10 +23,11 @@ import { SPLAT_LIGHT_COLOR_DEFAULTS, SPLAT_LIGHT_DIRECTION_EPSILON } from '@/uti
 import { generateId } from '@/utils/idGenerator';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
 import { makeTypedEdge } from '@/utils/edgeUtils';
-import complexityData from '@/registry/complexity.json';
+import { freshNodeCost, nodeCostPoints } from '@/utils/nodeCost';
 import { VALID_SWIZZLE, TOHSL_COMPONENT_TO_HANDLE, OWN_MEMBER_TO_HANDLE } from './graphToCode';
 import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import { DEFAULT_RAMP_STOPS, formatRampStops, isRampInterp, parseRampStops } from '@/utils/colorRamp';
+import { IDENTITY_CURVE, formatCurve, parseCurve, isCurveExtend } from '@/utils/rgbCurves';
 
 /** Output channels whose widget stores a NUMBER / a HEX color — the parse
  *  twin of graphToCode's stored-value emission (keep the two in sync). */
@@ -1719,10 +1720,42 @@ export const HELPER_ARG_READERS: ReadonlyMap<string, HelperArgReader> = new Map<
     if (Object.keys(vals).length) setNodeValues(node, vals);
     return fac !== undefined ? [fac] : [];
   }],
+  ['rgbCurves', (call, node, code, errors) => {
+    const { warn, quote } = argReporter(call, code, errors);
+    const [color, fac, c, r, g, b, extend, ...rest] = call.arguments;
+    // The colorRamp reader's rule: only a string LITERAL, through the one strict grammar, stored RE-FORMATTED;
+    // the identity line and Extrapolated are stored as nothing — absent = default.
+    const vals: Record<string, string> = {};
+    for (const [arg, key, name] of [[c, 'curveC', 'C'], [r, 'curveR', 'R'], [g, 'curveG', 'G'], [b, 'curveB', 'B']] as const) {
+      if (arg === undefined) continue;
+      const parsed = t.isStringLiteral(arg) ? parseCurve(arg.value) : null;
+      if (!parsed) {
+        warn(`fsRgbCurves: curve ${name} ${quote(arg)} could not be read — a straight line is used.`);
+        continue;
+      }
+      const can = formatCurve(parsed.points);
+      if (can !== IDENTITY_CURVE) vals[key] = can;
+      if (parsed.droppedHandles) warn(`fsRgbCurves: curve ${name} carries handle types this version does not know — they were reset to Auto.`);
+    }
+    if (extend !== undefined) {
+      if (t.isStringLiteral(extend) && isCurveExtend(extend.value)) {
+        if (extend.value === 'horizontal') vals.extend = 'horizontal';
+      } else warn(`fsRgbCurves: ${quote(extend)} is not extrapolate or horizontal — Extrapolated is used.`);
+    }
+    if (rest.length) warn(`fsRgbCurves: ${rest.length} extra argument${rest.length > 1 ? 's' : ''} dropped.`);
+    if (Object.keys(vals).length) setNodeValues(node, vals);
+    // createNode stamped a FRESH node's price (the identity form, 1); these curves may bake. The snapshot is what
+    // codeGroupBuilder totals (a ready-made group's price), so it is this node's own price. (layoutEngine sizes a
+    // shader card by its LIVE price, never by this snapshot.)
+    node.data.cost = nodeCostPoints(node, []);
+    return [color, fac].filter((a): a is NonNullable<typeof a> => a !== undefined);
+  }],
 ]);
 
 /** The readers' shared reporting: `warn` pushes a non-blocking warning on the call's line; `quote` is the
- *  argument's source text, capped at 80 chars, in double quotes (or `"argument"` without positions). */
+ *  argument's source text, capped at 80 chars, in double quotes (or `"argument"` without positions). A STRING
+ *  literal is quoted by its VALUE (`JSON.stringify`, so control characters stay escaped) — its source text
+ *  already carries quotes, and wrapping that printed `""0 #zz0000 1""`. */
 export function argReporter(call: t.CallExpression, code: string, errors: ParseError[]): {
   warn: (message: string) => void;
   quote: (n: t.Node) => string;
@@ -1730,6 +1763,7 @@ export function argReporter(call: t.CallExpression, code: string, errors: ParseE
   return {
     warn: (message) => errors.push({ message, line: call.loc?.start.line, severity: 'warning' }),
     quote: (n) => {
+      if (t.isStringLiteral(n)) return JSON.stringify(n.value.length > 80 ? `${n.value.slice(0, 80)}…` : n.value);
       const text = n.start != null && n.end != null ? code.slice(n.start, n.end) : 'argument';
       return `"${text.length > 80 ? `${text.slice(0, 80)}…` : text}"`;
     },
@@ -2302,7 +2336,7 @@ function matchNoiseUnsignedRemap(callExpr: t.CallExpression): t.CallExpression |
  * Here we additionally require a compile-time numeric constant. Together those
  * guards mean we never eat a user's real Multiply node:
  *   - `mul(time, 0.5)`   — the human idiom; pinned by codeToGraph.test.ts
- *   - `mul(time1, 5)`    — the Tests/ corpus writes this ~51 times, usually with
+ *   - `mul(time1, 5)`    — the tests/corpus/ shaders write this ~51 times, usually with
  *                          TWO muls sharing one time1, which a single Time node
  *                          could not represent
  *   - `t.mul(2)`         — variable receiver, not the bare identifier
@@ -2588,8 +2622,8 @@ function foldNumericConstant(node: t.Node): number | undefined {
 }
 
 function createNode(id: string, def: NodeDefinition, label: string): AppNode {
-  const costs = complexityData.costs as Record<string, number>;
-  const cost = costs[def.type] ?? 0;
+  // A fresh node's price — what node creation stamps on the canvas too (utils/nodeCost.ts freshNodeCost).
+  const cost = freshNodeCost(def.type) ?? 0;
 
   return {
     id,

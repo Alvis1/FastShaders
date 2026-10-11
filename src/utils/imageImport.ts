@@ -51,6 +51,7 @@ import {
   type PixelStats,
 } from './imageCodec';
 import { base64ToBytes } from './binaryCodec';
+import { PICTURE_EXTENSIONS, trailingExtensionRe } from './pictureExtensions';
 
 /** One finished encode: the payload plus the dimensions it was encoded at. */
 export interface EncodedImage {
@@ -165,11 +166,15 @@ export function isSvgFile(file: File): boolean {
   return file.name.toLowerCase().endsWith('.svg') || file.type === 'image/svg+xml';
 }
 
+/** The drop filter's names: the ONE picture list (utils/pictureExtensions.ts,
+ *  which the glTF image-name strip reads too), plus SVG. */
+const IMAGE_FILE_NAME = trailingExtensionRe([...PICTURE_EXTENSIONS, 'svg']);
+
 /** Broad drop-filter match: anything that looks like an image by extension OR
  *  MIME — including SVG, so a lone-SVG drop reaches placeImageFile and gets a
  *  visible rejection instead of a silent no-op. */
 export function isImageFile(file: File): boolean {
-  if (/\.(png|jpe?g|jfif|pjp(eg)?|webp|gif|bmp|avif|tiff?|ico|svg)$/.test(file.name.toLowerCase())) return true;
+  if (IMAGE_FILE_NAME.test(file.name)) return true;
   return file.type.startsWith('image/');
 }
 

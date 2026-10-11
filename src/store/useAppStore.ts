@@ -120,6 +120,7 @@ import type { MeshInventory, PreviewSplatFacts } from '@/utils/meshInventory';
 import type { PreviewShape } from '@/engine/exportModel';
 import { savePreviewMeshToCache, announceMeshCacheFull } from '@/utils/previewMeshCache';
 import { encodeImageFile } from '@/utils/imageImport';
+import { filePictureOrientation } from '@/utils/pictureOrientation';
 import { transposeCsv, type ParsedCsv } from '@/utils/csvParser';
 
 /**
@@ -2661,7 +2662,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // Same construction path as the canvas drop (makeImageNodeFromEncode), so
     // an "Add anyway" image is indistinguishable from a normal one — provenance
     // included. Dropping it here is what would leave every override-placed
-    // image permanently un-revertible.
+    // image permanently un-revertible. The orientation, too, is the drop's
+    // rule, decided as the node is placed: the glTF way over a glTF model's
+    // own UVs (utils/pictureOrientation.ts).
     const place = (
       enc: { dataUrl: string; width: number; height: number },
       origin?: ImageOriginInfo,
@@ -2671,7 +2674,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
         type: 'shader',
         position,
         // The size-aware price (nodeCost.imageNodeCost), as the canvas drop.
-        data: makeImageNodeFromEncode(enc, imageNodeCost(getCost('imageNode'), enc.width, enc.height), file.name, origin),
+        data: makeImageNodeFromEncode(
+          enc,
+          imageNodeCost(getCost('imageNode'), enc.width, enc.height),
+          file.name,
+          origin,
+          filePictureOrientation(get()),
+        ),
       } as AppNode);
 
     if (encoded) {

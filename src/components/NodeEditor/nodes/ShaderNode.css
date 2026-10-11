@@ -245,6 +245,19 @@
   pointer-events: none;
 }
 
+/* RGB Curves' art (CurvesArt): a reading like the ramp strip — the strokes
+   carry their own colours, so no background and no dark-mode remap. */
+.shader-node__curves-art {
+  display: block;
+  width: 72px;
+  height: 56px;
+  margin: 4px 6px 2px;
+  border: 1px solid rgba(var(--node-ink-rgb), 0.28);
+  border-radius: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
 /* ===== Operator layout (2-input glyph node: glyph BETWEEN the two inputs) ===== */
 .shader-node__op {
   position: relative;

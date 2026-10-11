@@ -144,7 +144,7 @@ const STUDY_ROWS = [
  *  UVs became three's SphereGeometry parameterization, and clockwise on a
  *  model (engine/imageRotation.test.ts measures both senses, and the tile's sign). */
 const ROTATION_TIP =
-  'Turns the picture about its own centre. A positive angle turns it counter-clockwise on the Sphere, Plane, Cube, Teapot and Bunny, and clockwise on most imported models — the sign three.js and glTF use (with positive Tile X and Tile Y). With different Tile X and Tile Y the turned picture is stretched along the surface, as in glTF.';
+  'Turns the picture about its own centre. A positive angle turns it counter-clockwise on the Sphere, Plane, Cube, Utah Teapot, Stanford Bunny and OBJ models, and clockwise on glTF/GLB models with their own UVs — the sign three.js and glTF use (with positive Tile X and Tile Y). With different Tile X and Tile Y the turned picture is stretched along the surface, as in glTF.';
 const OLDER_TIP =
   'A transform saved by an earlier FastShaders that Tile, Offset and Rotation cannot express. It still applies. Clearing it changes the picture.';
 
@@ -317,11 +317,22 @@ describe('one writer per key, and no menu writes orientation', () => {
   });
 
   it('no menu writes `orientation`: it is a fact about the bytes, and moves with them', () => {
-    // The one place a menu names it is the model-texture pick, which hands the
-    // picture's own fact to withImagePayload together with its bytes.
+    // A menu names it in exactly two places, each handing a picture's own fact
+    // to withImagePayload together with its bytes: the model-texture pick
+    // ('gltf', always) and "From file…" — the ONE predicate's answer
+    // (utils/pictureOrientation.ts: the glTF way over a glTF model's own UVs,
+    // unless the node's Flip Y is ticked, which keeps its own),
+    // which it also reads back, through the mapping reader, for its no-op test.
     const src = code(IMAGE_MENU);
-    expect(count(src, 'orientation')).toBe(1);
-    expect(src).toMatch(/withImagePayload\(liveVals, \{[^}]*orientation: 'gltf',/);
+    const fromFile = between(src, 'async function fillImageNodeFromFile(', 'async function materialiseModelTexture(');
+    const modelPick = between(src, 'async function materialiseModelTexture(', 'export function ImageNodeSettings(');
+    expect(count(src, 'orientation')).toBe(count(fromFile, 'orientation') + count(modelPick, 'orientation'));
+    expect(count(modelPick, 'orientation')).toBe(1);
+    expect(modelPick).toMatch(/withImagePayload\(liveVals, \{[^}]*orientation: 'gltf',/);
+    expect(count(fromFile, 'orientation')).toBe(4);
+    expect(fromFile).toContain('const orientation = replacementPictureOrientation(store, liveVals);');
+    expect(fromFile).toContain("readImageUvMapping(liveVals).orientation === (orientation ?? 'app')");
+    expect(fromFile).toMatch(/withImagePayload\(liveVals, \{[^}]*orientation,/);
     const dir = fileURLToPath(new URL('.', import.meta.url));
     for (const f of readdirSync(dir).filter((n) => n.endsWith('.tsx'))) {
       const s = code(readFileSync(path.join(dir, f), 'utf8'));
@@ -376,8 +387,10 @@ describe('a click in and out of an imported Offset writes nothing', () => {
   const NO_WIRES = { tileX: false, tileY: false, offsetX: false, offsetY: false };
 
   it('the row’s guard matches what the edit field shows and commits', () => {
-    expect(DRAG).toContain('setEditText(String(roundTo(value, 4)));');
-    expect(DRAG).toMatch(/const num = parseFloat\(editText\);\s*if \(!isNaN\(num\)\) onChange\(num\);/);
+    // 4 places through the ONE field text rule (utils/numberField.ts): `formatFieldNumber(v, 4)` prints
+    // `Math.round(v*1e4)/1e4`, which `parseFieldNumber` reads back exactly — the rounding the guard knows.
+    expect(DRAG).toContain('setEditText(formatFieldNumber(value, 4));');
+    expect(DRAG).toMatch(/const num = parseFieldNumber\(editText\);\s*if \(num !== null\) onChange\(num\);/);
     expect(PARAM_ROW).toContain('const EDIT_DECIMALS = 4;');
     expect(code(PARAM_ROW)).toMatch(
       /onChange=\{\(v\) => \{\s*if \(!isRoundingOnlyCommit\(v, Number\(currentValue\)\)\) handleValueChange\(paramKey, v\);\s*\}\}/,
@@ -507,13 +520,18 @@ describe('the strings: the fold-out’s went with it, the new ones are translate
     const clockwiseOnBuiltIn = /(?<!counter-)clockwise on the (Sphere|Plane|Cube|Utah Teapot|Teapot|Stanford Bunny|Bunny)/i;
     expect(IMAGE_MENU).not.toMatch(clockwiseOnBuiltIn);
     expect(Object.keys(LV_UI).some((k) => clockwiseOnBuiltIn.test(k))).toBe(false);
-    expect(ROTATION_TIP).toContain('counter-clockwise on the Sphere, Plane, Cube, Teapot and Bunny');
-    expect(ROTATION_TIP).toContain('clockwise on most imported models');
+    // The clockwise sense is named by what decides it — a glTF model's OWN
+    // (v-down) UVs — never "most imported models": a dropped OBJ, with or
+    // without vt, and a GLB without UVs turn like the Sphere (measured).
+    expect(ROTATION_TIP).toContain('counter-clockwise on the Sphere, Plane, Cube, Utah Teapot, Stanford Bunny and OBJ models');
+    expect(ROTATION_TIP).toContain('clockwise on glTF/GLB models with their own UVs');
+    expect(ROTATION_TIP).not.toContain('most imported models');
     expect(ROTATION_TIP).toContain('the sign three.js and glTF use');
     // Latvian: both senses, each with the shapes the Model menu names (lv.json's own names).
     const lv = t(ROTATION_TIP, 'lv');
-    expect(lv).toMatch(/uz lodes, plaknes, kuba, Jūtas tējkannas un Stenfordas zaķa attēlu griež pretēji pulksteņrādītāja virzienam\./);
-    expect(lv).toMatch(/Uz vairuma importēto modeļu tas attēlu griež pulksteņrādītāja virzienā\./);
+    expect(lv).toMatch(/uz lodes, plaknes, kuba, Jūtas tējkannas, Stenfordas zaķa un OBJ modeļa attēlu griež pretēji pulksteņrādītāja virzienam\./);
+    expect(lv).toMatch(/Uz glTF\/GLB modeļa ar savām UV koordinātām tas attēlu griež pulksteņrādītāja virzienā\./);
+    expect(lv).not.toMatch(/vairuma importēto/);
     expect(lv).not.toMatch(/Uz Stenfordas zaķa/);
     for (const name of ['Sphere', 'Plane', 'Cube', 'Utah Teapot', 'Stanford Bunny']) expect(t(name, 'lv'), name).not.toBe(name);
     expect([t('Sphere', 'lv'), t('Cube', 'lv'), t('Utah Teapot', 'lv'), t('Stanford Bunny', 'lv')])

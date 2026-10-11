@@ -8,6 +8,7 @@ import {
   outputMaterials,
   materialExposedPorts,
   channelHandle,
+  parseChannelHandle,
   planNamedPartsAcross,
   planIndexPartsAcross,
   moduleSignatureOf,
@@ -40,7 +41,8 @@ import { isUnsignedNoise } from '@/utils/noiseRange';
 import { isWireframeEdges } from '@/utils/wireframeMode';
 import { decodeDataNode, columnForHandle } from '@/utils/dataNode';
 import { readSoundSettings } from '@/utils/soundSettings';
-import { readColorRamp } from '@/utils/colorRamp';
+import { readColorRamp, rampTableKey } from '@/utils/colorRamp';
+import { readRgbCurves, curvesTableKey } from '@/utils/rgbCurves';
 import {
   SOUND_CHANNELS,
   soundUniformName,
@@ -88,6 +90,7 @@ import {
 } from '@/utils/colormaps';
 import { float32ToBase64, float16ToBase64 } from '@/utils/binaryCodec';
 import { topologicalSort } from './topologicalSort';
+import { maxMaterialSampledTextures, textureBudgetLine } from './textureBudget';
 
 /** Format a JS number as a TSL-safe numeric literal (finite or `0`). */
 function num(n: number): string {
@@ -150,6 +153,7 @@ const CUSTOM_EMISSION_BASENAMES: Record<string, string> = {
   wireframe: 'wireframe',
   fresnel: 'fresnel',
   colorRamp: 'colorRamp',
+  rgbCurves: 'rgbCurves',
 };
 
 /** Emit the setup lines for a 256-texel RGBA colormap LUT. Values are baked in
@@ -230,10 +234,16 @@ export const TOHSL_COMPONENT_TO_HANDLE = new Map<string, string>([['x', 'h'], ['
  * registryType → member → handle. Each node's graphToCode-side map sits beside
  * it as the other half of a drift pair. Maps all the way down — the member name
  * is adversarial text from the code panel.
+ *
+ * The colour/texcoord ALIASES of each member are here too (Fresnel `.r`/`.s`,
+ * `.g`/`.t`; Color Ramp `.xyz`, `.w`), read back to the same socket and re-
+ * emitted in the canonical spelling: without them a hand-written `fresnel1.g`
+ * fell through to a Split fed from the SCALAR `out` socket, whose `.y` is
+ * nothing — the wire vanished on Apply with no warning.
  */
 export const OWN_MEMBER_TO_HANDLE: ReadonlyMap<string, ReadonlyMap<string, string>> = new Map<string, ReadonlyMap<string, string>>([
-  ['fresnel', new Map([['x', 'out'], ['y', 'facing']])],
-  ['colorRamp', new Map([['rgb', 'out'], ['a', 'alpha']])],
+  ['fresnel', new Map([['x', 'out'], ['r', 'out'], ['s', 'out'], ['y', 'facing'], ['g', 'facing'], ['t', 'facing']])],
+  ['colorRamp', new Map([['rgb', 'out'], ['xyz', 'out'], ['a', 'alpha'], ['w', 'alpha']])],
 ]);
 
 /** Fresnel's sockets ⇄ the members of its ONE `fsFresnel` call (a vec2); the
@@ -318,6 +328,36 @@ function inEdge(gidx: GraphIndex, id: string, handle: string): AppEdge | undefin
 function imageSampleIsWide(gidx: GraphIndex, id: string): boolean {
   for (const e of outEdges(gidx, id)) if (isImageChannelHandle(e.sourceHandle)) return true;
   return false;
+}
+
+/**
+ * Whether an Image node is sampled ONLY as a sky: its Direction is wired (an
+ * equirect lookup that replaces the whole uv path), or every consumer is an
+ * Output's Environment fed from its Color socket (PMREM reads the texture
+ * OBJECT). Such a sample has no mesh UVs to match, so a glTF orientation
+ * (`Texture.flipY = false`) only turned the panorama upside down — and no Flip
+ * box reaches it, the Flips being uv notions. A picture ALSO sampled on the
+ * mesh keeps its orientation (one Texture object cannot be both).
+ */
+function imageSampledOnlyAsSky(gidx: GraphIndex, id: string, directionWired: boolean): boolean {
+  if (directionWired) return true;
+  const out = outEdges(gidx, id);
+  return (
+    out.length > 0 &&
+    out.every(
+      (e) =>
+        !isImageChannelHandle(e.sourceHandle) &&
+        gidx.nodeById.get(e.target)?.data.registryType === 'output' &&
+        parseChannelHandle(e.targetHandle ?? '').channel === 'env',
+    )
+  );
+}
+
+/** A fresh copy of `values` without `orientation` — the app way, for a sky sample. */
+function withoutOrientation(values: Record<string, string | number>): Record<string, string | number> {
+  const out = { ...values };
+  delete out.orientation;
+  return out;
 }
 
 export function graphToCode(
@@ -686,6 +726,10 @@ export function graphToCode(
   // either node existed.
   const mainLines: string[] = [];
   let bodyLines: string[] = mainLines;
+  // The Color Ramp / RGB Curves tables this module bakes, by the body variable that bakes each — fsLut.make's own
+  // cache keys (`rampTableKey`/`curvesTableKey`, which lutHelpers.test.ts finds the emitted helpers' textures
+  // under), so equal ones count once, and only for a material that reads them (engine/textureBudget.ts).
+  const lutKeyOfVar = new Map<string, string>();
   // Module-scope setup emitted BEFORE the shader Fn — the Data/Stripes nodes
   // build their `THREE.DataTexture` lookups here (closed over by the Fn body).
   const setupLines: string[] = [];
@@ -886,7 +930,16 @@ export function graphToCode(
       // MEMBER form; uv math is per node. See docs/dev/images-and-textures.md.
       const nv = getNodeValues(node);
       const wide = imageSampleIsWide(gidx, node.id);
-      const placed = imagePlanner.place(node.id, nv);
+      // A wired Direction replaces the whole uv path (below).
+      const dirEdge = inEdge(gidx, node.id, 'dir');
+      const dirRef = dirEdge ? resolveEdgeRef(dirEdge, varNames, gidx) : null;
+      const mapping = readImageUvMapping(nv);
+      // A picture sampled only as a SKY has no mesh UVs to match, so it is uploaded the app way whatever its
+      // stored orientation (imageSampledOnlyAsSky). The stored key itself is untouched.
+      const placed = imagePlanner.place(
+        node.id,
+        mapping.orientation === 'gltf' && imageSampledOnlyAsSky(gidx, node.id, dirRef !== null) ? withoutOrientation(nv) : nv,
+      );
       if (!placed) {
         // Inert fallback — consumers still reference this var, so it must
         // exist (a missing declaration would be a runtime ReferenceError).
@@ -903,14 +956,10 @@ export function graphToCode(
         addImport('three/tsl', 'texture');
         const uvEdge = inEdge(gidx, node.id, 'uv');
         const uvRef = uvEdge ? resolveEdgeRef(uvEdge, varNames, gidx) : null;
-        // A wired Direction replaces the whole uv path (below).
-        const dirEdge = inEdge(gidx, node.id, 'dir');
-        const dirRef = dirEdge ? resolveEdgeRef(dirEdge, varNames, gidx) : null;
         // Unwired inside a splat Fn: the splat's own sample point, never the
         // quad's (absent) uv attribute — see implicitBinding.
         const scopedUv = !uvRef && !dirRef ? implicitBinding('uv') : null;
         if (!uvRef && !scopedUv) addImport('three/tsl', 'uv');
-        const mapping = readImageUvMapping(nv);
         // The placement is read ONCE, by the reader the restore fold shares
         // (utils/imagePlacement.ts): the Flip thresholds, the stored tile/offset
         // and the turn's sign. Each ticked box mirrors its axis, in both
@@ -1549,9 +1598,25 @@ export function graphToCode(
       // narrowed inside the helper (`float(fac)` takes .x), never `.x` here — a nested member would not parse back.
       const ramp = readColorRamp(getNodeValues(node));
       const [fac] = resolveArguments(node, varNames, def, gidx, ['fac']);
-      if (ramp.rejected) bodyLines.push(`  // ${varName}: stored ramp unreadable - default used`);
+      if (ramp.rejectedStops) bodyLines.push(`  // ${varName}: stored ramp unreadable - default used`);
+      if (ramp.rejectedInterp) bodyLines.push(`  // ${varName}: stored interpolation unreadable - linear used`);
+      lutKeyOfVar.set(varName, rampTableKey(ramp));
       usedHelperNames.add('fsColorRamp');
       bodyLines.push(`  const ${varName} = fsColorRamp(${fac}, ${JSON.stringify(ramp.canonical)}, ${JSON.stringify(ramp.interp)});`);
+    } else if (def.type === 'rgbCurves') {
+      // Blender's RGB Curves: ONE fsRgbCurves call (engine/lutHelperText.ts) returning the vec3. The four curves
+      // are canonical strings RE-FORMATTED from the parse; Color/Factor coercion happens in the helper (vec3(),
+      // float()), never at the call site.
+      const curves = readRgbCurves(getNodeValues(node));
+      const [color, fac] = resolveArguments(node, varNames, def, gidx, ['color', 'fac']);
+      if (curves.rejectedChannels.length) bodyLines.push(`  // ${varName}: stored curve ${curves.rejectedChannels.join('/')} unreadable - straight line used`);
+      if (curves.rejectedExtend) bodyLines.push(`  // ${varName}: stored extend unreadable - extrapolated used`);
+      // The helper's own cache key (fsLut.make); null — no table — for identity + Extrapolated, which bakes nothing.
+      const tableKey = curvesTableKey(curves);
+      if (tableKey !== null) lutKeyOfVar.set(varName, tableKey);
+      usedHelperNames.add('fsRgbCurves');
+      const s = (k: 'c' | 'r' | 'g' | 'b') => JSON.stringify(curves[k].canonical);
+      bodyLines.push(`  const ${varName} = fsRgbCurves(${color}, ${fac}, ${s('c')}, ${s('r')}, ${s('g')}, ${s('b')}, ${JSON.stringify(curves.extend)});`);
     } else if (def.modes) {
       // A def with MODES calls the variant its mode selects (the default mode
       // is the def's own tslFunction), with that variant's port list — a
@@ -2343,6 +2408,23 @@ export function graphToCode(
   const helperLines: string[] = [];
   for (const type of usedHelpers) helperLines.push(...MODULE_HELPERS.get(type)!.lines, '');
 
+  // Over the per-stage sampled-texture limit the module SAYS so (engine/textureBudget.ts); under it, nothing.
+  // Counted per MATERIAL, from what each one reads: a driving custom sink is the module's one program; otherwise
+  // the default material and every `parts` / `materialParts` entry are compiled apart.
+  const materialChannels = (m: { channels: Record<string, string>; discardRef: string | null }): string[] => [
+    ...Object.values(m.channels),
+    ...(m.discardRef ? [m.discardRef] : []),
+  ];
+  const budgetLine = textureBudgetLine(
+    maxMaterialSampledTextures(
+      mainLines,
+      customEmission
+        ? [[...customEmission.lines, customEmission.returnLine, ...(customEmission.discardLine ? [customEmission.discardLine] : [])]]
+        : [materialChannels(defaultResolved), ...parts.map(materialChannels), ...indexParts.map(materialChannels)],
+      lutKeyOfVar,
+    ),
+  );
+
   const code = [
     ...importLines,
     '',
@@ -2350,6 +2432,7 @@ export function graphToCode(
     // Module-scope DataTexture construction (Data/Stripes nodes) — must precede
     // the shader Fn so its body can close over the textures.
     ...(setupLines.length ? [...setupLines, ''] : []),
+    ...(budgetLine ? [budgetLine] : []),
     'const shader = Fn(() => {',
     ...mainLines,
     ...(customEmission ? customEmission.lines : []),

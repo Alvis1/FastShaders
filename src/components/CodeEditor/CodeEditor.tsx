@@ -220,17 +220,18 @@ export function CodeEditor() {
   }, [requestCodeSync]);
 
   // Only compute export code when that tab is active; catch errors to avoid blank tabs.
-  // The A-Frame tab shows the REAL module, so image placeholders are expanded back
-  // to their `data:` payloads here — the TSL tab above keeps the short references.
+  // The module is built with its image placeholders expanded back to their
+  // `data:` payloads (the TSL tab above keeps the short references), but neither
+  // page below shows it: `buildAFrameEmbedHTML` and `buildThreeEmbedHTML` read
+  // only its schema rows and its `positionNode:` test, and load the module by
+  // file name.
   //
-  // Nodes are read IMPERATIVELY, for the same reason and with the same proof as
-  // ShaderPreview's `inlineImageAssetsFromNodes` srcDoc build: the module depends
-  // on nodes only through image payloads, and the `fs-asset:<node>-<hash>`
-  // placeholder embeds an FNV-1a hash of the stored payload (`IMAGE_PLACEHOLDER_RE`
-  // in imageAssets.ts, emitted by graphToCode's `fs-asset:` placeholder branch),
-  // so swapping an image always changes `code` — and therefore `settledCode` —
-  // and re-runs this memo. Dimensions and file name ride the same emitted line;
-  // an undecodable payload emits no placeholder at all. Everything the module
+  // Nodes are read IMPERATIVELY, and `settledCode` may run up to CODE_SETTLE_MS
+  // behind them: a placeholder whose node no longer holds its key is left
+  // verbatim (imageAssets.ts), which changes nothing either page reads. That
+  // is why this memo needs no settled {code, nodes} pair, unlike ShaderPreview,
+  // whose sandboxed document RESOLVES every key its module names
+  // (components/Preview/settledPreview.ts). Everything the module
   // reads that the generated code does NOT carry —
   // materialSettings (graphToCode never emits the DEFAULT material's settings;
   // an added material's four keys ride inside `parts` in the code itself) and

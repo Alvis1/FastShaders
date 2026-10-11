@@ -48,11 +48,11 @@ const MATERIAL_KEYS: ReadonlySet<string> = new Set([...PART_SETTING_KEYS, 'merge
 /** A Splat Output scope Fn's declarator line — graphToCode's exact spelling. */
 const SPLAT_FN_DECL_RE = /^const\s+sp\d+(?:Shade|Shape|Size|Feather)\s*=\s*Fn\s*\(/;
 
-/** Net brace depth change across `s`: every `{` minus every `}`. */
 /** A module-scope helper's first line: `const <helper> = Fn(` or a plain-JS `const <helper> = (` (fsLut's IIFE),
  *  built ONCE from the table so a new row is preserved without touching this file. */
 const MODULE_HELPER_DECL = new RegExp(`^\\s*const\\s+(${[...MODULE_HELPER_NAMES].join('|')})\\s*=\\s*(?:Fn\\(|\\()`);
 
+/** Net brace depth change across `s`: every `{` minus every `}`. */
 function braceDelta(s: string): number {
   let d = 0;
   for (const ch of s) {

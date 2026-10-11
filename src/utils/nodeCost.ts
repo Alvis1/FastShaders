@@ -1,12 +1,21 @@
 import type { AppNode, AppEdge } from '@/types';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
-import { getCost } from '@/utils/costTable';
+import { getCost, getBaseCosts } from '@/utils/costTable';
 import {
   activeSink, isSinkNode, isMarchOutput, isSplatOutput, isCustomSink, marchPartition,
   buildIncoming, closure,
 } from '@/utils/sdfPartition';
 import { contributingOutputs } from '@/utils/outputMaterials';
+import { readRgbCurves } from '@/utils/rgbCurves';
+
+/** RGB Curves' ALU beyond its six fetches, AUTHORED (not measured) at the table's own per-op prices: each of the
+ *  two stages of engine/lutHelperText.ts's expression is `v + min(v,0)·s0 + max(v−1,0)·s1` — add ×2, mul ×2, min,
+ *  sub, max, 7 one-point ops — and the final `mix(base, post, fac)` is mix's 2: 7 + 7 + 2. The six taps' inset
+ *  mul/add (`fsLut.at`) is inside colormap's price, as it is for the Colormap node. */
+const RGB_CURVES_ALU = 16;
+/** The identity RGB Curves form bakes no texture and emits a bare `vec3(col)`. */
+const RGB_CURVES_IDENTITY_COST = 1;
 
 /**
  * GPU cost READERS that need the node graph — the per-instance price and the
@@ -93,13 +102,67 @@ export function imageNodeCost(base: number, width: unknown, height: unknown): nu
   return Math.round(base * (IMAGE_COST_MIN_SCALE + (1 - IMAGE_COST_MIN_SCALE) * t));
 }
 
+/** The table a price is read from: `getCost` (the ACTIVE, override-aware one) for a live node, `baseCost` (the
+ *  shipped complexity.json) for a node TYPE. */
+type CostOf = (type: string) => number;
+function baseCost(type: string): number {
+  return getBaseCosts()[type] ?? 0;
+}
+
+/**
+ * A LUT node that BAKES — Color Ramp, a non-identity RGB Curves — IS `fetches`
+ * fetches of one 257-texel table (`fsLut.at`, the Colormap node's fetch + inset)
+ * plus its own arithmetic, so it is charged at colormap's price: a measured
+ * profile, which prices `colormap` and never these, reprices all three LUT
+ * nodes together. Under the shipped table that sum IS the type's complexity.json
+ * entry (pinned). A profile that moves the node's OWN entry off the shipped
+ * price is charged that entry instead — only a hand-authored one can (the bench
+ * never measures these), and "New profile…" seeds every entry at its shipped
+ * price, so an untouched entry still follows colormap.
+ */
+function lutBakeCost(type: 'colorRamp' | 'rgbCurves', fetches: number, alu: number, cost: CostOf): number {
+  const own = cost(type);
+  return own !== baseCost(type) ? own : fetches * cost('colormap') + alu;
+}
+
+/** THE price of a Color Ramp or RGB Curves node holding `values` — null for any other type. Color Ramp is one
+ *  fetch (Color/Alpha are swizzles of it); RGB Curves six (C per channel, then R/G/B) + RGB_CURVES_ALU, or 1 in
+ *  its identity form, which bakes nothing. */
+function lutNodeCost(type: string, values: unknown, cost: CostOf): number | null {
+  if (type === 'colorRamp') return lutBakeCost('colorRamp', 1, 0, cost);
+  if (type === 'rgbCurves') {
+    return readRgbCurves(values).identity ? RGB_CURVES_IDENTITY_COST : lutBakeCost('rgbCurves', 6, RGB_CURVES_ALU, cost);
+  }
+  return null;
+}
+
+/**
+ * THE price of a node TYPE: what a FRESH node of it — one holding its
+ * definition's defaults — is charged under the shipped table. It is the number
+ * the palette tile, the Add-node menu row, the Designer card and the
+ * node-editor overview print (and the palette strip sorts by), and the
+ * `data.cost` every creation path stamps — a snapshot nothing restamps on an
+ * edit, which only the Preview/Clock/MathPreview/Sound cards draw (a ShaderNode card
+ * prices itself live, and layoutEngine reserves it at that live price) — so
+ * the number a node is picked by is the number it shows once dropped. The table entry, except for a
+ * type priced by its values: a fresh RGB Curves node holds no curves, so it is
+ * the identity form (1) — its table entry is what a node that BAKES is charged.
+ * undefined for a type the table does not price; callers keep their fallback.
+ */
+export function freshNodeCost(type: string): number | undefined {
+  const base = getBaseCosts()[type];
+  if (base === undefined) return undefined;
+  return lutNodeCost(type, NODE_REGISTRY.get(type)?.defaultValues, baseCost) ?? base;
+}
+
 /**
  * GPU cost points for a node instance.
  *
  * A `chainable` (variadic) arithmetic node scales with its operand count: an
  * N-operand op performs N−1 operations, so its cost is `base × (N−1)`. A plain
- * 2-operand node is therefore unchanged (base × 1). Every other node type is the
- * flat registry cost.
+ * 2-operand node is therefore unchanged (base × 1). The LUT nodes are priced
+ * through Colormap (`lutNodeCost`), the Image node by its resolution. Every
+ * other node type is the flat registry cost.
  *
  * Operand count is the *semantic* count (`effectiveInputs(..., false)`) — wired
  * operands plus any interior identity gaps, excluding the empty grow socket —
@@ -112,11 +175,8 @@ export function imageNodeCost(base: number, width: unknown, height: unknown): nu
 export function nodeCostPoints(node: AppNode, edges: AppEdge[], wiredHandles?: readonly string[]): number {
   const type = node.data.registryType;
   if (!type) return 0;
-  // Color Ramp IS one 1-D LUT fetch — the same measurement as the Colormap
-  // node — so it is charged at colormap's live price and a measured profile
-  // reprices both; its own complexity.json entry is only what node creation
-  // and the Designer read.
-  if (type === 'colorRamp') return getCost('colormap');
+  const lut = lutNodeCost(type, getNodeValues(node), getCost);
+  if (lut !== null) return lut;
   const base = getCost(type);
   if (type === 'imageNode') {
     const v = getNodeValues(node);

@@ -30,6 +30,14 @@ describe('nodeArtStyle — movable node art (colormap ramp)', () => {
     expect(nodeArtStyle('colormap', { scale: 1.5 })).toEqual({ transform: 'translate(0px, 0px) scale(1.5)' });
   });
 
+  it('moves the Color Ramp strip by the same rule (an ART node, glyphless)', () => {
+    expect(nodeArtStyle('colorRamp', { dx: 4 })).toEqual({ transform: 'translate(4px, 0px) scale(1)' });
+  });
+
+  it('moves the RGB Curves art by the same rule (an ART node, glyphless)', () => {
+    expect(nodeArtStyle('rgbCurves', { dy: 3, scale: 2 })).toEqual({ transform: 'translate(0px, 3px) scale(2)' });
+  });
+
   it('ignores a non-positive or non-numeric scale (same rule as nodeScale)', () => {
     expect(nodeArtStyle('colormap', { dx: 2, scale: 0 } as GlyphDesign)).toEqual({
       transform: 'translate(2px, 0px) scale(1)',

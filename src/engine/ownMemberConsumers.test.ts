@@ -20,11 +20,21 @@ import { makeNode, makeEdge } from '@/test-utils';
  */
 
 interface Graph { nodes: AppNode[]; edges: AppEdge[] }
-interface Source { type: string; handle: string; member: string }
+interface Source {
+  type: string;
+  handle: string;
+  member: string;
+  /** A VECTOR socket (Color Ramp's Color, `.rgb` of the vec4 sample): a scalar-narrowed consumer (Discard, the
+   *  Splat scalars, SDF Field/Density, the dataviz inputs) reads `.x` of the BARE variable instead — never
+   *  `.rgb.x`, which the parse cannot read — and a Split of it swizzles the bare variable. */
+  narrowed?: string;
+}
 
 const SOURCES: readonly Source[] = [
   { type: 'fresnel', handle: 'out', member: 'x' },
   { type: 'fresnel', handle: 'facing', member: 'y' },
+  { type: 'colorRamp', handle: 'out', member: 'rgb', narrowed: 'x' },
+  { type: 'colorRamp', handle: 'alpha', member: 'a' },
   { type: 'toHsl', handle: 's', member: 'y' },
 ];
 
@@ -167,8 +177,9 @@ describe('own-member sources — every consumer keeps its wire across Apply', ()
           expect(parsed.errors.some((e) => drop.test(e.message)), `${key}: a drop must be announced`).toBe(true);
           return;
         }
-        // The GPU text reads the socket's own member.
-        expect(first, key).toContain(`${srcVar}.${src.member}`);
+        // The GPU text reads the socket's own member (or, for a vector socket into a scalar, the narrowed one).
+        const reads = [src.member, ...(src.narrowed ? [src.narrowed] : [])].some((m) => first.includes(`${srcVar}.${m}`));
+        expect(reads, `${key}: reads ${srcVar}.${src.member}`).toBe(true);
         const ps = byLabel(parsed.nodes, srcVar);
         expect(ps, key).toBeDefined();
         const targetLabel = c.target === 'C'
@@ -190,7 +201,9 @@ describe('own-member sources — every consumer keeps its wire across Apply', ()
 });
 
 describe('own-member sources — a Split reads per SOURCE SOCKET', () => {
-  for (const src of SOURCES) {
+  // Scalar sockets only: a Split of a vector socket (Color Ramp's Color) swizzles the bare variable like any
+  // vec3 source — pinned in colorRampNode.test.ts.
+  for (const src of SOURCES.filter((s) => !s.narrowed)) {
     it(`${src.type}.${src.handle} → Split.x → Color reads ${src.member}; Split.y reads nothing; Apply drops the Split`, () => {
       const S = makeNode('S', src.type);
       const sx = makeNode('X', 'split');

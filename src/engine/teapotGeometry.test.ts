@@ -203,22 +203,17 @@ describe('Utah Teapot OBJ', () => {
 
   it('public/models/teapot.obj is byte-identical to the generator output (written by scripts/sync-generated.mjs)', () => {
     const generated = readFileSync(new URL('../../public/models/teapot.obj', import.meta.url), 'utf8');
-    expect(generated).toBe(api.obj(STATIC_TEAPOT_RESOLUTION));
+    expect(
+      generated,
+      'stale teapot.obj: the sync writes it at a dev/build/test start (restart a watch run after editing the ' +
+        'teapot), and only when its content stamp says a file in TEAPOT_INPUTS (scripts/sync-generated.mjs) changed',
+    ).toBe(api.obj(STATIC_TEAPOT_RESOLUTION));
   });
 
-  it('stays loadable under plain Node type stripping (scripts/sync-generated.mjs imports it)', () => {
-    // Node's strip-types resolves no `@/` alias, needs explicit `.ts` on every
-    // relative import, and cannot strip an enum, namespace or parameter property.
-    for (const file of ['./teapotGeometry.ts', './teapotData.ts']) {
-      const src = readFileSync(new URL(file, import.meta.url), 'utf8');
-      const specs = [...src.matchAll(/^\s*(?:import|export)\b[^;]*?\sfrom\s+['"]([^'"]+)['"]/gm)].map((m) => m[1]);
-      for (const spec of specs) {
-        expect(spec.startsWith('.') && spec.endsWith('.ts'), `${file} imports '${spec}'`).toBe(true);
-      }
-      expect(src, file).not.toMatch(/^\s*(?:export\s+)?(?:const\s+)?enum\s/m);
-      expect(src, file).not.toMatch(/^\s*(?:export\s+)?namespace\s/m);
-    }
-  });
+  // Nothing here pins that these modules load under plain Node's type stripping,
+  // deliberately: a breach fails the sync that starts vitest before any test
+  // runs, so a guard in this file could only ever fail on a false positive. The
+  // sync's own error names the rule (syncGenerated.test.ts pins that message).
 
   it('the preview script registers the teapot-mesh component only where AFRAME + THREE exist', () => {
     expect(TEAPOT_SCRIPT.startsWith('<script>')).toBe(true);

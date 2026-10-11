@@ -13,7 +13,7 @@ import { DragNumberInput } from './inputs/DragNumberInput';
 import { nodeTextScale } from './nodes/glyphs/NodeGlyph';
 import { WaveformSvg } from './nodes/WaveformSvg';
 import { renderNoisePreview, type NoiseType } from '@/utils/noisePreview';
-import { getBaseCosts } from '@/utils/costTable';
+import { freshNodeCost } from '@/utils/nodeCost';
 import {
   SOUND_BODY_W, SOUND_BODY_H, MIC_PARAM_TOPS, MIC_CHIP_H,   SOUND_METER_TOP, MIC_METER_H, SOUND_BTN_TOP, MIC_OUT_TOPS, MIC_PAD_X,
 } from './nodes/soundGeometry';
@@ -41,8 +41,6 @@ import { SPLAT_NODE_CONFIG, SPLAT_OWN_COLOUR_KEY } from './nodes/SplatOutputNode
 import { OutputTitle } from './nodes/OutputTitle';
 import './NodePreviewCard.css';
 import { NODE_BORDER_WIDTH } from './nodes/nodeFrame';
-
-const COSTS = getBaseCosts();
 
 interface NodePreviewCardProps {
   def: NodeDefinition;
@@ -707,7 +705,8 @@ function ColorCardContent({ def, cost, costTextColor }: { def: NodeDefinition; c
  * ============================================================ */
 
 export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart }: NodePreviewCardProps) {
-  const cost = COSTS[def.type] ?? 0;
+  // A FRESH node's price — the number the node shows once dropped (a fresh RGB Curves node is its identity form).
+  const cost = freshNodeCost(def.type) ?? 0;
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   // The header mixes into the card, and the card follows the theme

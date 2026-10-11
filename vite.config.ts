@@ -418,20 +418,31 @@ const ND_I18N = path.resolve(__dirname, 'src/i18n/node-i18n.json');
  * the submodule would otherwise build a dist with no js/), and the script
  * prunes its output folders, so a stale file cannot ship from a local deploy.
  *
- * Runs at buildStart, which vitest's server also calls, so dev, build, test and
- * the desktop build all see fresh files. KEEP THIS BODY SYNCHRONOUS: Rollup
- * runs buildStart hooks in parallel, and only a synchronous body finishes
- * before `shaderCarouselDesktopStagePlugin`'s buildStart copies ShaderCarousel/
- * (with the generated three) into src-tauri/carousel-dist. It also runs before
- * `shaderCarouselCopyPlugin`'s closeBundle copy for the web build.
+ * Runs when the config RESOLVES (configResolved), which `vite`, `vite build`
+ * and vitest's server all do first, so dev, build, test and the desktop build
+ * all see fresh files. Not at buildStart: the dev server snapshots public/
+ * (initPublicFiles) right after the config resolves and BEFORE any buildStart,
+ * so a file first written at buildStart was never in the served set — a fresh
+ * clone's first `npm run dev` answered /js/*.js and /models/teapot.obj with
+ * index.html until a restart (vite 6.4.2, measured). resolveConfig awaits
+ * every configResolved hook (`await Promise.all(…)`) before that snapshot and
+ * before any buildStart, so the files also exist before
+ * `shaderCarouselDesktopStagePlugin`'s buildStart copies ShaderCarousel/ (with
+ * the generated three) into src-tauri/carousel-dist and before
+ * `shaderCarouselCopyPlugin`'s closeBundle copy for the web build. (At
+ * buildStart, which Rollup runs in parallel, only a synchronous body was
+ * guaranteed to finish first; here the synchronous body is just the simplest.)
  *
  * A child process because the teapot generator is TypeScript that plain Node
  * loads with type stripping, and because importing src/ statically from this
  * config would put one file in two TS projects (TS6305, see tsconfig.node.json).
+ * It costs a start ~22 ms, ~15 of them the process itself: the script writes
+ * only what changed and skips the teapot (~70 ms) while its content stamp holds
+ * (Node 22.16, measured 2026-10-10; it was ~95 ms a start before the stamp).
  */
 const vendorSyncPlugin = (): Plugin => ({
   name: 'fs-vendor-sync',
-  buildStart() {
+  configResolved() {
     execFileSync(
       process.execPath,
       ['--experimental-strip-types', '--disable-warning=ExperimentalWarning',

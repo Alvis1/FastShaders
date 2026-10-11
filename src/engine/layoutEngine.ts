@@ -1,6 +1,7 @@
 import dagre from '@dagrejs/dagre';
 import type { AppNode, AppEdge } from '@/types';
 import { getCostScale } from '@/utils/colorUtils';
+import { nodeCostPoints } from '@/utils/nodeCost';
 import { OUTPUT_DEFAULT_EXPOSED, SPLAT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import { SPLAT_LIGHT_PORTS } from '@/utils/splatLight';
 import { NODE_REGISTRY, growsOperands, getFlowNodeType } from '@/registry/nodeRegistry';
@@ -36,8 +37,9 @@ const W_PAD = 42; // sockets + labels on both sides of an auto-width node
 // deliberately left out — its footprint predates this table). A Map: the rows
 // branch runs even when `def` is undefined, so `type` is an untrusted string out
 // of a file, and a Record lookup of `constructor`/`__proto__` would make the
-// body height NaN. Color Ramp: .shader-node__ramp-strip 12 + 4/2 margins.
-const ART_H: ReadonlyMap<string, number> = new Map([['colorRamp', 18]]);
+// body height NaN. Color Ramp: .shader-node__ramp-strip 12 + 4/2 margins;
+// RGB Curves: .shader-node__curves-art 56 + 4/2 margins.
+const ART_H: ReadonlyMap<string, number> = new Map([['colorRamp', 18], ['rgbCurves', 62]]);
 
 // Flow component types whose root element applies `transform: scale(costScale)`
 // (top-left origin) — the same set NodeEditor's drag-connect hit boxes scale.
@@ -66,11 +68,10 @@ type SizedNode = AppNode & {
 export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
   const type = (node.data as { registryType?: string }).registryType ?? '';
   const def = NODE_REGISTRY.get(type);
-  const cost = (node.data as { cost?: number }).cost ?? 0;
-  const scale = getCostScale(cost);
   // The renderer is picked by the registry def (node.type mirrors it in real
   // graphs but test stubs default to 'shader'); group/note have no def.
   const flowType = def ? getFlowNodeType(def) : ((node.type as string) ?? 'shader');
+  const scale = getCostScale(cardCost(node, flowType === 'shader' && def != null));
 
   // Fixed-footprint component types (dimensions from their CSS/canvas consts;
   // the colour swatch imports its real constant so auto-layout can't drift
@@ -191,9 +192,24 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
 export function measuredSize(node: AppNode): NodeSize | null {
   const m = (node as SizedNode).measured;
   if (!m?.width || !m?.height) return null;
-  const cost = (node.data as { cost?: number }).cost ?? 0;
-  const s = COST_SCALED_TYPES.has(node.type ?? '') ? getCostScale(cost) : 1;
+  const s = COST_SCALED_TYPES.has(node.type ?? '') ? getCostScale(cardCost(node, node.type === 'shader')) : 1;
   return { width: m.width * s, height: m.height * s };
+}
+
+/**
+ * The price a card is DRAWN at, which is what its cost scale follows — asked
+ * the way the card's own component asks (NodeEditor's `nodeVisualSize` does
+ * the same). A ShaderNode prices itself LIVE through `nodeCostPoints`, so a
+ * node bent after creation (an RGB Curves node: 1 fresh, 40 once it bakes), an
+ * Image at a new resolution and any node under a cost profile are reserved at
+ * the size they are drawn; the other cost-scaled cards (Preview, Clock,
+ * MathPreview, Sound) draw their creation-time `data.cost` snapshot, so they
+ * keep it. `[]` edges: a variadic node is laid
+ * out at its two-operand price (its list-mode HEIGHT already follows
+ * `inDegree`), which is the snapshot it was created with.
+ */
+function cardCost(node: AppNode, livePriced: boolean): number {
+  return livePriced ? nodeCostPoints(node, []) : ((node.data as { cost?: number }).cost ?? 0);
 }
 
 function median(values: number[]): number {

@@ -79,6 +79,25 @@ describe('projectTextureSources', () => {
     expect(plain.srcHeight).toBeUndefined();
   });
 
+  it('reads the orientation from EVERY holder: their common value, or mixed — never one holder’s', () => {
+    const gltf = (id: string) => img(id, { imageB64: A, orientation: 'gltf' });
+    const app = (id: string) => img(id, { imageB64: A });
+    expect(projectTextureSources([gltf('n1'), gltf('n2')])[0].orientation).toBe('gltf');
+    expect(projectTextureSources([app('n1'), app('n2')])[0]).not.toHaveProperty('orientation');
+    // The same file added under two models: ONE cell, the same answer in
+    // either document order (it used to be the first holder's).
+    for (const nodes of [[app('n1'), gltf('n2')], [gltf('n2'), app('n1')]]) {
+      const s = projectTextureSources(nodes);
+      expect(s).toHaveLength(1);
+      expect(s[0].orientation).toBe('mixed');
+    }
+    // Nor does the PROVENANCE holder decide it: n2 supplies the record, n1 disagrees.
+    const [p] = projectTextureSources([app('n1'), img('n2', { imageB64: A, orientation: 'gltf', originId: ORIGIN })]);
+    expect(p).toMatchObject({ originId: ORIGIN, orientation: 'mixed' });
+    // Read exactly, as the texture spec reads it: a junk value is the app way.
+    expect(projectTextureSources([img('n1', { imageB64: A, orientation: 'GLTF' }), app('n2')])[0]).not.toHaveProperty('orientation');
+  });
+
   it('caps the grid at 64', () => {
     expect(MAX_LISTED_TEXTURE_SOURCES).toBe(64);
   });
@@ -90,7 +109,11 @@ describe('pickTextureValues', () => {
   });
 
   it('is null when the node already holds that payload (no write, no undo entry)', () => {
-    expect(pickTextureValues({ imageB64: B }, src())).toBeNull();
+    expect(pickTextureValues({ imageB64: B }, src(), undefined)).toBeNull();
+    // Whichever way round the source is stored: orientation is changed by
+    // Flip Y or "From file…", never by re-picking the picture a node holds.
+    expect(pickTextureValues({ imageB64: B }, src({ orientation: 'mixed' }), 'gltf')).toBeNull();
+    expect(pickTextureValues({ imageB64: B, orientation: 'gltf' }, src(), undefined)).toBeNull();
   });
 
   it('swaps the picture and keeps every sampling and placement setting', () => {
@@ -101,7 +124,7 @@ describe('pickTextureValues', () => {
       // does a legacy transform the restore fold had to leave in place.
       rotation: 0.5, uvSet: 2, xfRotation: 0.5,
     };
-    const next = pickTextureValues(current, src())!;
+    const next = pickTextureValues(current, src(), undefined)!;
     expect(next).toEqual({
       ...current, imageB64: B, width: 16, height: 8, fileName: 'b.webp',
     });
@@ -111,14 +134,32 @@ describe('pickTextureValues', () => {
     // A model texture is uploaded top-row-first; a file drop is not. Keeping
     // the previous picture's `orientation` renders the new one upside down.
     const fromModel = { imageB64: A, orientation: 'gltf' };
-    expect(pickTextureValues(fromModel, src())!).not.toHaveProperty('orientation');
+    expect(pickTextureValues(fromModel, src(), undefined)!).not.toHaveProperty('orientation');
     expect(withImagePayload(fromModel, { dataUrl: B, width: 1, height: 1, fileName: 'x' })).not.toHaveProperty('orientation');
     // …and a source that IS top-row-first carries it onto the node.
-    expect(pickTextureValues({ imageB64: A }, src({ orientation: 'gltf' }))!).toMatchObject({ orientation: 'gltf' });
+    expect(pickTextureValues({ imageB64: A }, src({ orientation: 'gltf' }), undefined)!).toMatchObject({ orientation: 'gltf' });
+  });
+
+  it('a source its holders agree on brings THEIR orientation, whatever "From file…" would store now', () => {
+    for (const now of ['gltf', undefined] as const) {
+      expect(pickTextureValues({ imageB64: A }, src(), now)!, String(now)).not.toHaveProperty('orientation');
+      expect(pickTextureValues({ imageB64: A }, src({ orientation: 'gltf' }), now)!.orientation, String(now)).toBe('gltf');
+    }
+  });
+
+  it('a MIXED source brings none: the pick stores what "From file…" would — and never writes "mixed"', () => {
+    const mixed = src({ orientation: 'mixed' });
+    expect(pickTextureValues({ imageB64: A }, mixed, 'gltf')!.orientation).toBe('gltf');
+    expect(pickTextureValues({ imageB64: A }, mixed, undefined)!).not.toHaveProperty('orientation');
+    // It replaces the node's previous orientation like any other pick.
+    expect(pickTextureValues({ imageB64: A, orientation: 'gltf' }, mixed, undefined)!).not.toHaveProperty('orientation');
+    // Everything else is the ordinary swap.
+    const decided = pickTextureValues({ imageB64: A, tileX: 2 }, mixed, 'gltf')!;
+    expect(decided).toEqual(pickTextureValues({ imageB64: A, tileX: 2 }, src({ orientation: 'gltf' }), undefined));
   });
 
   it('deletes stale provenance when the source carries none', () => {
-    const next = pickTextureValues({ imageB64: A, originId: ORIGIN, srcWidth: 2048, srcHeight: 1024 }, src())!;
+    const next = pickTextureValues({ imageB64: A, originId: ORIGIN, srcWidth: 2048, srcHeight: 1024 }, src(), undefined)!;
     expect(next).not.toHaveProperty('originId');
     expect(next).not.toHaveProperty('srcWidth');
     expect(next).not.toHaveProperty('srcHeight');
@@ -128,6 +169,7 @@ describe('pickTextureValues', () => {
     const next = pickTextureValues(
       { imageB64: A, originId: 'ffffffffffffffff' },
       src({ originId: ORIGIN, srcWidth: 300, srcHeight: 200 }),
+      undefined,
     )!;
     expect(next).toMatchObject({ originId: ORIGIN, srcWidth: 300, srcHeight: 200 });
   });
@@ -153,6 +195,22 @@ describe('mergeTextureSources', () => {
     // The input lists are not mutated.
     expect(first[0].holderIds).toEqual(['a']);
   });
+
+  it('holders that disagree on the orientation make the merged record mixed, in either order', () => {
+    const at = (orientation: ProjectTextureSource['orientation'], id: string): ProjectTextureSource => ({
+      kind: 'project', dataUrl: A, width: 1, height: 1, fileName: id, holderIds: [id], ...(orientation ? { orientation } : {}),
+    });
+    const orientationOf = (...lists: ProjectTextureSource[][]) => {
+      const [s] = mergeTextureSources(...lists);
+      return s.kind === 'project' ? s.orientation : 'not a project source';
+    };
+    expect(orientationOf([at('gltf', 'a')], [at(undefined, 'b')])).toBe('mixed');
+    expect(orientationOf([at(undefined, 'b')], [at('gltf', 'a')])).toBe('mixed');
+    expect(orientationOf([at('gltf', 'a')], [at('mixed', 'b')])).toBe('mixed');
+    expect(orientationOf([at('mixed', 'a')], [at('gltf', 'b')])).toBe('mixed');
+    expect(orientationOf([at('gltf', 'a')], [at('gltf', 'b')])).toBe('gltf');
+    expect(orientationOf([at(undefined, 'a')], [at(undefined, 'b')])).toBeUndefined();
+  });
 });
 
 describe('textureSourcesKey', () => {
@@ -169,6 +227,13 @@ describe('textureSourcesKey', () => {
     expect(textureSourcesKey([img('n1', { imageB64: A, width: 65 }), base[1]])).not.toBe(k);
     expect(textureSourcesKey([img('n1', { imageB64: A, fileName: 'longer-name.png' }), base[1]])).not.toBe(k);
     expect(textureSourcesKey([base[0]])).not.toBe(k);
+  });
+
+  it('moves when a holder’s orientation alone changes ("From file…" of the same file under another model)', () => {
+    // The cell's orientation is what a pick writes, so a grid left open must not keep the old one.
+    expect(textureSourcesKey([img('n1', { imageB64: A, orientation: 'gltf' }), base[1]])).not.toBe(textureSourcesKey(base));
+    // Read exactly: a junk value is the app way, the key does not move.
+    expect(textureSourcesKey([img('n1', { imageB64: A, orientation: 'GLTF' }), base[1]])).toBe(textureSourcesKey(base));
   });
 });
 

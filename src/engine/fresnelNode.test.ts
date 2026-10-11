@@ -266,6 +266,31 @@ describe('Fresnel — emission and the round trip', () => {
     expect(into.sourceHandle).toBe('facing');
   });
 
+  it('hand-written colour/texcoord members (.r/.g/.s/.t) read their sockets — no Split, no silently lost wire', () => {
+    const src = [
+      "import { Fn, sin, vec3 } from 'three/tsl';",
+      'const shader = Fn(() => {',
+      '  const fresnel1 = fsFresnel(1.5);',
+      '  const s1 = sin(fresnel1.g);',
+      '  return { roughness: fresnel1.r, metalness: s1, emissive: vec3(fresnel1.t), opacity: fresnel1.s };',
+      '});',
+      'export default shader;',
+    ].join('\n');
+    const r = codeToGraph(src);
+    expect(r.errors).toEqual([]);
+    expect(r.nodes.some((n) => n.data.registryType === 'split')).toBe(false);
+    const fromFresnel = r.edges.filter((e) => r.nodes.find((n) => n.id === e.source)?.data.registryType === 'fresnel');
+    expect(fromFresnel.map((e) => `${e.sourceHandle}->${e.targetHandle}`).sort()).toEqual(['facing->emissive', 'facing->x', 'out->opacity', 'out->roughness']);
+    const regenerated = graphToCode(r.nodes, r.edges).code;
+    // Canonical spelling on the way out, and every consumer kept.
+    expect(regenerated).toContain('sin(fresnel1.y)');
+    expect(regenerated).toContain('roughness: fresnel1.x');
+    expect(regenerated).toContain('emissive: vec3(fresnel1.y)');
+    expect(regenerated).toContain('opacity: fresnel1.x');
+    const again = codeToGraph(regenerated);
+    expect(graphToCode(again.nodes, again.edges).code).toBe(regenerated);
+  });
+
   it('hand-written calls: a bare `fsFresnel(1.5)` is Normal unwired; a foreign position or a literal normal warns', () => {
     const wrap = (call: string) => [
       "import { Fn, normalWorld } from 'three/tsl';",

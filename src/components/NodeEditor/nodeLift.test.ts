@@ -324,7 +324,7 @@ describe('dark mode reaches the node ART and the canvas ink', () => {
   });
 
   it("re-maps only the GLYPH — never a reading, never the user's own picture", () => {
-    for (const cls of ['colormap-strip', 'image-thumb', 'preview-node__canvas', 'clock-node__canvas']) {
+    for (const cls of ['colormap-strip', 'ramp-strip', 'curves-art', 'image-thumb', 'preview-node__canvas', 'clock-node__canvas']) {
       expect(base, `${cls} is being re-coloured`).not.toMatch(
         new RegExp(`data-theme="dark"[^{]*\\.${cls}`),
       );

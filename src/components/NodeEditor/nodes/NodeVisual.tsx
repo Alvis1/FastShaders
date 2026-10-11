@@ -3,6 +3,7 @@ import type { NodeDefinition } from '@/types';
 import { getTypeColor } from '@/utils/colorUtils';
 import { getColormap, colormapGradientCss } from '@/utils/colormaps';
 import { ColorRampStrip } from './ColorRampArt';
+import { CurvesArt } from './CurvesArt';
 import { formatNodeLabel } from '@/i18n';
 import { useAppStore } from '@/store/useAppStore';
 import { buildRows, visiblePortRows, outputRowLabel, ImageThumbEmpty, IMAGE_EMPTY_HINT_EVAL, PortValueCell } from './ShaderNode';
@@ -413,6 +414,18 @@ export function NodeVisual({
           <ColorRampStrip
             stops={values?.stops}
             interp={values?.interp}
+            dataNdArt={interactive ? '' : undefined}
+            style={{ ...nodeArtStyle(def.type, design), ...interactiveStyle }}
+          />
+        )}
+        {/* RGB Curves: the same curves as the canvas node (CurvesArt). */}
+        {def.type === 'rgbCurves' && (
+          <CurvesArt
+            curveC={values?.curveC}
+            curveR={values?.curveR}
+            curveG={values?.curveG}
+            curveB={values?.curveB}
+            extend={values?.extend}
             dataNdArt={interactive ? '' : undefined}
             style={{ ...nodeArtStyle(def.type, design), ...interactiveStyle }}
           />

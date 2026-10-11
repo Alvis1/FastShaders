@@ -41,11 +41,12 @@ describe('locateRegistryDescriptions', () => {
     // the Audio Input node was folded into the Sound node (2026-09-08 — one
     // def, one capture session, one analyser); 98 when the Image node joined
     // `definitions` (GLB Phase 4); 99 with the Splat Output (2026-09-25);
-    // 100 with Brightness/Contrast (2026-10-01); 101 with Fresnel (2026-10-09).
+    // 100 with Brightness/Contrast (2026-10-01); 101 with Fresnel (2026-10-09);
+    // 102 with Color Ramp (2026-10-09); 103 with RGB Curves (2026-10-09).
     // The tally is a breadcrumb, not a spec — `getAllDefinitions()` is what
     // the assertion below actually compares against.
-    expect(slots).toHaveLength(101);
-    expect(defs).toHaveLength(101);
+    expect(slots).toHaveLength(103);
+    expect(defs).toHaveLength(103);
     expect(new Set(slots.map(s => s.key))).toEqual(new Set(defs.map(d => d.type)));
   });
 
@@ -213,10 +214,12 @@ describe('splitAliases / joinAliases', () => {
     // its label calls Image; 59 with the Splat Output (2026-09-25: 'gaussian
     // splat', 'point cloud', '3dgs'); 60 with Brightness/Contrast
     // (2026-10-01: 'exposure', 'levels', 'blender'); 61 with Fresnel
-    // (2026-10-09: 'rim', 'layer weight', 'schlick'). Worth pinning as a count
+    // (2026-10-09: 'rim', 'layer weight', 'schlick'); 62 with Color Ramp
+    // (2026-10-09: 'gradient', 'colorband', 'valtorgb'); 63 with RGB Curves
+    // (2026-10-09: 'tone curve', 'grading', 'levels'). Worth pinning as a count
     // because a description edit that drops a tail changes search ranking and
     // nothing else — it fails no other test and shows on no screen.
-    expect(tailed).toHaveLength(61);
+    expect(tailed).toHaveLength(63);
   });
 
   it('round-trips every tailed description byte-exactly', () => {
@@ -289,7 +292,7 @@ describe('escaped-apostrophe safety', () => {
     // ...and must decode back to exactly the value we asked for.
     const relocated = locateRegistryDescriptions(out);
     expect(relocated.find(s => s.key === 'tangentLocal')!.value).toBe(nasty);
-    expect(relocated).toHaveLength(101);
+    expect(relocated).toHaveLength(103);
 
     // Still a single-line edit.
     const changed = registrySource

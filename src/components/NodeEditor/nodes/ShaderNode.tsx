@@ -32,6 +32,7 @@ import { effectiveNodeDef } from '@/utils/exposedPorts';
 import { displayImageFileName, validImageDataUrl } from '@/utils/imageNode';
 import { getColormap, colormapGradientCss } from '@/utils/colormaps';
 import { ColorRampStrip } from './ColorRampArt';
+import { CurvesArt } from './CurvesArt';
 import { parseFormula, hasCustomFormula } from '@/utils/dataRangeFormula';
 import { modeOf } from '@/engine/moduleHelpers';
 import './ShaderNode.css';
@@ -1192,6 +1193,18 @@ export const ShaderNode = memo(function ShaderNode({
           purpose: the reader is total on `unknown` and never coerces. */}
       {data.registryType === 'colorRamp' && (
         <ColorRampStrip stops={data.values?.stops} interp={data.values?.interp} style={nodeArtStyle(data.registryType)} />
+      )}
+      {/* RGB Curves: its real curves (CurvesArt — one renderer for canvas,
+          NodeVisual and the editor), RAW values like the ramp strip above. */}
+      {data.registryType === 'rgbCurves' && (
+        <CurvesArt
+          curveC={data.values?.curveC}
+          curveR={data.values?.curveR}
+          curveG={data.values?.curveG}
+          curveB={data.values?.curveB}
+          extend={data.values?.extend}
+          style={nodeArtStyle(data.registryType)}
+        />
       )}
 
       {/* Data Range carrying a user-authored formula. The SURPRISING state is

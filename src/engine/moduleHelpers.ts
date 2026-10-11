@@ -29,7 +29,7 @@
  * skips them by name whatever their init shape; a `support` row (fsLut) is no
  * def's helper and ships only through another row's `requires`.
  */
-import { FS_LUT_LINES, FS_COLOR_RAMP_LINES } from './lutHelperText';
+import { FS_LUT_LINES, FS_COLOR_RAMP_LINES, FS_RGB_CURVES_LINES } from './lutHelperText';
 
 export interface HelperAlias {
   /** The registry TYPE a call to this helper parses back into. */
@@ -484,6 +484,7 @@ export const MODULE_HELPERS: ReadonlyMap<string, ModuleHelper> = new Map<string,
   // before them keeps its bytes; each ships only when a node (or `requires`) asks.
   ['fsLut', { lines: [...FS_LUT_LINES], imports: ['texture', 'vec2', 'float'], kind: 'js', support: true }],
   ['fsColorRamp', { lines: [...FS_COLOR_RAMP_LINES], imports: [], kind: 'js', requires: ['fsLut'] }],
+  ['fsRgbCurves', { lines: [...FS_RGB_CURVES_LINES], imports: ['vec3', 'float', 'mix'], kind: 'js', requires: ['fsLut'] }],
 ]);
 
 /** Every emitted helper name — what codeToGraph skips as a declarator. */

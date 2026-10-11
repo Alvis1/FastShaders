@@ -33,7 +33,7 @@
  * wire), and the sampler from `readImageTextureSpec`.
  */
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
-import { valueNum, valueStr } from '@/utils/valueCoerce';
+import { valueNum } from '@/utils/valueCoerce';
 import { drivingCustomSink, drivingSplatOutput } from '@/utils/sdfPartition';
 import {
   channelHandle,
@@ -53,11 +53,12 @@ import { readImagePlacement, type ImagePlacement } from '@/utils/imagePlacement'
 import { readImageTextureSpec } from '@/utils/imageTextureSpec';
 import { IMAGE_MIME_FORMAT, decodeDataUri, sniffImageFormat } from '@/utils/glbContainer';
 import { isLosslessWebpBytes } from '@/utils/imageCodec';
-import { HARD_MAX_IMAGE_ENCODED_CHARS } from '@/utils/imageNode';
+import { HARD_MAX_IMAGE_ENCODED_CHARS, displayImageFileName } from '@/utils/imageNode';
 import { IMAGE_ASSET_KEY_RE } from './glbShaderContract';
 import { IMAGE_PLACEHOLDER_RE, imageAssetFor } from './imageAssets';
 import {
   GLTF_WRITABLE_SLOTS,
+  safeImageName,
   samplerFor,
   type GltfWritableSlot,
   type KhrTextureTransform,
@@ -212,6 +213,35 @@ interface Asset {
   height: number;
 }
 
+/** The longest image name the repacker keeps (`safeImageName`, utils/glbRepack.ts). */
+const IMAGE_NAME_MAX = 48;
+
+/**
+ * The glTF image NAME a node's picture is written under: the name its card
+ * shows (`displayImageFileName` — the stored stem with the extension of the
+ * bytes actually held), never the raw `fileName`, and already in the form the
+ * file keeps — the repacker's own `safeImageName` over the STEM, cut to fit its
+ * 48 characters before the extension goes back on. A drop stores the file's
+ * own name, and "Mesh with Materials" over the export strips only a picture
+ * extension it knows before appending the sniffed one: a name a MIME type
+ * alone vouched for ('cat.heic' on Safari) came back 'cat.heic.png', and the
+ * repacker's cut through a long name's extension came back '….p.png'. A node
+ * without a name — or with nothing the file can hold ('照片.jpg') — is written
+ * unnamed, as it always was, and the reader names it after the model.
+ */
+function exportImageName(fileName: unknown, src: string): string {
+  // Read as the card reads it: a name that is not a string is NO name (the
+  // card shows 'image.png'), never its coercion ('42' would write '42.png').
+  const stored = typeof fileName === 'string' ? fileName.trim() : '';
+  if (!stored) return '';
+  const shown = displayImageFileName(stored, src);
+  const ext = /\.(?:png|jpg|webp)$/.exec(shown)?.[0] ?? '';
+  const stem = safeImageName(shown.slice(0, shown.length - ext.length))
+    .slice(0, IMAGE_NAME_MAX - ext.length)
+    .replace(/[ .]+$/, '');
+  return stem ? stem + ext : '';
+}
+
 function payloadOf(src: string): RepackPayload | null {
   const d = decodeDataUri(src, 'image', HARD_MAX_IMAGE_ENCODED_CHARS);
   if (!d.ok) return null;
@@ -257,7 +287,7 @@ export function planGlbExport(
     const v = getNodeValues(n);
     const asset = imageAssetFor(n.id, v);
     a = asset
-      ? { key: asset.key, src: asset.src, name: valueStr(v.fileName ?? ''), width: valueNum(v.width), height: valueNum(v.height) }
+      ? { key: asset.key, src: asset.src, name: exportImageName(v.fileName, asset.src), width: valueNum(v.width), height: valueNum(v.height) }
       : null;
     assetOfNode.set(n.id, a);
     return a;

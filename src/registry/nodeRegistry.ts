@@ -776,8 +776,8 @@ const definitions: NodeDefinition[] = [
     // IDENTITY when nothing is set (the rule min/max/pow/mod/clamp follow), and
     // matches cpuEvaluator's own fallbacks exactly, so the node's on-card value
     // agrees with what renders. Every existing graph passes its bounds
-    // explicitly (the Tests/ corpus and both presets do), so their emission is
-    // unchanged.
+    // explicitly (the tests/corpus/ shaders and every built-in preset that
+    // remaps do), so their emission is unchanged.
     defaultValues: { x: 0, inLow: 0, inHigh: 1, outLow: 0, outHigh: 1 },
     description: 'Rescale a value from the In Low–In High range to Out Low–Out High. Also: map range',
   },
@@ -1627,6 +1627,29 @@ const definitions: NodeDefinition[] = [
     description:
       'Turn a 0–1 factor into a colour and an alpha through a gradient of up to 32 stops, blended Linear, Constant, Ease, B-Spline or Cardinal in linear light — exactly as Blender bakes it. Outside the first and last stop the end colours hold. Also: colour ramp, color ramp, colorramp, gradient, stops, colour band, color band, colorband, valtorgb, lut, fac, blender',
     construction: 'Color, Alpha = the stops at Factor, blended in linear light (held at the first and last stop outside them), baked into a 257-texel table',
+  },
+  // Blender's RGB Curves (node_shader_curves.cc + curves_combined_rgb): the C curve bends all three channels, then R,
+  // G and B bend their own, each continued past 0…1 along its end slope (Extrapolated, Blender's default) or held
+  // (Horizontal), then Factor mixes back toward the input. Curves are Blender's auto-handle Béziers baked by
+  // curvemap_make_table into ONE 257-texel HalfFloat RGBA table (r,g,b = R,G,B, a = C — Blender's band layout) at
+  // module load by fsRgbCurves; identity curves (not Horizontal) emit no texture at all. Curves ride in the call as
+  // canonical strings re-formatted from the parse (utils/rgbCurves.ts); values.curveC/R/G/B and values.extend,
+  // ABSENT = identity / Extrapolated — never defaultValues. Color first: a splice lands on the FIRST free input.
+  {
+    type: 'rgbCurves',
+    label: 'RGB Curves',
+    category: 'type',
+    tslFunction: 'fsRgbCurves',
+    tslImportModule: '',
+    inputs: [
+      { id: 'color', label: 'Color', dataType: 'vec3' },
+      { id: 'fac', label: 'Factor', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Color', dataType: 'vec3' }],
+    defaultValues: { color: 1, fac: 1 },
+    description:
+      'Reshape the tones of a colour with editable curves, exactly as in Blender: the C curve bends all three channels, then R, G and B each bend their own, and Factor blends the result back toward the input. Past 0–1 a curve continues along its end slope, or holds its end value. Also: rgb curves, tone curve, colour correction, color correction, grade, grading, highlights, shadows, levels, blender',
+    construction: 'out = mix(color, R/G/B(C(color)) per channel, Factor); past 0…1 a curve continues along its end slope (Extrapolated) or holds its end value (Horizontal)',
   },
 
   // ===== DATA VISUALIZATION =====

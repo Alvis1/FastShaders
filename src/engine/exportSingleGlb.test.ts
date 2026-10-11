@@ -26,12 +26,16 @@ import { graphToCode } from './graphToCode';
 import { resolveProjectImageRefs } from './projectImageRefs';
 import { readFsGlbPointers } from './glbShaderContract';
 import { createPreviewMesh, type PreviewMesh } from '@/utils/previewMesh';
-import { readGltfModel } from '@/utils/gltfReader';
+import { gltfImageFileName, readGltfModel } from '@/utils/gltfReader';
+import { encodeRequests } from '@/utils/gltfImportPlan';
+import { encodeGltfImages } from '@/utils/gltfTextureEncode';
+import { buildGltfSectionGraph } from './gltfSectionBuilder';
+import { fakeEncoder, fakeStash } from './gltfImportFixtures';
 import { readGlbFsExtras } from '@/utils/glbShaderExtras';
 import { parseGlbContainer } from '@/utils/glbContainer';
 import { safeJsonReviver } from '@/utils/safeJson';
 import { canonicalSrc, fakeWebp, makeEdge, makeNode, makeRealPng, repackBaseGlb, splatRows } from '@/test-utils';
-import type { AppEdge, AppNode } from '@/types';
+import { getNodeValues, type AppEdge, type AppNode } from '@/types';
 
 const SIG = ['Body', 'Glass', 'Trim'];
 const WEBP = fakeWebp(8, 8, false);
@@ -165,6 +169,45 @@ describe('prepareSingleGlb → build', () => {
     const p = await prepared();
     expect(p.sizes.fallback.fallbackMissing).toBe(1);
     expect(p.sizes.fallback.webpRequired).toBe(true);
+  });
+});
+
+describe('export → "Mesh with Materials": a picture comes back under its own name', () => {
+  it('"myF-pink.png" re-imports as "myF-pink.png", never "myF-pink.png.png"', async () => {
+    // Measured 2026-10-09: the export writes the Image node's fileName,
+    // extension included, as the glTF image name, and the reader appended the
+    // sniffed extension to the whole of it (gltfReader.ts, gltfImageFileName).
+    const out = graph().nodes[0];
+    const pink = makeNode('P', 'imageNode', {
+      imageB64: SRC.N, width: 4, height: 4, fileName: 'myF-pink.png', orientation: 'gltf',
+    });
+    setStore({ nodes: [out, pink], edges: [makeEdge('P', 'out', 'out', 'm1:color')] });
+    const read = readGltfModel((await prepared()).build('fallback').bytes, 'glb');
+    if (!read.ok) throw new Error('re-read');
+    const m = read.model;
+    const ref = m.materials[0].slots.find((s) => s.slot === 'baseColor');
+    const extract = ref ? m.textures[ref.texture].extract : null;
+    if (!extract || extract.status !== 'ok') throw new Error('the picture is not in material 0');
+    // What the export wrote, and the name the reader gives it back.
+    expect(m.images[extract.image].name).toBe('myF-pink.png');
+    expect(gltfImageFileName(m, extract.image, 'golden.glb')).toBe('myF-pink.png');
+    // What the import stores on the Image node it builds: the encoder's file
+    // name, the same function's answer.
+    const { requests } = encodeRequests(m, [0]);
+    const enc = await encodeGltfImages(m, requests, {
+      modelName: 'golden.glb',
+      maxDim: null,
+      deviceMaxDim: 2048,
+      ignoreLimits: false,
+      budgetChars: Infinity,
+      encode: fakeEncoder([]),
+      stash: fakeStash(),
+    });
+    const built = buildGltfSectionGraph(m, { materials: [0], encoded: enc.encoded });
+    const names = built.nodes
+      .filter((n) => n.data.registryType === 'imageNode')
+      .map((n) => getNodeValues(n).fileName);
+    expect(names).toEqual(['myF-pink.png']);
   });
 });
 
@@ -382,6 +425,35 @@ describe('prepareSingleGlb: the KTX2 copies', () => {
     if (!r.ok) throw new Error('refused');
     expect(encodes).toEqual([]);
     expect(r.prepared.ktx2Skipped).toHaveLength(2);
+  });
+
+  it('names a skipped texture as its CARD does, never by the name the file keeps', async () => {
+    // The plan's `name` is the one the FILE keeps (ASCII, at most 48): 'attēls.png' read 'att ls.png' in this
+    // line and '照片.jpg' read “?”. The card prints the stored stem with the extension of the bytes it holds.
+    const named = (fileNames: Record<string, string | undefined>) => {
+      const g = graph();
+      for (const n of g.nodes) {
+        if (!(n.id in fileNames)) continue;
+        const values = (n.data as { values: Record<string, unknown> }).values;
+        if (fileNames[n.id] === undefined) delete values.fileName;
+        else values.fileName = fileNames[n.id];
+      }
+      return g;
+    };
+    __setKtx2PixelReaderForTests(async () => null);
+    setStore(named({ T: 'attēls.png', N: '照片.jpg' })); // T holds WebP bytes, N PNG
+    const r = await prepareSingleGlb({ ktx2: { encoder: okEncoder } });
+    if (!r.ok) throw new Error('refused');
+    expect(r.prepared.ktx2Skipped.map((s) => s.name)).toEqual(['attēls.webp', '照片.png']);
+    // A card with no name row names nothing: the line falls back to the file's (unnamed) image.
+    setStore(named({ T: undefined, N: undefined }));
+    const bare = await prepareSingleGlb({ ktx2: { encoder: okEncoder } });
+    if (!bare.ok) throw new Error('refused');
+    expect(bare.prepared.ktx2Skipped.map((s) => s.name)).toEqual(['', '']);
+    // The too-large refusal reads the same labels (it needs a > 16 MiB picture to fire, so it is pinned by source).
+    const text = readFileSync(path.join(__dirname, 'exportSingleGlb.ts'), 'utf8');
+    expect(text).toContain('name: nameForAssetKey(plan, refusal.detail, labels),');
+    expect(text).toContain('return (a && (labels.get(a.src) || a.name)) || undefined;');
   });
 
   it('refuses an over-cap texture by its DECLARED size, WITHOUT decoding it', async () => {

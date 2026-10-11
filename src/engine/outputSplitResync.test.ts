@@ -19,10 +19,11 @@
  * the pairing, the placement and the per-key settings carry live in the pure
  * `utils/resyncPairing.ts` rather than inside it.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { graphToCode } from './graphToCode';
+import { loadUnknownExpressionValidator } from './unknownExpression';
 import { codeToGraph } from './codeToGraph';
 import { buildGltfSectionGraph } from './gltfSectionBuilder';
 import { encodeRequests } from '@/utils/gltfImportPlan';
@@ -47,6 +48,15 @@ import { carryInactiveSinks } from '@/utils/sinkCarry';
 import { makeEdge, makeNode } from '@/test-utils';
 import type { AppEdge, AppNode, MaterialSettings } from '@/types';
 import type { GltfModelReport } from '@/utils/gltfReader';
+
+// The `unknown`-node expression validator parses with @babel/parser, which is
+// loaded ON DEMAND (engine/unknownExpression), and codegen FAILS CLOSED until it
+// lands: the apply∘apply pins below are written against the loaded validator
+// (SCAN's `normalMap(image3)` round-trips verbatim and pairs), so wait for it
+// once. Without this the suite passed only when an earlier test in the worker
+// had finished the load — a shuffled run emitted the `float(0)` fallback, whose
+// node then came back unpaired.
+beforeAll(() => loadUnknownExpressionValidator());
 
 const isOut = (n: AppNode) => n.data.registryType === 'output';
 const outs = (nodes: readonly AppNode[]) => outputsInEmitOrder(nodes.filter(isOut));

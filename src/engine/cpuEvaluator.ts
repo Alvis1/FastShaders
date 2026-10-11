@@ -23,6 +23,7 @@ import { buildTimeUpstreamSet, buildDownstreamClosure } from '@/utils/graphTrave
 import { IMAGE_CHANNEL_INDEX } from '@/utils/imageChannels';
 import { fresnelFacing } from '@/utils/fresnel';
 import { readColorRamp, rampFetch, rampRangeOver } from '@/utils/colorRamp';
+import { readRgbCurves, evalRgbCurves, rgbCurvesRange } from '@/utils/rgbCurves';
 
 /** Multiplier applied to UV coordinates before sampling noise (matches GPU preview scale). */
 const NOISE_UV_SCALE = 4;
@@ -534,6 +535,21 @@ function buildNodeIndex(nodes: AppNode[]): Map<string, AppNode> {
   return index;
 }
 
+/**
+ * THE rule for an UNWIRED socket, read exactly as codegen's resolveArguments
+ * emits it: the stored value when it is a finite number, else `fallback` (the
+ * registry default codegen emits in its place) — so junk in a `.fastshader`
+ * shows the card, the edge values and the range the shader actually runs. A
+ * WIRED socket never reaches this: its upstream value or range is
+ * authoritative, unknown included. The evaluator's `finiteScalar` and
+ * `socketChannels` and the range's `socketRange` all read through it (Fresnel,
+ * Color Ramp, RGB Curves); the older nodes keep their historical `Number()` read.
+ */
+function unwiredValue(stored: unknown, fallback: number): number {
+  const v = valueNum(stored);
+  return Number.isFinite(v) ? v : fallback;
+}
+
 function evaluate(
   nodeId: string,
   time: number,
@@ -574,8 +590,7 @@ function evaluate(
   };
 
   // A scalar input read exactly as codegen's resolveArguments reads it: wired →
-  // the upstream channel when finite, else null (unknown); unwired → the stored
-  // value when finite, else `fallback` (the registry default codegen emits).
+  // the upstream channel when finite, else null (unknown); unwired → `unwiredValue`.
   const finiteScalar = (portId: string, fallback: number): number | null => {
     const edge = nodeEdges.find((e) => e.targetHandle === portId);
     if (edge) {
@@ -586,8 +601,7 @@ function evaluate(
       const u = upstream?.[0];
       return u !== undefined && Number.isFinite(u) ? u : null;
     }
-    const v = valueNum(values[portId]);
-    return Number.isFinite(v) ? v : fallback;
+    return unwiredValue(values[portId], fallback);
   };
 
   // Resolve a multi-channel input. If an edge exists, the upstream result is authoritative
@@ -604,6 +618,13 @@ function evaluate(
     const v = values[portId];
     return [v !== undefined ? Number(v) : fallback];
   };
+
+  // `channelInput` read exactly as codegen reads the socket: wired → the upstream
+  // channels (authoritative, null included); unwired → `unwiredValue`.
+  const socketChannels = (portId: string, fallback: number): EvalResult =>
+    nodeEdges.some((e) => e.targetHandle === portId)
+      ? channelInput(portId, fallback)
+      : [unwiredValue(values[portId], fallback)];
 
   // A vec3 INPUT SOCKET, read as the emitted SDF helpers read one: an unwired
   // scalar default BROADCASTS (`vec3(0.5)` is a box, not a flat sheet) and a
@@ -973,6 +994,16 @@ function evaluate(
     case 'colorRamp': {
       const tt = finiteScalar('fac', 0.5);
       result = tt === null ? null : rampFetch(readColorRamp(values), tt);
+      break;
+    }
+    // RGB Curves — the two-stage expression on the same half table the shader
+    // samples (utils/rgbCurves.ts). Color is read as the helper's `vec3(col)`
+    // reads it; an unwired non-finite colour is the registry's 1, as codegen
+    // emits it, and a wired non-finite one is unknown.
+    case 'rgbCurves': {
+      const c = socketChannels('color', 1);
+      const f = finiteScalar('fac', 1);
+      result = !c || c.length === 0 || f === null ? null : evalRgbCurves(readRgbCurves(values), brightContrastRgb(c), f);
       break;
     }
     // Brightness/Contrast — Blender's formula, read exactly as the helper reads
@@ -1435,6 +1466,16 @@ function computeRange(
     return { min: [num], max: [num] };
   };
 
+  // `portRange` read exactly as codegen reads the socket — the evaluator's
+  // `finiteScalar`/`socketChannels` rule: wired → the upstream range
+  // (authoritative); unwired → `unwiredValue`, so a junk stored Factor bounds
+  // the ramp at the value the card shows, never at NaN (the whole ramp).
+  const socketRange = (portId: string, fallback: number): RangeResult => {
+    if (nodeEdges.some((e) => e.targetHandle === portId)) return portRange(portId, fallback);
+    const num = unwiredValue(values[portId], fallback);
+    return { min: [num], max: [num] };
+  };
+
   // Interval fold over a chainable node's effective operands (variadic
   // arithmetic). Mirrors naryOp in evaluate(): unconnected operands contribute
   // `identity`, left-folded through the per-op interval rule.
@@ -1621,9 +1662,21 @@ function computeRange(
       // them (rangeHalf), so a ramp that dips between its stops is not
       // reported by its endpoints alone. ±Infinity bounds go through as they
       // are — ClampToEdge holds the end colours, so `−∞…1` is the whole ramp,
-      // not the colour at 0.5 — and rangeHalf reads a NaN bound as unknown.
-      const r = portRange('fac', 0.5);
+      // not the colour at 0.5 — and rangeHalf reads a NaN bound of a WIRED
+      // Factor as unknown. An unwired one is `socketRange`'s finite value.
+      const r = socketRange('fac', 0.5);
       result = rampRangeOver(readColorRamp(values), r.min[0] ?? 0.5, r.max[0] ?? 0.5);
+      break;
+    }
+    case 'rgbCurves': {
+      // Stage by stage over the half table (rgbCurvesRange): each curve is
+      // piecewise linear with linear extensions, so ends + texel centres are
+      // exact; the Factor mix is bounded on its corners. An unwired non-finite
+      // stored value is the registry default codegen emits (`socketRange`);
+      // anything unbounded with a non-zero end slope is unknown (null).
+      const c = socketRange('color', 1);
+      const f = socketRange('fac', 1);
+      result = rgbCurvesRange(readRgbCurves(values), brightContrastRgb(c.min), brightContrastRgb(c.max), f.min[0] ?? 1, f.max[0] ?? 1);
       break;
     }
     case 'brightContrast': {

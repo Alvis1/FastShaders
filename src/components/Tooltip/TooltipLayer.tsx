@@ -54,6 +54,8 @@ export function TooltipLayer() {
   const hostRef = useRef<HTMLElement | null>(null);
   const stashedTitleRef = useRef<string | null>(null);
   const timerRef = useRef<number | null>(null);
+  // The host a MOUSE press dismissed: it does not re-arm until the pointer leaves it (the native tooltip's rule).
+  const pressedHostRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     const clearTimer = () => {
@@ -122,15 +124,40 @@ export function TooltipLayer() {
       return el;
     };
 
+    /**
+     * A MOUSE press dismisses on `pointerdown` too, not only `mousedown`: a
+     * gesture that `preventDefault`s its pointerdown (the LUT editors' marker
+     * and plot drags — no text selection) cancels the compatibility mousedown,
+     * so the hint over the bar stayed up through the whole drag and after it,
+     * covering the very fields that show the value being set. The pressed host
+     * then stays quiet until the pointer LEAVES it — moving across its own
+     * children (the markers) would otherwise re-arm it mid-gesture. Mouse only:
+     * touch keeps its existing path untouched.
+     */
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.pointerType !== 'mouse') return;
+      const target = e.target instanceof Node ? e.target : null;
+      const current = hostRef.current;
+      const pressed = current && target && current.contains(target) ? current : findHost(e.target);
+      dismiss();
+      pressedHostRef.current = pressed;
+    };
+
     const onOver = (e: MouseEvent) => {
       const el = findHost(e.target);
       if (!el) return;
+      if (el === pressedHostRef.current) return; // pressed: quiet until the pointer leaves it
       if (el === hostRef.current) return; // already tracking this element
       dismiss(); // switching hosts: restore the previous one first
       openFor(el);
     };
 
     const onOut = (e: MouseEvent) => {
+      const pressed = pressedHostRef.current;
+      if (pressed) {
+        const leaving = e.relatedTarget as Node | null;
+        if (!(leaving && pressed.contains(leaving))) pressedHostRef.current = null;
+      }
       const host = hostRef.current;
       if (!host) return;
       const to = e.relatedTarget as Node | null;
@@ -165,6 +192,7 @@ export function TooltipLayer() {
     document.addEventListener('focusin', onFocus, true);
     document.addEventListener('focusout', onBlur, true);
     document.addEventListener('mousedown', dismiss, true);
+    document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('wheel', dismiss, true);
     document.addEventListener('scroll', dismiss, true);
     // WINDOW capture, registered at app boot: it runs before the study
@@ -180,6 +208,7 @@ export function TooltipLayer() {
       document.removeEventListener('focusin', onFocus, true);
       document.removeEventListener('focusout', onBlur, true);
       document.removeEventListener('mousedown', dismiss, true);
+      document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('wheel', dismiss, true);
       document.removeEventListener('scroll', dismiss, true);
       window.removeEventListener('keydown', onKeyDown, true);

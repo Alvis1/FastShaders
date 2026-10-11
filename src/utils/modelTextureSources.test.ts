@@ -19,6 +19,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { modelTextureSources, modelTextureKey } from './modelTextureSources';
+import { gltfImageFileName } from './gltfReader';
 import { readOk, aiGlb, blenderGlb, allSlotsGlb, glbOf, PNG_COLOR, PNG_NORMAL } from '@/engine/gltfImportFixtures';
 import { glbSlotPolicy } from './glbImportLimits';
 
@@ -130,6 +131,29 @@ describe('what the model offers', () => {
       [PNG_COLOR],
     );
     expect(modelTextureSources(readOk(bytes), 'twice.glb')).toHaveLength(1);
+  });
+
+  it('names a picture as the import and the pick do: an exported "myF-pink.png" is offered as "myF-pink.png"', () => {
+    // A FastShaders single-GLB export writes the Image node's fileName,
+    // extension included, as the glTF image name. The listing, the import's
+    // encoder and the pick's re-parse check (ImageNodeSettings compares this
+    // name on a FRESH parse before encoding) all call gltfImageFileName, so
+    // the extension is never doubled and the two parses agree.
+    const bytes = glbOf(
+      {
+        images: [{ bufferView: 1, mimeType: 'image/png', name: 'myF-pink.png' }],
+        textures: [{ source: 0 }],
+        materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }],
+        meshes: [{ primitives: [{ attributes: { POSITION: 0, TEXCOORD_0: 0 }, material: 0 }] }],
+        nodes: [{ mesh: 0 }],
+        scenes: [{ nodes: [0] }],
+        scene: 0,
+      },
+      [PNG_COLOR],
+    );
+    const [src] = modelTextureSources(readOk(bytes), 'golden.glb');
+    expect(src.fileName).toBe('myF-pink.png');
+    expect(gltfImageFileName(readOk(bytes), src.image, 'golden.glb')).toBe(src.fileName);
   });
 
   it('a model with no textures offers nothing, and does not throw', () => {
