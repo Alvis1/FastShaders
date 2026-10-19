@@ -15,9 +15,9 @@ concurrency:
 jobs:
   test:
     name: Test + typecheck
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The build and the suite NEED the a-frame-shaderloader submodule:
           # public/js/ is not tracked — scripts/sync-generated.mjs writes it from
@@ -27,7 +27,7 @@ jobs:
           # out submodules on all three of its jobs for the same reason.
           submodules: recursive
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
