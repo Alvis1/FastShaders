@@ -8,7 +8,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { t, portLabel } from '@/i18n';
 import { isActiveSinkSelector } from './activeSinkSelector';
 import { effectiveExposedPorts } from '@/utils/exposedPorts';
-import { useCostChrome } from './useCostChrome';
+import { useCostChrome, useSinkBadgeClass } from './useCostChrome';
 import { TypedHandle } from '../handles/TypedHandle';
 import { OutputTitle } from './OutputTitle';
 import { useWiredLabels } from './ShaderNode';
@@ -158,6 +158,7 @@ export const SplatOutputNode = memo(function SplatOutputNode({ id, data, selecte
   const exposed = useMemo(() => new Set(exposedKey.split('|')), [exposedKey]);
   const lit = isSplatLit((data as { values?: unknown }).values);
   const { costColor, headerTextColor, costTextColor } = useCostChrome(cost);
+  const badgeClass = useSinkBadgeClass(cost);
   const values = getNodeValues({ id, data } as unknown as ShaderFlowNode);
 
   // What is arriving on each wired socket (useWiredLabels: the cheap-string
@@ -258,7 +259,7 @@ export const SplatOutputNode = memo(function SplatOutputNode({ id, data, selecte
       style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid var(--cat-output)` }}
     >
       {cost > 0 && (
-        <span className="node-base__cost-badge" style={{ color: costTextColor }}>
+        <span className={badgeClass} style={{ color: costTextColor }}>
           {cost}
         </span>
       )}

@@ -105,27 +105,31 @@ describe('the Output→preview wire', () => {
     const base = ruleBody(LINK_CSS, '.preview-link__path {');
     expect(base).not.toMatch(/animation:/);
     expect(base).not.toMatch(/stroke-dasharray/);
-    expect(base).toMatch(/marker-end:\s*url\(#fs-preview-link-arrow\)/);
-    const live = ruleBody(LINK_CSS, '.preview-link__path[data-live] {');
+    const live = ruleBody(LINK_CSS, '.preview-link__wire[data-live] .preview-link__path {');
     expect(live).toMatch(/animation:\s*preview-link-flow/);
     expect(live).toMatch(/stroke-dasharray:\s*6 3/);
-    expect(live).toMatch(/marker-end:\s*none/);
   });
 
-  it('keeps the arrowhead OUT of the wires\' path index (a polyline, not a path)', () => {
-    // The tick and the hover find each wire by querySelectorAll('path')[i].
-    expect(LINK).toContain('id={ARROW_MARKER_ID}');
-    expect(LINK).toContain("const ARROW_MARKER_ID = 'fs-preview-link-arrow';");
-    const marker = LINK.slice(LINK.indexOf('<marker'), LINK.indexOf('</marker>'));
-    expect(marker).toContain('<polyline');
-    expect(marker).not.toContain('<path');
+  it('carries direction chevrons like a canvas wire — and no arrowhead at the rail end', () => {
+    // Owner, 2026-10-12: the arrow "should not be at the end … and should
+    // follow the same rules as other edges". The chevrons come from the canvas
+    // wires' own arrowMarks + chevronPath (previewLinkGeometry.test.ts holds
+    // where they land); a live wire hides them, as TypedEdge draws none.
+    expect(LINK).not.toContain('<marker');
+    expect(LINK_CSS).not.toMatch(/marker-end/);
+    expect(LINK).toContain('<path className="preview-link__arrows" fill="none" d="" />');
+    expect(LINK).toContain('linkArrows(ends.start, ends.end)');
+    expect(ruleBody(LINK_CSS, '.preview-link__wire[data-live] .preview-link__arrows {')).toMatch(/display:\s*none/);
+    // The tick and the hover index wires by CLASS, so the chevron paths can
+    // never shift which wire a `path` index names.
+    expect(LINK).not.toMatch(/querySelectorAll<[^>]+>\('path'\)/);
   });
 
   it('still freezes under reduced motion — at the LIVE rule\'s own specificity', () => {
     // A bare `.preview-link__path { animation: none }` loses to the
     // `[data-live]` rule (measured in Chrome: the animation stayed named).
     const rm = LINK_CSS.slice(LINK_CSS.indexOf('@media (prefers-reduced-motion: reduce)'));
-    expect(rm).toMatch(/\.preview-link__path\[data-live\]\s*\{\s*animation:\s*none/);
+    expect(rm).toMatch(/\.preview-link__wire\[data-live\] \.preview-link__path\s*\{\s*animation:\s*none/);
   });
 });
 

@@ -21,7 +21,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { ACTIVE_LOADERS, evalLoader, loaderAvailable, type ActiveLoader } from './shaderloaderHarness';
+import { ACTIVE_LOADERS, evalLoader, loaderAvailable, loaderText, type ActiveLoader } from './shaderloaderHarness';
 
 interface Comp {
   init: () => void;
@@ -264,6 +264,34 @@ for (const v of ACTIVE_LOADERS) {
 }
 
 /** The measurement the normals-differ rule rests on, pinned as fact — once, not per loader. */
+describe.skipIf(!loaderAvailable('0.8'))('shaderloader 0.8 — `uvDisplaced: false` keeps the seam (2026-10-18)', () => {
+  // ANY uv() in the source made the loader weld a displaced sphere's seam,
+  // even when uv only drove the COLOUR — and a welded seam vertex keeps one
+  // u, squeezing the texture into one column. The editor now says when the
+  // displacement reads no uv; ABSENT keeps the source test for every
+  // existing module.
+  const { FastShaders } = evalLoader('0.8', { THREE });
+  const weldUvDriven = (FastShaders as unknown as { internals: { weldUvDriven: (r: unknown, s: string) => boolean } })
+    .internals.weldUvDriven;
+
+  it('a module that reads uv() still welds the seam by default', () => {
+    expect(weldUvDriven({}, 'const u = uv();')).toBe(true);
+    expect(weldUvDriven(null, 'const u = uv();')).toBe(true);
+    expect(weldUvDriven({}, 'const p = positionGeometry;')).toBe(false);
+  });
+
+  it('`uvDisplaced: false` (=== false only) leaves the seam split', () => {
+    expect(weldUvDriven({ uvDisplaced: false }, 'const u = uv();')).toBe(false);
+    expect(weldUvDriven({ uvDisplaced: 0 }, 'const u = uv();')).toBe(true);
+    expect(weldUvDriven({ uvDisplaced: true }, 'const u = uv();')).toBe(true);
+  });
+
+  it('the apply path asks it, rather than its own copy of the test', () => {
+    const src = loaderText('0.8');
+    expect(src).toContain('state._weldUvDriven = weldUvDriven(shaderResult, source);');
+  });
+});
+
 describe('the weld rule measures three, not a loader', () => {
   it('the sphere really has no normal split to repair, and the box is all split', () => {
     const groupsOf = (geom: THREE.BufferGeometry) => {

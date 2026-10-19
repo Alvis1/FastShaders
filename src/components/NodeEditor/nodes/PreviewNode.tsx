@@ -46,8 +46,9 @@ const NOISE_TYPES = new Set<string>([
   'voronoi', 'voronoiVec2', 'voronoiVec3',
 ]);
 
-/** Distribute handles evenly along the side, centered. */
-function handleTop(index: number, total: number): string {
+/** Distribute handles evenly along the side, centered. Shared with the card
+ *  replica (NodePreviewCard's NoiseCardContent), which draws exposed sockets. */
+export function handleTop(index: number, total: number): string {
   if (total === 1) return '50%';
   const start = 25;
   const end = 75;

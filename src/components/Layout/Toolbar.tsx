@@ -15,6 +15,7 @@ import { useExportPreflight } from '@/components/Modals/ExportPreflightModal';
 import { FeedbackModal } from '@/components/Modals/FeedbackModal';
 import { PalettesModal } from '@/components/Modals/PalettesModal';
 import { isEvalMode } from '@/eval/evalMode';
+import { openIntro } from '@/intro/introGate';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { GLB_IMPORT_MATERIAL_LIMIT } from '@/utils/glbImportLimits';
 import { WorkFolder } from './WorkFolder';
@@ -585,6 +586,20 @@ export function Toolbar() {
           </div>
         )}
       </div>
+      {/* The intro window again — the slides FastShaders opens with
+          (src/intro/). Never in a study session, which never shows it. */}
+      {!isEvalMode() && (
+        <button
+          type="button"
+          className="toolbar__sc-link toolbar__intro"
+          onClick={openIntro}
+          aria-haspopup="dialog"
+          title={t('Intro — how FastShaders works, in short animated hints', language)}
+          aria-label={t('Open the intro', language)}
+        >
+          i
+        </button>
+      )}
       {/* Desktop opens Podest as a REAL second app window (a Rust command —
           see src-tauri/src/podest_window.rs); the web build keeps the plain
           new-tab anchor. `target="_blank"` is meaningless inside a Tauri

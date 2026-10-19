@@ -1,10 +1,11 @@
 /**
  * A group DRAGGED from the asset bar lands with its frame's TOP-RIGHT corner
- * on the drop point (owner, 2026-10-01); a click/Enter add keeps the top-left
- * at its scattered centre point. One rule for all three group sources — saved
- * groups, built-in presets and built-in textures — decided in
- * `cloneGroupSnapshot`, from the frame's DRAWN width (`groupFrameSize`, which
- * also reads the `style`-only frames the built-in builder used to write).
+ * on the drop point (owner, 2026-10-01); a click/Enter add of a saved group
+ * keeps the top-left at its scattered centre point, while a pressed Preset or
+ * Texture puts its top-right corner there too (owner, 2026-10-17 — the end
+ * that feeds an Output is the end that shows). Decided from the frame's DRAWN
+ * width (`groupFrameSize`, which also reads the `style`-only frames the
+ * built-in builder used to write).
  */
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -117,9 +118,10 @@ describe('NodeEditor placeTilePayload', () => {
     expect(body).toContain("const anchor: GroupDropAnchor = activate ? 'top-left' : 'top-right';");
   });
 
-  it('passes the anchor to all three group sources', () => {
+  it('a saved group takes that anchor; a preset or texture lands top-right however it was added', () => {
     expect(body).toContain('instantiateSavedGroup(payload.id, position, { anchor })');
-    expect(body).toContain('instantiateBuiltinTexture(payload.id, position, anchor)');
-    expect(body).toContain('instantiateBuiltinPreset(payload.id, position, anchor)');
+    expect(body).toContain("void place(payload.id, position, 'top-right').then(");
+    expect(body).toContain("void place(payload.id, position, 'top-right', { outputId: wireTarget.id, beside }).then(");
+    expect(body).not.toMatch(/instantiateBuiltin(Texture|Preset)\(payload\.id, position, anchor\)/);
   });
 });

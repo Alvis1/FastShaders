@@ -1,5 +1,6 @@
-import { memo, useEffect, useRef, useCallback, useState } from 'react';
-import type { NodeDefinition, NodeCategory } from '@/types';
+import { createContext, memo, useContext, useEffect, useRef, useCallback, useState, type RefObject } from 'react';
+import type { NodeDefinition, NodeCategory, PortDefinition } from '@/types';
+import { socketTooltip } from './handles/TypedHandle';
 import { startTileDrag, tileGhostZoom, tileActivationProps } from './tileDrag';
 import { getTypeColor, getCostColor, getCostTextColor, getCostScale, CATEGORY_COLORS, getContrastColor, hexToRgb01 } from '@/utils/colorUtils';
 import { getFlowNodeType, displayDescription } from '@/registry/nodeRegistry';
@@ -7,11 +8,13 @@ import { formatNodeLabel, nodeDescription, portLabel, t } from '@/i18n';
 import { useAssetTooltip } from './AssetTooltip';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { useAppStore } from '@/store/useAppStore';
-import { NodeVisual } from './nodes/NodeVisual';
+import { NodeVisual, type NodeVisualProps } from './nodes/NodeVisual';
 import { NodeTitle } from './nodes/NodeTitle';
+import { useSinkBadgeClass } from './nodes/useCostChrome';
 import { DragNumberInput } from './inputs/DragNumberInput';
 import { nodeTextScale } from './nodes/glyphs/NodeGlyph';
-import { WaveformSvg } from './nodes/WaveformSvg';
+import { WaveformSvg, type WaveformDynamicRefs } from './nodes/WaveformSvg';
+import { handleTop } from './nodes/PreviewNode';
 import { renderNoisePreview, type NoiseType } from '@/utils/noisePreview';
 import { freshNodeCost } from '@/utils/nodeCost';
 import {
@@ -47,7 +50,7 @@ interface NodePreviewCardProps {
   onDragStart: (event: React.DragEvent, def: NodeDefinition) => void;
 }
 
-interface ContentProps {
+export interface ContentProps {
   def: NodeDefinition;
   catColor: string;
   costColor: string;
@@ -176,7 +179,12 @@ function FitNodeHeading({ visualScale, textScale, children }: { visualScale: num
  * ShaderCardContent — EXACT static replica of the live ShaderNode
  * ============================================================ */
 
-function ShaderCardContent(props: ContentProps) {
+/** `portStates` draws an input as wired (its arriving value in place of the
+ *  number box), `values` shows stored values in place of the defaults and
+ *  `headerText` the name the canvas header shows (a Property node's own name)
+ *  — all off on a tile, which shows a fresh node; the intro passes them for
+ *  the nodes of a graph it stages. */
+export function ShaderCardContent(props: ContentProps & Pick<NodeVisualProps, 'portStates' | 'values' | 'headerText'>) {
   // The replica itself lives in NodeVisual — ONE component shared by these
   // cards, the node-editor.html overview (which renders these same cards) and
   // the Node Designer's stage, so every preview surface draws a node with the
@@ -220,19 +228,40 @@ function canvasCtx(canvas: HTMLCanvasElement | null) {
  * the whole card instead, which is how the Time tile's socket ended up half a
  * header-height below the node's (which centres on the clock FACE).
  */
-function CardSocket({ side, dataType, style }: {
+function CardSocket({ side, dataType, style, port }: {
   side: 'left' | 'right';
   dataType: Parameters<typeof getTypeColor>[0];
   style?: React.CSSProperties;
+  /** The port this dot stands for — what a labelled socket names (below). */
+  port?: PortDefinition;
 }) {
+  const labelled = useContext(CardSocketLabels);
+  const language = useAppStore((s) => s.language);
   return (
     <span
       className={`react-flow__handle react-flow__handle-${side} typed-handle`}
       style={{ background: getTypeColor(dataType), ...style }}
       aria-hidden="true"
+      {...(labelled && port
+        ? {
+            'data-handleid': port.id,
+            'data-tooltip': socketTooltip(port.label, dataType, null, language),
+          }
+        : {})}
     />
   );
 }
+
+/**
+ * Sockets that carry what a canvas handle carries: React Flow's `data-handleid`
+ * and the name label (`data-tooltip`, TypedHandle's text). OFF for the asset
+ * tiles — their sockets are never hovered (the card is `pointer-events: none`),
+ * and an invisible label still hangs outside the frame, where it would count
+ * toward the strip's scroll width. ON for a surface that shows a connection
+ * being made (the intro, `src/intro/`), which rings a socket and shows its
+ * label with the canvas's own `.fs-connect-socket` rule.
+ */
+export const CardSocketLabels = createContext(false);
 
 /**
  * `nodeClassName` carries the LIVE node's own class (`clock-node`,
@@ -271,7 +300,7 @@ function CardShell({ def, catColor, costColor, costTextColor, costScale, cost, h
           face) — this generic centre dot would render as an extra, phantom
           output on top of them. */}
       {def.outputs[0] && !hideOutput && (
-        <CardSocket side="right" dataType={def.outputs[0].dataType} />
+        <CardSocket side="right" dataType={def.outputs[0].dataType} port={def.outputs[0]} />
       )}
     </div>
   );
@@ -281,8 +310,11 @@ function CardShell({ def, catColor, costColor, costTextColor, costScale, cost, h
  * MathCardContent — waveform plot (static)
  * ============================================================ */
 
-function MathCardContent(props: ContentProps) {
-  const { def } = props;
+/** `xWired` draws X as connected (no number box, as MathPreviewNode does) and
+ *  `dynamicRefs` lets a surface move the wave — both off on a tile; the
+ *  intro window's stage passes them for a Sin fed by Time (src/intro/). */
+export function MathCardContent(props: ContentProps & { xWired?: boolean; dynamicRefs?: WaveformDynamicRefs }) {
+  const { def, xWired = false, dynamicRefs } = props;
 
   // MathPreviewNode's own classes and its own stylesheet — plot size, row
   // padding and both socket insets all come from MathPreviewNode.css, so the
@@ -297,6 +329,7 @@ function MathCardContent(props: ContentProps) {
           funcLabel={def.type}
           phase={0}
           showReadout
+          dynamicRefs={dynamicRefs}
         />
       </div>
 
@@ -307,8 +340,8 @@ function MathCardContent(props: ContentProps) {
           shorter than the node by the row's height. */}
       <div className="math-preview-node__port-row">
         <div className="math-preview-node__left">
-          {def.inputs[0] && <CardSocket side="left" dataType={def.inputs[0].dataType} />}
-          <DragNumberInput compact value={0} onChange={() => {}} />
+          {def.inputs[0] && <CardSocket side="left" dataType={def.inputs[0].dataType} port={def.inputs[0]} />}
+          {!xWired && <DragNumberInput compact value={0} onChange={() => {}} />}
         </div>
       </div>
     </CardShell>
@@ -319,9 +352,17 @@ function MathCardContent(props: ContentProps) {
  * NoiseCardContent — CPU noise pattern (static)
  * ============================================================ */
 
-function NoiseCardContent(props: ContentProps) {
-  const { def } = props;
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+/** `exposedPorts` draws the parameter sockets a wire made visible (PreviewNode
+ *  places them with the same `handleTop`), and `canvasRef` lets a surface
+ *  repaint the picture — both off on a tile, which shows a fresh node; the
+ *  intro window's stage passes them for a noise fed by a wire (src/intro/). */
+export function NoiseCardContent(props: ContentProps & {
+  exposedPorts?: readonly string[];
+  canvasRef?: RefObject<HTMLCanvasElement>;
+}) {
+  const { def, exposedPorts = [] } = props;
+  const ownCanvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasRef = props.canvasRef ?? ownCanvasRef;
 
   useEffect(() => {
     const ctx = canvasCtx(canvasRef.current);
@@ -349,6 +390,15 @@ function NoiseCardContent(props: ContentProps) {
           className="preview-node__canvas"
         />
       </div>
+      {exposedPorts.map((key, i) => (
+        <CardSocket
+          key={key}
+          side="left"
+          dataType={key === 'pos' ? 'vec3' : 'float'}
+          port={{ id: key, label: key, dataType: key === 'pos' ? 'vec3' : 'float' }}
+          style={{ top: handleTop(i, exposedPorts.length) }}
+        />
+      ))}
     </CardShell>
   );
 }
@@ -357,7 +407,9 @@ function NoiseCardContent(props: ContentProps) {
  * ClockCardContent — static clock face
  * ============================================================ */
 
-function ClockCardContent(props: ContentProps) {
+/** `handRef` lets a surface turn the hand (`applyClockFrame`) — off on a tile;
+ *  the intro window's stage passes it (src/intro/). */
+export function ClockCardContent(props: ContentProps & { handRef?: RefObject<SVGGElement> }) {
   // Phase 0 — the same hand position a Time node shows the instant it lands
   // on the canvas (ClockNode integrates from phaseRef = 0). This used to seed
   // from Date.now(), so the tile pointed somewhere arbitrary and no two
@@ -369,9 +421,9 @@ function ClockCardContent(props: ContentProps) {
   return (
     <CardShell {...props} nodeClassName="clock-node" hideOutput>
       <div className="clock-node__canvas-wrap">
-        <ClockFaceSvg phase={0} />
+        <ClockFaceSvg phase={0} handRef={props.handRef} />
         {props.def.outputs[0] && (
-          <CardSocket side="right" dataType={props.def.outputs[0].dataType} />
+          <CardSocket side="right" dataType={props.def.outputs[0].dataType} port={props.def.outputs[0]} />
         )}
       </div>
       {/* The canvas node's speed row — always present there, so the tile shows
@@ -446,9 +498,19 @@ function SoundCardContent(props: ContentProps) {
  * OutputCardContent — static replica of the OutputNode
  * ============================================================ */
 
-function OutputCardContent({ def, cost, costColor, costTextColor, headerTextColor }: ContentProps) {
+export function OutputCardContent({
+  def, cost, costColor, costTextColor, headerTextColor, exposedPorts = OUTPUT_DEFAULT_EXPOSED, wired,
+}: ContentProps & {
+  /** The channels shown — a fresh node's set unless a surface depicts a node
+   *  whose user exposed more (the node's right-click menu does that). */
+  exposedPorts?: readonly string[];
+  /** Channel → the value text arriving on its wire. A wired row shows that
+   *  text where the stored-value widget was, as OutputNode's `rowWidget` does. */
+  wired?: Readonly<Record<string, string>>;
+}) {
   // The labels follow the UI language like the canvas node's do (OutputNode.tsx).
   const language = useAppStore((s) => s.language);
+  const badgeClass = useSinkBadgeClass(cost);
   // The Output node is the one flow type with NO branch in this dispatch, so it
   // used to fall through to the generic ShaderCardContent — which, from a def
   // with 7 inputs and no defaultValues, drew SEVEN editable number boxes,
@@ -461,7 +523,7 @@ function OutputCardContent({ def, cost, costColor, costTextColor, headerTextColo
   // Mirrors OutputNode.tsx's markup and reuses its stylesheet outright, so the
   // two can only differ by the handles being inert dots here. It shows the
   // default-exposed channel set — what a freshly placed Output node looks like.
-  const exposed = new Set<string>(OUTPUT_DEFAULT_EXPOSED);
+  const exposed = new Set<string>(exposedPorts);
   const section = (ids: string[]) => def.inputs.filter((p) => ids.includes(p.id) && exposed.has(p.id));
   // The stored-value widget cell, mirroring a FRESH node's unwired state:
   // unset color swatch, float channels at their material defaults. Real
@@ -470,6 +532,11 @@ function OutputCardContent({ def, cost, costColor, costTextColor, headerTextColo
   // with pointer-events: none is what a card can honestly do (the mic tile's
   // inert-arm-light precedent).
   const valueCell = (portId: string) => {
+    const arriving = wired?.[portId];
+    if (arriving !== undefined) {
+      // LiveEdgeValue's span for a still wire — plain text, no fill.
+      return <span className="shader-node__edge-val output-node__val">{arriving}</span>;
+    }
     if (portId in OUTPUT_COLOR_VALUE_PORTS) {
       // A tile depicts a FRESH Output node — nothing wired, nothing stored —
       // which is exactly graphToCode's red-fallback state, so Color shows the
@@ -495,7 +562,7 @@ function OutputCardContent({ def, cost, costColor, costTextColor, headerTextColo
         {/* Real handle classes inside the real row: `.output-node__row
             .react-flow__handle-left` in OutputNode.css owns the inset and the
             vertical centring, so the tile can't restate either. */}
-        <CardSocket side="left" dataType={port.dataType} />
+        <CardSocket side="left" dataType={port.dataType} port={port} />
         {valueCell(port.id)}
         <span className="output-node__port-label">{portLabel(port.label, language)}</span>
       </div>
@@ -504,7 +571,7 @@ function OutputCardContent({ def, cost, costColor, costTextColor, headerTextColo
   return (
     <div className="output-node node-preview-card__node" style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid var(--cat-output)` }}>
       {cost > 0 && (
-        <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
+        <span className={badgeClass} style={{ color: costTextColor }}>{cost}</span>
       )}
       <div className="output-node__header" style={{ background: costColor }}>
         <span className="output-node__title" style={{ color: headerTextColor }}>{formatNodeLabel(def.label, def.type, language, false)}</span>
@@ -704,7 +771,12 @@ function ColorCardContent({ def, cost, costTextColor }: { def: NodeDefinition; c
  * NodePreviewCard — main component with type dispatch
  * ============================================================ */
 
-export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart }: NodePreviewCardProps) {
+/**
+ * A fresh node's card chrome — frame colour, header colour, price and the
+ * cost scale — exactly as a tile draws it. Exported for the intro
+ * (`src/intro/`), which stages these same cards at canvas size.
+ */
+export function useCardChrome(def: NodeDefinition): ContentProps {
   // A FRESH node's price — the number the node shows once dropped (a fresh RGB Curves node is its identity form).
   const cost = freshNodeCost(def.type) ?? 0;
   const costColorLow = useAppStore((s) => s.costColorLow);
@@ -713,15 +785,18 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
   // (getCostColor). `codeEditorTheme` is the app-wide dark switch; the store
   // field keeps its historical name.
   const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
-  const language = useAppStore((s) => s.language);
   const catColor = CATEGORY_COLORS[def.category as NodeCategory] ?? 'var(--type-any)';
   const costColor = getCostColor(cost, costColorLow, costColorHigh, darkTheme);
   const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
   const headerTextColor = getContrastColor(costColor);
   const costScale = getCostScale(cost);
-  const flowType = getFlowNodeType(def);
+  return { def, catColor, costColor, costTextColor, costScale, cost, headerTextColor };
+}
 
-  const shared: ContentProps = { def, catColor, costColor, costTextColor, costScale, cost, headerTextColor };
+export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart }: NodePreviewCardProps) {
+  const language = useAppStore((s) => s.language);
+  const flowType = getFlowNodeType(def);
+  const shared = useCardChrome(def);
   const { tooltip, tooltipHandlers } = useAssetTooltip(
     nodeDescription(displayDescription(def), def.type, language),
   );
@@ -753,7 +828,7 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
     >
       {tooltip}
       {flowType === 'color' ? (
-        <ColorCardContent def={def} cost={cost} costTextColor={costTextColor} />
+        <ColorCardContent def={def} cost={shared.cost} costTextColor={shared.costTextColor} />
       ) : flowType === 'mathPreview' ? (
         <FitNodeHeading visualScale={shared.costScale} textScale={1}><MathCardContent {...shared} /></FitNodeHeading>
       ) : flowType === 'preview' ? (

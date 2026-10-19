@@ -227,7 +227,7 @@ describe('PreviewLink wiring (source pins — no DOM in this env)', () => {
   it('the hover is imperative, gated on the PANE, and stood down during a gesture', () => {
     // A React render per pointermove is exactly what this component's memo()
     // exists to avoid.
-    expect(LINK).toContain("classList.add('preview-link__path--hot')");
+    expect(LINK).toContain("classList.add('preview-link__wire--hot')");
     expect(LINK).toContain('label.textContent = hit.wire.label;');
     // Live only over the pane — the same condition under which a press reaches
     // React Flow's onPaneClick, so hover and click cannot disagree about what

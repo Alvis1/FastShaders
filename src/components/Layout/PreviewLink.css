@@ -15,44 +15,53 @@
   transition: opacity 160ms ease;
 }
 
-.preview-link__path {
+/* One wire: its line and, while still, its chevrons. The opacity and the halo
+   sit on the GROUP, so the two read as one silhouette — on the paths, the
+   chevrons would darken where they cross the translucent line. */
+.preview-link__wire {
+  opacity: 0.8;
   /* Contrast vars come from NodeEditor's canvasCssVars (set on `.node-editor`,
      an ancestor): they follow the USER-PICKED canvas background per theme via
      getContrastColor — the same auto-flip cost badges and 1-channel edges use —
      so the wire stays visible on a dark canvas. The shadow var is the
      CONTRASTING halo (white on light bg, black on dark), matching the
-     cost-badge treatment. */
+     cost-badge treatment. Hard offset, no blur — the app-wide shadow idiom. It
+     was a 2px GLOW, which is the one thing the technical style has no room
+     for; the contrast token stays, so the halo still flips with the canvas the
+     wire is drawn on. */
+  filter: drop-shadow(1px 1px 0 var(--node-cost-text-shadow, rgba(0, 0, 0, 0.35)));
+}
+
+/* STILL by default — solid, with direction chevrons along it, the canvas
+   wires' own rule (TypedEdge). A marching path repaints the canvas every frame
+   (~1 ms/frame on its own), so only a wire whose Output's graph changes on its
+   own marches (`data-live`, PreviewLink.tsx). No arrowhead at the rail end:
+   the chevrons say the direction, and the end meets its socket plainly. */
+.preview-link__path {
   stroke: var(--node-cost-text, #000);
   stroke-width: 4.5;
   stroke-linecap: butt;
-  opacity: 0.8;
-  /* Hard offset, no blur — the app-wide shadow idiom. It was a 2px GLOW, which
-     is the one thing the technical style has no room for; the contrast token
-     stays, so the halo still flips with the canvas the wire is drawn on. */
-  filter: drop-shadow(1px 1px 0 var(--node-cost-text-shadow, rgba(0, 0, 0, 0.35)));
-  /* STILL by default — solid, with an arrowhead into the rail socket. A
-     marching path repaints the canvas every frame (~1 ms/frame on its own),
-     so only a wire whose Output's graph changes on its own marches
-     (`data-live`, PreviewLink.tsx — the canvas wires' own rule). */
-  marker-end: url(#fs-preview-link-arrow);
+}
+
+/* The chevrons, in the wire's own ink, open `>` marks with round caps like the
+   canvas's (TypedEdge's `fs-edge-arrows`). Their geometry is written by the
+   tick (previewLinkGeometry `linkArrows`). */
+.preview-link__arrows {
+  stroke: var(--node-cost-text, #000);
+  stroke-width: 3;
+  stroke-linecap: round;
 }
 
 /* LIVE: bold, closely-spaced dashes flowing toward the preview imply "the
-   Output feeds the view", and the flow says it is changing. */
-.preview-link__path[data-live] {
+   Output feeds the view", and the flow says it is changing. A live wire
+   carries no chevrons — the march is its direction, as on the canvas. */
+.preview-link__wire[data-live] .preview-link__path {
   stroke-dasharray: 6 3;
-  marker-end: none;
   animation: preview-link-flow 0.9s linear infinite;
 }
 
-/* The arrowhead, in the wire's own ink. Its halo comes from the path's own
-   filter, which renders the marker as part of the path. */
-.preview-link__arrow {
-  fill: none;
-  stroke: var(--node-cost-text, #000);
-  stroke-width: 3;
-  stroke-linecap: butt;
-  stroke-linejoin: miter;
+.preview-link__wire[data-live] .preview-link__arrows {
+  display: none;
 }
 
 /* The wire under the pointer. It cannot be a `:hover` rule — the layer is
@@ -62,9 +71,16 @@
    Weight and opacity only, the TypedEdge hover rule's vocabulary: a wire is a
    line, so weight is the property it actually has to spend, and an offset copy
    of a line just reads as a second line beside it. */
-.preview-link__path--hot {
-  stroke-width: 6;
+.preview-link__wire--hot {
   opacity: 1;
+}
+
+.preview-link__wire--hot .preview-link__path {
+  stroke-width: 6;
+}
+
+.preview-link__wire--hot .preview-link__arrows {
+  stroke-width: 4;
 }
 
 /* The wire's hover label — its own element because a `title` on an SVG
@@ -117,7 +133,7 @@
 /* Same selector as the LIVE rule above: a bare `.preview-link__path` here
    would lose to it on specificity and leave the freeze to reset.css alone. */
 @media (prefers-reduced-motion: reduce) {
-  .preview-link__path[data-live] {
+  .preview-link__wire[data-live] .preview-link__path {
     animation: none;
   }
 }

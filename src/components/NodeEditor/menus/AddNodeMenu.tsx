@@ -22,6 +22,7 @@ import { getRecentNodeTypes, noteNodeUsed } from './recentNodes';
 import { hiddenOptionalCategories } from '@/registry/optionalCategories';
 import { freshNodeCost } from '@/utils/nodeCost';
 import { evalTask } from '@/eval/evalTask';
+import { noteMatchesQuery } from '../noteSearch';
 
 /** Selected nodes eligible for grouping: not groups, not notes (annotations). */
 const isGroupable = (n: AppNode) => !!n.selected && n.type !== 'group' && n.type !== 'note';
@@ -103,6 +104,8 @@ export function AddNodeMenu() {
     if (query.trim()) return searchNodes(query, hidden);
     return getEditorDefinitions(hidden).filter((d) => d.type !== 'output');
   }, [query, hidden]);
+
+  const noteMatches = useMemo(() => noteMatchesQuery(query), [query]);
 
   // Group by category when not searching
   const grouped = useMemo(() => {
@@ -273,6 +276,15 @@ export function AddNodeMenu() {
     }
     // Recent nodes render above the category list (distinct `recent:` keys so a
     // def appearing here AND in its category stays two independent focus stops).
+    // A search naming the note offers it AFTER the node results, so a node
+    // match keeps the Enter key ("tex" is Texture before it is text).
+    if (query.trim() && noteMatches) {
+      for (const def of results) {
+        items.push({ kind: 'def', key: def.type, def, run: () => handleAddNode(def) });
+      }
+      items.push({ kind: 'note', key: '__note__', run: handleAddNote });
+      return items;
+    }
     for (const def of recentDefs) {
       items.push({ kind: 'def', key: `recent:${def.type}`, def, run: () => handleAddNode(def) });
     }
@@ -289,7 +301,7 @@ export function AddNodeMenu() {
       }
     }
     return items;
-  }, [query, canGroup, canOrganize, grouped, results, recentDefs, handleGroupSelection, handleOrganizeSelection, handleAddNode, handleAddNote]);
+  }, [query, noteMatches, canGroup, canOrganize, grouped, results, recentDefs, handleGroupSelection, handleOrganizeSelection, handleAddNode, handleAddNote]);
 
   // Reset focus to the first item whenever the visible list changes (typing in
   // the search box, selection toggling, output-node presence flipping, etc.).
@@ -530,6 +542,19 @@ export function AddNodeMenu() {
             ))
           : // Flat search results
             results.map((def) => renderDefRow(def))}
+
+        {/* …and the note, when the search names it (noteSearch.ts). */}
+        {query.trim() && noteMatches && (
+          <button
+            className={itemClass('__note__')}
+            data-add-node-focused={focusedAttr('__note__')}
+            onClick={handleAddNote}
+            onMouseEnter={() => hoverFocus('__note__')}
+          >
+            <span>{t('Add Note', language)}</span>
+            <span className="context-menu__item-category">{t('note', language)}</span>
+          </button>
+        )}
       </div>
     </>
   );

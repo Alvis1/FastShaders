@@ -14,6 +14,7 @@ import {
   bezierMarkAt,
   arrowMarks,
   chevronPath,
+  visibleArcMidpoint,
   ribbonHalfWidth,
   ribbonStrokeWidth,
   RIBBON_GAP,
@@ -235,9 +236,27 @@ describe('arrowMarks', () => {
     expect(m.ux).toBeCloseTo(-1, 6);
   });
 
-  it('draws none on a wire too short to read, and never throws on a non-finite endpoint', () => {
-    expect(arrowMarks([straight(0, 0, ARROW_MIN_ARC - 1, 0)])).toEqual([]);
-    expect(arrowMarks([straight(0, 0, ARROW_MIN_ARC + 1, 0)])).toHaveLength(1);
+  it('ALWAYS draws one on a canvas wire, however short (owner, 2026-10-17)', () => {
+    for (const len of [ARROW_MIN_ARC - 1, 10, 1, 0.01]) {
+      const marks = arrowMarks([straight(0, 0, len, 0)]);
+      expect(marks, `len ${len}`).toHaveLength(1);
+      expect(marks[0].x, `len ${len}`).toBeCloseTo(len / 2, 3);
+      expect(marks[0].ux, `len ${len}`).toBeCloseTo(1, 6);
+    }
+  });
+
+  it('a ZERO-length wire still gets one, pointing source → target (+x), never a dot', () => {
+    const [m] = arrowMarks([[5, 7, 5, 7, 5, 7, 5, 7]]);
+    expect(m).toEqual({ x: 5, y: 7, ux: 1, uy: 0 });
+    expect(chevronPath([m], 4)).not.toBe('');
+  });
+
+  it('a caller-given minimum (the preview link) still draws none below it', () => {
+    expect(arrowMarks([straight(0, 0, ARROW_MIN_ARC - 1, 0)], ARROW_SPACING, ARROW_MIN_ARC)).toEqual([]);
+    expect(arrowMarks([straight(0, 0, ARROW_MIN_ARC + 1, 0)], ARROW_SPACING, ARROW_MIN_ARC)).toHaveLength(1);
+  });
+
+  it('never throws on a non-finite endpoint', () => {
     expect(arrowMarks([straight(0, 0, Number.NaN, 0)])).toEqual([]);
     expect(arrowMarks([straight(0, 0, Infinity, 0)])).toEqual([]);
     expect(arrowMarks([])).toEqual([]);
@@ -343,5 +362,45 @@ describe('ribbon geometry', () => {
 
   it('retires the ribbon dash — it never rendered (React Flow\'s CSS dash beat the attribute)', () => {
     expect('RIBBON_DASH' in geometry).toBe(false);
+  });
+});
+
+describe('visibleArcMidpoint — the value chip sits mid-wire AS SEEN', () => {
+  // A straight wire 0 → 1000 along y = 0, drawn as a cubic.
+  const line: BezierSegment = [0, 0, 333, 0, 667, 0, 1000, 0];
+  const close = (p: [number, number] | null, x: number, y = 0) => {
+    expect(p).not.toBeNull();
+    expect(p![0]).toBeCloseTo(x, 0);
+    expect(p![1]).toBeCloseTo(y, 0);
+  };
+
+  it('a wire wholly on screen gets its plain arc midpoint', () => {
+    close(visibleArcMidpoint([line], { x0: -100, y0: -100, x1: 2000, y1: 100 }), 500);
+    close(visibleArcMidpoint([line], null), 500);
+  });
+
+  it('a wire running off-screen anchors in the middle of the VISIBLE stretch', () => {
+    // Only x ∈ [600, 1000] on screen → middle at 800.
+    close(visibleArcMidpoint([line], { x0: 600, y0: -50, x1: 1400, y1: 50 }), 800);
+    // Both ends off-screen → middle of the window.
+    close(visibleArcMidpoint([line], { x0: 100, y0: -50, x1: 300, y1: 50 }), 200);
+  });
+
+  it('a wire that leaves and comes back lands ON a visible stretch', () => {
+    // A V: down to (500, 500) and back up; the view shows only the top band.
+    const v = catmullRomToBeziers([[0, 0], [500, 500], [1000, 0]]);
+    const m = visibleArcMidpoint(v, { x0: -10, y0: -10, x1: 1010, y1: 100 });
+    expect(m).not.toBeNull();
+    expect(m![1]).toBeLessThanOrEqual(100.001);
+  });
+
+  it('null when nothing is on screen, for a non-finite chain, or an empty one', () => {
+    expect(visibleArcMidpoint([line], { x0: 0, y0: 500, x1: 1000, y1: 900 })).toBeNull();
+    expect(visibleArcMidpoint([[0, 0, NaN, 0, 1, 0, 2, 0]], null)).toBeNull();
+    expect(visibleArcMidpoint([], null)).toBeNull();
+  });
+
+  it('an unmeasured (empty) view clips nothing', () => {
+    close(visibleArcMidpoint([line], { x0: 0, y0: 0, x1: 0, y1: 0 }), 500);
   });
 });

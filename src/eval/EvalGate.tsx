@@ -177,7 +177,7 @@ export function EvalGate() {
     });
   }, [consented]);
 
-  const handleAgree = (participant: string) => {
+  const handleAgree = (participant: string, ageConfirmed: boolean) => {
     const nowIso = new Date().toISOString();
     const rec: EvalSessionRecord = {
       id: mintEvalSessionId(),
@@ -185,6 +185,7 @@ export function EvalGate() {
       startedIso: nowIso,
       consentIso: nowIso,
       consentVersion: CONSENT_TEXT_VERSION,
+      ...(ageConfirmed ? { ageConfirmed: true as const } : {}),
     };
     writeEvalSession(rec);
     initEvalBridge(makeBridge());

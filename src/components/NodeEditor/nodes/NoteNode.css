@@ -50,8 +50,8 @@
   opacity: 0.5;
 }
 
-/* Notes float ABOVE the resting graph — both nodes and edges are z-index 0 (and
-   group-attached edges elevate above that), so an unpinned note at 0 gets buried
+/* Notes float ABOVE the resting graph — both nodes and edges are z-index 0
+   (grouped members sit at 1), so an unpinned note at 0 gets buried
    under them. A resting layer of 500 keeps the note readable/grabbable on top of
    the graph; selected/dragging lifts it to the top tier above other notes. The
    `!important` is required because React Flow writes an inline z-index per node. */

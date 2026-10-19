@@ -89,7 +89,9 @@ describe('a cleanup hook restores BEFORE it asserts', () => {
   it('no test file has one', () => {
     const leaking = testFiles(SRC).flatMap((f) => assertsBeforeRestoring(f.slice(SRC.length), readFileSync(f, 'utf8')));
     expect(leaking).toEqual([]);
-  });
+    // An AST parse of every test file: ~1 s alone, but over the 5 s default when
+    // the machine is busy (load 28 timed it out three runs in a row).
+  }, 30_000);
 
   it('the sweep sees the shape it hunts (a vacuous sweep would pass on nothing)', () => {
     const hook = (body: string) => `afterEach(() => {\n${body}\n});\n`;

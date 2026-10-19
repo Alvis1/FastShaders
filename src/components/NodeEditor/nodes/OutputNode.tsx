@@ -37,7 +37,7 @@ import { outputNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
 import { isActiveSinkSelector } from './activeSinkSelector';
-import { useCostChrome } from './useCostChrome';
+import { useCostChrome, useSinkBadgeClass } from './useCostChrome';
 import { TypedHandle } from '../handles/TypedHandle';
 // Also pulls in ShaderNode.css transitively — the shared .shader-node__edge-val
 // class (one font size for every number on a node) lives there.
@@ -184,6 +184,7 @@ export const OutputNode = memo(function OutputNode({
   const gltfNotShown = useAppStore((s) => s.previewShowsModel === false && !!s.previewMesh && loadedModelOf(s.previewMesh).kind !== 'not-gltf');
   const cost = data.cost ?? 0;
   const { costColor, headerTextColor, costTextColor } = useCostChrome(cost);
+  const badgeClass = useSinkBadgeClass(cost);
 
   const exposedPorts = data.exposedPorts ?? OUTPUT_DEFAULT_EXPOSED;
   const exposedSet = new Set(exposedPorts);
@@ -548,7 +549,7 @@ export const OutputNode = memo(function OutputNode({
       {/* Bare number, matching every ShaderNode badge — the unit is spelled out
           once on the CostBar meter rather than repeated on every node. */}
       {cost > 0 && (
-        <span className="node-base__cost-badge" style={{ color: costTextColor }}>
+        <span className={badgeClass} style={{ color: costTextColor }}>
           {cost}
         </span>
       )}

@@ -5,7 +5,7 @@ import { linkLabelText } from '@/components/NodeEditor/nodes/sectionLabelText';
 import { nodeEl } from '@/components/NodeEditor/nodeElement';
 import { resolveWireTargets, wireTargetsKey } from './previewWires';
 import { RAIL_INSET, railY } from './previewRailGeometry';
-import { linkPath, pickLinkAt, rectCenter, type LinkWire } from './previewLinkGeometry';
+import { linkArrows, linkPath, pickLinkAt, rectCenter, type LinkWire, type Pt } from './previewLinkGeometry';
 import { setLivePreviewWires } from './previewLinkHit';
 import './PreviewLink.css';
 
@@ -55,10 +55,6 @@ import './PreviewLink.css';
  * own `onPaneClick` reading the same published endpoints — see previewLinkHit.
  */
 
-/** The still wire's arrowhead marker. One PreviewLink is ever mounted (the
- *  canvas's), so a fixed document id is unique; PreviewLink.css names it. */
-const ARROW_MARKER_ID = 'fs-preview-link-arrow';
-
 /** Label offset from the pointer, and how close it may come to the pane edge. */
 const LABEL_DX = 14;
 const LABEL_DY = -22;
@@ -103,8 +99,11 @@ export const PreviewLink = memo(function PreviewLink() {
   wiresRef.current = wires;
   // Which wires MARCH: only an Output whose graph changes on its own (fed by
   // Time or Sound — the same getLiveUpstreamSet the canvas's own wires ask).
-  // A still one is drawn solid with an arrowhead into its rail socket (owner,
-  // 2026-10-11: "marching only animated"). One '1'/'0' per wire in wire order,
+  // A still one is drawn solid with direction chevrons along it, exactly as a
+  // canvas wire is (owner, 2026-10-11: "marching only animated"; 2026-10-12:
+  // no arrowhead at the rail end, "the same rules as other edges"). The tick
+  // writes every wire's chevrons and PreviewLink.css shows them only on a
+  // still one, so a wire turning live needs no tick. One '1'/'0' per wire in wire order,
   // a primitive, so a drag notify bails on Object.is; resolveWireTargets is
   // the memo the wire key above already filled. Written as a data attribute,
   // never a class: the hover writes `--hot` into the class imperatively, and a
@@ -122,6 +121,7 @@ export const PreviewLink = memo(function PreviewLink() {
   useEffect(() => {
     let raf = 0;
     const lastDs: string[] = [];
+    const lastArrows: string[] = [];
     let lastShown = '';
     // Endpoint elements are CACHED across frames — a full-DOM querySelector
     // per frame scales with node count and is pure waste while the elements
@@ -150,10 +150,23 @@ export const PreviewLink = memo(function PreviewLink() {
       }
     };
 
-    const setD = (paths: NodeListOf<SVGPathElement>, i: number, d: string) => {
-      if (lastDs[i] !== d) {
-        lastDs[i] = d;
-        paths[i].setAttribute('d', d);
+    /** Write wire i's path and, only when that moved, its chevrons — the
+     *  arc-length walk runs on a frame where the wire changed, never on an
+     *  idle one. `ends` absent blanks both. */
+    const setD = (
+      paths: NodeListOf<SVGPathElement>,
+      arrows: NodeListOf<SVGPathElement>,
+      i: number,
+      ends?: { start: Pt; end: Pt },
+    ) => {
+      const d = ends ? linkPath(ends.start, ends.end) : '';
+      if (lastDs[i] === d) return;
+      lastDs[i] = d;
+      paths[i].setAttribute('d', d);
+      const a = ends ? linkArrows(ends.start, ends.end) : '';
+      if (lastArrows[i] !== a) {
+        lastArrows[i] = a;
+        arrows[i]?.setAttribute('d', a);
       }
     };
 
@@ -171,8 +184,8 @@ export const PreviewLink = memo(function PreviewLink() {
      *  the ONE way out, so the cleanup, a gesture and a miss all agree. */
     const clearHot = () => {
       if (hotId !== null) {
-        svgRef.current?.querySelectorAll<SVGPathElement>('path')
-          .forEach((p) => p.classList.remove('preview-link__path--hot'));
+        svgRef.current?.querySelectorAll<SVGGElement>('.preview-link__wire')
+          .forEach((g) => g.classList.remove('preview-link__wire--hot'));
         hotId = null;
       }
       const label = labelRef.current;
@@ -204,6 +217,7 @@ export const PreviewLink = memo(function PreviewLink() {
         // The dedupe cache describes <path> elements that now belong to other
         // nodes, and the hover state names a wire that may no longer exist.
         lastDs.length = 0;
+        lastArrows.length = 0;
         clearHot();
       }
 
@@ -223,7 +237,10 @@ export const PreviewLink = memo(function PreviewLink() {
         }
       }
 
-      const paths = svg.querySelectorAll<SVGPathElement>('path');
+      // Each wire is a <g> holding its line and its chevrons; both lists are
+      // in wire order, one entry per <g>.
+      const paths = svg.querySelectorAll<SVGPathElement>('.preview-link__path');
+      const arrows = svg.querySelectorAll<SVGPathElement>('.preview-link__arrows');
       // The dedupe cache must not outlive the elements it describes: a shrink
       // leaves stale entries past the new count, and a later regrow (an undo,
       // a re-added Output) mounts FRESH <path d=""> elements at those indices
@@ -231,6 +248,7 @@ export const PreviewLink = memo(function PreviewLink() {
       // entry, setD would skip the write, and the regrown wire stayed
       // invisible until a pan/zoom/drag changed a coordinate.
       if (lastDs.length > paths.length) lastDs.length = paths.length;
+      if (lastArrows.length > paths.length) lastArrows.length = paths.length;
       if (paths.length === 0) {
         setShown(svg, false);
         publish([]);
@@ -275,7 +293,7 @@ export const PreviewLink = memo(function PreviewLink() {
         // unmounting, and its rect reads 0x0) hides just that wire.
         const nodeRect = i < count ? nodeEls[i]?.getBoundingClientRect() : undefined;
         if (!nodeRect || nodeRect.width < 1) {
-          setD(paths, i, '');
+          setD(paths, arrows, i);
           continue;
         }
         // A socket not laid out yet (0-height, mid-mount) falls back to the
@@ -290,7 +308,7 @@ export const PreviewLink = memo(function PreviewLink() {
         // endpoints the hover and click hit-test against are the drawn ones.
         const endClient = { x: endX, y: railY(svgRect.top, svgRect.height, i, count) };
         const end = { x: endClient.x - svgRect.left, y: endClient.y - svgRect.top };
-        setD(paths, i, linkPath(start, end));
+        setD(paths, arrows, i, { start, end });
         next.push({ id: list[i].id, label: list[i].label, start: startClient, end: endClient });
       }
       // `next` is dense and `paths` may carry blanked entries, so the hit test
@@ -301,12 +319,12 @@ export const PreviewLink = memo(function PreviewLink() {
       setShown(svg, next.length > 0);
     };
 
-    /** The <path> element drawing wire `id`, or null — `live` is the DRAWN
-     *  subset, so its index is not the path index once a wire is hidden. */
-    const pathFor = (id: string): SVGPathElement | null => {
+    /** The <g> drawing wire `id`, or null — `live` is the DRAWN subset, so
+     *  its index is not the wire index once a wire is hidden. */
+    const wireFor = (id: string): SVGGElement | null => {
       const l = wiresRef.current.findIndex((w) => w.id === id);
       if (l < 0) return null;
-      return svgRef.current?.querySelectorAll<SVGPathElement>('path')[l] ?? null;
+      return svgRef.current?.querySelectorAll<SVGGElement>('.preview-link__wire')[l] ?? null;
     };
 
     const onMove = (e: PointerEvent) => {
@@ -340,9 +358,9 @@ export const PreviewLink = memo(function PreviewLink() {
         return;
       }
       if (hotId !== hit.wire.id) {
-        if (hotId !== null) pathFor(hotId)?.classList.remove('preview-link__path--hot');
+        if (hotId !== null) wireFor(hotId)?.classList.remove('preview-link__wire--hot');
         hotId = hit.wire.id;
-        pathFor(hotId)?.classList.add('preview-link__path--hot');
+        wireFor(hotId)?.classList.add('preview-link__wire--hot');
         label.textContent = hit.wire.label;
         label.hidden = false;
         // ONE forced layout, and only when the text changed — not per move.
@@ -383,33 +401,15 @@ export const PreviewLink = memo(function PreviewLink() {
   return (
     <>
       <svg ref={svgRef} className="preview-link" aria-hidden="true" style={{ opacity: 0 }}>
-        {/* The still wire's arrowhead (PreviewLink.css puts it on the path).
-            A <polyline>, never a <path>: the tick and the hover find the
-            wires by `querySelectorAll('path')` INDEX. In user space, so the
-            hover's thicker stroke does not inflate it; its tip is the wire's
-            end, where the wire meets the rail socket's rim. */}
-        <defs>
-          <marker
-            id={ARROW_MARKER_ID}
-            viewBox="0 0 18 18"
-            refX="15"
-            refY="9"
-            markerWidth="18"
-            markerHeight="18"
-            markerUnits="userSpaceOnUse"
-            orient="auto"
-          >
-            <polyline className="preview-link__arrow" points="3,2 12,9 3,16" />
-          </marker>
-        </defs>
+        {/* One <g> per wire: its line and its chevrons, so the halo, the
+            opacity and the hover weight apply to them as ONE silhouette (the
+            chevrons sit on the line in the same ink — two translucent
+            elements would darken where they cross). */}
         {Array.from({ length: pathCount }, (_, i) => (
-          <path
-            key={i}
-            className="preview-link__path"
-            data-live={liveKey[i] === '1' ? '' : undefined}
-            fill="none"
-            d=""
-          />
+          <g key={i} className="preview-link__wire" data-live={liveKey[i] === '1' ? '' : undefined}>
+            <path className="preview-link__path" fill="none" d="" />
+            <path className="preview-link__arrows" fill="none" d="" />
+          </g>
         ))}
       </svg>
       {/* The hover label. Its own HTML element rather than a `title` on the

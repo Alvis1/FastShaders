@@ -4,10 +4,8 @@ import type { NoteFlowNode } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
 import { getContrastColor } from '@/utils/colorUtils';
 import { assetText, t } from '@/i18n';
+import { NOTE_BODY_COLOR, NOTE_HEADER_COLOR, NOTE_MIN_HEIGHT, NOTE_MIN_WIDTH } from '@/utils/noteDefaults';
 import './NoteNode.css';
-
-const DEFAULT_BODY = '#fff7cc';
-const DEFAULT_HEADER = '#ffd24a';
 
 /**
  * Sticky note — a free-floating canvas annotation with no shader semantics.
@@ -30,8 +28,8 @@ export const NoteNode = memo(function NoteNode({
   data,
   selected,
 }: NodeProps<NoteFlowNode>) {
-  const bodyColor = data.color ?? DEFAULT_BODY;
-  const headerColor = data.headerColor ?? DEFAULT_HEADER;
+  const bodyColor = data.color ?? NOTE_BODY_COLOR;
+  const headerColor = data.headerColor ?? NOTE_HEADER_COLOR;
   const scale = data.scale ?? 1;
   const bodyText = getContrastColor(bodyColor);
   const headText = getContrastColor(headerColor);
@@ -54,8 +52,8 @@ export const NoteNode = memo(function NoteNode({
         <NodeResizeControl
           position="bottom-right"
           color={headerColor}
-          minWidth={120}
-          minHeight={70}
+          minWidth={NOTE_MIN_WIDTH}
+          minHeight={NOTE_MIN_HEIGHT}
           style={{ width: 15, height: 15, borderRadius: 0, border: '2px solid #fff' }}
         />
       )}

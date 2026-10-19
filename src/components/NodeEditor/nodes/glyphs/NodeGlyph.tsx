@@ -160,9 +160,26 @@ export function nodeTextScale(type: string, design?: GlyphDesign): number {
   return typeof t === 'number' && t > 0 ? Math.max(0.4, Math.min(2.5, t)) : 1;
 }
 
-/** Per-socket vertical offsets for the operator layout (designer override).
- *  Px relative to the body center; keys are input port ids plus 'out'.
- *  Missing keys fall back to the defaults (a −12.5, b +12.5, out 0). */
+/** The `sockets` key of one output port. The first output keeps 'out' so the
+ *  ~60 saved designs that authored it stay valid; every later output (split's
+ *  y/z/w, toHsl's h/s/l, Fresnel's Facing, the Image channels) is keyed by its
+ *  own id — which is how the edge-port rail already looked them up. Compared
+ *  by ID, not identity: the Data node's per-instance outputs are not the
+ *  registry's objects. Input ids and output ids never collide (pinned by
+ *  outputSockets.test.ts), so ONE flat map holds both. */
+export function outputSocketKey(
+  outputs: readonly { id: string }[],
+  output: { id: string },
+): string {
+  return output.id === outputs[0]?.id ? 'out' : output.id;
+}
+
+/** Per-socket vertical offsets (designer override). Px relative to the body
+ *  center; keys are every input port id plus every output: the FIRST output is
+ *  'out' (its historical key — every saved design says so), any later one is
+ *  its own port id ({@link outputSocketKey}). Missing keys fall back to the
+ *  defaults (operator layout: a −12.5, b +12.5, out 0; rows layout: the
+ *  socket stays in its row). */
 export function nodeSockets(type: string, design?: GlyphDesign): Record<string, number> {
   const s = (design ?? CUSTOM_GLYPHS[type])?.sockets;
   return s && typeof s === 'object' ? s : {};

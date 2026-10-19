@@ -180,7 +180,7 @@ function validateLighting(v: string | null): LightingMode {
   // 'env' is only honoured while an env map is actually wired — the
   // effLighting derivation in the component falls back to studio otherwise,
   // so a persisted 'env' can't boot into a lightless void.
-  if (v === 'studio' || v === 'moon' || v === 'laboratory' || v === 'env') return v;
+  if (v === 'studio' || v === 'moon' || v === 'laboratory' || v === 'none' || v === 'env') return v;
   return 'studio';
 }
 
@@ -3024,6 +3024,7 @@ export function ShaderPreview() {
             <option value="studio">{t('Studio', language)}</option>
             <option value="moon">{t('Moon', language)}</option>
             <option value="laboratory">{t('Laboratory', language)}</option>
+            <option value="none">{t('No light', language)}</option>
             {envMapName !== '' && (
               // Named after the attached environment image (extension
               // stripped) — selecting it turns the analytic lights off so the

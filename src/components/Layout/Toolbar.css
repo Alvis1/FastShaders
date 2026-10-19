@@ -508,6 +508,16 @@ button.toolbar__local-row.toolbar__wf-row--current {
   color: #fff;
 }
 
+/* The intro "i": a letter chip like P and SC, set in the serif italic of an
+   information sign so it reads as "about", not as a tool. */
+.toolbar__sc-link.toolbar__intro {
+  min-width: 30px;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-style: italic;
+  font-weight: 700;
+  font-size: 15px;
+}
+
 /* Feedback "!" — the only red element in the chrome, so it stays findable when
    someone has hit a problem and is scanning for help. Same double-class
    specificity note as the two rules above.
@@ -948,4 +958,10 @@ button.toolbar__local-row.toolbar__reload-row {
   font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.toolbar__wf-header-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex: none;
 }

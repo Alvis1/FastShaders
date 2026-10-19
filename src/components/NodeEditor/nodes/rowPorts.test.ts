@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildRows, visiblePortRows } from './ShaderNode';
-import { nodeSockets } from './glyphs/NodeGlyph';
+import { nodeSockets, outputSocketKey } from './glyphs/NodeGlyph';
 import { getAllDefinitions, getFlowNodeType } from '@/registry/nodeRegistry';
 import type { PortDefinition } from '@/types';
 
@@ -49,11 +49,24 @@ describe('visiblePortRows', () => {
   });
 
   it('keeps a moved-input row that still draws a NON-first output', () => {
-    // Only `out` is detached (`sockets['out']`), so a second output — split's
+    // `out` (the FIRST output) is detached, so a second output — split's
     // y/z/w, toHsl's h/s/l — is still drawn in its row and the row must stay.
     const second = port('y');
     expect(visiblePortRows([row(IN, second)], { x: -12, out: 0 }, [OUT, second]))
       .toHaveLength(1);
+  });
+
+  it('drops a row whose NON-first output was moved too (keyed by its own id)', () => {
+    // Fresnel's Facing: the second output, authored at `sockets.facing`.
+    const second = port('y');
+    expect(visiblePortRows([row(IN, second)], { x: -12, out: 0, y: 8 }, [OUT, second]))
+      .toEqual([]);
+    expect(visiblePortRows([row(null, second)], { y: 8 }, [OUT, second])).toEqual([]);
+  });
+
+  it('a later output is NEVER read through the first output\'s `out` key', () => {
+    const second = port('y');
+    expect(visiblePortRows([row(null, second)], { out: 0 }, [OUT, second])).toHaveLength(1);
   });
 
   it('is identity when the design moves nothing', () => {
@@ -81,7 +94,7 @@ describe('the shipped registry', () => {
       const kept = new Set(visiblePortRows(buildRows(d), sockets, d.outputs));
       for (const row of buildRows(d)) {
         const drawsInput = !!row.input && sockets[row.input.id] == null;
-        const drawsOutput = !!row.output && !(sockets['out'] != null && row.output === d.outputs[0]);
+        const drawsOutput = !!row.output && sockets[outputSocketKey(d.outputs, row.output)] == null;
         if (drawsInput || drawsOutput) {
           // Compare by content: buildRows mints fresh row objects per call.
           const match = [...kept].some(

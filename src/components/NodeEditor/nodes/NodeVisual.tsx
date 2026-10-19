@@ -6,7 +6,7 @@ import { ColorRampStrip } from './ColorRampArt';
 import { CurvesArt } from './CurvesArt';
 import { formatNodeLabel } from '@/i18n';
 import { useAppStore } from '@/store/useAppStore';
-import { buildRows, visiblePortRows, outputRowLabel, ImageThumbEmpty, IMAGE_EMPTY_HINT_EVAL, PortValueCell } from './ShaderNode';
+import { buildRows, visiblePortRows, outputRowLabel, ImageCardPicture, IMAGE_EMPTY_HINT_EVAL, PortValueCell } from './ShaderNode';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
@@ -16,6 +16,7 @@ import {
   usesOperatorLayout,
   nodeBox,
   nodeSockets,
+  outputSocketKey,
   nodeTextScale,
   nodeJustify,
   nodeScale,
@@ -354,7 +355,6 @@ export function NodeVisual({
 
   // ── Rows layout (ShaderNode's rows branch) ──
   const rows = buildRows(def);
-  const outMoved = sockets['out'] != null && !!def.outputs[0];
   /** ShaderNode's edge-port flag, read from the SAME predicate. */
   const edgePorts = usesEdgePorts(def.type);
   /** Drop rows that draw nothing — THE SAME function ShaderNode uses, not a
@@ -367,7 +367,7 @@ export function NodeVisual({
    *  ONE not-moved condition. `dynamic` is false: a replica never carries the
    *  Data node's per-instance `dynamicOutputs`. */
   const rowOutput = (output: (typeof def.outputs)[number] | null) => {
-    if (!output || (outMoved && output === def.outputs[0])) return null;
+    if (!output || sockets[outputSocketKey(def.outputs, output)] != null) return null;
     const outLabel = outputRowLabel(def.type, output, false, language);
     return (
       <>
@@ -446,13 +446,14 @@ export function NodeVisual({
             </div>
           )}
 
-          {/* Image node: a replica never carries a payload, so it draws the ONE
-              empty slot ShaderNode draws for a payload-less node — in the same
-              place (inside the port region), with no filename. Its hover text
-              is the PLAIN statement: a replica has no settings menu, and on the
-              Node Designer stage (drawn hit-testable) the canvas hint's
+          {/* Image node: ShaderNode's own picture block. A tile carries no
+              payload, so it draws the ONE empty slot ShaderNode draws for a
+              payload-less node, with no filename; the intro window's stage
+              passes a real one in `values`. The empty slot's hover text is the
+              PLAIN statement: a replica has no settings menu, and on the Node
+              Designer stage (drawn hit-testable) the canvas hint's
               "Right-click the node…" would open only the browser's menu. */}
-          {def.type === 'imageNode' && <ImageThumbEmpty language={language} hint={IMAGE_EMPTY_HINT_EVAL} />}
+          {def.type === 'imageNode' && <ImageCardPicture values={values} language={language} emptyHint={IMAGE_EMPTY_HINT_EVAL} />}
 
           {/* EDGE PORTS — ShaderNode's rail, inert. Indexed against the node's
               FULL port lists (`rawDef`, not the exposure-filtered `def`) for
@@ -468,7 +469,7 @@ export function NodeVisual({
                 dataType={out.dataType}
                 port={out.id}
                 label={out.label}
-                style={{ top: calcTop(sockets[out.id] ?? edgePortOffset(i, def.outputs.length)) }}
+                style={{ top: calcTop(sockets[outputSocketKey(def.outputs, out)] ?? edgePortOffset(i, def.outputs.length)) }}
               />
             ))}
 
@@ -556,10 +557,14 @@ export function NodeVisual({
               identical `top`. The Image node is designable, and the Designer's
               corner drag rewrites `sockets.out` on any height change, so this
               is reachable while authoring even without dragging a socket. */}
-          {!edgePorts && outMoved && (
-            <StaticHandle side="right" dataType={def.outputs[0].dataType} port={def.outputs[0].id} label={def.outputs[0].label}
-              style={{ top: calcTop(sockets['out']) }} />
-          )}
+          {!edgePorts && def.outputs.map((out) => {
+            const off = sockets[outputSocketKey(def.outputs, out)];
+            if (off == null) return null;
+            return (
+              <StaticHandle key={`mo-${out.id}`} side="right" dataType={out.dataType} port={out.id} label={out.label}
+                style={{ top: calcTop(off) }} />
+            );
+          })}
           {snapColEl}
         </div>
       </div>

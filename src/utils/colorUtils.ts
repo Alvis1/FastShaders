@@ -121,6 +121,17 @@ export function canvasInkColor(bgHex: string): string {
   return getContrastColor(bgHex) === '#000000' ? '#000000' : '#d9dce0';
 }
 
+/** The shadow under canvas ink text (`--node-cost-text-shadow`): the
+ *  OPPOSITE of the ink `canvasInkColor` resolved to. */
+export function canvasInkShadow(ink: string): string {
+  return ink === '#000000' ? 'rgba(255, 255, 255, 0.65)' : 'rgba(0, 0, 0, 0.65)';
+}
+
+/** The canvas grid's colour for that ink — subtle on either backdrop. */
+export function canvasGridColor(ink: string): string {
+  return ink === '#000000' ? '#BBBBBB' : 'rgba(255, 255, 255, 0.12)';
+}
+
 /**
  * The base the group tints mix FROM: `--node-bg` in tokens.css, duplicated here
  * because the tests run under `node` with no CSSOM to read the variable from.

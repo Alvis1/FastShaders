@@ -34,8 +34,12 @@ describe('paste and Ctrl+D count the project image budget', () => {
     expect(paste).toMatch(/const commit = \(\) => \{\s*const live = useAppStore\.getState\(\);\s*live\.pushHistory\(\);/);
   });
 
-  it('shifts the clipboard only once a paste lands', () => {
-    expect(EDITOR).toMatch(/pasteNodes\(clipboardRef\.current, \(clones\) => \{\s*clipboardRef\.current = clones\.map/);
+  it('advances the repeated-paste cascade only once a paste lands', () => {
+    // A paste lands centred in the view (pastePlacement.ts); the clipboard is
+    // never rewritten, and the step between repeated pastes moves inside
+    // `commit`, so a paste refused by the image budget changes nothing.
+    expect(EDITOR).toContain('pasteNodes(clipboardRef.current, true);');
+    expect(EDITOR).toMatch(/live\.setEdges\(\[\.\.\.live\.edges, \.\.\.edgeClones\] as AppEdge\[\]\);\s*if \(landed\) lastPaste = landed;/);
     expect(EDITOR).not.toContain('const clones = pasteNodes(');
   });
 });
@@ -157,7 +161,7 @@ describe('storage de-duplication: every project add still counts instances, and 
     expect(EDITOR).not.toContain('structuredClone(node)');
     expect(EDITOR).not.toContain('structuredClone(selected)');
     expect(EDITOR).toContain('const cloned = cloneNodeSharingPayloads(node);');
-    expect(EDITOR).toContain('clones.map((n) => cloneNodeSharingPayloads(n))');
+    expect(EDITOR).toContain('clipboardRef.current = cloneNodesSharingPayloads(selected);');
     expect(MENU_SHARED).not.toContain('structuredClone(node)');
     expect(MENU_SHARED).toContain('...cloneNodeSharingPayloads(node),');
     expect(MENU_SHARED).toContain('exceedsImageBudget(');

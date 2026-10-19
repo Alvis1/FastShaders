@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { useAppStore } from '@/store/useAppStore';
-import { t } from '@/i18n';
-import { limitNoticeCopy } from './limitNoticeCopy';
+import { t, type Language } from '@/i18n';
+import { limitNoticeCopy, type NoticeCopy } from './limitNoticeCopy';
 import { desktopLiftsLimit } from '@/utils/desktopAppNoteRules';
 import { DesktopAppNote } from './DesktopAppNote';
 import { useModalKeys } from './useModalKeys';
@@ -68,51 +68,88 @@ export function LimitModal() {
 
   return (
     <div className="csv-import-modal__backdrop" onClick={() => commit('dismiss')}>
-      <div
-        ref={panelRef}
-        className="csv-import-modal__panel"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="limit-modal-title"
-        tabIndex={-1}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="csv-import-modal__title" id="limit-modal-title">{copy.title}</div>
-        <div className="csv-import-modal__message">{copy.message}</div>
-        {copy.suggestions.length > 0 && (
-          <ul className="limit-modal__suggestions">
-            {copy.suggestions.map((s, i) => (
-              <li key={i}>{s}</li>
-            ))}
-          </ul>
-        )}
-        {desktopLiftsLimit(head, ignoreLimits) && <DesktopAppNote language={language} />}
-        {copy.toggle && (
-          <label className="csv-import-modal__check">
-            <input
-              type="checkbox"
-              checked={checkboxOn}
-              onChange={(e) => setCheckboxOn(e.target.checked)}
-            />
-            {copy.toggle.label}
-          </label>
-        )}
-        <div className="csv-import-modal__buttons">
+      <LimitNoticePanel
+        copy={copy}
+        language={language}
+        panelRef={panelRef}
+        desktopNote={desktopLiftsLimit(head, ignoreLimits)}
+        checkboxOn={checkboxOn}
+        onCheck={setCheckboxOn}
+        onDismiss={() => commit('dismiss')}
+        onProceed={() => commit('proceed')}
+      />
+    </div>
+  );
+}
+
+/**
+ * A notice's panel, from its copy (`limitNoticeCopy`): the dialog above, and
+ * the intro window's stage (intro/ImageScene.tsx), which draws the
+ * device-downscale notice inert over its small canvas.
+ */
+export function LimitNoticePanel({
+  copy, language, panelRef, desktopNote, checkboxOn, onCheck, onDismiss, onProceed, inert = false,
+}: {
+  copy: NoticeCopy;
+  language: Language;
+  panelRef?: RefObject<HTMLDivElement>;
+  desktopNote: boolean;
+  checkboxOn: boolean;
+  onCheck: (on: boolean) => void;
+  onDismiss: () => void;
+  onProceed: () => void;
+  /** A picture of the dialog: no dialog role, nothing focusable. */
+  inert?: boolean;
+}) {
+  const tab = inert ? -1 : undefined;
+  return (
+    <div
+      ref={panelRef}
+      className="csv-import-modal__panel"
+      role={inert ? undefined : 'dialog'}
+      aria-modal={inert ? undefined : true}
+      aria-labelledby={inert ? undefined : 'limit-modal-title'}
+      tabIndex={-1}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="csv-import-modal__title" id={inert ? undefined : 'limit-modal-title'}>{copy.title}</div>
+      <div className="csv-import-modal__message">{copy.message}</div>
+      {copy.suggestions.length > 0 && (
+        <ul className="limit-modal__suggestions">
+          {copy.suggestions.map((s, i) => (
+            <li key={i}>{s}</li>
+          ))}
+        </ul>
+      )}
+      {desktopNote && <DesktopAppNote language={language} />}
+      {copy.toggle && (
+        <label className="csv-import-modal__check">
+          <input
+            type="checkbox"
+            tabIndex={tab}
+            checked={checkboxOn}
+            onChange={(e) => onCheck(e.target.checked)}
+          />
+          {copy.toggle.label}
+        </label>
+      )}
+      <div className="csv-import-modal__buttons">
+        <button
+          className="csv-import-modal__button"
+          tabIndex={tab}
+          onClick={onDismiss}
+        >
+          {copy.canProceed ? t('Cancel', language) : t('OK', language)}
+        </button>
+        {copy.canProceed && (
           <button
-            className="csv-import-modal__button"
-            onClick={() => commit('dismiss')}
+            className="csv-import-modal__button csv-import-modal__button--primary"
+            tabIndex={tab}
+            onClick={onProceed}
           >
-            {copy.canProceed ? t('Cancel', language) : t('OK', language)}
+            {copy.proceedLabel ?? t('Add anyway', language)}
           </button>
-          {copy.canProceed && (
-            <button
-              className="csv-import-modal__button csv-import-modal__button--primary"
-              onClick={() => commit('proceed')}
-            >
-              {copy.proceedLabel ?? t('Add anyway', language)}
-            </button>
-          )}
-        </div>
+        )}
       </div>
     </div>
   );

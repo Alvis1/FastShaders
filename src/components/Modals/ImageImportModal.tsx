@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
-import { t } from '@/i18n';
+import { t, type Language } from '@/i18n';
 import { useModalKeys } from './useModalKeys';
 import './CsvImportModal.css';
 
@@ -57,41 +57,74 @@ export function ImageImportModal({ request, onResolve }: Props) {
 
   return createPortal(
     <div className="csv-import-modal__backdrop" onClick={() => onResolve('keep', false)}>
-      <div
-        className="csv-import-modal__panel"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="image-import-modal-title"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="csv-import-modal__title" id="image-import-modal-title">
-          {request.count > 1
-            ? t('Convert {count} images to optimized format?', language)
-                .replace('{count}', () => String(request.count))
-            : t('Convert image to optimized format?', language)}
-        </div>
-        <label className="csv-import-modal__check">
-          <input
-            type="checkbox"
-            checked={remember}
-            onChange={(e) => setRemember(e.target.checked)}
-          />
-          {t('Don’t ask again', language)}
-        </label>
-        <div className="csv-import-modal__buttons">
-          <button className="csv-import-modal__button" onClick={() => onResolve('keep', remember)}>
-            {t('No', language)}
-          </button>
-          <button
-            ref={yesRef}
-            className="csv-import-modal__button csv-import-modal__button--yes"
-            onClick={() => onResolve('convert', remember)}
-          >
-            {t('Yes', language)}
-          </button>
-        </div>
-      </div>
+      <ImageImportPanel
+        count={request.count}
+        language={language}
+        remember={remember}
+        onRemember={setRemember}
+        onNo={() => onResolve('keep', remember)}
+        onYes={() => onResolve('convert', remember)}
+        yesRef={yesRef}
+      />
     </div>,
     document.body,
+  );
+}
+
+/**
+ * The question's panel: the dialog above, and the intro window's stage
+ * (intro/ImageScene.tsx), which draws it inert over its small canvas.
+ */
+export function ImageImportPanel({
+  count, language, remember, onRemember, onNo, onYes, yesRef, inert = false,
+}: {
+  count: number;
+  language: Language;
+  remember: boolean;
+  onRemember: (on: boolean) => void;
+  onNo: () => void;
+  onYes: () => void;
+  yesRef?: RefObject<HTMLButtonElement>;
+  /** A picture of the dialog: no dialog role, nothing focusable. */
+  inert?: boolean;
+}) {
+  const tab = inert ? -1 : undefined;
+  return (
+    <div
+      className="csv-import-modal__panel"
+      role={inert ? undefined : 'dialog'}
+      aria-modal={inert ? undefined : true}
+      aria-labelledby={inert ? undefined : 'image-import-modal-title'}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="csv-import-modal__title" id={inert ? undefined : 'image-import-modal-title'}>
+        {count > 1
+          ? t('Convert {count} images to optimized format?', language)
+              .replace('{count}', () => String(count))
+          : t('Convert image to optimized format?', language)}
+      </div>
+      <label className="csv-import-modal__check">
+        <input
+          type="checkbox"
+          tabIndex={tab}
+          checked={remember}
+          onChange={(e) => onRemember(e.target.checked)}
+        />
+        {t('Don’t ask again', language)}
+      </label>
+      <div className="csv-import-modal__buttons">
+        <button className="csv-import-modal__button" tabIndex={tab} onClick={onNo}>
+          {t('No', language)}
+        </button>
+        <button
+          ref={yesRef}
+          tabIndex={tab}
+          className="csv-import-modal__button csv-import-modal__button--yes"
+          onClick={onYes}
+        >
+          {t('Yes', language)}
+        </button>
+      </div>
+    </div>
   );
 }

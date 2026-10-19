@@ -544,9 +544,13 @@ describe('every path that brings a FILE’s picture into an Image node asks the 
     const files = sourceFiles(SRC_ROOT).map((f) => [f.slice(SRC_ROOT.length), readFileSync(f, 'utf8')] as const);
     const callers = (needle: RegExp) => files.filter(([, s]) => needle.test(codeLines(s))).map(([f]) => f).sort();
     // `encodeImageFile(` outside its own module: exactly the three file paths.
+    // The intro's image slide runs the real drop on a painted photo and asks
+    // the same predicate, though its node is only ever DRAWN (it never
+    // reaches the graph — introGate.test.ts pins that the intro writes nothing).
     expect(callers(/(?<!function )\bencodeImageFile\(/).filter((f) => f !== 'utils/imageImport.ts')).toEqual([
       'components/NodeEditor/NodeEditor.tsx',
       'components/NodeEditor/menus/ImageNodeSettings.tsx',
+      'intro/ImageScene.tsx',
       'store/useAppStore.ts',
     ]);
     // `makeImageNodeFromEncode(`: the drop, its "Add anyway", and the GLB
@@ -554,9 +558,10 @@ describe('every path that brings a FILE’s picture into an Image node asks the 
     expect(callers(/(?<!function )\bmakeImageNodeFromEncode\(/).filter((f) => f !== 'utils/imageNode.ts')).toEqual([
       'components/NodeEditor/NodeEditor.tsx',
       'engine/gltfSectionBuilder.ts',
+      'intro/ImageScene.tsx',
       'store/useAppStore.ts',
     ]);
-    for (const f of ['components/NodeEditor/NodeEditor.tsx', 'components/NodeEditor/menus/ImageNodeSettings.tsx', 'store/useAppStore.ts']) {
+    for (const f of ['components/NodeEditor/NodeEditor.tsx', 'components/NodeEditor/menus/ImageNodeSettings.tsx', 'intro/ImageScene.tsx', 'store/useAppStore.ts']) {
       expect(code(read(f)), f).toMatch(/\b(?:file|replacement)PictureOrientation\(/);
     }
     const builder = code(read('engine/gltfSectionBuilder.ts'));

@@ -25,6 +25,26 @@ export function ribbonHalfWidth(count: number): number {
   return ((count - 1) / 2) * RIBBON_GAP + ribbonStrokeWidth(count) / 2;
 }
 
+/** Each channel line's perpendicular offset from the centreline, RIBBON_GAP
+ *  apart and centred (TypedEdge and the intro window's wires). */
+export function ribbonOffsets(count: number): number[] {
+  if (count <= 1) return [0];
+  const offsets: number[] = [];
+  const half = (count - 1) / 2;
+  for (let i = 0; i < count; i++) {
+    offsets.push((i - half) * RIBBON_GAP);
+  }
+  return offsets;
+}
+
+/** The unit vector the offsets run along: perpendicular to source → target. */
+export function ribbonNormal(sx: number, sy: number, tx: number, ty: number): [number, number] {
+  const dx = tx - sx;
+  const dy = ty - sy;
+  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+  return [-dy / len, dx / len];
+}
+
 /**
  * React Flow's control-handle length for one side of a bezier edge: half the
  * FORWARD distance along that side's exit axis, or a slow sqrt ramp when the
@@ -99,7 +119,11 @@ export function edgeBezier(
 /** Flow px of arc per chevron, roughly — the count is rounded to an ODD number
  *  so one always sits on the midpoint and the rest pair off around it. */
 export const ARROW_SPACING = 130;
-/** A wire with less arc than this carries no chevron: it would be all arrow. */
+/** The shortest arc the Output→preview LINK puts a chevron on (scaled to its
+ *  own arrow size, previewLinkGeometry.ts). Canvas wires have NO minimum: every
+ *  still wire carries at least one, even at zero length (owner, 2026-10-17) —
+ *  a wire whose direction you cannot read is the thing the chevrons exist to
+ *  prevent, and two nodes butted together are exactly where it goes unread. */
 export const ARROW_MIN_ARC = 36;
 /** How far a chevron's arms reach past the ribbon's own edge, each side. */
 export const ARROW_FLARE = 2.75;
@@ -129,7 +153,9 @@ function cubicSlope(p0: number, p1: number, p2: number, p3: number, t: number): 
 
 /** Point and unit tangent of one segment at parameter t. A vanishing
  *  derivative (a control point sitting on its endpoint) falls back to the
- *  chord, so the mark still points somewhere sensible. */
+ *  chord, so the mark still points somewhere sensible; a segment with NO
+ *  length at all (two sockets on one spot) points +x, source → target, the way
+ *  a wire leaves an output socket on a node's right edge. */
 export function bezierMarkAt(seg: BezierSegment, t: number): ArrowMark {
   const [p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y] = seg;
   const x = cubicAt(p0x, c1x, c2x, p3x, t);
@@ -137,7 +163,8 @@ export function bezierMarkAt(seg: BezierSegment, t: number): ArrowMark {
   let dx = cubicSlope(p0x, c1x, c2x, p3x, t);
   let dy = cubicSlope(p0y, c1y, c2y, p3y, t);
   let len = Math.hypot(dx, dy);
-  if (!(len > 1e-9)) { dx = p3x - p0x; dy = p3y - p0y; len = Math.hypot(dx, dy) || 1; }
+  if (!(len > 1e-9)) { dx = p3x - p0x; dy = p3y - p0y; len = Math.hypot(dx, dy); }
+  if (!(len > 1e-9)) return { x, y, ux: 1, uy: 0 };
   return { x, y, ux: dx / len, uy: dy / len };
 }
 
@@ -145,14 +172,19 @@ export function bezierMarkAt(seg: BezierSegment, t: number): ArrowMark {
  * Where a still wire's chevrons go: evenly along the ARC LENGTH of the chain
  * `segs` (one segment, or a waypoint spline's several), an odd count about
  * `spacing` apart so the middle one always sits on the midpoint, none on an
- * arc shorter than `minArc`, and never more than ARROW_MAX. Never throws: a
- * non-finite endpoint yields [].
+ * arc shorter than `minArc`, and never more than ARROW_MAX. `minArc` defaults
+ * to 0 — a canvas wire ALWAYS carries one, even at zero length; only the
+ * preview link passes a minimum. Never throws: a non-finite endpoint yields [].
  */
 export function arrowMarks(
   segs: readonly BezierSegment[],
   spacing: number = ARROW_SPACING,
-  minArc: number = ARROW_MIN_ARC,
+  minArc: number = 0,
 ): ArrowMark[] {
+  // No curve, no mark — and with `minArc` 0 an empty chain would otherwise
+  // pass the length test and index a segment that is not there (a throw in
+  // render blanks the app).
+  if (segs.length === 0) return [];
   // Cumulative chord length at the end of every chord, segment after segment.
   const cum: number[] = [];
   let total = 0;
@@ -203,6 +235,82 @@ export function chevronPath(marks: readonly ArrowMark[], half: number, depth: nu
   return d;
 }
 
+/* ---------------- the value chip's anchor ---------------- */
+
+/** An axis-aligned box in flow coordinates: the part of the canvas on screen. */
+export interface FlowRect { x0: number; y0: number; x1: number; y1: number }
+
+/** Chords per segment for the visible-midpoint walk — finer than ARC_STEPS
+ *  because the clip is per chord, so a coarse chord would snap the chip a few
+ *  px as the wire slides past the viewport edge. */
+const MID_STEPS = 32;
+
+/**
+ * Where a selected wire's value chip sits: the arc-length MIDPOINT of the part
+ * of the chain `segs` that lies inside `view` — the middle of the wire as the
+ * user sees it, not of the whole curve, so a wire running off-screen keeps its
+ * chip in view. A wire wholly inside `view` gets its plain arc midpoint. Each
+ * chord is clipped to the box (Liang–Barsky) and the walk advances only along
+ * the clipped pieces, so the result always lies ON a visible stretch, even for
+ * a wire that leaves the screen and comes back. A `view` that is null or empty
+ * (React Flow not measured yet) clips nothing. Null when no part of the wire is
+ * on screen, or for a non-finite chain. Never throws.
+ */
+export function visibleArcMidpoint(
+  segs: readonly BezierSegment[],
+  view: FlowRect | null,
+): [number, number] | null {
+  const clip = view && view.x1 > view.x0 && view.y1 > view.y0 ? view : null;
+  // Visible pieces as [ax, ay, bx, by, length].
+  const pieces: Array<[number, number, number, number, number]> = [];
+  let total = 0;
+  for (const [p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y] of segs) {
+    let px = p0x, py = p0y;
+    for (let i = 1; i <= MID_STEPS; i++) {
+      const t = i / MID_STEPS;
+      const x = cubicAt(p0x, c1x, c2x, p3x, t);
+      const y = cubicAt(p0y, c1y, c2y, p3y, t);
+      const piece = clip ? clipChord(px, py, x, y, clip) : [px, py, x, y] as const;
+      if (piece) {
+        const len = Math.hypot(piece[2] - piece[0], piece[3] - piece[1]);
+        if (len > 0) { pieces.push([piece[0], piece[1], piece[2], piece[3], len]); total += len; }
+      }
+      px = x; py = y;
+    }
+  }
+  if (!(total > 0) || !Number.isFinite(total)) return null;
+  let s = total / 2;
+  for (const [ax, ay, bx, by, len] of pieces) {
+    if (s <= len) {
+      const f = s / len;
+      return [ax + (bx - ax) * f, ay + (by - ay) * f];
+    }
+    s -= len;
+  }
+  const last = pieces[pieces.length - 1];
+  return [last[2], last[3]];
+}
+
+/** The part of the chord a→b inside `r`, or null when it misses the box. */
+function clipChord(
+  ax: number, ay: number, bx: number, by: number, r: FlowRect,
+): readonly [number, number, number, number] | null {
+  const dx = bx - ax, dy = by - ay;
+  let t0 = 0, t1 = 1;
+  const p = [-dx, dx, -dy, dy];
+  const q = [ax - r.x0, r.x1 - ax, ay - r.y0, r.y1 - ay];
+  for (let i = 0; i < 4; i++) {
+    if (p[i] === 0) {
+      if (q[i] < 0) return null;
+      continue;
+    }
+    const u = q[i] / p[i];
+    if (p[i] < 0) { if (u > t1) return null; if (u > t0) t0 = u; }
+    else { if (u < t0) return null; if (u < t1) t1 = u; }
+  }
+  return [ax + dx * t0, ay + dy * t0, ax + dx * t1, ay + dy * t1];
+}
+
 /**
  * Convert a poly-line of points into a chain of smooth cubic bezier segments
  * using a (clamped) Catmull-Rom spline: the curve passes THROUGH every point,
@@ -241,18 +349,13 @@ function hypot(a: { x: number; y: number }, b: { x: number; y: number }): number
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+type Pt = { x: number; y: number };
+
 /**
- * Insert a new routing waypoint `p` into `waypoints` at the position that adds
- * the least detour to the poly-line source → …waypoints… → target. Returns a new
- * array (never mutates). Ordering by minimum added length keeps a freshly-placed
- * point on the visually-correct part of the wire regardless of click order.
+ * Where in `waypoints` a new point `p` belongs: the index that adds the least
+ * detour to the poly-line source → …waypoints… → target.
  */
-export function insertWaypointOrdered(
-  source: { x: number; y: number },
-  target: { x: number; y: number },
-  waypoints: Array<{ x: number; y: number }>,
-  p: { x: number; y: number },
-): Array<{ x: number; y: number }> {
+function waypointInsertIndex(source: Pt, target: Pt, waypoints: readonly Pt[], p: Pt): number {
   const pts = [source, ...waypoints, target];
   let bestIdx = 0;
   let bestCost = Infinity;
@@ -265,9 +368,44 @@ export function insertWaypointOrdered(
       bestIdx = i;
     }
   }
+  return bestIdx;
+}
+
+/**
+ * Insert a new routing waypoint `p` into `waypoints` at the position that adds
+ * the least detour to the poly-line source → …waypoints… → target. Returns a new
+ * array (never mutates). Ordering by minimum added length keeps a freshly-placed
+ * point on the visually-correct part of the wire regardless of click order.
+ */
+export function insertWaypointOrdered(
+  source: Pt,
+  target: Pt,
+  waypoints: Array<Pt>,
+  p: Pt,
+): Array<Pt> {
   const next = waypoints.slice();
-  next.splice(bestIdx, 0, { x: p.x, y: p.y });
+  next.splice(waypointInsertIndex(source, target, waypoints, p), 0, { x: p.x, y: p.y });
   return next;
+}
+
+/**
+ * Share one wire's routing points between the two halves a node spliced onto it
+ * leaves behind. The node's `center` sits at the position it would take as a
+ * waypoint, so what lies before it stays with the source half and what lies
+ * after goes with the target half. Points within `radius` of the node are
+ * DISSOLVED — they would sit under the card or kink the new wires into it —
+ * and every other point is kept exactly. Never mutates.
+ */
+export function splitWaypointsAtNode(
+  source: Pt,
+  target: Pt,
+  waypoints: readonly Pt[],
+  center: Pt,
+  radius: number,
+): { before: Pt[]; after: Pt[] } {
+  const k = waypointInsertIndex(source, target, waypoints, center);
+  const far = (w: Pt) => hypot(w, center) > radius;
+  return { before: waypoints.slice(0, k).filter(far), after: waypoints.slice(k).filter(far) };
 }
 
 /** Minimum distance from (px,py) to a Catmull-Rom spline through `pts`. */

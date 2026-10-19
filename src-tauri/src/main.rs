@@ -24,6 +24,7 @@ fn main() {
             work_folder::work_folder_status,
             work_folder::work_folder_pick,
             work_folder::work_folder_forget,
+            work_folder::work_folder_open,
             work_folder::work_folder_list,
             work_folder::work_folder_read,
             work_folder::work_folder_write_bytes,

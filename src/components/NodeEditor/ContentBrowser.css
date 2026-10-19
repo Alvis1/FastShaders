@@ -161,9 +161,27 @@
   background: rgba(255, 255, 255, 0.06);
 }
 
-/* Active tab: connected to the page below — border on top/sides, no bottom border */
+/* Every tab reserves its BOLD width (an invisible bold copy of its own label,
+   `data-label`), so the active tab's weight change never shifts its
+   neighbours along the row. */
+.content-browser__cat-btn::after {
+  content: attr(data-label);
+  display: block;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+/* Active tab: connected to the page below — border on top/sides, no bottom
+   border — and TALLER and bold, so the chosen tab reads at a glance. The row
+   bottom-aligns its tabs, so the extra top padding raises the active one alone
+   (exactly one tab is always active, so the row's own height never moves). */
 .content-browser__cat-btn--active {
   color: var(--text-primary);
+  font-weight: 700;
+  padding-top: 9px;
   border-color: var(--border-subtle);
   border-bottom-color: transparent;
 }

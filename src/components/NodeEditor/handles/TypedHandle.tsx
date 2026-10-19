@@ -5,7 +5,7 @@ import type { TSLDataType } from '@/types';
 import { channelTypeName } from '@/types';
 import { getTypeColor } from '@/utils/colorUtils';
 import { useAppStore } from '@/store/useAppStore';
-import { portLabel } from '@/i18n';
+import { portLabel, type Language } from '@/i18n';
 import './TypedHandle.css';
 
 interface TypedHandleProps {
@@ -81,6 +81,34 @@ export function TypedHandle({ type, position, id, dataType, label, style, reveal
   const handleTapPointerCancel = useCallback(() => {
     ownTapClearRef.current?.();
   }, []);
+  const language = useAppStore((s) => s.language);
+  return (
+    <Handle
+      type={type}
+      position={position}
+      id={id}
+      className={`typed-handle${reveal ? ' typed-handle--reveal' : ''}${tapped ? ' typed-handle--tapped' : ''}`}
+      style={{ background: getTypeColor(dataType), ...style }}
+      onPointerDown={handleTapPointerDown}
+      onPointerCancel={handleTapPointerCancel}
+      isConnectableStart
+      {...{ 'data-tooltip': socketTooltip(label ?? id, dataType, channels, language) }}
+    />
+  );
+}
+
+/**
+ * A socket's label text — its name, then the TSL type it takes or receives.
+ * The ONE spelling: the canvas handle above and the intro's inert replica
+ * sockets (NodePreviewCard's CardSocket) both read it, so the label a viewer
+ * learns in the intro is the label the canvas shows.
+ */
+export function socketTooltip(
+  label: string,
+  dataType: TSLDataType,
+  channels: number | null | undefined,
+  language: Language,
+): string {
   // A color IS a vec3 — the evaluator already counts it as 3 channels, so a
   // CONNECTED color reads "vec3". Normalise the declared name to match, or the
   // same socket would say "color" empty and "vec3" wired.
@@ -93,19 +121,6 @@ export function TypedHandle({ type, position, id, dataType, label, style, reveal
   // Socket display name is translated (Latvian mode); the appended TSL type
   // (vec3, float…) stays canonical. `id` fallbacks (e.g. 'a', 'x') have no
   // translation so portLabel returns them unchanged.
-  const language = useAppStore((s) => s.language);
-  const name = portLabel(label ?? id, language);
-  return (
-    <Handle
-      type={type}
-      position={position}
-      id={id}
-      className={`typed-handle${reveal ? ' typed-handle--reveal' : ''}${tapped ? ' typed-handle--tapped' : ''}`}
-      style={{ background: getTypeColor(dataType), ...style }}
-      onPointerDown={handleTapPointerDown}
-      onPointerCancel={handleTapPointerCancel}
-      isConnectableStart
-      {...{ 'data-tooltip': typeName ? `${name} · ${typeName}` : name }}
-    />
-  );
+  const name = portLabel(label, language);
+  return typeName ? `${name} · ${typeName}` : name;
 }

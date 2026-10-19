@@ -1,7 +1,7 @@
 import { useAppStore } from '@/store/useAppStore';
-import { t, portLabel } from '@/i18n';
+import { t, portLabel, type Language } from '@/i18n';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import type { MaterialSettings, OutputNodeData, AppNode, AppEdge } from '@/types';
+import type { MaterialSettings, OutputNodeData, AppNode, AppEdge, NodeDefinition } from '@/types';
 import { outputNodeValues } from '@/types';
 import { removeEdgesForPort, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { OUTPUT_DEFAULT_EXPOSED, toggleExposedPort } from '@/utils/exposedPorts';
@@ -26,6 +26,52 @@ import { graphTextureMemory, textureMemoryLine, TEXTURE_MEMORY_HINT_KEY } from '
  *  inputs). Color is excluded (always exposed) and Opacity is excluded —
  *  it's auto-managed by transparent/alphaTest. */
 const OPTIONAL_OUTPUT_PORTS = ['emissive', 'roughness', 'metalness', 'discard', 'normal', 'env'];
+
+/**
+ * The pixel stage's channel switches — one checkbox per optional Output
+ * socket. The menu below owns the writes; the intro window's stage draws the
+ * same rows inert (intro/ExposeScene.tsx).
+ */
+export function OutputPortToggles({
+  outputDef,
+  exposed,
+  onToggle,
+  language,
+  inert = false,
+}: {
+  outputDef: NodeDefinition;
+  exposed: ReadonlySet<string>;
+  onToggle: (portId: string) => void;
+  language: Language;
+  /** A picture of the rows: nothing focusable. */
+  inert?: boolean;
+}) {
+  return (
+    <>
+      {OPTIONAL_OUTPUT_PORTS.map((portId) => {
+        const port = outputDef.inputs.find((p) => p.id === portId);
+        if (!port) return null;
+        return (
+          <label
+            key={portId}
+            style={labelStyle}
+            title={port.description ? t(port.description, language) : undefined}
+          >
+            <input
+              type="checkbox"
+              checked={exposed.has(portId)}
+              onChange={() => onToggle(portId)}
+              style={checkboxStyle}
+              tabIndex={inert ? -1 : undefined}
+              data-port={portId}
+            />
+            {portLabel(port.label, language)}
+          </label>
+        );
+      })}
+    </>
+  );
+}
 
 /** One-entry memo on the RAW store arrays. The selector below runs on every
  *  store notification (hover writes included), but the figure can only change
@@ -268,27 +314,7 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
       <div className="context-menu__divider" />
       <div className="context-menu__category">{t('Pixel (Fragment) Shader', language)}</div>
       {outputDef && (
-        <>
-          {OPTIONAL_OUTPUT_PORTS.map((portId) => {
-            const port = outputDef.inputs.find((p) => p.id === portId);
-            if (!port) return null;
-            return (
-              <label
-                key={portId}
-                style={labelStyle}
-                title={port.description ? t(port.description, language) : undefined}
-              >
-                <input
-                  type="checkbox"
-                  checked={exposedSet.has(portId)}
-                  onChange={() => handleTogglePort(portId)}
-                  style={checkboxStyle}
-                />
-                {portLabel(port.label, language)}
-              </label>
-            );
-          })}
-        </>
+        <OutputPortToggles outputDef={outputDef} exposed={exposedSet} onToggle={handleTogglePort} language={language} />
       )}
 
       {/* WHICH material these settings belong to — a static scope LINE, not a

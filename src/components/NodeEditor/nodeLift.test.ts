@@ -266,7 +266,7 @@ describe('a wire under the pointer', () => {
     // thickening strokes on their own closes those gaps and fuses a 4-channel
     // ribbon into one band — the highlight would destroy the channel count it
     // is highlighting. `boost` feeds both widths and offsets.
-    expect(edgeSrc).toContain('const offsets = getOffsets(count).map((d) => d * boost);');
+    expect(edgeSrc).toContain('const offsets = ribbonOffsets(count).map((d) => d * boost);');
     // …and no CSS shortcut has grown beside it. The edge rules live in
     // NodeEditor.css (there is no TypedEdge.css), and a `:hover` stroke-width
     // there would be exactly the fuse-the-ribbon bug, invisible on the

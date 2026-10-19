@@ -278,6 +278,32 @@ pub fn work_folder_forget(
     Ok(())
 }
 
+/// Show the linked folder in the OS file manager. The webview passes NOTHING —
+/// the path is the one Rust already holds, so there is no argument to forge —
+/// and the folder is handed to the platform's own opener as a single argv
+/// entry (never through a shell). `async` so the spawn never rides the main
+/// thread; the child is not waited on (`explorer` exits non-zero on success).
+#[tauri::command]
+pub async fn work_folder_open(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WorkFolderState>,
+) -> Result<(), String> {
+    let Some(root) = resolve_root(&app, &state)? else {
+        return Err(NO_FOLDER.into());
+    };
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(target_os = "windows")]
+    let opener = "explorer";
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let opener = "xdg-open";
+    std::process::Command::new(opener)
+        .arg(&root)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("could not open the folder: {e}"))
+}
+
 /// `async` (like every command below that touches files): sync commands run
 /// on the main thread, and a folder of multi-MB exports — or a network drive —
 /// would freeze the whole window for the duration of the reads.

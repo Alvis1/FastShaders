@@ -1,11 +1,41 @@
 import { useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
+import { useStore as useReactFlowStore, type ReactFlowState } from '@xyflow/react';
 import { useAppStore } from '@/store/useAppStore';
 import { COUNT_CARD_COLORS, COUNT_LABELS } from '@/utils/colorUtils';
 import { appTime } from '@/utils/appClock';
 import { useFrameLoop } from '@/hooks/useFrameLoop';
 import { evaluateEdgeRange, getEdgeOutputShape, getTimeUpstreamSet, type RangeResult } from '@/engine/cpuEvaluator';
+import { visibleArcMidpoint, type BezierSegment } from './bezierGeometry';
 import './EdgeInfoCard.css';
+
+/** Screen px kept clear between the chip's anchor and the canvas border, so a
+ *  wire running off-screen keeps its chip readable rather than half-cut. */
+const VIEW_INSET_PX = 28;
+
+/**
+ * The chip's anchor for the current viewport, as a primitive "x,y" string
+ * (flow coordinates, 0.1 px) — or '' when no part of the wire is on screen.
+ * Computed IN the React Flow selector so a pan that leaves the anchor where
+ * it is (a wire wholly on screen) re-renders nothing.
+ */
+function anchorFor(segs: readonly BezierSegment[], s: ReactFlowState): string {
+  const [tx, ty, zoom] = s.transform;
+  const inset = VIEW_INSET_PX / (zoom || 1);
+  const x0 = -tx / zoom, y0 = -ty / zoom;
+  const x1 = (s.width - tx) / zoom, y1 = (s.height - ty) / zoom;
+  // A canvas too small for the inset clips to its own border instead.
+  const full = { x0, y0, x1, y1 };
+  const inner = x1 - x0 > 2 * inset && y1 - y0 > 2 * inset
+    ? { x0: x0 + inset, y0: y0 + inset, x1: x1 - inset, y1: y1 - inset }
+    : full;
+  // A wire that shows only inside the inset band anchors there; one wholly
+  // off-screen keeps its plain arc midpoint (out of sight either way).
+  const m = visibleArcMidpoint(segs, inner)
+    ?? visibleArcMidpoint(segs, full)
+    ?? visibleArcMidpoint(segs, null);
+  return m ? `${Math.round(m[0] * 10) / 10},${Math.round(m[1] * 10) / 10}` : '';
+}
 
 /**
  * Same bounds, channel for channel — a tick that would re-render the chip to
@@ -26,17 +56,18 @@ interface EdgeInfoCardProps {
    *  the channel THIS wire carries, not the node's whole vector. */
   sourceHandle?: string | null;
   targetId: string;
-  labelX: number;
-  labelY: number;
+  /** The wire's centreline. The chip sits at the middle of the part of it
+   *  that is ON SCREEN (visibleArcMidpoint), not of the whole curve. */
+  segs: readonly BezierSegment[];
 }
 
 export function EdgeInfoCard({
   sourceId,
   sourceHandle,
   targetId,
-  labelX,
-  labelY,
+  segs,
 }: EdgeInfoCardProps) {
+  const anchor = useReactFlowStore((s) => anchorFor(segs, s));
   const nodes = useAppStore((s) => s.nodes);
   const edges = useAppStore((s) => s.edges);
   const sourceNode = nodes.find((n) => n.id === sourceId);
@@ -98,7 +129,8 @@ export function EdgeInfoCard({
     [sourceId, sourceHandle, isTimeDriven],
   );
 
-  if (!sourceNode || !targetNode) return null;
+  if (!sourceNode || !targetNode || !anchor) return null;
+  const [labelX, labelY] = anchor.split(',');
 
   // Channel count: prefer the range result's length (it knows about texture-derived
   // shapes), and fall back to static shape inference for nodes the range evaluator

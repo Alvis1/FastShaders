@@ -56,10 +56,17 @@ const pageCss = readFileSync(
   'utf8',
 );
 
+/** The intro window stages the same cards at canvas size (src/intro/). */
+const introCss = readFileSync(
+  fileURLToPath(new URL('../../intro/IntroWindow.css', import.meta.url)),
+  'utf8',
+);
+
 /** Stylesheets that draw an asset card, keyed by the file the failure names. */
 const CARD_STYLESHEETS: { file: string; source: string }[] = [
   { file: 'NodePreviewCard.css', source: css },
   { file: 'Graphs/GraphsPage.css', source: pageCss },
+  { file: 'intro/IntroWindow.css', source: introCss },
 ];
 
 /** Class prefixes owned by a NODE's own stylesheet — off limits to the card. */

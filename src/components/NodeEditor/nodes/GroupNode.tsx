@@ -1,11 +1,33 @@
-import { memo, useEffect, type MouseEvent } from 'react';
+import { memo, useEffect, type MouseEvent, type ReactNode } from 'react';
 import { NodeResizeControl, Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import type { GroupFlowNode } from '@/types';
 import { useAppStore, MIN_GROUP_W, MIN_GROUP_H } from '@/store/useAppStore';
 import { getGroupFrameColors } from '@/utils/colorUtils';
-import { assetText, t } from '@/i18n';
+import { assetText, t, type Language } from '@/i18n';
 import { TypedHandle } from '../handles/TypedHandle';
 import './GroupNode.css';
+
+/**
+ * A frame's coloured header strip and its name — the canvas group's, and the
+ * intro window's (intro/BudgetScene.tsx), which draws a frame without React
+ * Flow. `children` is the +/− control: a button here, an inert mark there.
+ */
+export function GroupHeader({ data, language, children }: {
+  data: Pick<GroupFlowNode['data'], 'label' | 'color' | 'titleSize'>;
+  language: Language;
+  children: ReactNode;
+}) {
+  const color = data.color ?? '#6366f1';
+  return (
+    <div
+      className="group-node__header"
+      style={{ background: color, height: data.titleSize && data.titleSize > 1 ? 22 * data.titleSize : undefined }}
+    >
+      <span className="group-node__label" style={data.titleSize && data.titleSize > 1 ? { fontSize: `calc(var(--font-size-xs) * ${data.titleSize})` } : undefined}>{typeof data.label === 'string' && data.label ? assetText(data.label, language) : t('Group', language)}</span>
+      {children}
+    </div>
+  );
+}
 
 /**
  * Group node — a labeled, colored frame that holds member nodes via React Flow's
@@ -104,11 +126,7 @@ export const GroupNode = memo(function GroupNode({
           style={{ width: 15, height: 15, borderRadius: 0, border: '2px solid #fff' }}
         />
       )}
-      <div
-        className="group-node__header"
-        style={{ background: color, height: data.titleSize && data.titleSize > 1 ? 22 * data.titleSize : undefined }}
-      >
-        <span className="group-node__label" style={data.titleSize && data.titleSize > 1 ? { fontSize: `calc(var(--font-size-xs) * ${data.titleSize})` } : undefined}>{typeof data.label === 'string' && data.label ? assetText(data.label, language) : t('Group', language)}</span>
+      <GroupHeader data={data} language={language}>
         <button
           type="button"
           className="group-node__toggle nodrag"
@@ -119,7 +137,7 @@ export const GroupNode = memo(function GroupNode({
         >
           {collapsed ? '+' : '\u2212'}
         </button>
-      </div>
+      </GroupHeader>
 
       {/* Cost badge above the collapsed pill — same styling as regular nodes,
           driven by the sum of member costs cached on the group at collapse time. */}

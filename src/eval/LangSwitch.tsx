@@ -1,8 +1,9 @@
 import { useAppStore } from '@/store/useAppStore';
 
-/** The study dialogs' own EN/LV switch: they are modal, so the toolbar's button
- *  is unreachable behind the backdrop. It names the language it switches TO.
- *  `disabled` freezes it while the questionnaire packs its answers. */
+/** The study dialogs' own EN/LV switch, and the intro window's: they are
+ *  modal, so the toolbar's button is unreachable behind the backdrop. It names
+ *  the language it switches TO. `disabled` freezes it while the questionnaire
+ *  packs its answers. */
 export function LangSwitch({ disabled = false }: { disabled?: boolean }) {
   const lv = useAppStore((s) => s.language) === 'lv';
   const setLanguage = useAppStore((s) => s.setLanguage);

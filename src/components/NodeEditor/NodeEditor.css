@@ -231,6 +231,17 @@
   border-radius: var(--border-radius-md);
 }
 
+/* Every wire draws UNDER every node. React Flow gives each edge its own <svg>
+   with an inline z-index, and lifts an edge touching a GROUP MEMBER to that
+   member's z (getElevatedEdgeZIndex: parent 0 → member 1, a selected member
+   1000+), so a grouped wire painted over every ungrouped card it crossed.
+   Pinned at 0, the edge layer — earlier in the DOM than the nodes layer — sits
+   under every node at z >= 0 and still above group frames (-1, GroupNode.css).
+   `!important` beats the inline style. */
+.node-editor .react-flow__edges > svg {
+  z-index: 0 !important;
+}
+
 /* Lift the node that OWNS the highlighted target socket above the other node,
    so the ringed socket (.fs-connect-socket) and its name tooltip are never
    hidden. In feed-hover that's the hovered node (the dragged node slides

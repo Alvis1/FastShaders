@@ -21,6 +21,7 @@ import { makeTypedEdge } from './utils/edgeUtils';
 import { readStoredViewport } from './utils/viewportMemory';
 import { lazyOr } from './utils/lazyOr';
 import { t } from './i18n';
+import { INTRO_OPEN_EVENT, shouldShowIntro } from './intro/introGate';
 /**
  * The study STYLESHEET stays eager even though every module that draws with it
  * is now lazy, and that is not an oversight.
@@ -92,6 +93,16 @@ function EvalGateUnavailable() {
 const EvalGate = lazyOr(
   () => import('./eval/EvalGate').then((m) => m.EvalGate),
   EvalGateUnavailable,
+);
+
+/**
+ * The intro window, a lazy chunk fetched only on a boot that shows it (the
+ * first one, or `?intro`). A failed fetch shows nothing — the intro is
+ * optional, and a broken one must never stand in front of the app.
+ */
+const IntroWindow = lazyOr<{ onClose: () => void }>(
+  () => import('./intro/IntroWindow').then((m) => m.IntroWindow),
+  () => null,
 );
 
 /**
@@ -265,6 +276,15 @@ export default function App() {
   const initialized = useRef(false);
   // Desktop only: the file-store read runs before the graph is seeded.
   const [desktopBooting, setDesktopBooting] = useState<boolean>(__FS_DESKTOP__);
+  // Decided once, at the first render (intro/introGate.ts); the toolbar's
+  // "i" button opens it again (never drawn in a study session).
+  const [introOpen, setIntroOpen] = useState(() => shouldShowIntro(isEvalMode()));
+  useEffect(() => {
+    if (isEvalMode()) return;
+    const open = () => setIntroOpen(true);
+    window.addEventListener(INTRO_OPEN_EVENT, open);
+    return () => window.removeEventListener(INTRO_OPEN_EVENT, open);
+  }, []);
 
   // A file dropped where nothing handles it is a NO-OP, never a navigation —
   // Chromium's default is to open the file, which throws the unsaved graph
@@ -336,6 +356,12 @@ export default function App() {
       )}
       <AppLayout />
       {desktopBooting && <DesktopBootOverlay />}
+      {introOpen && !desktopBooting && (
+        <Suspense fallback={null}>
+          {/* The window writes its own "Don't show this again" on close. */}
+          <IntroWindow onClose={() => setIntroOpen(false)} />
+        </Suspense>
+      )}
     </ReactFlowProvider>
   );
 }

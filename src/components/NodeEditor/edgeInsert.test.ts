@@ -79,6 +79,44 @@ describe('spliceNodeIntoEdge', () => {
   });
 });
 
+describe('spliceNodeIntoEdge — routing points', () => {
+  // a sits at the origin, b far right; the wire carries points at x = 100, 350, 450, 700 (350 and 450 lie inside the node's reach).
+  function seedRouted() {
+    const a = makeNode('a', 'float');
+    const b = makeNode('b', 'float');
+    const m = makeNode('m', 'mul');
+    a.position = { x: 0, y: 0 };
+    b.position = { x: 800, y: 0 };
+    m.position = { x: 340, y: -20 }; // centre ≈ (400, 0)
+    const e = makeEdge('a', 'out', 'b', 'x');
+    e.data = { dataType: 'any', waypoints: [100, 350, 450, 700].map((x) => ({ x, y: 0 })) };
+    useAppStore.setState({ nodes: [a, b, m], edges: [e] });
+    return e.id;
+  }
+
+  it('keeps the points outside the node\'s reach, split across the two new wires', () => {
+    spliceNodeIntoEdge('m', def('mul'), seedRouted());
+    const edges = useAppStore.getState().edges;
+    const xs = (e: typeof edges[number] | undefined) =>
+      ((e?.data?.waypoints ?? []) as { x: number }[]).map((w) => w.x);
+    expect(xs(edges.find((e) => e.target === 'm'))).toEqual([100]);
+    expect(xs(edges.find((e) => e.source === 'm'))).toEqual([700]);
+  });
+
+  it('dissolves the points close around the node', () => {
+    spliceNodeIntoEdge('m', def('mul'), seedRouted());
+    const all = useAppStore.getState().edges.flatMap((e) => (e.data?.waypoints ?? []) as { x: number }[]);
+    expect(all.map((w) => w.x).sort((p, q) => p - q)).toEqual([100, 700]);
+  });
+
+  it('adds no waypoints key to a wire that had none', () => {
+    seed();
+    const id = useAppStore.getState().edges[0].id;
+    spliceNodeIntoEdge('m', def('mul'), id);
+    for (const e of useAppStore.getState().edges) expect(e.data?.waypoints).toBeUndefined();
+  });
+});
+
 describe('the two surfaces that splice (source pins)', () => {
   const read = (f: string) => readFileSync(new URL(f, import.meta.url), 'utf8');
 

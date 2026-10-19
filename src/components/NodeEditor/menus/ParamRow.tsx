@@ -1,5 +1,6 @@
 import { useAppStore } from '@/store/useAppStore';
-import { t } from '@/i18n';
+import type { ReactNode } from 'react';
+import { t, type Language } from '@/i18n';
 import { getNodeValues, getNodeExposedPorts } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { DragNumberInput } from '../inputs/DragNumberInput';
@@ -117,19 +118,11 @@ export function ParamRow({ nodeId, paramKey, label }: ParamRowProps) {
   const isExposed = exposedPorts.includes(paramKey);
 
   return (
-    <div style={rowStyle}>
-      <label style={checkLabelStyle}>
-        {showPortToggle && (
-          <input
-            type="checkbox"
-            checked={isExposed}
-            onChange={() => handleTogglePort(paramKey)}
-            title={t('Expose as input socket', language)}
-            style={checkStyle}
-          />
-        )}
-        {label ?? paramKey}
-      </label>
+    <ParamRowView
+      toggle={showPortToggle ? { exposed: isExposed, onToggle: () => handleTogglePort(paramKey) } : null}
+      label={label ?? paramKey}
+      language={language}
+    >
       {isPropertyName ? (
         <input
           type="text"
@@ -157,6 +150,45 @@ export function ParamRow({ nodeId, paramKey, label }: ParamRowProps) {
           }}
         />
       )}
+    </ParamRowView>
+  );
+}
+
+/**
+ * The row as drawn: the expose-as-socket checkbox (when the node has opt-in
+ * sockets), the label, and the control. ParamRow owns the store; the intro
+ * window's stage draws the same row inert (intro/ExposeScene.tsx).
+ */
+export function ParamRowView({
+  toggle,
+  label,
+  language,
+  inert = false,
+  children,
+}: {
+  toggle: { exposed: boolean; onToggle: () => void } | null;
+  label: string;
+  language: Language;
+  /** A picture of the row: nothing focusable. */
+  inert?: boolean;
+  children?: ReactNode;
+}) {
+  return (
+    <div style={rowStyle}>
+      <label style={checkLabelStyle}>
+        {toggle && (
+          <input
+            type="checkbox"
+            checked={toggle.exposed}
+            onChange={toggle.onToggle}
+            title={t('Expose as input socket', language)}
+            style={checkStyle}
+            tabIndex={inert ? -1 : undefined}
+          />
+        )}
+        {label}
+      </label>
+      {children}
     </div>
   );
 }

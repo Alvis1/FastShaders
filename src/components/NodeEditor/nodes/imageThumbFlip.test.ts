@@ -15,8 +15,9 @@ describe('the Image node card shows its flips', () => {
   it('mirrors the thumbnail per axis', () => {
     // A checkbox in a menu you have to close before you can see its effect is
     // a guess; the card is where the picture is.
-    expect(SHADER_NODE).toMatch(/flipThumbX = valueNum\(data\.values\?\.flipX \?\? 0\) >= 0\.5/);
-    expect(SHADER_NODE).toMatch(/flipThumbY = valueNum\(data\.values\?\.flipY \?\? 0\) >= 0\.5/);
+    // ImageCardPicture — the ONE picture block, the canvas's and every replica's.
+    expect(SHADER_NODE).toMatch(/flipThumbX = valueNum\(values\?\.flipX \?\? 0\) >= 0\.5/);
+    expect(SHADER_NODE).toMatch(/flipThumbY = valueNum\(values\?\.flipY \?\? 0\) >= 0\.5/);
     expect(SHADER_NODE).toMatch(/transform: `scale\(\$\{flipThumbX \? -1 : 1\}, \$\{flipThumbY \? -1 : 1\}\)`/);
   });
 
@@ -67,7 +68,7 @@ describe('the Image node card shows Nearest filtering', () => {
     // a blur the shader never draws. Both sides read the same exact string;
     // codegen places each image through the texture planner, which reads it
     // through the ONE texture-spec normaliser.
-    expect(SHADER_NODE).toMatch(/const nearestThumb = data\.values\?\.filter === 'nearest';/);
+    expect(SHADER_NODE).toMatch(/const nearestThumb = values\?\.filter === 'nearest';/);
     expect(SHADER_NODE).toMatch(/nearestThumb \? \{ imageRendering: 'pixelated' as const \}/);
     // (A picture sampled only as a sky is placed without its glTF orientation — graphToCode imageSampledOnlyAsSky.)
     expect(GRAPH_TO_CODE).toMatch(/imagePlanner\.place\(\s*node\.id,\s*mapping\.orientation === 'gltf' && imageSampledOnlyAsSky\(gidx, node\.id, dirRef !== null\) \? withoutOrientation\(nv\) : nv,\s*\)/);
@@ -96,12 +97,16 @@ describe('the empty image slot', () => {
     // itself — the flip and filter pins above read that element's JSX. Both
     // live INSIDE the port region since 2026-09-19 (nodes/edgePorts.ts): the
     // sockets are centred on that region, so the picture is in it.
-    expect(SHADER_NODE).toMatch(/\{imageThumbUrl \? \(/);
-    expect(SHADER_NODE).toMatch(/\) : \(\s*\/\*[\s\S]*?\*\/\s*<ImageThumbEmpty language=\{language\} \/>/);
+    expect(SHADER_NODE).toMatch(/const url = useMemo\(\(\) => validImageDataUrl\(values\?\.imageB64\), \[values\?\.imageB64\]\);/);
+    expect(SHADER_NODE).toMatch(/\{url \? \(/);
+    expect(SHADER_NODE).toMatch(/\) : \(\s*\/\*[\s\S]*?\*\/\s*<ImageThumbEmpty language=\{language\} hint=\{emptyHint\} \/>/);
+    expect(SHADER_NODE).toMatch(/<ImageCardPicture values=\{data\.values\} language=\{language\} onLoad=/);
   });
 
-  it('is drawn by every replica — a replica never carries a payload', () => {
-    expect(NODE_VISUAL).toMatch(/def\.type === 'imageNode' && <ImageThumbEmpty/);
+  it('is drawn by every replica through the same picture block — a tile carries no payload', () => {
+    // A tile passes no values, so the block falls to the empty slot; the
+    // intro window's stage passes a real payload and gets the real picture.
+    expect(NODE_VISUAL).toMatch(/def\.type === 'imageNode' && <ImageCardPicture values=\{values\}/);
   });
 
   it('is node INK, carries no literal colour, and keeps its title live', () => {

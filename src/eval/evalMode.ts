@@ -36,7 +36,7 @@ export const EVAL_SCHEMA = 'fs-eval-1';
  * package says which wording its participant agreed to. BUMP IT whenever the
  * text changes materially; the per-version history is in docs/dev/eval-mode.md.
  */
-export const CONSENT_TEXT_VERSION = 'consent-9';
+export const CONSENT_TEXT_VERSION = 'consent-10';
 
 /**
  * The two addresses the study app is served from. Only alvismisjuns.lv has
@@ -114,6 +114,9 @@ export interface EvalSessionRecord {
   startedIso: string;
   consentIso: string;
   consentVersion: string;
+  /** The participant ticked "I am 18 or older" — asked in every arm but the
+   *  professional one (`/evalpro`), so ABSENT means "not asked", never "no". */
+  ageConfirmed?: true;
 }
 
 const MAX_FIELD = 200;
@@ -147,7 +150,9 @@ export function readEvalSession(): EvalSessionRecord | null {
   if (id == null || participant == null || startedIso == null || consentIso == null || consentVersion == null) {
     return null;
   }
-  return { id, participant, startedIso, consentIso, consentVersion };
+  const rec: EvalSessionRecord = { id, participant, startedIso, consentIso, consentVersion };
+  if (p.ageConfirmed === true) rec.ageConfirmed = true;
+  return rec;
 }
 
 export function writeEvalSession(rec: EvalSessionRecord): void {

@@ -52,6 +52,11 @@
  * same way the drop-on-edge preview does.
  */
 
+/** Flow-px gap between the two handle anchors when the dropped node snaps
+ *  into place beside the node it just connected to (NodeEditor's
+ *  `connectSnapOffset`; the intro's tour lands the same way). */
+export const CONNECT_SNAP_GAP = 48;
+
 /** A candidate drop target's absolute flow-space bounding box. */
 export interface NodeBox {
   id: string;

@@ -1,14 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import {
   distanceToLink,
+  linkArrows,
   linkControlPoints,
   linkPath,
   pickLinkAt,
   rectCenter,
+  LINK_ARROW_HALF,
+  LINK_ARROW_MIN_ARC,
   LINK_HIT_RADIUS,
   type LinkWire,
   type RectLike,
 } from './previewLinkGeometry';
+import { ARROW_MAX, ARROW_MIN_ARC } from '@/components/NodeEditor/edges/bezierGeometry';
 
 const rect = (left: number, top: number, right: number, bottom: number): RectLike => ({
   left, top, right, bottom,
@@ -76,12 +80,24 @@ describe('previewLinkGeometry', () => {
       expect(c2x).toBeLessThan(ex);
     });
 
-    it('keeps a minimum handle reach for near-vertical links', () => {
-      // dx = 0 → reach floors at 40, so handles still push out from the line.
-      const d = linkPath({ x: 300, y: 0 }, { x: 300, y: 400 });
-      const nums = d.replace('M', '').replace('C', '').trim().split(/\s+/).map(Number);
-      const [, , c1x] = nums;
-      expect(c1x).toBe(340);
+    it('never loops on a short hop — the curve stays inside its own span', () => {
+      // The reach used to floor at 40, so an Output parked within ~40px of the
+      // rail overshot it and curled back, with a chevron sitting on the curl.
+      // Half the span (the canvas wires' rule) cannot overshoot.
+      for (const dx of [0, 6, 18, 39, 80]) {
+        const p = parsePath(linkPath({ x: 300, y: 0 }, { x: 300 + dx, y: 160 }));
+        for (let i = 0; i <= 32; i++) {
+          const x = cubicAt(p.sx, p.c1x, p.c2x, p.ex, i / 32);
+          expect(x, `dx ${dx}, t ${i / 32}`).toBeGreaterThanOrEqual(300 - 1e-9);
+          expect(x, `dx ${dx}, t ${i / 32}`).toBeLessThanOrEqual(300 + dx + 1e-9);
+        }
+      }
+    });
+
+    it('reaches as far as a canvas wire does — half the horizontal span', () => {
+      const { c1, c2 } = linkControlPoints({ x: 100, y: 0 }, { x: 500, y: 300 });
+      expect(c1).toEqual({ x: 300, y: 0 });
+      expect(c2).toEqual({ x: 300, y: 300 });
     });
 
     it('draws through the control points linkControlPoints reports', () => {
@@ -149,22 +165,15 @@ describe('previewLinkGeometry', () => {
       expect(d).toBeGreaterThanOrEqual(0);
     });
 
-    it('handles a near-vertical link, where the reach floors at 40', () => {
+    it('handles a vertical link, which is a straight segment', () => {
+      // No floor, so dx = 0 puts both handles on the line — the hit test must
+      // still find every point of it, and nothing beside it.
       const start = { x: 300, y: 0 };
       const end = { x: 300, y: 400 };
-      const p = parsePath(linkPath(start, end));
-      const x = cubicAt(p.sx, p.c1x, p.c2x, p.ex, 0.5);
-      const y = cubicAt(p.sy, p.c1y, p.c2y, p.ey, 0.5);
-      expect(distanceToLink(start, end, x, y)).toBeLessThan(0.5);
-
-      // The bow is real, and it is NOT measurable at the midpoint: this
-      // S-curve crosses its own chord at t=0.5 (symmetric handles), so the
-      // midpoint sits exactly on the straight line. It has pushed ~11px off
-      // by t=0.25, which is where a chord-based hit test would miss the wire.
-      const x25 = cubicAt(p.sx, p.c1x, p.c2x, p.ex, 0.25);
-      const y25 = cubicAt(p.sy, p.c1y, p.c2y, p.ey, 0.25);
-      expect(x25).toBeGreaterThan(305);
-      expect(distanceToLink(start, end, 300, y25)).toBeGreaterThan(3);
+      for (const t of [0.1, 0.25, 0.5, 0.9]) {
+        expect(distanceToLink(start, end, 300, 400 * t)).toBeLessThan(0.5);
+      }
+      expect(distanceToLink(start, end, 310, 200)).toBeCloseTo(10, 0);
     });
   });
 
@@ -233,6 +242,67 @@ describe('previewLinkGeometry', () => {
 
     it('reports the wire itself, so a caller paints and focuses by its id', () => {
       expect(pickLinkAt([a, b, c], 0, 600)?.wire).toBe(c);
+    });
+  });
+
+  describe('linkArrows (a STILL wire\'s direction chevrons)', () => {
+    /** Each chevron of the `d`, as its tip, its two arm ends and the mark it
+     *  is centred on (half-way between the tip and the arms' midpoint). */
+    const chevrons = (d: string) =>
+      d.split('M').filter(Boolean).map((sub) => {
+        const [a, tip, b] = sub.split('L').map((p) => p.split(',').map(Number));
+        const base = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        return { a, tip, b, mark: [(tip[0] + base[0]) / 2, (tip[1] + base[1]) / 2] };
+      });
+
+    const start = { x: 0, y: 0 };
+    const end = { x: 400, y: 200 };
+
+    it('sits on the drawn curve, pointing toward the rail', () => {
+      const marks = chevrons(linkArrows(start, end));
+      expect(marks.length).toBeGreaterThan(0);
+      for (const c of marks) {
+        expect(distanceToLink(start, end, c.mark[0], c.mark[1])).toBeLessThan(0.5);
+        // The tip leads the arms toward the end — the wire's direction.
+        expect(c.tip[0]).toBeGreaterThan((c.a[0] + c.b[0]) / 2);
+        // Sized from the one constant: the arms span the chevron's full height.
+        expect(Math.hypot(c.a[0] - c.b[0], c.a[1] - c.b[1])).toBeCloseTo(2 * LINK_ARROW_HALF, 1);
+      }
+    });
+
+    it('is an ODD count with one on the midpoint — and none on the rail end', () => {
+      // The S-curve is point-symmetric about the chord's midpoint.
+      const marks = chevrons(linkArrows(start, end));
+      expect(marks.length % 2).toBe(1);
+      const mid = marks[(marks.length - 1) / 2].mark;
+      expect(mid[0]).toBeCloseTo(200, 0);
+      expect(mid[1]).toBeCloseTo(100, 0);
+      // The owner's report: an arrowhead where the wire meets its socket. The
+      // last chevron is half a spacing short of the end, never on it.
+      for (const c of marks) {
+        for (const p of [c.a, c.tip, c.b]) {
+          expect(Math.hypot(p[0] - end.x, p[1] - end.y)).toBeGreaterThan(30);
+        }
+      }
+    });
+
+    it('carries none on a wire too short for one, and none for a non-finite end', () => {
+      // An Output parked beside the rail: under the old 40px reach floor this
+      // hop looped past ARROW_MIN_ARC and grew a chevron on the loop.
+      expect(linkArrows({ x: 0, y: 0 }, { x: ARROW_MIN_ARC / 2, y: 0 })).toBe('');
+      expect(linkArrows({ x: NaN, y: 0 }, end)).toBe('');
+      // The cutoff scales with the chevron, which is twice a canvas one: a
+      // wire the canvas would mark is still too short for this one.
+      expect(LINK_ARROW_MIN_ARC).toBe(2 * ARROW_MIN_ARC);
+      expect(linkArrows({ x: 0, y: 0 }, { x: LINK_ARROW_MIN_ARC - 2, y: 0 })).toBe('');
+      expect(chevrons(linkArrows({ x: 0, y: 0 }, { x: LINK_ARROW_MIN_ARC + 2, y: 0 }))).toHaveLength(1);
+    });
+
+    it('is capped for an Output panned absurdly far away', () => {
+      // A restored node position need only be FINITE, and the wire starts on it.
+      const d = linkArrows({ x: -1e12, y: 300 }, end);
+      expect(chevrons(d).length).toBe(ARROW_MAX);
+      expect(d).not.toMatch(/NaN|Infinity/);
     });
   });
 });

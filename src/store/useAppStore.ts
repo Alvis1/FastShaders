@@ -23,7 +23,7 @@ import { fillTemplate } from '@/utils/fillTemplate';
 import type { NodePreviewTarget } from '@/utils/nodePreview';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { randomGroupColor, nextGroupLabel } from '@/utils/newNodeValues';
-import { autoLayout } from '@/engine/layoutEngine';
+import { organizeLayout } from '@/engine/layoutEngine';
 // NB the two built-in libraries are deliberately NOT imported here — see
 // instantiateBuiltinTexture, which loads them on demand so that the Babel
 // front end behind `buildCodeGroup` stays out of every page's boot chunk.
@@ -98,6 +98,14 @@ import {
 import { composeImportNoteLines, imageDropReport, type ImageDropReport } from '@/utils/imageImportNote';
 import { stashImageOrigin } from '@/utils/imageOriginCache';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
+import {
+  exposeWiredChannels,
+  freeFrameSpot,
+  libraryWireEdges,
+  libraryWireOutput,
+  placementObstacles,
+  takenOutputChannels,
+} from '@/utils/libraryAutoWire';
 import { selectionOnlyGraphChange } from '@/utils/graphSemantics';
 import { sanitizeDrawings, MAX_STROKES, MAX_TOTAL_POINTS, type DrawStroke } from '@/utils/drawings';
 import {
@@ -123,6 +131,7 @@ import { savePreviewMeshToCache, announceMeshCacheFull } from '@/utils/previewMe
 import { encodeImageFile } from '@/utils/imageImport';
 import { filePictureOrientation } from '@/utils/pictureOrientation';
 import { transposeCsv, type ParsedCsv } from '@/utils/csvParser';
+import { NOTE_BODY_COLOR, NOTE_HEADER_COLOR, NOTE_HEIGHT, NOTE_WIDTH } from '@/utils/noteDefaults';
 
 /**
  * A user-saved group: the group node + every member node + every edge that lives
@@ -352,7 +361,7 @@ function cloneGroupSnapshot(
   snapshot: { nodes: AppNode[]; edges: AppEdge[] },
   position: { x: number; y: number },
   anchor: GroupDropAnchor = 'top-left',
-): { group: AppNode; members: AppNode[]; edges: AppEdge[] } {
+): { group: AppNode; members: AppNode[]; edges: AppEdge[]; idMap: ReadonlyMap<string, string> } {
   const idMap = new Map<string, string>();
   for (const n of snapshot.nodes) idMap.set(n.id, generateId());
 
@@ -393,7 +402,7 @@ function cloneGroupSnapshot(
     };
   });
 
-  return { group, members, edges };
+  return { group, members, edges, idMap };
 }
 
 /**
@@ -410,21 +419,72 @@ function cloneGroupSnapshot(
  * `instantiateSavedGroup` deliberately does NOT route through here: a
  * user-saved group may legitimately contain an Output, so it needs the mesh
  * target / active-sink / fold repairs re-run against the COMBINED node list.
+ *
+ * `wire` (a PRESS while the graph has a plain Output, utils/libraryAutoWire.ts)
+ * wires the asset's own Output channels into every socket that is still EMPTY
+ * — never replacing a wire — exposing any it lands on, in the same history
+ * entry, and puts the frame BESIDE the Output. When none of the asset's
+ * sockets is free, `position`/`anchor` (the press's scattered point, or the
+ * drop point) is used and nothing is wired. Either way the frame takes the
+ * nearest spot from there that lands on nothing drawn (`freeFrameSpot`).
+ * Everything is asked HERE, after the library's `import()` resolved: the
+ * Output may have been wired, deleted or replaced since the press.
  */
 function placeLibraryGroup(
-  snapshot: { nodes: AppNode[]; edges: AppEdge[] } | undefined,
+  snapshot: { nodes: AppNode[]; edges: AppEdge[]; outputEdges?: AppEdge[] } | undefined,
   position: { x: number; y: number },
   anchor?: GroupDropAnchor,
-): void {
-  if (!snapshot || snapshot.nodes.length === 0) return;
-  const { group, members, edges } = cloneGroupSnapshot(snapshot, position, anchor);
-  useAppStore.getState().pushHistory();
-  useAppStore.setState((state) => ({
-    nodes: [group, ...state.nodes, ...members] as AppNode[],
-    edges: [...state.edges, ...edges] as AppEdge[],
+  wire?: LibraryWire,
+): LibraryPlacement | null {
+  if (!snapshot || snapshot.nodes.length === 0) return null;
+  const state = useAppStore.getState();
+  const target = wire ? libraryWireOutput(state.nodes, state.edges) : null;
+  const taken = target ? takenOutputChannels(state.nodes, state.edges, target.id) : new Set<string>();
+  const free =
+    wire && target?.id === wire.outputId
+      ? (snapshot.outputEdges ?? []).filter((e) => !!e.targetHandle && !taken.has(e.targetHandle))
+      : [];
+  // The frame slides to the nearest spot that lands on nothing already drawn
+  // — another group, a loose node, the Output itself (owner, 2026-10-17: every
+  // add, not only a wired press). Wired, the IDEAL top-right corner is
+  // `wire.beside`; otherwise it is the press's or the drop's point at
+  // `anchor`. The frame size is only known here.
+  const { w, h } = groupFrameSize(snapshot.nodes[0]);
+  const ideal =
+    wire && free.length > 0
+      ? { x: wire.beside.x - w, y: wire.beside.y }
+      : { x: anchor === 'top-right' ? position.x - w : position.x, y: position.y };
+  const at = freeFrameSpot({ ...ideal, w, h }, placementObstacles(state.nodes));
+  const { group, members, edges, idMap } = cloneGroupSnapshot(snapshot, at, 'top-left');
+  const wires = target && free.length > 0 ? libraryWireEdges(free, idMap, target.id, taken) : [];
+  const handles = wires.map((e) => e.targetHandle).filter((h): h is string => !!h);
+  state.pushHistory();
+  useAppStore.setState((s) => ({
+    nodes: [
+      group,
+      ...(target && wires.length > 0
+        ? s.nodes.map((n) => (n.id === target.id ? exposeWiredChannels(n, handles) : n))
+        : s.nodes),
+      ...members,
+    ] as AppNode[],
+    edges: [...s.edges, ...edges, ...wires] as AppEdge[],
     syncSource: 'graph' as SyncSource,
     isUndoRedo: false,
   }));
+  return { groupId: group.id, wired: wires.length };
+}
+
+/** A press's wiring request: the Output it saw, and the IDEAL top-right corner
+ *  for the frame beside it (flow coords). */
+export interface LibraryWire {
+  outputId: string;
+  beside: { x: number; y: number };
+}
+
+/** Where a library group landed, and how many Output wires came with it. */
+export interface LibraryPlacement {
+  groupId: string;
+  wired: number;
 }
 
 /** A dropped CSV whose column count exceeds COLUMN_WARN_THRESHOLD, awaiting the
@@ -1891,9 +1951,22 @@ interface AppState {
     opts?: { overBudgetOk?: boolean; anchor?: GroupDropAnchor },
   ) => void;
   /** Drop a built-in texture group onto the canvas, its `anchor` corner at `position` (flow coords). */
-  instantiateBuiltinTexture: (textureId: string, position: { x: number; y: number }, anchor?: GroupDropAnchor) => void;
-  /** Drop a built-in preset group onto the canvas, its `anchor` corner at `position` (flow coords). */
-  instantiateBuiltinPreset: (presetId: string, position: { x: number; y: number }, anchor?: GroupDropAnchor) => void;
+  instantiateBuiltinTexture: (
+    textureId: string,
+    position: { x: number; y: number },
+    anchor?: GroupDropAnchor,
+    wire?: LibraryWire,
+  ) => Promise<LibraryPlacement | null>;
+  /** Drop a built-in preset group onto the canvas, its `anchor` corner at
+   *  `position` (flow coords); `wire` asks to wire it into the Output's EMPTY
+   *  sockets, beside it (utils/libraryAutoWire.ts). Resolves to where it
+   *  landed, null if nothing did. */
+  instantiateBuiltinPreset: (
+    presetId: string,
+    position: { x: number; y: number },
+    anchor?: GroupDropAnchor,
+    wire?: LibraryWire,
+  ) => Promise<LibraryPlacement | null>;
 }
 
 export const useAppStore = create<AppState>()((set, get) => ({
@@ -3064,27 +3137,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   organizeSelection: () => {
     const state = get();
     const byId = new Map(state.nodes.map((n) => [n.id, n]));
-    // Notes are free-floating annotations — the graph layout has no meaningful
-    // place for them, so they stay put.
-    const selected = state.nodes.filter((n) => n.selected && n.type !== 'note');
-    if (selected.length < 2) return;
-    const selectedIds = new Set(selected.map((n) => n.id));
-
-    // Layout units: a selected node rides with its parent when that parent (or
-    // any ancestor group) is also selected — laying both out independently
-    // would move the member twice.
-    const hasSelectedAncestor = (n: AppNode): boolean => {
-      let pid = n.parentId;
-      while (pid) {
-        if (selectedIds.has(pid)) return true;
-        pid = byId.get(pid)?.parentId;
-      }
-      return false;
-    };
-    const units = selected.filter((n) => !hasSelectedAncestor(n));
-    if (units.length < 2) return;
-    const unitIds = new Set(units.map((n) => n.id));
-
+    const newAbs = organizeLayout(state.nodes, state.edges);
+    if (!newAbs) return;
     // Absolute position of a (possibly group-nested) node.
     const absOf = (n: AppNode): { x: number; y: number } => {
       let x = n.position.x;
@@ -3099,50 +3153,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
       }
       return { x, y };
     };
-
-    // Edges between units, with endpoints lifted to their unit: an edge into a
-    // selected group's member connects the GROUP unit (collapsed groups already
-    // carry rewritten boundary edges pointing at the group node itself).
-    const unitOf = (id: string): string | null => {
-      let n = byId.get(id);
-      while (n) {
-        if (unitIds.has(n.id)) return n.id;
-        n = n.parentId ? byId.get(n.parentId) : undefined;
-      }
-      return null;
-    };
-    const seenPairs = new Set<string>();
-    const unitEdges: AppEdge[] = [];
-    for (const e of state.edges) {
-      const src = unitOf(e.source);
-      const tgt = unitOf(e.target);
-      if (!src || !tgt || src === tgt) continue;
-      const key = `${src}\0${tgt}`;
-      if (seenPairs.has(key)) continue;
-      seenPairs.add(key);
-      unitEdges.push({ ...e, source: src, target: tgt });
-    }
-
-    // Lay out the units in absolute space (autoLayout assigns fresh positions;
-    // spreading keeps `measured` on each node so the real DOM boxes are used),
-    // then translate the result back onto the selection's old top-left corner
-    // so the organized cluster stays where the user had it.
-    const absUnits = units.map((n) => ({ ...n, position: absOf(n) }) as AppNode);
-    const laid = autoLayout(absUnits, unitEdges);
-    let oldMinX = Infinity, oldMinY = Infinity, newMinX = Infinity, newMinY = Infinity;
-    for (const n of absUnits) {
-      oldMinX = Math.min(oldMinX, n.position.x);
-      oldMinY = Math.min(oldMinY, n.position.y);
-    }
-    for (const n of laid) {
-      newMinX = Math.min(newMinX, n.position.x);
-      newMinY = Math.min(newMinY, n.position.y);
-    }
-    const dx = oldMinX - newMinX;
-    const dy = oldMinY - newMinY;
-    const newAbs = new Map(
-      laid.map((n) => [n.id, { x: n.position.x + dx, y: n.position.y + dy }]),
-    );
 
     // Frame (w/h) of a node, same source precedence NodeEditor uses for its
     // group-containment test: measured DOM box → explicit props → data dims.
@@ -3296,16 +3306,16 @@ export const useAppStore = create<AppState>()((set, get) => ({
       type: 'note',
       position,
       // React Flow honors width/height directly on the node; NodeResizer mutates them.
-      width: 240,
-      height: 150,
+      width: NOTE_WIDTH,
+      height: NOTE_HEIGHT,
       // Dragged only by the header bar so the body textarea stays editable.
       dragHandle: '.note-node__header',
       data: {
         registryType: 'note',
         heading: 'Note',
         text: '',
-        color: '#fff7cc',
-        headerColor: '#ffd24a',
+        color: NOTE_BODY_COLOR,
+        headerColor: NOTE_HEADER_COLOR,
         scale: 1,
       } as NoteNodeData,
     } as AppNode;
@@ -3804,21 +3814,25 @@ export const useAppStore = create<AppState>()((set, get) => ({
   // Both libraries share ONE placement path (placeLibraryGroup) and load ON
   // DEMAND: building either runs `codeToGraph`, so a static import would pin
   // the Babel chunk into every page's boot (engine/unknownExpression.ts).
-  instantiateBuiltinTexture: (textureId, position, anchor) => {
+  instantiateBuiltinTexture: (textureId, position, anchor, wire) =>
     import('@/registry/builtinTextures')
-      .then(({ getBuiltinTextures }) => {
-        placeLibraryGroup(getBuiltinTextures().find((t) => t.id === textureId), position, anchor);
-      })
-      .catch(() => console.warn('[fs] the built-in texture library failed to load'));
-  },
+      .then(({ getBuiltinTextures }) =>
+        placeLibraryGroup(getBuiltinTextures().find((t) => t.id === textureId), position, anchor, wire),
+      )
+      .catch(() => {
+        console.warn('[fs] the built-in texture library failed to load');
+        return null;
+      }),
 
-  instantiateBuiltinPreset: (presetId, position, anchor) => {
+  instantiateBuiltinPreset: (presetId, position, anchor, wire) =>
     import('@/registry/builtinPresets')
-      .then(({ getBuiltinPresets }) => {
-        placeLibraryGroup(getBuiltinPresets().find((p) => p.id === presetId), position, anchor);
-      })
-      .catch(() => console.warn('[fs] the built-in preset library failed to load'));
-  },
+      .then(({ getBuiltinPresets }) =>
+        placeLibraryGroup(getBuiltinPresets().find((p) => p.id === presetId), position, anchor, wire),
+      )
+      .catch(() => {
+        console.warn('[fs] the built-in preset library failed to load');
+        return null;
+      }),
 
   instantiateSavedGroup: (savedId, position, opts) => {
     const state = get();

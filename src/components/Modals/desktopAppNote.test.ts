@@ -226,7 +226,10 @@ describe('DesktopAppNote source pins', () => {
   });
 
   it('is mounted only behind the lift decisions', () => {
-    expect(read('./LimitModal.tsx')).toMatch(/\{desktopLiftsLimit\(head, ignoreLimits\) && <DesktopAppNote /);
+    // The decision is the modal's; its panel (shared with the intro window,
+    // which passes false) only draws what it is told.
+    expect(read('./LimitModal.tsx')).toMatch(/desktopNote=\{desktopLiftsLimit\(head, ignoreLimits\)\}/);
+    expect(read('./LimitModal.tsx')).toMatch(/\{desktopNote && <DesktopAppNote /);
     expect(read('./ExportPreflightModal.tsx')).toMatch(/\{exportLiftedByDesktop\(request\) && <DesktopAppNote /);
   });
 

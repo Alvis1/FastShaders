@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import {
   FIT_BOUNDS_SCRIPT,
+  LIGHT_PRESETS,
   MARCH_WINDOW_GEOMETRY,
   MODEL_FEED_KINDS,
   decoderAssetUrl,
@@ -744,5 +745,30 @@ describe('tslToPreviewHTML — Gaussian-splat documents', () => {
         expect(Object.keys(f.attrs), `${kind} as ${payload}`).toEqual(attr ? [attr] : []);
       }
     });
+  });
+});
+
+describe('tslToPreviewHTML — the light rig', () => {
+  const lightCount = (html: string) => (html.match(/<a-light /g) ?? []).length;
+
+  it('"No light" bakes no light at all — and the scene never adds its own', () => {
+    // A-Frame's light system lights a scene that loads with NO light (an
+    // ambient + a directional, as `<a-entity light>` elements the hot-update
+    // never removes), so an empty rig is only empty with the switch off.
+    for (const xr of [false, true]) {
+      const html = tslToPreviewHTML(TSL, { geometry: 'sphere', lighting: 'none', xr });
+      expect(lightCount(html), `xr ${xr}`).toBe(0);
+      expect(html, `xr ${xr}`).toContain(esc('light="defaultLightsEnabled: false"'));
+    }
+    expect(LIGHT_PRESETS.none).toEqual([]);
+  });
+
+  it('every other rig still bakes its lights, under the same scene switch', () => {
+    for (const lighting of ['studio', 'moon', 'laboratory'] as const) {
+      const html = tslToPreviewHTML(TSL, { geometry: 'sphere', lighting });
+      expect(lightCount(html), lighting).toBe(LIGHT_PRESETS[lighting].length);
+      expect(LIGHT_PRESETS[lighting].length, lighting).toBeGreaterThan(0);
+      expect(html).toContain(esc('light="defaultLightsEnabled: false"'));
+    }
   });
 });

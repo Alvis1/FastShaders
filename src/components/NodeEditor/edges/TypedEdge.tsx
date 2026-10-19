@@ -16,16 +16,18 @@ import { setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { evaluateEdgeSource, getEdgeOutputShape, getLiveUpstreamSet, getUnwrappedEdge } from '@/engine/cpuEvaluator';
 import {
   ARROW_FLARE,
-  RIBBON_GAP,
   arrowMarks,
   catmullRomToBeziers,
   chevronPath,
   edgeBezier,
   ribbonHalfWidth,
+  ribbonNormal,
+  ribbonOffsets,
   ribbonStrokeWidth,
   splinePath,
 } from './bezierGeometry';
 import { handleEl, nodeEl } from '../nodeElement';
+import { removeEdgeWaypoint } from './edgeWaypoints';
 import { EdgeInfoCard } from './EdgeInfoCard';
 
 type Waypoint = { x: number; y: number };
@@ -89,10 +91,7 @@ function EdgeWaypointHandles({
   };
   const onDoubleClick = (e: React.MouseEvent, index: number) => {
     e.stopPropagation();
-    const store = useAppStore.getState();
-    const edge = store.edges.find((ed) => ed.id === edgeId);
-    const wps = ((edge?.data?.waypoints ?? []) as Waypoint[]).filter((_, i) => i !== index);
-    store.setEdgeWaypoints(edgeId, wps, { history: true });
+    removeEdgeWaypoint(edgeId, index);
   };
 
   return (
@@ -132,7 +131,7 @@ function EdgeWaypointHandles({
  * ribbon into one band — the highlight would destroy the channel count it is
  * highlighting.
  */
-const HOVER_EDGE_BOOST = 1.35;
+export const HOVER_EDGE_BOOST = 1.35;
 
 /** A selected wire simply gets THICKER — no shadow, no glow, no colour change.
  *
@@ -143,7 +142,7 @@ const HOVER_EDGE_BOOST = 1.35;
  *  has to spend.
  *
  *  The boost scales the WHOLE ribbon — both the stroke width and the
- *  per-channel perpendicular offsets (see getOffsets) — rather than the stroke
+ *  per-channel perpendicular offsets (see ribbonOffsets) — rather than the stroke
  *  alone. Multi-channel lines sit RIBBON_GAP (1.167px) apart and are already up to
  *  1.2px wide, so thickening the strokes on their own would close those gaps
  *  and fuse a 4-channel ribbon into one solid band: the selection highlight
@@ -175,24 +174,6 @@ const LIVE_BIT = 8;
  */
 const LIVE_PATH_STYLE: CSSProperties = { pointerEvents: 'none' };
 const STILL_PATH_STYLE: CSSProperties = { pointerEvents: 'none', strokeDasharray: 'none', animation: 'none' };
-
-function getOffsets(count: number): number[] {
-  if (count <= 1) return [0];
-  const offsets: number[] = [];
-  const half = (count - 1) / 2;
-  for (let i = 0; i < count; i++) {
-    offsets.push((i - half) * RIBBON_GAP);
-  }
-  return offsets;
-}
-
-/** Perpendicular unit vector to the source→target direction. */
-function perp(sx: number, sy: number, tx: number, ty: number): [number, number] {
-  const dx = tx - sx;
-  const dy = ty - sy;
-  const len = Math.sqrt(dx * dx + dy * dy) || 1;
-  return [-dy / len, dx / len];
-}
 
 /**
  * Cubic bezier whose SOURCE tangent is a free unit vector instead of one of
@@ -354,21 +335,17 @@ export function TypedEdge({
   // drawn heavier. Previously only the 1-channel case thickened, which left a
   // selected multi-channel edge marked by nothing but an opacity nudge.
   const boost = selected ? SELECTED_EDGE_BOOST : hovered ? HOVER_EDGE_BOOST : 1;
-  const offsets = getOffsets(count).map((d) => d * boost);
+  const offsets = ribbonOffsets(count).map((d) => d * boost);
   const strokeWidth = ribbonStrokeWidth(count) * boost;
 
-  const [px, py] = perp(sourceX, sourceY, targetX, targetY);
+  const [px, py] = ribbonNormal(sourceX, sourceY, targetX, targetY);
   const waypoints = (data?.waypoints ?? []) as Waypoint[];
   const hasWaypoints = waypoints.length > 0;
   const paths: string[] = [];
-  let labelX = 0;
-  let labelY = 0;
 
   for (let i = 0; i < offsets.length; i++) {
     const d = offsets[i];
     let path: string;
-    let lx: number;
-    let ly: number;
     if (hasWaypoints) {
       // Route through the user's waypoints as a smooth spline. The per-channel
       // perpendicular offset is applied to EVERY point so parallel multi-channel
@@ -380,11 +357,8 @@ export function TypedEdge({
         [targetX + d * px, targetY + d * py],
       ];
       path = splinePath(pts);
-      const mid = pts[Math.floor(pts.length / 2)];
-      lx = mid[0];
-      ly = mid[1];
     } else if (radial) {
-      [path, lx, ly] = getRadialBezierPath({
+      [path] = getRadialBezierPath({
         sourceX: sourceX + d * px,
         sourceY: sourceY + d * py,
         radial,
@@ -393,7 +367,7 @@ export function TypedEdge({
         targetPosition,
       });
     } else {
-      [path, lx, ly] = getBezierPath({
+      [path] = getBezierPath({
         sourceX: sourceX + d * px,
         sourceY: sourceY + d * py,
         sourcePosition,
@@ -403,10 +377,6 @@ export function TypedEdge({
       });
     }
     paths.push(path);
-    if (i === Math.floor(offsets.length / 2)) {
-      labelX = lx;
-      labelY = ly;
-    }
   }
 
   // Center path for the invisible interaction hit area
@@ -427,16 +397,13 @@ export function TypedEdge({
   // same curve the hit test measures (bezierGeometry), sized to the ribbon and
   // scaled by the same boost, so a selected or hovered wire's arrows grow with
   // it. ONE path element per edge however many chevrons it carries.
+  // The same centreline also anchors the value chip (EdgeInfoCard).
+  const centerSegs = centerPts
+    ? catmullRomToBeziers(centerPts)
+    : [edgeBezier(sourceX, sourceY, radial ?? sourcePosition, targetX, targetY, targetPosition)];
   const arrows = live
     ? ''
-    : chevronPath(
-        arrowMarks(
-          centerPts
-            ? catmullRomToBeziers(centerPts)
-            : [edgeBezier(sourceX, sourceY, radial ?? sourcePosition, targetX, targetY, targetPosition)],
-        ),
-        (ribbonHalfWidth(count) + ARROW_FLARE) * boost,
-      );
+    : chevronPath(arrowMarks(centerSegs), (ribbonHalfWidth(count) + ARROW_FLARE) * boost);
 
   const dragStart = useRef<{ x: number; y: number; pointerId: number } | null>(null);
 
@@ -535,8 +502,7 @@ export function TypedEdge({
             sourceId={logical.source}
             sourceHandle={logical.sourceHandle}
             targetId={logical.target}
-            labelX={labelX}
-            labelY={labelY}
+            segs={centerSegs}
           />
         </EdgeLabelRenderer>
       )}

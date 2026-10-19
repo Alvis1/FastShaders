@@ -3,6 +3,7 @@
  * Handles import extraction, TDZ fix, body parsing, and channel resolution.
  */
 
+import { displacementReadsUv } from './displacementUv';
 import type { MaterialSettings } from '@/types';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
 import { HEX6 } from '@/utils/colorUtils';
@@ -1075,6 +1076,16 @@ export function buildShaderModule(
   // object; see docs/dev/preview-and-runtime.md.
   if (materialSettings?.mergeVertices === false) {
     returnProps.push('mergeVertices: false');
+  }
+
+  // The weld's seam rule (loader 0.8 `weldUvDriven`): a module that reads uv()
+  // ANYWHERE gets a displaced sphere's seam welded, which squeezes its texture
+  // into one column. Say so when the DISPLACEMENT reads none — emitted only
+  // when it changes something (a displacement, and a uv() the loader's source
+  // test would see), so every other module stays byte-identical. Frozen 0.6
+  // and older ignore the key and keep welding as before.
+  if (channels.position && /\buv\s*\(/.test(tslCode) && !displacementReadsUv(channels.position, defLines, preambleDecls)) {
+    returnProps.push('uvDisplaced: false');
   }
 
   // Wireframe EDGES reads a per-corner `bary` attribute no mesh carries, so the

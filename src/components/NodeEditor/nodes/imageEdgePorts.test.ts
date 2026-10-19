@@ -133,15 +133,17 @@ describe('both surfaces read the same geometry', () => {
   it('the picture lives INSIDE the region on both surfaces', () => {
     // The sockets are centred on the region; a picture outside it would leave
     // them centred on nothing the user can see.
+    // Both draw the ONE picture block (ImageCardPicture: the thumbnail, or the
+    // empty slot) inside the region.
     for (const [name, src] of [['ShaderNode', SHADER_NODE], ['NodeVisual', NODE_VISUAL]] as const) {
       const region = src.indexOf('shader-node__edge-region');
-      const slot = src.indexOf('<ImageThumbEmpty');
+      const slot = src.indexOf('<ImageCardPicture');
       expect(region, name).toBeGreaterThan(-1);
       expect(slot, name).toBeGreaterThan(region);
     }
-    // ShaderNode's real thumbnail too.
-    const region = SHADER_NODE.indexOf('shader-node__edge-region');
-    expect(SHADER_NODE.indexOf('className="shader-node__image-thumb"')).toBeGreaterThan(region);
+    const block = SHADER_NODE.slice(SHADER_NODE.indexOf('export function ImageCardPicture('));
+    expect(block.slice(0, block.indexOf('\n}\n'))).toContain('className="shader-node__image-thumb"');
+    expect(block.slice(0, block.indexOf('\n}\n'))).toContain('<ImageThumbEmpty');
   });
 
   it('the drag-reveal happens IN the rail, never twice', () => {
@@ -255,23 +257,23 @@ describe('the Image node rows are gone, but its port TABLE is intact', () => {
 });
 
 describe('one handle per output id', () => {
-  it('the only card-level first-output handle left is the designer-moved one', () => {
-    // ShaderNode: two `id={def.outputs[0].id}` handles — the operator layout's
-    // own (a different branch) and the rows layout's designer-moved one. The
-    // rail maps over `def.outputs` and indexes nothing, so it adds none.
-    expect(SHADER_NODE.match(/id=\{def\.outputs\[0\]\.id\}/g)).toHaveLength(2);
-    expect(SHADER_NODE).toMatch(/\{def\.outputs\[0\] && \(\s*<TypedHandle/);
+  it('a designer-moved output is drawn by ONE loop over every output, off the rail', () => {
+    // ShaderNode: the only `id={def.outputs[0].id}` left is the operator
+    // layout's own (a different branch). The rows layout draws a moved output —
+    // the first ('out') or a later one, keyed by its id — from ONE loop over
+    // `def.outputs`; the rail maps over `def.outputs` and indexes nothing.
+    expect(SHADER_NODE.match(/id=\{def\.outputs\[0\]\.id\}/g)).toHaveLength(1);
     // Guarded on !edgePorts: an edge-port node placed every socket in the
     // rail, designer override included, and reaching here too mounts it twice.
-    expect(SHADER_NODE).toMatch(/\{!edgePorts && rowsOutOff != null && def\.outputs\[0\] && \(\s*<TypedHandle/);
+    expect(SHADER_NODE).toMatch(/\{!edgePorts && def\.outputs\.map\(\(out\) => \{\s*const off = sockOv\[outputSocketKey\(def\.outputs, out\)\];\s*if \(off == null\) return null;/);
     expect(SHADER_NODE).toMatch(/if \(edgePorts \|\| off == null\) return null;/);
-    // NodeVisual: the operator layout's own, and the rows layout's moved one.
-    expect(NODE_VISUAL.match(/port=\{def\.outputs\[0\]\.id\}/g)).toHaveLength(2);
+    // NodeVisual: the operator layout's own, and the rows layout's moved loop.
+    expect(NODE_VISUAL.match(/port=\{def\.outputs\[0\]\.id\}/g)).toHaveLength(1);
     // Guarded on !edgePorts for the same reason ShaderNode's is: the rail
-    // already placed `out`, designer override included, and the Designer's
-    // corner drag authors `sockets.out` on any height change — so an
+    // already placed every output, designer override included, and the
+    // Designer's corner drag authors `sockets.out` on any height change — so an
     // unguarded mirror here mounts the same dot twice at the same `top`.
-    expect(NODE_VISUAL).toMatch(/\{!edgePorts && outMoved && \(\s*<StaticHandle/);
+    expect(NODE_VISUAL).toMatch(/\{!edgePorts && def\.outputs\.map\(\(out\) => \{\s*const off = sockets\[outputSocketKey\(def\.outputs, out\)\];\s*if \(off == null\) return null;/);
   });
 
   it('the one-output era stays retired', () => {
@@ -284,9 +286,9 @@ describe('one handle per output id', () => {
     expect(SHADER_NODE).not.toContain('outCentered');
   });
 
-  it('beside its own socket only — one condition drops both when the designer moves `out`', () => {
-    expect(SHADER_NODE).toMatch(/if \(!output \|\| \(outDetached && output === def\.outputs\[0\]\)\) return null;/);
-    expect(NODE_VISUAL).toMatch(/if \(!output \|\| \(outMoved && output === def\.outputs\[0\]\)\) return null;/);
+  it('beside its own socket only — one condition drops both when the designer moves an output', () => {
+    expect(SHADER_NODE).toMatch(/if \(!output \|\| sockOv\[outputSocketKey\(def\.outputs, output\)\] != null\) return null;/);
+    expect(NODE_VISUAL).toMatch(/if \(!output \|\| sockets\[outputSocketKey\(def\.outputs, output\)\] != null\) return null;/);
   });
 });
 

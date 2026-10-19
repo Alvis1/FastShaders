@@ -205,14 +205,16 @@ describe('the empty slot names the picker — except in a study session', () => 
     // The slot is the `else` of the thumbnail now, both INSIDE the port
     // region (the edge-port layout centres the sockets on that region, so the
     // picture has to be in it).
-    expect(SHADER_NODE).toMatch(/<ImageThumbEmpty language=\{language\} \/>/);
+    // ImageCardPicture passes the canvas no hint, so the default speaks.
+    expect(SHADER_NODE).toMatch(/<ImageThumbEmpty language=\{language\} hint=\{emptyHint\} \/>/);
+    expect(SHADER_NODE).toMatch(/<ImageCardPicture values=\{data\.values\} language=\{language\} onLoad=\{[^}]*\}\s*\/>/);
   });
 
   it('a replica keeps the plain statement: it has no menu to name', () => {
     // The Node Designer stage draws NodeVisual hit-testable and binds no
     // contextmenu, so following "Right-click the node…" there opens only the
     // browser's own menu. Same reason the study session keeps the plain text.
-    expect(NODE_VISUAL).toMatch(/<ImageThumbEmpty language=\{language\} hint=\{IMAGE_EMPTY_HINT_EVAL\} \/>/);
+    expect(NODE_VISUAL).toMatch(/<ImageCardPicture values=\{values\} language=\{language\} emptyHint=\{IMAGE_EMPTY_HINT_EVAL\} \/>/);
   });
 });
 

@@ -21,7 +21,7 @@ import { useHeaderTip } from './headerTip';
 // specificity, and the on-node size must win. (The size override below is also
 // written under `.shader-node__left` so it does not depend on that ordering.)
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
-import { NodeGlyph, hasNodeGlyph, usesOperatorLayout, nodeJustify, nodeScale, nodeBox, nodeSockets, nodeTextScale, nodeArtStyle } from './glyphs/NodeGlyph';
+import { NodeGlyph, hasNodeGlyph, usesOperatorLayout, nodeJustify, nodeScale, nodeBox, nodeSockets, outputSocketKey, nodeTextScale, nodeArtStyle } from './glyphs/NodeGlyph';
 import { evaluateNodeOutput, evaluateEdgeSource, evaluateEdgeRange, getEdgeOutputShape, getTargetEdges, getTimeUpstreamSet, getFieldUpstreamSet } from '@/engine/cpuEvaluator';
 import { edgeRangeText } from '@/utils/edgeValueText';
 import { LiveEdgeValue } from './LiveEdgeValue';
@@ -45,7 +45,7 @@ import { plainStr, valueNum, valueStr } from '@/utils/valueCoerce';
  *  per-node: a node with an `out` port reports that port's width for every
  *  handle otherwise, so an RGB-to-HSL Lightness wire would draw a 3-line
  *  ribbon. */
-function channelCount(
+export function channelCount(
   nodeId: string,
   sourceHandle: string | null | undefined,
   nodes: Parameters<typeof evaluateNodeOutput>[1],
@@ -312,6 +312,93 @@ export function ImageThumbEmpty({
 }
 
 /**
+ * The Image node's file name and picture, INSIDE the port region — the
+ * sockets are centred on this region, so the thing they belong to has to be in
+ * it. (On every other node the region holds the rows, which is the same
+ * relationship.) ONE renderer for the canvas node (ShaderNode) and every
+ * replica (NodeVisual — the intro window's stage passes a real payload; a tile
+ * carries none and gets the empty slot).
+ *
+ * The filename's EXTENSION is the stored payload's, not the dropped file's: a
+ * re-encode routinely leaves a `.png` name on WebP or JPEG bytes and the card
+ * must not assert a format the node doesn't hold. The title keeps the name as
+ * dropped.
+ */
+export function ImageCardPicture({
+  values,
+  language,
+  onLoad,
+  emptyHint,
+}: {
+  values: Record<string, unknown> | undefined;
+  language: Parameters<typeof t>[1];
+  /** The canvas re-measures its sockets once the picture has its height. */
+  onLoad?: () => void;
+  emptyHint?: string;
+}) {
+  // Validated URL only: the payload is adversarial (utils/imageNode.ts).
+  const url = useMemo(() => validImageDataUrl(values?.imageB64), [values?.imageB64]);
+  /** Does the card draw the picture mirrored? See the thumbnail. */
+  const flipThumbX = valueNum(values?.flipX ?? 0) >= 0.5;
+  const flipThumbY = valueNum(values?.flipY ?? 0) >= 0.5;
+  // Nearest filtering is shown too: the browser would otherwise smooth a small
+  // stored image (an 8 px rung) into a blur the shader never draws.
+  const nearestThumb = values?.filter === 'nearest';
+  return (
+    <>
+      {/* `plainStr`, not `String()`: a tampered `{"fileName":{"toString":1}}`
+          out of a shared `.fastshader` throws on coercion, in a render body,
+          with no error boundary above it (utils/valueCoerce.ts). */}
+      {plainStr(values?.fileName) ? (
+        <div className="shader-node__file-name" title={plainStr(values?.fileName)}>
+          {displayImageFileName(values?.fileName, values?.imageB64)}
+        </div>
+      ) : null}
+      {/* Sized by CSS, no shadow/hover of its own, so it never fights the
+          socket-static or stack-shadow rules. */}
+      {url ? (
+        <img
+          className="shader-node__image-thumb"
+          src={url}
+          alt=""
+          draggable={false}
+          // The belt to imageGeomKey's braces: the sockets are centred on
+          // this region, so the picture settling at its real height moves
+          // every one of them. The key covers the cases we can predict
+          // from the stored values; this covers the decode itself.
+          onLoad={onLoad}
+          // Drop-time power-of-two snapping changes the stored pixel aspect
+          // (1920×1080 → 2048×1024). That is invisible on the mesh — uv()
+          // maps any texture across [0,1] — so the CARD must not be the one
+          // place that shows a stretched picture. When the pre-snap
+          // dimensions are recorded, the thumbnail is drawn at THEM.
+          style={{
+            ...(valueNum(values?.srcWidth) > 0 && valueNum(values?.srcHeight) > 0
+              ? { aspectRatio: `${valueNum(values?.srcWidth)} / ${valueNum(values?.srcHeight)}`, objectFit: 'fill' as const }
+              : null),
+            // Flip X / Flip Y are shown, not just stored — a checkbox in a
+            // menu you have to close to see the result of is a guess. The
+            // rule is graphToCode's (`readImagePlacement`: `mirrorX: flipX`):
+            // both unchecked samples the picture as stored, and each ticked
+            // box mirrors it on that axis, on the card and on the mesh
+            // alike. `transform` is safe on this element — the card's own
+            // hover lift is a `scale:` on `.node-base`, not on the image.
+            ...(flipThumbX || flipThumbY
+              ? { transform: `scale(${flipThumbX ? -1 : 1}, ${flipThumbY ? -1 : 1})` }
+              : null),
+            ...(nearestThumb ? { imageRendering: 'pixelated' as const } : null),
+          }}
+        />
+      ) : (
+        /* No valid payload (added empty, or stripped on restore): the ONE
+           empty slot, the same element every NodeVisual surface draws. */
+        <ImageThumbEmpty language={language} hint={emptyHint} />
+      )}
+    </>
+  );
+}
+
+/**
  * The rows of the ROWS layout that still DRAW something.
  *
  * A designer socket override detaches a socket — and the value that follows it —
@@ -340,11 +427,10 @@ export function visiblePortRows(
   sockets: Record<string, number | undefined>,
   outputs: readonly PortDefinition[],
 ): PortRow[] {
-  const outMoved = sockets['out'] != null;
   return rows.filter(
     (row) =>
       (!!row.input && sockets[row.input.id] == null) ||
-      (!!row.output && !(outMoved && row.output === outputs[0])),
+      (!!row.output && sockets[outputSocketKey(outputs, row.output)] == null),
   );
 }
 
@@ -639,16 +725,6 @@ export const ShaderNode = memo(function ShaderNode({
   // Image node thumbnail: render ONLY the validated data: URL — the stored
   // value comes from adversarial graph JSON and must never reach <img src>
   // raw (a remote URL there is a tracking beacon).
-  /** Image node: does the card draw the picture mirrored? See the thumbnail. */
-  const flipThumbX = valueNum(data.values?.flipX ?? 0) >= 0.5;
-  const flipThumbY = valueNum(data.values?.flipY ?? 0) >= 0.5;
-  // Nearest filtering is shown too: the browser would otherwise smooth a small
-  // stored image (an 8 px rung) into a blur the shader never draws.
-  const nearestThumb = data.values?.filter === 'nearest';
-  const imageThumbUrl = useMemo(
-    () => (data.registryType === 'imageNode' ? validImageDataUrl(data.values?.imageB64) : null),
-    [data.registryType, data.values?.imageB64],
-  );
   const catHex = CAT_HEX[def.category as NodeCategory] ?? CAT_HEX.unknown;
 
   // ── Edge-derived render inputs, without a whole-array subscription ──────
@@ -1107,15 +1183,14 @@ export const ShaderNode = memo(function ShaderNode({
     );
   }
 
-  // Rows layout: designer-moved sockets (sockets[id] / sockets['out']) detach
-  // from their rows and position from the below-header region's center — the
-  // same center-relative convention the operator layout uses. A detached
-  // input's value widget follows its socket (op-val styling). Without an
-  // override, sockets stay row-anchored (classic behavior).
+  // Rows layout: designer-moved sockets (sockets[id] for an input,
+  // sockets['out'] for the first output, sockets[id] for a later one —
+  // `outputSocketKey`) detach from their rows and position from the
+  // below-header region's center — the same center-relative convention the
+  // operator layout uses. A detached input's value widget follows its socket
+  // (op-val styling). Without an override, sockets stay row-anchored (classic
+  // behavior).
   const sockOv = nodeSockets(data.registryType);
-  const rowsOutOff = sockOv['out'];
-  /** A designer-moved first output leaves its row (drawn region-relative below). */
-  const outDetached = rowsOutOff != null;
   const rowsJustify = nodeJustify(data.registryType);
   const calcTop = (off: number) => `calc(50% ${off < 0 ? '-' : '+'} ${Math.abs(off)}px)`;
   /** Rows that still draw something — see {@link visiblePortRows}. An
@@ -1129,7 +1204,9 @@ export const ShaderNode = memo(function ShaderNode({
    * a label never sits beside a socket the designer moved out of its row.
    */
   const rowOutput = (output: PortDefinition | null) => {
-    if (!output || (outDetached && output === def.outputs[0])) return null;
+    // A designer-moved output (the first, or any later one) leaves its row;
+    // the detached loop below draws it region-relative.
+    if (!output || sockOv[outputSocketKey(def.outputs, output)] != null) return null;
     const outLabel = outputRowLabel(data.registryType, output, !!data.dynamicOutputs, language);
     return (
       <>
@@ -1272,57 +1349,7 @@ export const ShaderNode = memo(function ShaderNode({
           or JPEG bytes and the card must not assert a format the node doesn't
           hold. The title keeps the name as dropped. */}
       {data.registryType === 'imageNode' && (
-        <>
-          {/* `plainStr`, not `String()`: a tampered `{"fileName":{"toString":1}}`
-              out of a shared `.fastshader` throws on coercion, in a render body,
-              with no error boundary above it (utils/valueCoerce.ts). */}
-          {plainStr(data.values?.fileName) ? (
-            <div className="shader-node__file-name" title={plainStr(data.values.fileName)}>
-              {displayImageFileName(data.values.fileName, data.values.imageB64)}
-            </div>
-          ) : null}
-          {/* Embedded-image thumbnail (validated URL only — see the
-              imageThumbUrl memo). Sized by CSS, no shadow/hover of its own, so
-              it never fights the socket-static or stack-shadow rules. */}
-          {imageThumbUrl ? (
-            <img
-              className="shader-node__image-thumb"
-              src={imageThumbUrl}
-              alt=""
-              draggable={false}
-              // The belt to imageGeomKey's braces: the sockets are centred on
-              // this region, so the picture settling at its real height moves
-              // every one of them. The key covers the cases we can predict
-              // from the stored values; this covers the decode itself.
-              onLoad={() => updateNodeInternals(id)}
-              // Drop-time power-of-two snapping changes the stored pixel aspect
-              // (1920×1080 → 2048×1024). That is invisible on the mesh — uv()
-              // maps any texture across [0,1] — so the CARD must not be the one
-              // place that shows a stretched picture. When the pre-snap
-              // dimensions are recorded, the thumbnail is drawn at THEM.
-              style={{
-                ...(valueNum(data.values.srcWidth) > 0 && valueNum(data.values.srcHeight) > 0
-                  ? { aspectRatio: `${valueNum(data.values.srcWidth)} / ${valueNum(data.values.srcHeight)}`, objectFit: 'fill' as const }
-                  : null),
-                // Flip X / Flip Y are shown, not just stored — a checkbox in a
-                // menu you have to close to see the result of is a guess. The
-                // rule is graphToCode's (`readImagePlacement`: `mirrorX: flipX`):
-                // both unchecked samples the picture as stored, and each ticked
-                // box mirrors it on that axis, on the card and on the mesh
-                // alike. `transform` is safe on this element — the card's own
-                // hover lift is a `scale:` on `.node-base`, not on the image.
-                ...(flipThumbX || flipThumbY
-                  ? { transform: `scale(${flipThumbX ? -1 : 1}, ${flipThumbY ? -1 : 1})` }
-                  : null),
-                ...(nearestThumb ? { imageRendering: 'pixelated' as const } : null),
-              }}
-            />
-          ) : (
-            /* No valid payload (added empty, or stripped on restore): the ONE
-               empty slot, the same element every NodeVisual surface draws. */
-            <ImageThumbEmpty language={language} />
-          )}
-        </>
+        <ImageCardPicture values={data.values} language={language} onLoad={() => updateNodeInternals(id)} />
       )}
 
       {/* EDGE PORTS — every socket of an edge-port node, both edges, placed
@@ -1364,7 +1391,7 @@ export const ShaderNode = memo(function ShaderNode({
               id={out.id}
               dataType={out.dataType}
               label={out.label}
-              style={{ top: calcTop(sockOv[out.id] ?? edgePortOffset(i, def.outputs.length)) }}
+              style={{ top: calcTop(sockOv[outputSocketKey(def.outputs, out)] ?? edgePortOffset(i, def.outputs.length)) }}
             />
           ))}
         </>
@@ -1480,7 +1507,7 @@ export const ShaderNode = memo(function ShaderNode({
                 )}
               </div>
 
-              {/* Right side: the output socket (outputs[0] moves out of its row
+              {/* Right side: the output socket (an output moves out of its row
                   when a designer socket override exists), labelled only for
                   the #8 exception — Data columns. */}
               <div className="shader-node__right">{rowOutput(row.output)}</div>
@@ -1529,16 +1556,24 @@ export const ShaderNode = memo(function ShaderNode({
           </div>
         );
       })}
-      {!edgePorts && rowsOutOff != null && def.outputs[0] && (
-        <TypedHandle
-          type="source"
-          position={Position.Right}
-          id={def.outputs[0].id}
-          dataType={def.outputs[0].dataType}
-          label={def.outputs[0].label}
-          style={{ top: calcTop(rowsOutOff) }}
-        />
-      )}
+      {/* Detached output sockets — every output the design moved, the first
+          ('out') or a later one (keyed by its id). An edge-port node placed
+          them all in the rail above. */}
+      {!edgePorts && def.outputs.map((out) => {
+        const off = sockOv[outputSocketKey(def.outputs, out)];
+        if (off == null) return null;
+        return (
+          <TypedHandle
+            key={`mo-${out.id}`}
+            type="source"
+            position={Position.Right}
+            id={out.id}
+            dataType={out.dataType}
+            label={out.label}
+            style={{ top: calcTop(off) }}
+          />
+        );
+      })}
       </div>
       {/* Drag-reveal for a ROWS-layout node: hidden sockets float on the card's
           left edge. Unreachable today — the Image node, the only reveal client,

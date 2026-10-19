@@ -5,7 +5,7 @@
  *   height?: EXACT body height (>=28, both layouts; shorter than content shrinks
  *   the node, content overflows; independent of glyph scale), text?: text-size
  *   multiplier (0.4-2.5, default 1; header/value/edge-label fonts), sockets?:
- *   per-socket offsets from body center (4px snap; keys = input ids + "out";
+ *   per-socket offsets from body center (4px snap; keys = input ids + "out" (the first output) + each later output by its own id;
  *   the CORNER DRAG rescales them with the height, the W/H number
  *   fields do not — renderer semantics unchanged, so no saved design moves) }
  * Node frame style (corner radius, border) is fixed app-wide.
@@ -68,15 +68,15 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   },
   "fresnel": {
     "svg": "<g transform=\"translate(28 28)\"><circle cx=\"0\" cy=\"0\" r=\"16\" fill=\"#FFFFFF\" stroke=\"#F57C00\" stroke-width=\"2.4\"></circle><circle cx=\"0\" cy=\"0\" r=\"12.74\" fill=\"none\" stroke=\"#B4B7C0\" stroke-width=\"0.6\"></circle></g>",
-    "scale": 1.2,
+    "scale": 1.15,
     "dx": 0.5,
-    "dy": -2.5,
-    "width": 47,
-    "height": 71,
+    "dy": 18.5,
+    "width": 50,
+    "height": 54,
     "sockets": {
-      "ior": 8,
-      "normal": 24,
-      "out": 24
+      "ior": -16,
+      "normal": 16,
+      "out": -16
     }
   },
   "normalLocal": {

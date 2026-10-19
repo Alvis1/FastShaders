@@ -25,3 +25,36 @@ export function addEdgeWaypoint(
   const wps = (edge.data?.waypoints ?? []) as { x: number; y: number }[];
   store.setEdgeWaypoints(edgeId, insertWaypointOrdered(center(src), center(tgt), wps, p), { history: true });
 }
+
+/**
+ * Index of the routing point of `points` (SCREEN coords) within `radius` px of
+ * `at`, nearest first, or -1. Pure, so the context menu's "was this a click ON
+ * a point?" test is unit-testable without React Flow.
+ */
+export function waypointIndexAt(
+  points: readonly { x: number; y: number }[],
+  at: { x: number; y: number },
+  radius: number,
+): number {
+  let best = -1;
+  let bestD = radius;
+  points.forEach((p, i) => {
+    const d = Math.hypot(p.x - at.x, p.y - at.y);
+    if (d <= bestD) {
+      best = i;
+      bestD = d;
+    }
+  });
+  return best;
+}
+
+/** Remove routing point `index` from the LIVE edge as ONE undo entry — the one
+ *  path the point's double-click and the edge menu's "Remove routing point"
+ *  share. A no-op for a missing edge or an index out of range. */
+export function removeEdgeWaypoint(edgeId: string, index: number): void {
+  const store = useAppStore.getState();
+  const edge = store.edges.find((e) => e.id === edgeId);
+  const wps = (edge?.data?.waypoints ?? []) as { x: number; y: number }[];
+  if (!edge || index < 0 || index >= wps.length) return;
+  store.setEdgeWaypoints(edgeId, wps.filter((_, i) => i !== index), { history: true });
+}

@@ -2077,7 +2077,12 @@ function applyPaint(prop, value) {
 const DEF_OFF = [-12.5, 12.5];          // default input offsets from body center (a, b)
 const DEFAULTS = { justify: 'center', scale: 1, dx: 0, dy: 0, width: 0, height: 0, text: 1 };
 const state = { type: null, glyph: '', justify: 'center', scale: 1, dx: 0, dy: 0, width: 0, height: 0, text: 1, sockets: {} };
-function defOffFor(key) { if (key === 'out') return 0; const n = NODE_BY_TYPE[state.type]; const i = n ? n.in.findIndex((x) => x[0] === key) : -1; return DEF_OFF[i] ?? 0; }
+/* Socket keys: an input is its port id; the FIRST output is 'out' (every saved design says so);
+   a LATER output (split y/z/w, toHsl h/s/l, Fresnel's facing, the Image channels) is its own port id.
+   Input and output ids never collide (outputSockets.test.ts), so one flat map holds both. */
+function outPortOfKey(n, key) { if (!n) return null; if (key === 'out') return n.out[0] ? n.out[0][0] : null; const i = n.out.findIndex((o, j) => j > 0 && o[0] === key); return i > 0 ? n.out[i][0] : null; }
+function isOutKey(key) { return outPortOfKey(NODE_BY_TYPE[state.type], key) != null; }
+function defOffFor(key) { if (isOutKey(key)) return 0; const n = NODE_BY_TYPE[state.type]; const i = n ? n.in.findIndex((x) => x[0] === key) : -1; return DEF_OFF[i] ?? 0; }
 /* op body height: explicit designer height wins (glyph NOT scaled with it);
    auto = 52px base grown just enough to fit the glyph */
 function opBodyH() { return state.height > 0 ? Math.max(28, state.height) : Math.max(52, Math.round(34 * state.scale) + 10); }
@@ -2446,7 +2451,7 @@ function renderNode() {
       ? String((n.def && n.def.name) || 'property1')
       : ndNodeLabel(state.type),
     values: values,
-    snapCol: sockDrag ? (sockDrag.key === 'out' ? 'r' : 'l') : null,
+    snapCol: sockDrag ? (isOutKey(sockDrag.key) ? 'r' : 'l') : null,
     onValueChange: (key, v) => {
       const s = p.ins[key];
       if (s) s.val = String(v); else p.vals[key] = v;
@@ -2576,8 +2581,9 @@ function endGlyphMove() {
 
 /* ------- sockets: drag ↕ along the border (4px snap); plain click = cycle -------
    Operator layout: inputs + output, offsets from the body center.
-   Rows layout: the FIRST OUTPUT is movable too — dragging detaches it from its
-   row and anchors it to the below-header region's center. Rows overrides
+   Rows layout: EVERY OUTPUT is movable too — dragging detaches it from its
+   row and anchors it to the below-header region's center (the first output is
+   keyed 'out', a later one by its port id). Rows overrides
    persist even at 0 (0 = region center ≠ the row default); "Reset positions"
    restores row anchoring. */
 /* A socket's CURRENT visual offset from the region centre, in state units.
@@ -2594,7 +2600,7 @@ function measuredSockOff(sockEl, regionEl) {
 /* Every socket the designer is allowed to author, with its EFFECTIVE offset
    right now: the stored value, else the operator default, else — for a
    row-anchored socket — where it is actually drawn. Keys mirror onSockDown:
-   input ids plus 'out' for the FIRST output only. */
+   every input id, 'out' for the FIRST output, every later output's own id. */
 function effectiveSockOffsets() {
   const n = NODE_BY_TYPE[state.type];
   if (!n) return {};
@@ -2603,12 +2609,14 @@ function effectiveSockOffsets() {
   const out = {};
   const keys = n.in.map((x) => x[0]);
   if (n.out[0]) keys.push('out');
+  n.out.slice(1).forEach((o) => keys.push(o[0]));
   for (const key of keys) {
     if (state.sockets[key] != null) { out[key] = state.sockets[key]; continue; }
     if (rows) {
-      const sel = key === 'out'
-        ? ".typed-handle[data-port][data-io='out']"
-        : ".typed-handle[data-port='" + key + "']";
+      const outPort = outPortOfKey(n, key);
+      const sel = outPort != null
+        ? ".typed-handle[data-io='out'][data-port='" + outPort + "']"
+        : ".typed-handle[data-io='in'][data-port='" + key + "']";
       const m = measuredSockOff(el('nodeWrap').querySelector(sel), regionEl);
       if (m != null) { out[key] = m; continue; }
     }
@@ -2628,9 +2636,10 @@ function onSockDown(e, sock) {
   if (e.button !== 0) return;
   const n = NODE_BY_TYPE[state.type];
   const io = sock.dataset.io, port = sock.dataset.port;
-  /* only the first output is movable/toggleable (split's x/y/z/w stay put) */
-  if (io === 'out' && (!n.out[0] || port !== n.out[0][0])) return;
-  const key = io === 'out' ? 'out' : port;
+  /* every output is movable; only the FIRST one (the preview state's single
+     "connected" switch) toggles on a plain click */
+  if (io === 'out' && !n.out.some((o) => o[0] === port)) return;
+  const key = io === 'out' ? (n.out[0] && port === n.out[0][0] ? 'out' : port) : port;
   e.preventDefault(); e.stopPropagation();
   const rows = !layoutIsOp();
   const cs = nodeCostScale(), z = ui.zoom || 1;
@@ -2675,7 +2684,7 @@ function endSockMove() {
   else {
     renderNode(); // unmount the snap ruler
     if (d.key === 'out') toggleOut();
-    else cycleIn(d.key);
+    else if (!isOutKey(d.key)) cycleIn(d.key); /* a later output has no preview state to cycle */
   }
 }
 
@@ -3014,7 +3023,7 @@ drop.addEventListener('drop', (ev) => { const f = ev.dataTransfer.files[0]; if (
 
 /* ---------------- File System Access: save to FastShaders ---------------- */
 const GLYPH_REL = ['src', 'components', 'NodeEditor', 'nodes', 'glyphs', 'customGlyphs.ts'];
-const FILE_HEADER = '/**\n * Per-node design overrides authored with node-designer.html (repo root).\n * { svg?: inner SVG (0 0 56 56), justify?: left|center|right, scale?: glyph-only scale,\n *   dx?/dy?: glyph nudge, width?: exact node width (>=24; header text wraps + header auto-grows),\n *   height?: EXACT body height (>=28, both layouts; shorter than content shrinks\n *   the node, content overflows; independent of glyph scale), text?: text-size\n *   multiplier (0.4-2.5, default 1; header/value/edge-label fonts), sockets?:\n *   per-socket offsets from body center (4px snap; keys = input ids + "out";\n *   the CORNER DRAG rescales them with the height, the W/H number\n *   fields do not — renderer semantics unchanged, so no saved design moves) }\n * Node frame style (corner radius, border) is fixed app-wide.\n * Rewritten wholesale by the designer on save.\n */\n';
+const FILE_HEADER = '/**\n * Per-node design overrides authored with node-designer.html (repo root).\n * { svg?: inner SVG (0 0 56 56), justify?: left|center|right, scale?: glyph-only scale,\n *   dx?/dy?: glyph nudge, width?: exact node width (>=24; header text wraps + header auto-grows),\n *   height?: EXACT body height (>=28, both layouts; shorter than content shrinks\n *   the node, content overflows; independent of glyph scale), text?: text-size\n *   multiplier (0.4-2.5, default 1; header/value/edge-label fonts), sockets?:\n *   per-socket offsets from body center (4px snap; keys = input ids + "out" (the first output) + each later output by its own id;\n *   the CORNER DRAG rescales them with the height, the W/H number\n *   fields do not — renderer semantics unchanged, so no saved design moves) }\n * Node frame style (corner radius, border) is fixed app-wide.\n * Rewritten wholesale by the designer on save.\n */\n';
 
 /* tiny IndexedDB k/v so the folder link survives reloads */
 function idb() { return new Promise((res, rej) => { const r = indexedDB.open('fastshaders-node-designer', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }

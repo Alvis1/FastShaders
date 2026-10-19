@@ -160,23 +160,16 @@ export function limitNoticeCopy(n: LimitNotice, language: Language): NoticeCopy 
       const device = d?.deviceLabel || t('your device', language);
       return {
         title: fillTemplate(t('Image resized for {device}', language), { device }),
-        // {name} AND {device} are user-supplied (a device label comes from an
-        // imported cost profile), so the fill is one pass: neither can capture
-        // a placeholder the other sentence half still needs.
-        message: fillTemplate(
-          t('{name} ({src}) is larger than the recommended texture size for {device} ({cap}px). It was downscaled to {final} to keep the shader fast on that headset.', language),
-          {
-            name: nameFor(n, 'subject', language),
-            src: dim(d?.sourceW, d?.sourceH),
-            device,
-            cap: String(d?.cap ?? ''),
-            final: dim(d?.finalW, d?.finalH),
-          },
-        ),
-        suggestions: [
-          t('Pick a more powerful target headset in the cost bar to allow larger textures.', language),
-          t('Or re-import with “Ignore image size limits” ticked to keep more resolution (heavier project, may slow the editor).', language),
-        ],
+        // {name} is user-supplied (and so is {device}, in the title): each
+        // fill is one pass, so neither can capture a placeholder.
+        // Deliberately two lines and no advice (owner, 2026-10-19): it is
+        // news, not a question, and the node's Resolution row is the way back.
+        message: fillTemplate(t('{name} was scaled from {src} to {final}.', language), {
+          name: nameFor(n, 'subject', language),
+          src: dim(d?.sourceW, d?.sourceH),
+          final: dim(d?.finalW, d?.finalH),
+        }),
+        suggestions: [],
         canProceed: false,
         toggle: { label: t('Don’t show this warning again', language), pref: 'hide-downscale-warning' },
       };

@@ -36,6 +36,15 @@ export interface CodeGroupAsset extends CodeGroupEntry {
   totalCost: number;
   nodes: AppNode[];
   edges: AppEdge[];
+  /**
+   * The wires the asset's own code sent into its Output, kept when the Output
+   * itself is dropped: source = a member, targetHandle = the channel the code
+   * returned (`return result` → color, `{ position: height }` → position). A
+   * PRESS onto a graph whose Output has no wires re-targets them at the live
+   * Output (utils/libraryAutoWire.ts), so nothing ever guesses a "last node".
+   * The `target` is the parsed Output's id and means nothing outside here.
+   */
+  outputEdges: AppEdge[];
 }
 
 /**
@@ -49,8 +58,14 @@ export function buildCodeGroup(entry: CodeGroupEntry, groupIdPrefix: string): Co
   // Filter out the output node — these are sub-graphs, not full shaders
   const nodes = rawNodes.filter((n) => n.data.registryType !== 'output');
   const nodeIds = new Set(nodes.map((n) => n.id));
+  const outputIds = new Set(
+    rawNodes.filter((n) => n.data.registryType === 'output').map((n) => n.id),
+  );
   const edges = rawEdges.filter(
     (e) => nodeIds.has(e.source) && nodeIds.has(e.target),
+  );
+  const outputEdges = rawEdges.filter(
+    (e) => nodeIds.has(e.source) && outputIds.has(e.target) && !!e.targetHandle,
   );
 
   // Sum node costs
@@ -188,5 +203,6 @@ export function buildCodeGroup(entry: CodeGroupEntry, groupIdPrefix: string): Co
     totalCost,
     nodes: [groupNode, ...members],
     edges,
+    outputEdges,
   };
 }

@@ -293,6 +293,15 @@
   text-shadow: 1px 1px 0 var(--node-cost-text-shadow, rgba(255, 255, 255, 0.6)) !important;
 }
 
+/* A SINK's total past the device's point budget is red, on the canvas and
+   off it — the cost bar's `.cost-bar__value--over` colour, so the number over
+   the Output and the one in the corner say the same thing (useSinkBadgeClass).
+   One class more than the canvas rule above, which it has to beat. */
+.node-base__cost-badge.node-base__cost-badge--over,
+.react-flow .node-base__cost-badge.node-base__cost-badge--over {
+  color: var(--cost-high) !important;
+}
+
 /* Standard selection highlight: the node is LIFTED — its contact shadow moves
    from 2px to 8px and nothing else changes (tokens.css documents why). The
    whole property is replaced rather than added to, which is exactly what

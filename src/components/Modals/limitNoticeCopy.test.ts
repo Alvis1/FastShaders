@@ -222,10 +222,7 @@ describe('image-resolution-cap (N6) and image-library-cap', () => {
       downscale: { deviceLabel: '{cap}', cap: 2048, sourceW: 4096, sourceH: 3072, finalW: 2048, finalH: 1536 },
     }, 'en');
     expect(c.title).toBe('Image resized for {cap}');
-    expect(c.message).toBe(
-      '“{device}.png” (4096×3072) is larger than the recommended texture size for {cap} (2048px). ' +
-        'It was downscaled to 2048×1536 to keep the shader fast on that headset.',
-    );
+    expect(c.message).toBe('“{device}.png” was scaled from 4096×3072 to 2048×1536.');
   });
 
   it('the library cap offers "Save anyway" and names the LIBRARY budget', () => {

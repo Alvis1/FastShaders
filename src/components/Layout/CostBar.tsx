@@ -1,7 +1,7 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppStore, VR_HEADSETS, resolveDeviceBudget } from '@/store/useAppStore';
-import { t } from '@/i18n';
+import { t, type Language } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { downloadBlob } from '@/utils/downloadBlob';
 import {
@@ -45,6 +45,74 @@ const NOTICE_TIMEOUT_MS = 12000;
 /** Every file this bar writes is pretty-printed JSON. */
 function downloadJson(data: unknown, fileName: string): void {
   downloadBlob(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), fileName);
+}
+
+/** A device as its dropdown row reads — `Meta Quest 3 (200 pts)`, a measured
+ *  profile marked ◆ (⚠ when its run was invalid), a hand-authored one ✎.
+ *  Shared with the intro window's stage (intro/BudgetScene.tsx). */
+export function deviceOptionText(
+  device: { label: string; maxPoints: number; meta?: CostProfile['meta'] },
+  language: Language,
+): string {
+  const mark = !device.meta ? '' : device.meta.manual ? '✎ ' : device.meta.valid === false ? '⚠ ' : '◆ ';
+  return `${mark}${device.label} (${device.maxPoints} ${t('pts', language)})`;
+}
+
+/**
+ * The bar's readout: `0 · total / max pts · max` over the gradient track and
+ * its marker. The bar wraps the total in its own button or span (`value`) and
+ * supplies the two pole pickers; the intro window's stage draws the same
+ * readout with inert poles (intro/BudgetScene.tsx).
+ */
+export function CostMeter({
+  total, max, language, colorLow, colorHigh, capOverridden = false, value, lowPole, highPole,
+}: {
+  total: number;
+  max: number;
+  language: Language;
+  colorLow: string;
+  colorHigh: string;
+  capOverridden?: boolean;
+  /** Wraps the total; it gets the value's class and its text. */
+  value?: (className: string, label: ReactNode) => ReactNode;
+  lowPole: ReactNode;
+  highPole: ReactNode;
+}) {
+  const percentage = Math.min(total / max, 1);
+  const over = total > max;
+  const label = (
+    <>
+      {/* A typed cap must never pass for the device's measured budget —
+          same rule as the "✎ custom" tag on a hand-authored profile. */}
+      {capOverridden && <span className="cost-bar__cap-mark">✎ </span>}
+      {total} / {max} {t('pts', language)}
+    </>
+  );
+  const cls = `cost-bar__value ${over ? 'cost-bar__value--over' : ''}`;
+  return (
+    <>
+      <div className="cost-bar__labels">
+        <span className="cost-bar__label-end">0</span>
+        {value ? value(cls, label) : <span className={cls}>{label}</span>}
+        <span className="cost-bar__label-end">{max}</span>
+      </div>
+      <div className="cost-bar__track-row">
+        {lowPole}
+        <div
+          className="cost-bar__track"
+          style={{
+            background: `linear-gradient(to right, ${colorLow} 0%, ${colorHigh} 100%)`,
+          }}
+        >
+          <div
+            className="cost-bar__indicator"
+            style={{ left: `${percentage * 100}%` }}
+          />
+        </div>
+        {highPole}
+      </div>
+    </>
+  );
 }
 
 export interface CostBarProps {
@@ -238,7 +306,6 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
     };
   }, [capMenuAt, capHost, closeCapMenu]);
 
-  const percentage = Math.min(totalCost / maxBudget, 1);
   const over = totalCost > maxBudget;
   const invalid = activeProfile?.meta.valid === false;
 
@@ -543,7 +610,7 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
           <optgroup label={t('Headsets', language)}>
             {VR_HEADSETS.map((h) => (
               <option key={h.id} value={h.id}>
-                {h.label} ({h.maxPoints} {t('pts', language)})
+                {deviceOptionText(h, language)}
               </option>
             ))}
           </optgroup>
@@ -551,7 +618,7 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
             <optgroup label={t('Measured (dropped benchmark)', language)}>
               {measuredProfiles.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.meta.valid === false ? '⚠ ' : '◆ '}{p.label} ({p.maxPoints} {t('pts', language)})
+                  {deviceOptionText(p, language)}
                 </option>
               ))}
             </optgroup>
@@ -563,7 +630,7 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
             <optgroup label={t('Custom (hand-authored)', language)}>
               {manualProfiles.map((p) => (
                 <option key={p.id} value={p.id}>
-                  ✎ {p.label} ({p.maxPoints} {t('pts', language)})
+                  {deviceOptionText(p, language)}
                 </option>
               ))}
             </optgroup>
@@ -639,24 +706,25 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
           </button>
         </div>
       )}
-      <div className="cost-bar__labels">
-        <span className="cost-bar__label-end">0</span>
-        {/* The total is the shader's price, and the Output node is where that
-            price is spent — so the number doubles as the way to GET there, the
-            same "take me to it" affordance the Output's palette tile and its
-            Add-node row carry (outputFocus.ts). A real <button>, not a span
-            with a click handler: it is keyboard-reachable and announces itself.
-            It renders as an inert <span> when there is no Output to jump to. */}
-        {(() => {
-          const label = (
-            <>
-              {/* A typed cap must never pass for the device's measured budget —
-                  same rule as the "✎ custom" tag on a hand-authored profile. */}
-              {capOverridden && <span className="cost-bar__cap-mark">✎ </span>}
-              {totalCost} / {maxBudget} {t('pts', language)}
-            </>
-          );
-          const cls = `cost-bar__value ${over ? 'cost-bar__value--over' : ''}`;
+      {/* The total is the shader's price, and the Output node is where that
+          price is spent — so the number doubles as the way to GET there, the
+          same "take me to it" affordance the Output's palette tile and its
+          Add-node row carry (outputFocus.ts). A real <button>, not a span
+          with a click handler: it is keyboard-reachable and announces itself.
+          It renders as an inert <span> when there is no Output to jump to.
+          Both gradient poles take `history="none"`: `setCostColorLow`/`High`
+          write `fs:costColorLow`/`High` and the store, with no pushHistory —
+          the gradient is a display PREFERENCE over the whole app (it recolors
+          every cost badge), not a property of the graph. Bracketing would push
+          an undo entry that restores nothing and clear the redo stack. */}
+      <CostMeter
+        total={totalCost}
+        max={maxBudget}
+        language={language}
+        colorLow={costColorLow}
+        colorHigh={costColorHigh}
+        capOverridden={capOverridden}
+        value={(cls, label) => {
           // deviceLabel can be an imported profile's label, so every sentence
           // it goes into is filled in ONE pass (utils/fillTemplate.ts).
           const explain = `${fillTemplate(t('Estimated GPU cost: {total} of {max} points for {headset}. A point is a rough measure of per-pixel shader work — staying under the budget keeps the frame rate smooth in VR.', language), { total: totalCost, max: maxBudget, headset: deviceLabel })}${over ? t(' You are over budget.', language) : ''}${capOverridden ? `\n${fillTemplate(t('Custom cap — {device} measures {n}. Right-click to change or reset it.', language), { device: deviceLabel, n: deviceMaxPoints })}` : `\n${t('Right-click to set the point cap.', language)}`}`;
@@ -674,41 +742,26 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
           ) : (
             <span className={cls} title={explain}>{label}</span>
           );
-        })()}
-        <span className="cost-bar__label-end">{maxBudget}</span>
-      </div>
-      {/* Both gradient poles take `history="none"`: `setCostColorLow`/`High`
-          write `fs:costColorLow`/`High` and the store, with no pushHistory —
-          the gradient is a display PREFERENCE over the whole app (it recolors
-          every cost badge), not a property of the graph. Bracketing would push
-          an undo entry that restores nothing and clear the redo stack. */}
-      <div className="cost-bar__track-row">
-        <PaletteColorPicker
-          className="cost-bar__pole-picker"
-          history="none"
-          value={costColorLow}
-          onPick={setCostColorLow}
-          title={t('Low impact color', language)}
-        />
-        <div
-          className="cost-bar__track"
-          style={{
-            background: `linear-gradient(to right, ${costColorLow} 0%, ${costColorHigh} 100%)`,
-          }}
-        >
-          <div
-            className="cost-bar__indicator"
-            style={{ left: `${percentage * 100}%` }}
+        }}
+        lowPole={
+          <PaletteColorPicker
+            className="cost-bar__pole-picker"
+            history="none"
+            value={costColorLow}
+            onPick={setCostColorLow}
+            title={t('Low impact color', language)}
           />
-        </div>
-        <PaletteColorPicker
-          className="cost-bar__pole-picker"
-          history="none"
-          value={costColorHigh}
-          onPick={setCostColorHigh}
-          title={t('High impact color', language)}
-        />
-      </div>
+        }
+        highPole={
+          <PaletteColorPicker
+            className="cost-bar__pole-picker"
+            history="none"
+            value={costColorHigh}
+            onPick={setCostColorHigh}
+            title={t('High impact color', language)}
+          />
+        }
+      />
       {splatFacts && (
         <div className="cost-bar__override">
           <span className="cost-bar__override-tag" title={t(SPLAT_FIGURE_HINT_KEY, language)}>

@@ -74,6 +74,7 @@ import {
   type TilePayload,
 } from './tileDrag';
 import {
+  CONNECT_SNAP_GAP,
   pickDropTargetNode,
   planDragConnect,
   wouldCreateCycle,
@@ -102,13 +103,17 @@ import { CostBar } from '@/components/Layout/CostBar';
 import { PreviewLink } from '@/components/Layout/PreviewLink';
 import { PreviewRail } from '@/components/Layout/PreviewRail';
 import { RAIL_ADD_OUTPUT_EVENT, RAIL_FOCUS_EVENT, focusRequestId } from '@/components/Layout/previewRailEvents';
-import { getCostScale, canvasInkColor } from '@/utils/colorUtils';
+import { getCostScale, canvasInkColor, canvasInkShadow, canvasGridColor } from '@/utils/colorUtils';
 import { nodeCostPoints, imageNodeCost, getCost, getBaseCosts, freshNodeCost } from '@/utils/nodeCost';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import { findSingletonNode } from './singletonNodes';
+import { pastedSpots, PASTE_STEP } from './pastePlacement';
+import { axisLockChanges, type DragStarts } from './axisLock';
+import { NOTE_TILE_TYPE } from '@/utils/noteDefaults';
 import { nodeEl, handleEl } from './nodeElement';
-import { groupFrameSize, isCollapsedMember } from '@/utils/groupFrame';
+import { absoluteNodePosition, groupFrameSize, isCollapsedMember } from '@/utils/groupFrame';
+import { LIBRARY_WIRE_GAP, libraryWireOutput, revealCornerViewport } from '@/utils/libraryAutoWire';
 import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { isTypingTarget } from '@/utils/isTypingTarget';
@@ -255,9 +260,6 @@ const MULTI_SELECT_KEYS = ['Shift'];
 const DROP_ON_EDGE_RADIUS = 12;
 /** Pixels of movement before a node drag is considered "real" (and worth pushing history). */
 const DRAG_HISTORY_THRESHOLD = 2;
-/** Drag-connect: flow-px gap between the two handle anchors when the dropped
- *  node snaps into place beside the node it just connected to. */
-const CONNECT_SNAP_GAP = 48;
 /** Placeholder node id when planning a drag-connect for a palette tile whose
  *  node doesn't exist yet — a fresh id matches no edge, so it can neither
  *  cycle nor occupy anything. Swapped for the real id at drop. */
@@ -272,6 +274,18 @@ function getNodeSize(n: AppNode) {
 }
 
 /** Compute absolute (flow-space) position of a node, walking up the parent chain. */
+/**
+ * React Flow hands the drag callbacks its OWN copy of a dragged node, whose
+ * position is the raw pointer-driven one — never the store's, which the Shift
+ * axis lock (axisLock.ts) may have pinned. Every drag handler reads the
+ * store's, or a drop would reparent, splice or nudge from where the node is
+ * not, and a selection drop would write the unpinned position back.
+ */
+function withStorePosition(node: AppNode, allNodes: readonly AppNode[]): AppNode {
+  const stored = allNodes.find((n) => n.id === node.id);
+  return stored && stored.position !== node.position ? { ...node, position: stored.position } : node;
+}
+
 function nodeAbsolutePos(node: AppNode, allNodes: AppNode[]): { x: number; y: number } {
   let x = node.position.x;
   let y = node.position.y;
@@ -946,8 +960,35 @@ export function NodeEditor() {
    * straight to the store action and so is untouched here, which is what keeps
    * the A key selecting frames along with everything else.
    */
+  /**
+   * Shift held during a node drag pins it to one axis (axisLock.ts). The
+   * position changes carry no event, so the key is tracked here — a window
+   * listener in the CAPTURE phase, since nothing on the canvas may swallow a
+   * bare Shift, and dropped on blur so a Shift released in another window
+   * cannot stay stuck down.
+   */
+  const shiftHeldRef = useRef(false);
+  const dragStartsRef = useRef<DragStarts>(new Map());
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') shiftHeldRef.current = e.type === 'keydown';
+    };
+    const onBlur = () => { shiftHeldRef.current = false; };
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('keyup', onKey, true);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('keyup', onKey, true);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, []);
+
   const onNodesChange = useCallback(
-    (changes: Parameters<typeof storeOnNodesChange>[0]) => {
+    (raw: Parameters<typeof storeOnNodesChange>[0]) => {
+      const changes = axisLockChanges(
+        raw, useAppStore.getState().nodes, dragStartsRef.current, shiftHeldRef.current,
+      );
       if (flowStore.getState().userSelectionRect) {
         storeOnNodesChange(
           applyGroupMarqueeRule(useAppStore.getState().nodes, changes),
@@ -1222,27 +1263,49 @@ export function NodeEditor() {
   const clipboardRef = useRef<AppNode[]>([]);
 
   useEffect(() => {
+    // The view centre the last paste was aimed at, and how many pastes in a
+    // row hit it: a repeated Ctrl+V without moving the view steps each copy
+    // PASTE_STEP further, or every copy would land exactly on the one before.
+    let lastPaste: { x: number; y: number; n: number } | null = null;
+
     /**
      * Clone nodes + their internal edges, deselect originals, select clones.
-     * `onPasted` runs once the clones actually LAND, which may be later (the
-     * image-budget notice's "Add anyway") or never (Cancel).
+     * `toView` centres the set in the view (paste); otherwise it lands +30
+     * beside the source (duplicate) — see pastePlacement.ts. The clones
+     * land later (the image-budget notice's "Add anyway") or never (Cancel).
      */
-    function pasteNodes(sourceNodes: AppNode[], onPasted?: (clones: AppNode[]) => void): void {
+    function pasteNodes(sourceNodes: AppNode[], toView: boolean): void {
       const store = useAppStore.getState();
       const idMap = new Map<string, string>();
 
       if (sourceNodes.length === 0) return;
 
+      let target: { x: number; y: number } | null = null;
+      let landed: { x: number; y: number; n: number } | null = null;
+      const rect = toView ? canvasRef.current?.getBoundingClientRect() : undefined;
+      if (rect && rect.width > 0 && rect.height > 0) {
+        const c = screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+        const n = lastPaste && Math.hypot(lastPaste.x - c.x, lastPaste.y - c.y) < 1 ? lastPaste.n + 1 : 0;
+        landed = { x: c.x, y: c.y, n };
+        target = { x: c.x + n * PASTE_STEP, y: c.y + n * PASTE_STEP };
+      }
+      const spots = pastedSpots(sourceNodes, store.nodes, target);
+
+      for (const node of sourceNodes) idMap.set(node.id, generateId());
       const clones = sourceNodes.map((node) => {
-        const newId = generateId();
-        idMap.set(node.id, newId);
         const cloned = cloneNodeSharingPayloads(node);
         // A pasted output node arrives INACTIVE: the clone must not carry the
         // active flag off the original (several outputs may coexist, exactly
         // one active — utils/sdfPartition.ts). The original keeps driving.
         delete (cloned.data as Record<string, unknown>).activeOutput;
-        cloned.id = newId;
-        cloned.position = { x: node.position.x + 30, y: node.position.y + 30 };
+        cloned.id = idMap.get(node.id)!;
+        const spot = spots.get(node.id)!;
+        cloned.position = spot.position;
+        // A member pasted WITH its group belongs to the group's clone, not to
+        // the original frame.
+        const parentId = spot.parentId === undefined ? undefined : (idMap.get(spot.parentId) ?? spot.parentId);
+        if (parentId === undefined) delete cloned.parentId;
+        else cloned.parentId = parentId;
         cloned.selected = true;
         return cloned;
       });
@@ -1271,7 +1334,7 @@ export function NodeEditor() {
         live.pushHistory();
         live.setNodes([...live.nodes.map((n) => ({ ...n, selected: false })), ...clones] as AppNode[]);
         live.setEdges([...live.edges, ...edgeClones] as AppEdge[]);
-        onPasted?.(clones);
+        if (landed) lastPaste = landed;
       };
 
       // The project image budget, counted on every path that ADDS a payload
@@ -1340,11 +1403,7 @@ export function NodeEditor() {
       if (mod && key === 'v') {
         if (clipboardRef.current.length === 0) return;
         e.preventDefault();
-        // Shift the clipboard for cascading pastes, but only once the paste
-        // has landed: a paste refused by the image budget keeps its clipboard.
-        pasteNodes(clipboardRef.current, (clones) => {
-          clipboardRef.current = clones.map((n) => cloneNodeSharingPayloads(n));
-        });
+        pasteNodes(clipboardRef.current, true);
       }
 
       // Ctrl+G — group selected nodes (Ctrl+Shift+G ungroups the selected group)
@@ -1373,7 +1432,7 @@ export function NodeEditor() {
         if (selected.length === 0) return;
         e.preventDefault();
         clipboardRef.current = cloneNodesSharingPayloads(selected);
-        pasteNodes(selected);
+        pasteNodes(selected, false);
       }
 
       // Delete / Backspace / X — remove selected nodes and/or edges (X mimics Blender's delete)
@@ -1436,7 +1495,7 @@ export function NodeEditor() {
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, []);
+  }, [screenToFlowPosition]);
 
   // Track the dragged node's start position so we can detect "no real movement" clicks.
   const dragStartPosRef = useRef<{ x: number; y: number } | null>(null);
@@ -1459,6 +1518,7 @@ export function NodeEditor() {
     // The drag can wander over the 3D preview; see setCanvasBusy.
     setCanvasBusy(true);
     dragStartPosRef.current = { x: node.position.x, y: node.position.y };
+    dragStartsRef.current.clear();
     // A drag-connect preview forces tooltips of its own; a leftover tap-shown
     // label next to them would muddy which socket the drop will commit to.
     clearSocketTapTooltip();
@@ -1726,10 +1786,11 @@ export function NodeEditor() {
   // (highlight + socket tooltip); otherwise fall back to the drop-on-edge
   // nearest-edge highlight.
   const onNodeDrag = useCallback(
-    (_event: React.MouseEvent, draggedNode: AppNode, draggedNodes: AppNode[]) => {
-      if (draggedNode.type === 'group' || draggedNode.type === 'note') return;
+    (_event: React.MouseEvent, rfDragged: AppNode, draggedNodes: AppNode[]) => {
+      if (rfDragged.type === 'group' || rfDragged.type === 'note') return;
 
       const store = useAppStore.getState();
+      const draggedNode = withStorePosition(rfDragged, store.nodes);
       // Visible size, not the measured box: cost-scaled cards render bigger,
       // so the tested point must be the center the user actually sees.
       const { w: nw, h: nh } = nodeVisualSize(draggedNode, store.edges);
@@ -1812,7 +1873,10 @@ export function NodeEditor() {
   // Drop-on-edge: insert dragged node between source and target
   // + Anti-overlap: nudge dropped node so it doesn't sit on top of another
   const onNodeDragStop = useCallback(
-    (_event: React.MouseEvent, draggedNode: AppNode) => {
+    (_event: React.MouseEvent, rfDragged: AppNode) => {
+      // Where the node really landed — the store's position, which a Shift
+      // axis lock may have pinned (see withStorePosition).
+      const draggedNode = withStorePosition(rfDragged, useAppStore.getState().nodes);
       // Released FIRST, above everything that can throw or return early below —
       // the same rule the drag chrome follows. Leaving it set would make the 3D
       // preview permanently unclickable.
@@ -2043,9 +2107,10 @@ export function NodeEditor() {
   // one commit so a box-selected clump dropped onto a group all reparents
   // together rather than only one landing inside.
   const onSelectionDragStop = useCallback(
-    (_event: React.MouseEvent, draggedNodes: AppNode[]) => {
+    (_event: React.MouseEvent, rfDragged: AppNode[]) => {
       const store = useAppStore.getState();
       const allNodes = store.nodes;
+      const draggedNodes = rfDragged.map((n) => withStorePosition(n, allNodes));
       const draggedById = new Map<string, AppNode>(draggedNodes.map((n) => [n.id, n]));
 
       // Each node's local position in the drag event is already the post-drag
@@ -2340,6 +2405,31 @@ export function NodeEditor() {
     previewTileAt(getHtml5TileDrag(), event.clientX, event.clientY);
   }, [previewTileAt]);
 
+  // A placed preset/texture shows its frame's TOP-RIGHT corner — where the
+  // asset's last node sits, the one an Output wire leaves from (owner,
+  // 2026-10-17). A corner already in view moves nothing, so a press that lands
+  // on screen never shifts the canvas; otherwise the view PANS (the zoom is
+  // kept) and keeps the corner clear of the canvas chrome. A frame later, so
+  // the group has rendered.
+  const revealLibraryCorner = useCallback(
+    (groupId: string) => {
+      requestAnimationFrame(() => {
+        const group = useAppStore.getState().nodes.find((n) => n.id === groupId);
+        const el = canvasRef.current;
+        const rect = el?.getBoundingClientRect();
+        if (!group || !el || !rect || rect.width <= 0 || rect.height <= 0) return;
+        const chrome = [...el.querySelectorAll('.node-editor__cost-overlay, .node-editor__new-btn')].map((c) => {
+          const r = c.getBoundingClientRect();
+          return { x: r.left - rect.left, y: r.top - rect.top, w: r.width, h: r.height };
+        });
+        const corner = { x: group.position.x + groupFrameSize(group).w, y: group.position.y };
+        const next = revealCornerViewport(corner, getViewport(), { w: rect.width, h: rect.height }, chrome);
+        if (next) void setViewport(next, { duration: VIEW_GLIDE_MS });
+      });
+    },
+    [getViewport, setViewport],
+  );
+
   // Place a node/group/texture at the given screen point. Shared by both the
   // HTML5 onDrop path (desktop) and the touch tileDrag path (iPad/phone).
   const placeTilePayload = useCallback(
@@ -2359,28 +2449,66 @@ export function NodeEditor() {
       clearConnectPreview();
       const position = screenToFlowPosition({ x: clientX, y: clientY });
 
+      // A PRESSED preset/texture wires into every Output socket it feeds that
+      // is still EMPTY, and lands beside the Output (utils/libraryAutoWire.ts).
+      // Which sockets are free depends on the asset, so the store decides once
+      // the library has loaded — no free socket means the usual scattered add.
+      // Press only: a drag lands where it was aimed and is never wired.
+      const state = useAppStore.getState();
+      const wireTarget =
+        activate && (payload.kind === 'preset' || payload.kind === 'texture')
+          ? libraryWireOutput(state.nodes, state.edges)
+          : null;
+
       // Eval telemetry: which ready-made asset (or palette node) was placed.
       // Node-kind drops ALSO produce a node-add via addNode — this event is
-      // the "came from the palette" marker, not a duplicate count.
-      evalLog('asset-drop', {
-        kind: payload.kind,
-        id: payload.kind === 'node' ? payload.nodeType : payload.id,
-      });
+      // the "came from the palette" marker, not a duplicate count. A wired
+      // press logs once it has landed, with how many Output wires it brought
+      // (`wired`); they are deliberately not `edge-connect`s — the participant
+      // drew none of them, and `connects` counts their own wiring.
+      const logAssetDrop = (wired: number) =>
+        evalLog('asset-drop', {
+          kind: payload.kind,
+          id: payload.kind === 'node' ? payload.nodeType : payload.id,
+          ...(wired > 0 ? { wired } : {}),
+        });
+      if (!wireTarget) logAssetDrop(0);
 
       // A DRAGGED group lands with its frame's top-right corner on the pointer
       // or finger; a click/Enter add keeps the top-left at its scattered
-      // centre point (`GroupDropAnchor`, store/useAppStore.ts).
+      // centre point (`GroupDropAnchor`, store/useAppStore.ts) — except a
+      // Preset or Texture, whose top-right corner lands there either way, so
+      // the end of the chain that feeds an Output is the end that shows.
       const anchor: GroupDropAnchor = activate ? 'top-left' : 'top-right';
       if (payload.kind === 'savedGroup') {
         useAppStore.getState().instantiateSavedGroup(payload.id, position, { anchor });
         return;
       }
-      if (payload.kind === 'texture') {
-        useAppStore.getState().instantiateBuiltinTexture(payload.id, position, anchor);
+      if (wireTarget && (payload.kind === 'texture' || payload.kind === 'preset')) {
+        // Top-right corner a gap LEFT of the Output, tops level, so the
+        // asset's last node sits beside the channels it feeds.
+        const out = absoluteNodePosition(wireTarget, new Map(state.nodes.map((n) => [n.id, n])));
+        const beside = { x: out.x - LIBRARY_WIRE_GAP, y: out.y };
+        const place =
+          payload.kind === 'texture' ? state.instantiateBuiltinTexture : state.instantiateBuiltinPreset;
+        void place(payload.id, position, 'top-right', { outputId: wireTarget.id, beside }).then((placed) => {
+          logAssetDrop(placed?.wired ?? 0);
+          if (placed) revealLibraryCorner(placed.groupId);
+        });
         return;
       }
-      if (payload.kind === 'preset') {
-        useAppStore.getState().instantiateBuiltinPreset(payload.id, position, anchor);
+      if (payload.kind === 'texture' || payload.kind === 'preset') {
+        const place =
+          payload.kind === 'texture' ? state.instantiateBuiltinTexture : state.instantiateBuiltinPreset;
+        void place(payload.id, position, 'top-right').then((placed) => {
+          if (placed) revealLibraryCorner(placed.groupId);
+        });
+        return;
+      }
+
+      // The asset bar's Note tile: the Add menu's own action (NoteTileCard).
+      if (payload.nodeType === NOTE_TILE_TYPE) {
+        useAppStore.getState().addNote(position);
         return;
       }
 
@@ -2477,6 +2605,7 @@ export function NodeEditor() {
       clearConnectPreview,
       applyConnection,
       scheduleTileConnectSnap,
+      revealLibraryCorner,
     ],
   );
 
@@ -2943,12 +3072,10 @@ export function NodeEditor() {
   // backdrop glare and read as brighter than the nodes they connect — see that
   // function for why only the white end is eased.
   const contrastColor = canvasInkColor(nodeEditorBgColor);
-  const contrastShadow = contrastColor === '#000000'
-    ? 'rgba(255, 255, 255, 0.65)'
-    : 'rgba(0, 0, 0, 0.65)';
+  const contrastShadow = canvasInkShadow(contrastColor);
   // The dot-grid color is a React Flow PROP (SVG fill), so tokens.css can't
   // reach it — flip it here, following the CANVAS backdrop (subtle either way).
-  const gridColor = contrastColor === '#000000' ? '#BBBBBB' : 'rgba(255, 255, 255, 0.12)';
+  const gridColor = canvasGridColor(contrastColor);
   // NB no `--canvas-bg` here: the canvas color is applied directly to the React
   // Flow root. Publishing it as a var invited chrome (the asset bar) to tint
   // itself with the user's canvas pick, which it must not do.

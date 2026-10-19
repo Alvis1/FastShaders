@@ -275,6 +275,8 @@ export function SusModal({ open, onClose }: Props) {
         consent: {
           givenAtIso: session?.consentIso ?? '',
           textVersion: session?.consentVersion ?? '',
+          // Present only where the consent asked (every arm but /evalpro).
+          ...(session?.ageConfirmed ? { ageConfirmed: true } : {}),
         },
         // Which task and which experimental condition this session ran under.
         task: evalTask(),

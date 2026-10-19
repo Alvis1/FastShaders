@@ -428,3 +428,93 @@ export function autoLayout(
     return { ...node, position: { x: cx - size.get(node.id)!.width / 2, y: top } };
   });
 }
+
+/**
+ * Organize (the canvas menu's Selection → Organize, `organizeSelection`): the
+ * NEW absolute positions of the selected nodes, or null when fewer than two
+ * would move. Notes stay put; a node whose group is also selected rides with
+ * it. The units are laid out by `autoLayout` (measured boxes win) and the
+ * result is translated back onto the selection's old top-left corner, so the
+ * organized cluster stays where the user had it. Pure — the store applies it
+ * (re-parenting group members), and the intro's Organize slide plays it.
+ */
+export function organizeLayout(
+  nodes: readonly AppNode[],
+  edges: readonly AppEdge[],
+): Map<string, { x: number; y: number }> | null {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const selected = nodes.filter((n) => n.selected && n.type !== 'note');
+  if (selected.length < 2) return null;
+  const selectedIds = new Set(selected.map((n) => n.id));
+
+  // Layout units: a selected node rides with its parent when that parent (or
+  // any ancestor group) is also selected — laying both out independently
+  // would move the member twice.
+  const hasSelectedAncestor = (n: AppNode): boolean => {
+    let pid = n.parentId;
+    while (pid) {
+      if (selectedIds.has(pid)) return true;
+      pid = byId.get(pid)?.parentId;
+    }
+    return false;
+  };
+  const units = selected.filter((n) => !hasSelectedAncestor(n));
+  if (units.length < 2) return null;
+  const unitIds = new Set(units.map((n) => n.id));
+
+  // Absolute position of a (possibly group-nested) node.
+  const absOf = (n: AppNode): { x: number; y: number } => {
+    let x = n.position.x;
+    let y = n.position.y;
+    let pid = n.parentId;
+    while (pid) {
+      const p = byId.get(pid);
+      if (!p) break;
+      x += p.position.x;
+      y += p.position.y;
+      pid = p.parentId;
+    }
+    return { x, y };
+  };
+
+  // Edges between units, with endpoints lifted to their unit: an edge into a
+  // selected group's member connects the GROUP unit (collapsed groups already
+  // carry rewritten boundary edges pointing at the group node itself).
+  const unitOf = (id: string): string | null => {
+    let n = byId.get(id);
+    while (n) {
+      if (unitIds.has(n.id)) return n.id;
+      n = n.parentId ? byId.get(n.parentId) : undefined;
+    }
+    return null;
+  };
+  const seenPairs = new Set<string>();
+  const unitEdges: AppEdge[] = [];
+  for (const e of edges) {
+    const src = unitOf(e.source);
+    const tgt = unitOf(e.target);
+    if (!src || !tgt || src === tgt) continue;
+    const key = `${src}\0${tgt}`;
+    if (seenPairs.has(key)) continue;
+    seenPairs.add(key);
+    unitEdges.push({ ...e, source: src, target: tgt });
+  }
+
+  // Lay out the units in absolute space (autoLayout assigns fresh positions;
+  // spreading keeps `measured` on each node so the real DOM boxes are used),
+  // then translate the result back onto the selection's old top-left corner.
+  const absUnits = units.map((n) => ({ ...n, position: absOf(n) }) as AppNode);
+  const laid = autoLayout(absUnits, unitEdges);
+  let oldMinX = Infinity, oldMinY = Infinity, newMinX = Infinity, newMinY = Infinity;
+  for (const n of absUnits) {
+    oldMinX = Math.min(oldMinX, n.position.x);
+    oldMinY = Math.min(oldMinY, n.position.y);
+  }
+  for (const n of laid) {
+    newMinX = Math.min(newMinX, n.position.x);
+    newMinY = Math.min(newMinY, n.position.y);
+  }
+  const dx = oldMinX - newMinX;
+  const dy = oldMinY - newMinY;
+  return new Map(laid.map((n) => [n.id, { x: n.position.x + dx, y: n.position.y + dy }]));
+}

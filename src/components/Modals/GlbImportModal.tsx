@@ -1,7 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
-import { glbDialogCopy } from '@/utils/glbImportCopy';
+import { glbDialogCopy, type GlbDialogCopy } from '@/utils/glbImportCopy';
 import type { GlbDialogPlan, GlbImportFacts } from '@/utils/glbImportGate';
 import { useModalKeys } from './useModalKeys';
 import './CsvImportModal.css';
@@ -87,7 +87,6 @@ export function GlbImportModal({ request, phase, progress, portalHost, onChoose 
   const { facts, plan, fileName } = request;
   const copy = glbDialogCopy(plan, facts, { hasModel, phase, progress, fileName }, language);
   const building = phase === 'building';
-  const modelOnlyBlocked = copy.modelOnlyDisabledReason !== null;
 
   return createPortal(
     <div
@@ -96,86 +95,120 @@ export function GlbImportModal({ request, phase, progress, portalHost, onChoose 
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => e.preventDefault()}
     >
-      <div
-        ref={panelRef}
-        className="csv-import-modal__panel glb-import-modal__panel"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="glb-import-modal-title"
-        aria-describedby="glb-import-modal-facts"
-        aria-busy={building || undefined}
-        tabIndex={-1}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="csv-import-modal__title csv-import-modal__file" id="glb-import-modal-title">
-          {copy.title}
-        </div>
-        {copy.facts.length > 0 && (
-          <div className="glb-import-modal__facts" id="glb-import-modal-facts">
-            {copy.facts.map((line, i) => (
-              <div key={i} className="csv-import-modal__message">{line}</div>
-            ))}
-          </div>
-        )}
-        {copy.lines.map((line, i) =>
-          line.tone === 'heading' ? (
-            <div key={i} className="glb-import-modal__subtitle">{line.text}</div>
-          ) : (
-            <div key={i} className={'csv-import-modal__message' + (line.tone === 'warn' ? ' glb-import-modal__warn' : '')}>
-              {line.text}
-            </div>
-          ),
-        )}
-        {copy.progress && (
-          <div className="glb-import-modal__progress" aria-live="polite">{copy.progress}</div>
-        )}
-        <div className="csv-import-modal__heading">{copy.importHeading}</div>
-        {/* DOM order IS visual order: the two answers, then the restore when
-            it is offered, then Cancel. Tab therefore walks the dialog the way
-            it reads, and Cancel — the one that changes nothing — is last
-            rather than first. */}
-        <div className="csv-import-modal__choices">
-          <button
-            ref={modelOnlyRef}
-            className="csv-import-modal__button csv-import-modal__button--yes csv-import-modal__choice"
-            // `aria-disabled`, never `disabled`, for the refused case: a truly
-            // disabled control drops its native `title` in WebKit, and the
-            // title is the only place the refusal is explained.
-            aria-disabled={modelOnlyBlocked || undefined}
-            title={copy.modelOnlyTitle}
-            disabled={building}
-            onClick={() => { if (!modelOnlyBlocked) onChoose('model'); }}
-          >
-            {copy.modelOnlyLabel}
-          </button>
-          {copy.primaryLabel && (
-            <button
-              className="csv-import-modal__button csv-import-modal__button--yes csv-import-modal__choice"
-              title={copy.primaryTitle}
-              disabled={building}
-              onClick={() => onChoose('build')}
-            >
-              {copy.primaryLabel}
-            </button>
-          )}
-        </div>
-        {copy.restoreLabel && (
-          <div className="csv-import-modal__choices">
-            <button
-              className="csv-import-modal__button csv-import-modal__button--primary csv-import-modal__choice"
-              title={copy.restoreTitle ?? undefined}
-              disabled={building}
-              onClick={() => onChoose('restore')}
-            >
-              {copy.restoreLabel}
-            </button>
-          </div>
-        )}
-        <button className="csv-import-modal__cancel" disabled={building} onClick={() => onChoose('cancel')}>
-          {copy.cancelLabel}
-        </button>
-      </div>
+      <GlbImportPanel
+        copy={copy}
+        building={building}
+        busy={building}
+        panelRef={panelRef}
+        modelOnlyRef={modelOnlyRef}
+        onChoose={onChoose}
+      />
     </div>,
     portalHost ?? document.body,
+  );
+}
+
+/**
+ * The question's panel, from its copy (`glbDialogCopy`): the dialog above, and
+ * the intro window's stage (intro/ModelScene.tsx), which draws it inert over
+ * its 3D view for a model the real plan offers.
+ */
+export function GlbImportPanel({
+  copy, building, busy, panelRef, modelOnlyRef, onChoose, inert = false,
+}: {
+  copy: GlbDialogCopy;
+  building: boolean;
+  busy: boolean;
+  panelRef?: RefObject<HTMLDivElement>;
+  modelOnlyRef?: RefObject<HTMLButtonElement>;
+  onChoose: (c: GlbImportChoice) => void;
+  /** A picture of the dialog: no dialog role, nothing focusable. */
+  inert?: boolean;
+}) {
+  const modelOnlyBlocked = copy.modelOnlyDisabledReason !== null;
+  const tab = inert ? -1 : undefined;
+  return (
+    <div
+      ref={panelRef}
+      className="csv-import-modal__panel glb-import-modal__panel"
+      role={inert ? undefined : 'dialog'}
+      aria-modal={inert ? undefined : true}
+      aria-labelledby={inert ? undefined : 'glb-import-modal-title'}
+      aria-describedby={inert ? undefined : 'glb-import-modal-facts'}
+      aria-busy={busy || undefined}
+      tabIndex={-1}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="csv-import-modal__title csv-import-modal__file" id={inert ? undefined : 'glb-import-modal-title'}>
+        {copy.title}
+      </div>
+      {copy.facts.length > 0 && (
+        <div className="glb-import-modal__facts" id={inert ? undefined : 'glb-import-modal-facts'}>
+          {copy.facts.map((line, i) => (
+            <div key={i} className="csv-import-modal__message">{line}</div>
+          ))}
+        </div>
+      )}
+      {copy.lines.map((line, i) =>
+        line.tone === 'heading' ? (
+          <div key={i} className="glb-import-modal__subtitle">{line.text}</div>
+        ) : (
+          <div key={i} className={'csv-import-modal__message' + (line.tone === 'warn' ? ' glb-import-modal__warn' : '')}>
+            {line.text}
+          </div>
+        ),
+      )}
+      {copy.progress && (
+        <div className="glb-import-modal__progress" aria-live="polite">{copy.progress}</div>
+      )}
+      <div className="csv-import-modal__heading">{copy.importHeading}</div>
+      {/* DOM order IS visual order: the two answers, then the restore when
+          it is offered, then Cancel. Tab therefore walks the dialog the way
+          it reads, and Cancel — the one that changes nothing — is last
+          rather than first. */}
+      <div className="csv-import-modal__choices">
+        <button
+          ref={modelOnlyRef}
+          tabIndex={tab}
+          className="csv-import-modal__button csv-import-modal__button--yes csv-import-modal__choice"
+          // `aria-disabled`, never `disabled`, for the refused case: a truly
+          // disabled control drops its native `title` in WebKit, and the
+          // title is the only place the refusal is explained.
+          aria-disabled={modelOnlyBlocked || undefined}
+          title={copy.modelOnlyTitle}
+          disabled={building}
+          onClick={() => { if (!modelOnlyBlocked) onChoose('model'); }}
+        >
+          {copy.modelOnlyLabel}
+        </button>
+        {copy.primaryLabel && (
+          <button
+            tabIndex={tab}
+            className="csv-import-modal__button csv-import-modal__button--yes csv-import-modal__choice"
+            title={copy.primaryTitle}
+            disabled={building}
+            onClick={() => onChoose('build')}
+          >
+            {copy.primaryLabel}
+          </button>
+        )}
+      </div>
+      {copy.restoreLabel && (
+        <div className="csv-import-modal__choices">
+          <button
+            tabIndex={tab}
+            className="csv-import-modal__button csv-import-modal__button--primary csv-import-modal__choice"
+            title={copy.restoreTitle ?? undefined}
+            disabled={building}
+            onClick={() => onChoose('restore')}
+          >
+            {copy.restoreLabel}
+          </button>
+        </div>
+      )}
+      <button className="csv-import-modal__cancel" tabIndex={tab} disabled={building} onClick={() => onChoose('cancel')}>
+        {copy.cancelLabel}
+      </button>
+    </div>
   );
 }

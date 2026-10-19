@@ -342,6 +342,10 @@ export function scriptToTSLWithSettings(
           // pass so the extractor can never disagree with the stripper about
           // which entries are material settings.
           if (MATERIAL_KEYS.has(key)) { rawMaterial[key] = val; return null; }
+          // The weld's seam hint is DERIVED from the code (buildShaderModule
+          // re-emits it from what the displacement reads), so it never
+          // becomes a channel of the imported graph.
+          if (key === 'uvDisplaced') return null;
           // Reverse positionNode: positionLocal.add(normalLocal.mul(x)) → position: x
           // BOTH forms collapse to the same `position: x`, so which one it was
           // is only recoverable HERE — and buildShaderModule re-emits with

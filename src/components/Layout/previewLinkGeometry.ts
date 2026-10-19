@@ -4,7 +4,16 @@
  * the node test env (no DOM). All coordinates are viewport/client pixels.
  */
 
-import { distancePointToCubicBezier } from '@/components/NodeEditor/edges/bezierGeometry';
+import {
+  ARROW_FLARE,
+  ARROW_MIN_ARC,
+  ARROW_SPACING,
+  arrowMarks,
+  bezierControlOffset,
+  chevronPath,
+  distancePointToCubicBezier,
+  ribbonHalfWidth,
+} from '@/components/NodeEditor/edges/bezierGeometry';
 
 export interface Pt {
   x: number;
@@ -30,10 +39,15 @@ function round2(n: number): number {
 
 /**
  * The two cubic control points the link curve bends through. The control-handle
- * reach is half the horizontal span, floored so a near-vertical link still bows
- * instead of collapsing to a straight segment; handles follow the sign of the
- * span so the curve stays sensible even if the preview ends up left of the
- * Output node.
+ * reach is the canvas wires' own (`bezierControlOffset`, React Flow's forward
+ * rule): half the horizontal span, so a wire leaving the Output's socket
+ * rightward is drawn exactly as a canvas wire into a left-side input would be.
+ * NO floor: the reach used to floor at 40, which overshot every wire with less
+ * than ~40px to cover — an Output parked beside the rail drew a little loop
+ * there, and its chevron sat on the loop. A near-vertical link is a straight
+ * segment, as a canvas wire between aligned sockets is. Handles follow the sign
+ * of the span (where the canvas swings a backward wire round in a loop), so an
+ * Output panned off past the rail still enters it plainly.
  *
  * Split out of `linkPath` so the RENDERED curve and the HIT TEST read the same
  * numbers — the rule `edges/bezierGeometry.ts` already states for TypedEdge and
@@ -42,7 +56,7 @@ function round2(n: number): number {
  */
 export function linkControlPoints(start: Pt, end: Pt): { c1: Pt; c2: Pt } {
   const dx = end.x - start.x;
-  const reach = Math.max(40, Math.abs(dx) * 0.5);
+  const reach = bezierControlOffset(Math.abs(dx));
   const dir = dx >= 0 ? 1 : -1;
   return {
     c1: { x: start.x + reach * dir, y: start.y },
@@ -62,6 +76,44 @@ export function linkPath(start: Pt, end: Pt): string {
     `M ${round2(start.x)} ${round2(start.y)} ` +
     `C ${round2(c1.x)} ${round2(c1.y)} ${round2(c2.x)} ${round2(c2.y)} ` +
     `${round2(end.x)} ${round2(end.y)}`
+  );
+}
+
+/**
+ * Half the height of a STILL wire's chevron, screen px: the wire's own
+ * half-width (2.25 of PreviewLink.css's 4.5px stroke) plus the arms' 4.75px
+ * reach past it. The canvas sizes its chevrons the same way (`ribbonHalfWidth
+ * + ARROW_FLARE`); this wire is three times as heavy as a canvas one at zoom 1,
+ * so its chevrons are larger to match.
+ */
+export const LINK_ARROW_HALF = 7;
+
+/** The canvas's "too short for a chevron" arc, scaled with the chevron: a
+ *  canvas chevron is `ribbonHalfWidth(1) + ARROW_FLARE` (3.5) high, this one
+ *  twice that, so the unscaled 36 left a lone chevron filling an Output parked
+ *  ~40px from the rail. */
+export const LINK_ARROW_MIN_ARC = ARROW_MIN_ARC * LINK_ARROW_HALF / (ribbonHalfWidth(1) + ARROW_FLARE);
+
+/**
+ * A STILL wire's direction chevrons as ONE path `d`, by the canvas wires' own
+ * rule (`arrowMarks` + `chevronPath`, the same calls TypedEdge makes): an odd
+ * count ~`ARROW_SPACING` apart along the ARC so one sits on the midpoint, none
+ * on a wire too short to carry one (`LINK_ARROW_MIN_ARC`), never more than
+ * `ARROW_MAX` — and
+ * so never one on the wire's END, where it meets its rail socket. Measured on
+ * the curve `linkPath` draws (`linkControlPoints`), so a chevron cannot sit
+ * off its wire. Screen px, like the wire itself: the spacing does not follow
+ * the canvas zoom because the wire's weight does not.
+ */
+export function linkArrows(start: Pt, end: Pt): string {
+  const { c1, c2 } = linkControlPoints(start, end);
+  return chevronPath(
+    arrowMarks(
+      [[start.x, start.y, c1.x, c1.y, c2.x, c2.y, end.x, end.y]],
+      ARROW_SPACING,
+      LINK_ARROW_MIN_ARC,
+    ),
+    LINK_ARROW_HALF,
   );
 }
 

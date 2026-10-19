@@ -49,6 +49,19 @@
   border-radius: var(--border-radius-sm);
 }
 
+.eval-consent__age-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.eval-consent__age-row input {
+  margin: 0;
+}
+
 /* ---- SUS form ---- */
 
 .sus-modal__meta {

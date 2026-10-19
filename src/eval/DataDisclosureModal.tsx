@@ -135,7 +135,7 @@ export function DataDisclosureModal({ onClose }: Props) {
             {item(
               'The session record',
               'session.json',
-              'your participant code, start and submit times, time zone, your task and cost-budget condition, the price table used for your shader, graph counts, and the technical facts about this computer.',
+              'your participant code, your confirmation that you are 18 or older (if you were asked), start and submit times, time zone, your task and cost-budget condition, the price table used for your shader, graph counts, and the technical facts about this computer.',
             )}
             {item(
               'The shader you built',

@@ -1,0 +1,392 @@
+/* The intro window (IntroWindow.tsx). Panel, title, message and button are
+   the shared dialog chrome (CsvImportModal.css); only the stage is its own.
+
+   Like the asset-card stylesheets, this one may SCALE the node cards (from the
+   stage wrapper) and position their WRAPPERS, but never reach into a card:
+   assetCardGeometry.test.ts sweeps it for geometry on node-internal classes. */
+
+.fs-intro__panel {
+  width: min(720px, 94vw);
+}
+
+/* Twice the dialog title size — owner request. */
+.fs-intro__title.csv-import-modal__title {
+  font-size: calc(var(--font-size-sm) * 2);
+  line-height: 1.2;
+}
+
+/* Everything sits on one centre line (owner, 2026-10-17): the title with the
+   language switch beside it, and Start with "Don't show this again" under it. */
+.fs-intro__head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+}
+
+.fs-intro__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.fs-intro__again {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+/* Arrow · stage · arrow. */
+.fs-intro__body {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.fs-intro__slide {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fs-intro__arrow {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0 6px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-sm);
+  color: var(--text-primary);
+  font-size: 40px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.fs-intro__arrow:hover {
+  background: var(--bg-surface-hover);
+}
+
+/* One small box per hint; the shown one filled. */
+.fs-intro__dots {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+.fs-intro__dot {
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.fs-intro__dot--on {
+  background: var(--border-focus);
+  border-color: var(--border-focus);
+}
+
+.fs-intro__caption {
+  text-align: center;
+  min-height: 3em;
+}
+
+/* The window onto the stage; its height follows the stage's scale. */
+.fs-intro__viewport {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+}
+
+/* The stage is a small canvas at zoom 1, scaled to the window as a whole.
+   It wears `node-editor` and `react-flow` only as SCOPES — the canvas's
+   drag-connect rules (`.node-editor .react-flow__node.fs-connect-target`, the
+   socket ring) and its in-canvas node rules (the Output's preview socket, the
+   cost badge ink) are written under them — so `.node-editor`'s own pane
+   layout is undone here. `isolation` keeps the lifted node's z-index (10000,
+   `.fs-connect-front`) inside the stage. */
+.fs-intro__stage.node-editor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  transform-origin: 0 0;
+  overflow: hidden;
+  isolation: isolate;
+  pointer-events: none;
+  user-select: none;
+}
+
+.fs-intro__grid,
+.fs-intro__wires {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+
+.fs-intro__scene {
+  position: absolute;
+  inset: 0;
+}
+
+.fs-intro__node {
+  will-change: transform;
+}
+
+/* Above everything, the lifted node included — the pointer is the OS's own
+   on the canvas, and nothing covers it. */
+.fs-intro__cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 10001;
+  overflow: visible;
+  will-change: transform;
+}
+
+.fs-intro__cursor-ring {
+  fill: none;
+  stroke: var(--border-focus);
+  stroke-width: 2;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.fs-intro__cursor--pressed .fs-intro__cursor-ring {
+  opacity: 1;
+}
+
+/* The right-click: a mouse with its right button lit, beside the arrow. */
+.fs-intro__mouse {
+  opacity: 0;
+}
+
+.fs-intro__cursor--right .fs-intro__mouse {
+  opacity: 1;
+}
+
+.fs-intro__mouse-right {
+  fill: var(--border-focus);
+}
+
+/* The canvas menus, placed on the stage instead of over the window. Their own
+   classes draw them; only the positioning is this stage's. */
+.context-menu.fs-intro__menu {
+  position: absolute;
+  z-index: 10000;
+}
+
+/* A key being pressed. */
+.fs-intro__key {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 10002;
+  padding: 4px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 3px;
+  border-radius: var(--border-radius-sm);
+  box-shadow: var(--shadow-float);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+/* A group frame on the stage (BudgetScene): GroupNode's own markup, placed by
+   its wrapper the way React Flow places a group node. */
+.fs-intro__frame {
+  position: absolute;
+}
+
+/* The app's dialogs, drawn over the stage instead of the window (ImageScene):
+   their own classes, placed on the stage. */
+.fs-intro__stage .csv-import-modal__backdrop.fs-intro__backdrop {
+  position: absolute;
+}
+
+/* A file being dragged in from the operating system. No app chrome exists for
+   this, so it is the stage's own: a picture and the file's name and size. */
+.fs-intro__file {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-1);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-float);
+  opacity: 0.92;
+  will-change: transform;
+  white-space: nowrap;
+}
+
+.fs-intro__file-thumb {
+  width: 48px;
+  height: 36px;
+  object-fit: cover;
+  display: block;
+}
+
+.fs-intro__file-name {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.fs-intro__file-meta {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The toolbar's centre cluster along the stage's top (FolderScene): the
+   toolbar's own classes, placed on the stage. Above the cards, as the real
+   toolbar's popovers float over the canvas. */
+.toolbar.fs-intro__toolbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10000;
+}
+
+/* CodeScene's graph: the canvas at a zoom that fits the last graph, as the
+   canvas's own viewport scales its nodes. */
+.fs-intro__graph {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  transform-origin: 0 0;
+}
+
+/* CodeScene's code panel: the panel's own chrome (CodeEditor.css) along the
+   stage's bottom, and a body drawn in Monaco's stock theme colours — the
+   editor itself is a megabyte this slide does not load. 12px instead of the
+   editor's 14px so the longest line fits the stage. */
+.code-editor.fs-intro__code {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: auto;
+  z-index: 10000;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.fs-intro__code-body {
+  flex: 1;
+  overflow: hidden;
+  padding-top: 4px;
+  background: #fffffe;
+  color: #000000;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre;
+  /* Monaco draws `=>` as two characters (fontLigatures is off by default). */
+  font-variant-ligatures: none;
+}
+
+.fs-intro__code-line {
+  display: flex;
+  height: 18px;
+}
+
+.fs-intro__code-num {
+  flex: 0 0 34px;
+  padding-right: 12px;
+  text-align: right;
+  color: #237893;
+}
+
+.fs-intro__tok-kw { color: #0000ff; }
+.fs-intro__tok-str { color: #a31515; }
+.fs-intro__tok-num { color: #098658; }
+.fs-intro__tok-com { color: #008000; }
+.fs-intro__code-sel { background: #add6ff; }
+
+.fs-intro__caret {
+  display: inline-block;
+  width: 0;
+  height: 16px;
+  margin-right: -2px;
+  vertical-align: -3px;
+  border-left: 2px solid #000000;
+}
+
+.fs-intro__code--dark .fs-intro__code-body { background: #1e1e1e; color: #d4d4d4; }
+.fs-intro__code--dark .fs-intro__code-num { color: #858585; }
+.fs-intro__code--dark .fs-intro__tok-kw { color: #569cd6; }
+.fs-intro__code--dark .fs-intro__tok-str { color: #ce9178; }
+.fs-intro__code--dark .fs-intro__tok-num { color: #b5cea8; }
+.fs-intro__code--dark .fs-intro__tok-com { color: #6a9955; }
+.fs-intro__code--dark .fs-intro__code-sel { background: #264f78; }
+.fs-intro__code--dark .fs-intro__caret { border-left-color: #aeafad; }
+
+/* DrawScene's note: notes ride ABOVE the resting graph on the canvas
+   (NoteNode.css), so the stage keeps it over the cards and the ink. */
+.fs-intro__note {
+  z-index: 5;
+}
+
+/* The caret while the note is typed into, in the note's own text colour. */
+.fs-intro__note-caret {
+  display: inline-block;
+  width: 0;
+  height: 1.1em;
+  margin-left: 1px;
+  vertical-align: -0.2em;
+  border-left: 1.5px solid currentColor;
+}
+
+/* A canvas region on the stage that wears `.node-editor__canvas` so the
+   canvas's own state rules reach it (Preview mode's `fs-previewing` dim,
+   PreviewScene) — laid over the whole stage instead of flexing in a pane. */
+.fs-intro__stage .node-editor__canvas.fs-intro__canvas {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+
+/* The 3D pane: the real preview document (IntroPreview), framed as the pane
+   frames it. */
+.fs-intro__pane {
+  position: absolute;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+}
+
+.fs-intro__preview {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  pointer-events: none;
+}
+
+/* The marquee band and the box round a selection, placed on the stage
+   (React Flow positions them inside its own pane). Pictures only. */
+.fs-intro__marquee {
+  position: absolute;
+  pointer-events: none;
+  z-index: 5;
+}

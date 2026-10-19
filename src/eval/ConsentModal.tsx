@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { EVAL_DPO_CONTACT, EVAL_RETENTION_PERIOD, warnIfConsentIncomplete } from './evalMode';
+import { evalTask } from './evalTask';
 import { DataDisclosureModal } from './DataDisclosureModal';
 import { LangSwitch } from './LangSwitch';
 import { useStudyDialog } from './studyDialog';
@@ -40,14 +41,24 @@ import './eval.css';
  * package; these five bullets have to be true, not complete.
  */
 
+/*
+ * THE AGE CONFIRMATION (consent-10) is asked in every arm but the professional
+ * one: `/eval` and `/evalp` are handed to students, some of whom may be under
+ * 18, while `/evalpro` participants are working professionals. Agree stays
+ * disabled until it is ticked, and the tick rides the consent record
+ * (`ageConfirmed`) so a package shows the participant affirmed it.
+ */
+const ASKS_AGE = !evalTask().proQuestions;
+
 interface Props {
-  onAgree: (participant: string) => void;
+  onAgree: (participant: string, ageConfirmed: boolean) => void;
   onDecline: () => void;
 }
 
 export function ConsentModal({ onAgree, onDecline }: Props) {
   const language = useAppStore((s) => s.language);
   const [participant, setParticipant] = useState('');
+  const [adult, setAdult] = useState(false);
   const [showDisclosure, setShowDisclosure] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -124,12 +135,20 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
           {EVAL_RETENTION_PERIOD
             ? `${t('The data is stored under your participant code, not your name, used only for this research and kept', language)} ${EVAL_RETENTION_PERIOD}.`
             : t('The data is stored under your participant code, not your name, used only for this research and deleted when the project ends.', language)}{' '}
+          {ASKS_AGE && `${t('Only people aged 18 or older can take part.', language)} `}
           {t('Taking part is voluntary. To stop, close this tab: nothing is kept unless you submit. Later you can have your data deleted by quoting your participant code, and you can complain to the Data State Inspectorate (Datu valsts inspekcija).', language)}
         </div>
 
         <div className="eval-consent__section">
           <strong>{t('When you are finished, press EXPORT in the toolbar and choose “Submit”.', language)}</strong>
         </div>
+
+        {ASKS_AGE && (
+          <label className="eval-consent__age-row">
+            <input type="checkbox" checked={adult} onChange={(e) => setAdult(e.target.checked)} />
+            <strong>{t('I confirm that I am 18 years of age or older.', language)}</strong>
+          </label>
+        )}
 
         <div className="eval-consent__code-row">
           <label htmlFor="eval-participant">{t('Participant code (from the researcher):', language)}</label>
@@ -151,7 +170,11 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
           <button
             type="button"
             className="csv-import-modal__button csv-import-modal__button--yes"
-            onClick={() => onAgree(participant.trim())}
+            disabled={ASKS_AGE && !adult}
+            onClick={() => {
+              if (ASKS_AGE && !adult) return;
+              onAgree(participant.trim(), ASKS_AGE && adult);
+            }}
           >
             {t('I agree — start the session', language)}
           </button>

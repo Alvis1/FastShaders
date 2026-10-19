@@ -44,62 +44,146 @@ Every export carries the editor project inside it, so dragging an exported file 
 </a-scene>
 ```
 
-1. Click **EXPORT** in FastShaders. You get `myshader.js` (a `.zip`? unzip it and keep its folders).
-2. Put it in a folder next to an `index.html` holding the code above, with `myshader.js` changed to your file's name. Easier: the code panel's **A-Frame** tab → **Copy** gives that page ready-made.
-3. Open the page through a local web server. Double-clicking it gives `Failed to fetch`. **Search for:** `VS Code Live Server`.
+Those two scripts are all you need: `a-frame-180-a-01.min.js` bundles **A-Frame 1.8.0 + Three.js r184 (WebGPU)**, and `a-frame-shaderloader-0.8.js` rewrites the module's `import … from 'three/tsl'` to read that bundle's single Three.js instance — so **no import map and no shim are required**. The loader version is not a choice: every export the app produces pins it (`LOADER_FILE` in `src/engine/tslToShaderModule.ts`), so bump this snippet whenever that moves. Shaders exported by older releases name 0.6 or 0.5 in their header; those files stay on the CDN, frozen, so an old export keeps loading the loader it was written for. Without A-Frame the same loader runs the exported `.js` on plain Three.js r184 — see [Using the shader module with plain Three.js](#using-the-shader-module-with-plain-threejs). Serve the page over http(s): the loader `fetch`es `myshader.js` and imports it as a blob, so opening the HTML straight from disk (`file://`) leaves the mesh unshaded with `Failed to fetch` in the console.
 
-For VR, put the folder online over https (**search for:** `GitHub Pages tutorial`) and keep `renderer="backend: webgl"`. A shader using **Displacement** needs `segments-width="64" segments-height="64"` on the shape. Stuck? Open the console (F12, or Cmd+Option+J on a Mac) and search the web for its first red message. Without A-Frame, see [plain Three.js](#using-the-shader-module-with-plain-threejs).
+`renderer="backend: webgl"` is what makes the page enter VR: Three.js r184 picks its WebGPU backend whenever `navigator.gpu` exists, and that backend refuses a WebXR session outright. The attribute forces the WebGL2 path, which compiles the same TSL and can present to a headset. Drop it for a flat page if you would rather have WebGPU.
 
-<!-- Maintainers: every export pins its loader (LOADER_FILE in src/engine/tslToShaderModule.ts).
-     When that moves, update every snippet in this file; src/loaderSwitch.test.ts checks them. -->
-
-## Single-GLB export
-
-With your own `.glb` model in the preview, EXPORT saves one `.glb` holding the model, its pictures and the shader (right-click **EXPORT** → **Export .zip** for separate files). Drag it back in and choose **Restore** to keep editing. On a page, use the two scripts above and:
-
-```html
-<a-entity gltf-model="url(my-shader.glb)" shader="src: model" position="0 1.6 -3"></a-entity>
-```
-
-**Never use `src: model` on a page that loads models other people supply:** it runs the code inside the file. Blender and other viewers show the model without the shader, and re-saving it there deletes the shader.
-
-## Gaussian splats
-
-Drop a `.splat`, `.spz`, `.ply` or `.ksplat` scan (up to 1,000,000 splats) on the preview and wire a **Splat Output**: **Cut**, **Color**, **Opacity**, **Move**, **Size**. Right-click it for **Invert**, **Replace own colour** and **React to light**. A refused `.ply`? Convert it to `.splat` in [SuperSplat](https://superspl.at/editor). On a page, add the splat script after the two above (`kind` = the file type):
-
-```html
-<script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/fs-splat-0.1.js"></script>
-<a-entity splat-model="src: url(scene.splat); kind: splat" shader="src: myshader.js" position="0 1.6 -3"></a-entity>
-```
+A `.glb` export carries the shader inside the model and loads with `shader="src: model"` instead of a file path. Read [Single-GLB export](#single-glb-export) before you use it.
 
 ## Using the shader module with plain Three.js
 
-For Three.js programmers. The code panel's **Three.js** tab writes a full page; the core is:
+Loader 0.8 is a plain Three.js loader too: without A-Frame on the page it installs `globalThis.FastShaders`, which does for a mesh what the A-Frame component does for an entity. The code panel's **Three.js** tab writes such a page for the current shader, making these same three calls. With the loader:
 
+<!-- prettier-ignore -->
 ```html
 <script type="importmap">
-  { "imports": {
+  {
+    "imports": {
       "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.webgpu.min.js",
       "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.webgpu.min.js",
       "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.tsl.min.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/" } }
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/"
+    }
+  }
 </script>
 <script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/a-frame-shaderloader-0.8.js"></script>
 <script type="module">
   import * as THREE from 'three/webgpu';
-  FastShaders.use(THREE);
-  const shader = await FastShaders.load('./myshader.js');
+
+  FastShaders.use(THREE); // the three/webgpu namespace
+  const shader = await FastShaders.load('./myshader.js'); // fetch, the loader's transforms, import
+
+  const renderer = new THREE.WebGPURenderer({ antialias: true });
+  renderer.setSize(innerWidth, innerHeight);
+  document.body.appendChild(renderer.domElement);
+  await renderer.init();
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(
+    50,
+    innerWidth / innerHeight,
+    0.1,
+    100,
+  );
+  camera.position.set(0, 0, 3);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+  const key = new THREE.DirectionalLight(0xffffff, 2);
+  key.position.set(2, 3, 2);
+  scene.add(key);
+
   const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.8, 64, 32));
-  const binding = FastShaders.apply(mesh, shader, { values: { speed: 2 } }); // binding.set('speed', 3) later
-  // add `mesh` to your scene and render with THREE.WebGPURenderer as usual
+  scene.add(mesh);
+  const binding = FastShaders.apply(mesh, shader, { values: { speed: 2 } });
+
+  renderer.setAnimationLoop(() => renderer.render(scene, camera));
 </script>
 ```
 
-Keep three at 0.184.0, the version every export is made for. For glTF models call `loader.register(FastShaders.gltfPlugin)`; for compressed ones import `three/addons/loaders/DRACOLoader.js`, then `FastShaders.decoders.configure({ DRACOLoader })` and `FastShaders.decoders.install(loader)`. A shader inside a `.glb` runs through `FastShaders.applyFromGltf(gltf)`.
+Three is pinned to **0.184.0**, the revision every export names in its header and declares as `export const threeRevision`; a floating version tag can rename a TSL function out from under a saved page. `FastShaders.use(THREE)` takes the `three/webgpu` namespace and sets `globalThis.THREE` when the page has none. `FastShaders.apply` is synchronous and returns a binding: change a property at runtime with `binding.set('speed', 3)` (a number, or a colour as `'#rrggbb'`), read it as `binding.uniforms.speed.value`, and `binding.dispose()` puts the mesh back as it was. Serve the folder over http(s).
 
-## Browser support
+What `apply` does for you, as the A-Frame component does:
 
-Chrome 111+, Safari 16.4+, Firefox 126+ (and Edge, Opera). In older Safari the editor starts but the code panel fails.
+- **Uniforms from `schema`** — one `uniform()` node per entry, a `THREE.Color` for `type: 'color'`, starting at `values` where you pass them.
+- **The material** — the returned channels (`colorNode`, `roughnessNode`, …) on a `MeshPhysicalNodeMaterial`, with `emissiveNode` copied to `colorNode` when no colour is wired, and the material settings `transparent`, `side`, `alphaTest` and `depthWrite`.
+- **`parts`** — a per-mesh shader returns `parts: { "<mesh name>": { …same keys… } }`, and each entry becomes the material of the sub-mesh with that name.
+- **The weld** — a shader with `positionNode` has a box's corner copies welded by POSITION, or its faces separate, unless the module returns `mergeVertices: false`. Under the default it welds only three's own primitive geometries, never a loaded model.
+- **Barycentric corners** — a Wireframe node returns `barycentric: true` and reads an `attribute('bary')` the loader builds.
+- **The revision check** — one warning when the module's `threeRevision` differs from the page's three. It never stops the shader.
+
+Tessellation stays your job: a shader with `positionNode` needs vertices to move, and a default `PlaneGeometry`/`BoxGeometry` has one segment per side.
+
+**glTF models.** Register the loader's plugin on your `GLTFLoader` before loading — `loader.register(FastShaders.gltfPlugin)` — so a shader that shades by glTF material index knows which material each mesh came from; `FastShaders.decoders.install(loader)` adds the Draco and meshopt decoders the loader ships, from the `decoders/` folder beside its script. The bare `three/webgpu` namespace has no `DRACOLoader`, so a plain page imports it from `three/addons/loaders/DRACOLoader.js` (the import map's `three/addons/` entry, where `GLTFLoader` lives too) and calls `FastShaders.decoders.configure({ DRACOLoader })` before `install(loader)`. `LoadingManager` comes from the namespace `use()` bound.
+
+**WebGLRenderer.** three r184 can render node materials on the classic renderer through `renderer.setNodesHandler(new WebGLNodesHandler())` (`three/addons/tsl/WebGLNodesHandler.js`). `WebGLRenderer` is not in the `three/webgpu` build, so such a page maps `three` to `build/three.module.min.js`. The handler states its own limits (no VSM shadows, no MRT, no transmission, fog and environment that do not update until disposed), and an environment map may be prefiltered twice. Untested here.
+
+**Without the loader.** A module imports `THREE` from `three/webgpu` when it builds a texture (Image, Data and Colormap nodes, and Data Stripes / Data Viz fed by a Data node) and imports every `three/tsl` function it calls, so `await import('./myshader.js')` works with the import map above. Everything in the list above is then yours to redo by hand: `BufferGeometryUtils.mergeVertices`, for one, does not weld a box, because its corner copies differ in normal and UV.
+
+## Single-GLB export
+
+One `.glb` can carry the whole thing: the 3D model you dropped on the preview, the textures the shader uses, the shader module and the editor project.
+
+**EXPORT follows the preview.** What it writes depends on what the preview is showing, and right-click **EXPORT** offers the other way out for that export:
+
+| Preview shows                                                                 | EXPORT writes                                                     | Right-click EXPORT                                             |
+| ----------------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------- |
+| a dropped `.glb`, or a `.gltf` with its data embedded                         | that one `.glb`, with the shader inside                           | _Export .zip_: the shader file, with the model under `models/` |
+| a built-in shape                                                              | the shader file alone: `.js`, or `.zip` when the graph has images | _Export with model_: adds the shape as an `.obj`               |
+| an `.obj`, a Gaussian splat, or a `.gltf` with separate buffer or image files | a `.zip` with the shader file and the model                       | nothing else to offer                                          |
+
+The study mode never writes a `.glb`. EXPORT leaves out nodes that feed no Output; tick _Include unconnected nodes_ in the same right-click menu to keep them.
+
+**Imported materials keep four textures.** When _Mesh with Materials_ turns a dropped model's materials into a shader, it keeps only the four slots its Texture nodes fill: base colour, metal/rough, normal and emissive. Occlusion and extension textures (clearcoat and the like) are dropped at import, so no export can carry them.
+
+The page that runs it is the code panel's **A-Frame** tab, which always shows the page for what EXPORT writes — for the `.glb`:
+
+```html
+<script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/a-frame-180-a-01.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/a-frame-shaderloader-0.8.js"></script>
+```
+
+<!-- prettier-ignore -->
+```html
+<a-entity gltf-model="url(my-shader.glb)" shader="src: model" position="0 1.6 -3"></a-entity>
+```
+
+Loader **0.8 or later** is required: `src: model` is its opt-in for the module stored inside the file. Loader 0.6 reads it as a file path, logs one `shader-error`, and the model keeps its own PBR materials. On plain Three.js the same module runs through `FastShaders.applyFromGltf(gltf)` after `loader.register(FastShaders.gltfPlugin)`.
+
+**Never use `src: model` on a page that loads models other people supply.** The code inside the file runs with the page's privileges, exactly like a script tag.
+
+What other tools show:
+
+- **Blender, the three.js editor, Babylon's sandbox, model-viewer, any glTF 2.0 viewer** — an ordinary PBR model with the OPTIMISED textures, which replace the originals. Viewers that implement `EXT_texture_webp` read the WebP; the others read the PNG/JPEG copy, re-encoded from the same pixels (the extension is listed in `extensionsUsed`, never in `extensionsRequired`). None of them shows the authored shader look: extras are ignored.
+- **Round trips that LOSE the shader, silently** — a Blender re-export (even with Custom Properties ticked), `gltf-transform prune`, gltfpack. The module and project live in buffer views that only `extras` references, so a repack drops them or leaves the indices dangling. FastShaders then reports the file as carrying no shader, or as damaged.
+- **Scale** — the model appears at its AUTHORED scale on such a page; the editor's own preview normalises it to 1.6 units.
+
+Drag the `.glb` back onto FastShaders and the import dialog offers **Restore** — the graph, its stored values and the model come back.
+
+## Gaussian splats
+
+Drop a `.splat`, `.spz`, `.ply` (a Gaussian-splat PLY without spherical harmonics) or `.ksplat` file on the preview. A splat is shaded only through a **Splat Output**, so when the graph holds other nodes but no Splat Output, FastShaders asks first: **Clear graph** starts over with one Splat Output, and **Keep graph** loads the splat and leaves the graph as it is. Otherwise add a Splat Output from the Output tab. Then wire it:
+
+- **Cut** removes every splat where the value is above zero. A distance field wired to Cut keeps its inside; **Invert** keeps the outside, and **Feather** softens the edge.
+- **Color** tints each splat's own colour: a pattern or a swatch multiplies it, so white keeps a splat as it was and black darkens it. Tick **Replace own colour** (right-click the Splat Output) to paint over it instead, and also whenever your Color is built from **Vertex Color**, or the splat's colour counts twice. **Opacity** fades each splat.
+- Patterns built from **UV**, such as the Checker or Gradient preset or an Image node, are projected onto the splats from the front, like a slide.
+- **Move** displaces each splat. Keep it to small, smooth fields: splats are still depth-sorted by their original position.
+- **Size** scales each splat.
+- **React to light** (right-click the Splat Output) lights each splat with a key light, using its flattest axis as its surface normal, the way Blender relights splats. Set the light's direction, colour and ambient in the same menu. The captured colours already hold the light of the scan, so the side away from the light darkens. A **Normal** node points at the camera until React to light is on, so a rim or fresnel effect needs it.
+
+Up to 1,000,000 splats. View-dependent colour (spherical harmonics) is not shown. This shades splats; it does not edit the file. To crop, delete or clean splats use [SuperSplat](https://superspl.at/editor), then drop its export here. Opening a shader clears a loaded model, so open the shader first and drop the splat after it, or drop both together.
+
+An exported splat shader needs the splat runtime after the two scripts above, and a `splat-model` entity instead of a geometry:
+
+```html
+<script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/fs-splat-0.1.js"></script>
+
+<a-entity
+  splat-model="src: url(scene.splat); kind: splat"
+  shader="src: myshader.js"
+  position="0 1.6 -3"
+></a-entity>
+```
+
+`splat-model` scales the scene to a longest side of 1.6 units, the frame the shader was authored in; `size: 0` keeps the file's own units, and every pattern the shader drives from position or UV (a Checker, a noise, an image on Color) then follows those units instead of the ones you previewed.
 
 ## Tech Stack
 
@@ -127,9 +211,29 @@ start (they are not committed), so a clone without the submodule stops with a me
 Desktop builds additionally need a [Rust toolchain](https://rustup.rs):
 `npm run tauri dev` / `npm run tauri build`. Release binaries are built by CI on version tags.
 
+## Browser support
+
+**Chrome 111+ · Safari 16.4+ · Firefox 126+** (and Chromium-based Edge/Opera at the Chrome floor).
+Builds target `esnext` with no polyfills and nothing transpiled down, so the floor is whatever the
+newest feature actually used demands. That feature differs per engine, and so does the damage below it
+— only Safari's is a hard break, which is exactly why the single number is not the whole story:
+
+| Engine  | Floor | Set by                                                      | What an older version does                                                                                              |
+| ------- | ----- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Chrome  | 111   | `color-mix()` (`CostBar.css`)                               | Everything works; the benchmark drop-target loses a tint (a literal `rgba()` fallback runs first).                      |
+| Safari  | 16.4  | ES2022 class static blocks, shipped by `monaco-editor` 0.55 | The app boots and the node editor works; the **code panel** fails when opened, because Monaco is a lazily-loaded chunk. |
+| Firefox | 126   | the non-standard `zoom` property (`NodePreviewCard.css`)    | The app works, but every asset-browser tile renders ~1.49× and is clipped by the strip.                                 |
+
+A browser too old to start the app at all lands on a bilingual note in `index.html` rather than a blank
+page. That watchdog fires only when React never mounts, so it does **not** catch the Safari case above —
+there the editor really did start.
+
+Beyond the app itself, the 3D preview needs WebGL2 (WebGPU is used when the browser offers a working
+adapter, and the preview falls back on its own when it does not).
+
 ## License
 
-MIT: you may use, change and share FastShaders, also commercially, as long as you keep its copyright and licence notice ([LICENSE](LICENSE)). The other projects bundled with it (three.js, A-Frame, Monaco, fonts, scientific colormap data…) are credited in [public/THIRD-PARTY-NOTICES.txt](public/THIRD-PARTY-NOTICES.txt), which ships with every build.
+MIT. Bundled third-party components (three.js, A-Frame, Monaco, fonts, scientific colormap data…) are credited in [public/THIRD-PARTY-NOTICES.txt](public/THIRD-PARTY-NOTICES.txt), which ships with every build.
 
 ## Contact
 

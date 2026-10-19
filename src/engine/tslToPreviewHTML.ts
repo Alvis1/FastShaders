@@ -22,7 +22,9 @@ import { DECODER_DIR, DECODER_FILES, MAX_DECODER_FILE_BYTES, type DecoderFile } 
 // envNode (an image wired to the Output node's Environment socket) is the
 // light source (IBL). The option is offered in the Light dropdown only while
 // an env map is attached; ShaderPreview falls back to 'studio' otherwise.
-export type LightingMode = 'studio' | 'moon' | 'laboratory' | 'env';
+// 'none' = NO light at all, always offered: what is left on screen is what the
+// shader makes without any — emission, and an environment map's own light.
+export type LightingMode = 'studio' | 'moon' | 'laboratory' | 'none' | 'env';
 
 export type GeometryType = 'sphere' | 'cube' | 'plane' | 'teapot' | 'bunny' | 'custom' | 'marchSphere';
 
@@ -409,6 +411,11 @@ export const LIGHT_PRESETS: Record<LightingMode, LightSpec[]> = {
     // Pure flat ambient — every surface lit identically, no shadows.
     { type: 'ambient', color: '#ffffff', intensity: 2.5 },
   ],
+  // No light: an EMPTY rig, so a surface with no emission renders black. That
+  // is the point of it — it shows exactly what Emissive (or an env map)
+  // contributes on its own. The scene's `defaultLightsEnabled: false` is what
+  // keeps it empty: A-Frame lights a scene that boots with no light.
+  none: [],
   // Environment-map mode: an EMPTY rig on purpose. material.envNode supplies
   // radiance + irradiance (three's EnvironmentNode/pmremTexture), so any
   // analytic light on top would double-light the surface and drown the map.
@@ -3143,7 +3150,13 @@ export function tslToPreviewHTML(
   const rendererAttr = xr
     ? ' renderer="backend: webgl"'
     : ` ${SANDBOX_RENDERER_ATTR}`;
-  sceneLines.push(`<a-scene${rendererAttr} vr-mode-ui="enabled: ${xr ? 'true' : 'false'}"${xr ? ' fs-xr-stats' : ' fs-stats'} loading-screen="enabled: false" background="color: ${bgColor}">`);
+  // `light="defaultLightsEnabled: false"`: A-Frame's light system adds an
+  // ambient and a directional light to a scene that has NO light once it
+  // loads, as `<a-entity light>` elements the hot-update's `a-light` sweep
+  // never removes — so a document booted on an EMPTY rig ('none', 'env') was
+  // lit anyway, while switching to one live was not. Inert for every other
+  // rig: the system adds its defaults only when there is no light.
+  sceneLines.push(`<a-scene${rendererAttr} vr-mode-ui="enabled: ${xr ? 'true' : 'false'}"${xr ? ' fs-xr-stats' : ' fs-stats'} loading-screen="enabled: false" light="defaultLightsEnabled: false" background="color: ${bgColor}">`);
   sceneLines.push('  <a-entity camera="fov: 20; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 8; rotateSpeed: 0.5"></a-entity>');
   // Parent holds the spin (so it tweens cleanly 0→360 on world Y/Z), child
   // holds the static tilt and the shader/geometry. The id stays on the child

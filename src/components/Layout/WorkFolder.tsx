@@ -33,7 +33,8 @@ import {
   parseDesktopError,
 } from '@/utils/desktopIpc';
 import { fillTemplate } from '@/utils/fillTemplate';
-import { formatKbMb, formatMiB } from '@/utils/formatSize';
+import { formatMiB } from '@/utils/formatSize';
+import { WorkFolderCaretIcon, WorkFolderRow } from './WorkFolderView';
 import { generateId } from '@/utils/idGenerator';
 import { t } from '@/i18n';
 
@@ -271,6 +272,10 @@ export function WorkFolder() {
       })
       .finally(() => setBusy(false));
   }, [busy, language]);
+
+  const openFolder = useCallback(() => {
+    invokeDesktop<void>('work_folder_open').catch((e) => setError(errorText(e)));
+  }, []);
 
   const forgetFolder = useCallback(() => {
     setOpen(false);
@@ -572,10 +577,7 @@ export function WorkFolder() {
         title={t('Shaders in the work folder', language)}
         aria-label={t('Shaders in the work folder', language)}
       >
-        {/* Inline SVG, not a glyph — the self-hosted woff2 subset may lack ▾. */}
-        <svg viewBox="0 0 10 6" aria-hidden="true" focusable="false">
-          <path d="M0 0h10L5 6z" />
-        </svg>
+        <WorkFolderCaretIcon />
       </button>
       {open && (
         <div
@@ -587,14 +589,24 @@ export function WorkFolder() {
             <span className="toolbar__contact-label" title={info.path}>
               {info.name}
             </span>
-            <button
-              type="button"
-              className="toolbar__contact-copy"
-              onClick={pickFolder}
-              disabled={busy}
-            >
-              {t('Change…', language)}
-            </button>
+            <span className="toolbar__wf-header-actions">
+              <button
+                type="button"
+                className="toolbar__contact-copy"
+                onClick={openFolder}
+                title={t('Show the work folder in the file manager', language)}
+              >
+                {t('Open folder', language)}
+              </button>
+              <button
+                type="button"
+                className="toolbar__contact-copy"
+                onClick={pickFolder}
+                disabled={busy}
+              >
+                {t('Change…', language)}
+              </button>
+            </span>
           </div>
           {/* Error ABOVE the list — the popover scrolls, and an error after a
               long entry list would sit below the fold and read as success. */}
@@ -616,38 +628,21 @@ export function WorkFolder() {
                 openedFile !== null && sameShaderFile(openedFile.fileName, entry.fileName);
               const writesBack = isCurrent && trackedFile !== null;
               return (
-              <button
-                key={entry.fileName}
-                type="button"
-                className={`toolbar__local-row toolbar__wf-row${isCurrent ? ' toolbar__wf-row--current' : ''}`}
-                onClick={() => loadEntry(entry)}
-                disabled={busy}
-                aria-current={isCurrent ? 'true' : undefined}
-                title={
-                  writesBack
-                    ? t('Open in the editor — Save writes back to this file', language)
-                    : isCurrent
-                      ? t('Loaded from this file — the shader was renamed, so Save creates a new one', language)
-                      : t('Load this shader into the editor', language)
-                }
-              >
-                {/* The FILE NAME is the label — this is a folder listing, and
-                    the name on disk is the one the user can find again outside
-                    the app. It used to lead with the shader's authored name
-                    (recovered from the embedded project block) and repeat the
-                    file name underneath, which put two different names on one
-                    row: a file saved as `waves.js` whose graph was still called
-                    "Untitled" read as an unrelated shader. Loading now closes
-                    that divergence at the source (the file's name becomes the
-                    shader's), so the example survives only for foreign files.
-                    The size keeps the second line. */}
-                <span className="toolbar__local-os toolbar__wf-row-name">
-                  {entry.fileName}
-                </span>
-                <span className="toolbar__local-detail">
-                  {formatKbMb(entry.sizeBytes)}
-                </span>
-              </button>
+                <WorkFolderRow
+                  key={entry.fileName}
+                  fileName={entry.fileName}
+                  sizeBytes={entry.sizeBytes}
+                  current={isCurrent}
+                  onClick={() => loadEntry(entry)}
+                  disabled={busy}
+                  title={
+                    writesBack
+                      ? t('Open in the editor — Save writes back to this file', language)
+                      : isCurrent
+                        ? t('Loaded from this file — the shader was renamed, so Save creates a new one', language)
+                        : t('Load this shader into the editor', language)
+                  }
+                />
               );
             })
           )}

@@ -10,6 +10,8 @@ import { isTextureHiddenFromEditor } from '@/registry/editorVisibility';
 import { hiddenOptionalCategories, visibleTabs, effectiveTab } from '@/registry/optionalCategories';
 import { getBuiltinTextureIds } from '@/registry/builtinTextureIds';
 import { NodePreviewCard } from './NodePreviewCard';
+import { NoteTileCard } from './NoteTileCard';
+import { noteMatchesQuery } from './noteSearch';
 import { SavedGroupCard } from './SavedGroupCard';
 import { TextureCard } from './TextureCard';
 import { PresetCard } from './PresetCard';
@@ -310,6 +312,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
   }, []);
   const savedGroups = useAppStore((s) => s.savedGroups);
   const language = useAppStore((s) => s.language);
+  const savedTabLabel = `${t('Saved Groups', language)}${savedGroups.length > 0 ? ` (${savedGroups.length})` : ''}`;
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
@@ -846,11 +849,19 @@ export const ContentBrowser = memo(function ContentBrowser() {
     // Show a message rather than a blank strip that reads as a rendering bug.
     // A query with the libraries still absent is the one exception: "no
     // matches" would be said before the presets had been searched at all.
-    items = defCards.length + assetCards.length === 0
+    // The Note tile (not a registry node, so no def card): first on the All
+    // tab — it costs nothing, and the strip runs cheapest-first — and, on a
+    // search that names it, after the node matches, as in the Add menu.
+    const noteCard = q
+      ? noteMatchesQuery(q)
+      : activeCategory === 'all';
+    items = defCards.length + assetCards.length === 0 && !noteCard
       ? (q
         ? (libraries ? noMatch('No matches for “{query}”.') : null)
         : empty(t('Nothing here yet.', language)))
-      : [...defCards, ...assetCards];
+      : q
+        ? [...defCards, ...(noteCard ? [<NoteTileCard key="__note__" />] : []), ...assetCards]
+        : [...(noteCard ? [<NoteTileCard key="__note__" />] : []), ...defCards, ...assetCards];
   }
 
   return (
@@ -907,6 +918,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
                 : {}
             }
             onClick={() => setActiveCategory('all')}
+            data-label={t('All', language)}
           >
             {t('All', language)}
           </button>
@@ -916,6 +928,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
               className={`content-browser__cat-btn ${activeCategory === cat.id ? 'content-browser__cat-btn--active' : ''}`}
               style={tabStyle(CAT_HEX[cat.id], activeCategory === cat.id)}
               onClick={() => setActiveCategory(cat.id)}
+              data-label={formatCategoryLabel(cat.label, cat.id, language)}
             >
               {formatCategoryLabel(cat.label, cat.id, language)}
             </button>
@@ -924,8 +937,9 @@ export const ContentBrowser = memo(function ContentBrowser() {
             className={`content-browser__cat-btn ${activeCategory === 'saved' ? 'content-browser__cat-btn--active' : ''}`}
             style={tabStyle(CAT_HEX.saved, activeCategory === 'saved')}
             onClick={() => setActiveCategory('saved')}
+            data-label={savedTabLabel}
           >
-            {t('Saved Groups', language)} {savedGroups.length > 0 ? `(${savedGroups.length})` : ''}
+            {savedTabLabel}
           </button>
         </div>
         {tabsArrows.canRight && <ScrollArrow direction="right" onClick={() => tabsArrows.scrollBy(1)} />}
