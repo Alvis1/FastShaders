@@ -53,7 +53,7 @@ const SLIDES: ReadonlyArray<{ Scene: ComponentType; caption: string }> = [
   },
   {
     Scene: DrawScene,
-    caption: 'Turn on Draw to mark up the canvas, and right-click to add a note. Neither changes the shader.',
+    caption: 'Turn on Draw to mark up the canvas, and right-click to add a note.',
   },
   {
     Scene: OrganizeScene,

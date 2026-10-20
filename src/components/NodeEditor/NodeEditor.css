@@ -34,23 +34,27 @@
   right: var(--space-3);
   z-index: var(--z-controls);
   width: 280px;
-  /* Yields to the NEW button on a narrow pane. Both are pinned to the same
+  /* Yields to the NEW + IMPORT buttons on a narrow pane. Both are pinned to the same
      line at opposite edges, and at a fixed 280px the pill would slide under
      the button (and swallow its clicks — same z-index, later in the DOM)
      once the graph column drops below ~400px, which a three-column split
      reaches easily. The pill compresses instead. */
-  max-width: calc(100% - 110px);
+  max-width: calc(100% - 210px);
 }
 
 /* NEW (start a fresh shader) — top-LEFT of the canvas, the corner opposite the
    cost pill and diagonally away from the bottom-left working bar. Deliberately
    not a React Flow <Panel>: this absolute layer already owns the canvas chrome
    corners, and a panel would bring React Flow's own margin rule with it. */
-.node-editor__new-btn {
+.node-editor__file-btns {
   position: absolute;
   top: var(--space-3);
   left: var(--space-3);
   z-index: var(--z-controls);
+  display: flex;
+  gap: var(--space-2);
+}
+.node-editor__new-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -78,6 +82,15 @@
 .node-editor__new-btn:hover {
   background: #bce197;
   border-color: #6fa63e;
+}
+/* IMPORT: the same plate in WHITE — theme-invariant for the same reason. */
+.node-editor__import-btn {
+  background: #ffffff;
+  border-color: #b8b8b8;
+}
+.node-editor__import-btn:hover {
+  background: #f0f0f0;
+  border-color: #8a8a8a;
 }
 .node-editor__new-btn:focus-visible {
   outline: 1px solid var(--border-focus);

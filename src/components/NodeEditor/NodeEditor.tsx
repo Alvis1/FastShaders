@@ -140,7 +140,7 @@ import {
   type ImageDropReport,
 } from '@/utils/imageImportNote';
 import { encodeImageFile, isImageFile, isSvgFile, type ImageConvertMode } from '@/utils/imageImport';
-import { GRAPH_MERGED_EVENT, importShaderZip, importShaderText, isZipFile, reportZipImportError } from '@/engine/projectImport';
+import { GRAPH_MERGED_EVENT, importShaderZip, importShaderText, isZipFile, openDroppedShader, reportZipImportError } from '@/engine/projectImport';
 import { detectMeshKind } from '@/utils/previewMesh';
 import { requestPreviewModelLoad } from '@/utils/previewModelDrop';
 import { requestShaderImport } from '@/utils/shaderDropRequest';
@@ -919,6 +919,31 @@ export function NodeEditor() {
   // NEW button → save-first confirmation. Local state like the toolbar's
   // feedback dialog: nothing outside this component opens it.
   const [newShaderOpen, setNewShaderOpen] = useState(false);
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const onImportFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    openDroppedShader(file)
+      .then((result) => {
+        if (result === null) {
+          window.alert(
+            t('{name} does not contain a shader script (.js / .mjs / .tsl).', language)
+              .replace('{name}', () => `“${file.name}”`),
+          );
+        }
+      })
+      .catch((err) => {
+        // Imported files are adversarial input — a failure must surface.
+        if (reportZipImportError(err, file.name)) return;
+        window.alert(
+          fillTemplate(t('Could not import {name}: {reason}', language), {
+            name: `“${file.name}”`,
+            reason: err instanceof Error ? err.message : String(err),
+          }),
+        );
+      });
+  }, [language]);
   // The export pre-flight's dialog (N1) for NEW's save-first download.
   const { ask: askExportPreflight, glb: glbExportUi, modal: exportPreflightModal } = useExportPreflight();
   // In-flight image imports, one ghost per file at its drop point (see
@@ -2418,7 +2443,7 @@ export function NodeEditor() {
         const el = canvasRef.current;
         const rect = el?.getBoundingClientRect();
         if (!group || !el || !rect || rect.width <= 0 || rect.height <= 0) return;
-        const chrome = [...el.querySelectorAll('.node-editor__cost-overlay, .node-editor__new-btn')].map((c) => {
+        const chrome = [...el.querySelectorAll('.node-editor__cost-overlay, .node-editor__file-btns')].map((c) => {
           const r = c.getBoundingClientRect();
           return { x: r.left - rect.left, y: r.top - rect.top, w: r.width, h: r.height };
         });
@@ -3719,14 +3744,34 @@ export function NodeEditor() {
         {/* Top-RIGHT chrome, immediately left of the cost pill: start a fresh
             shader. Kept well away from the bottom-left working bar — it throws
             the whole document away (undoably, and after a save offer). */}
-        <button
-          type="button"
-          className="node-editor__new-btn"
-          onClick={() => setNewShaderOpen(true)}
-          title={t('Start a new shader — offers to export the current one first; can be undone with Ctrl+Z / ⌘Z', language)}
-        >
-          {t('New', language)}
-        </button>
+        <div className="node-editor__file-btns">
+          <button
+            type="button"
+            className="node-editor__new-btn"
+            onClick={() => setNewShaderOpen(true)}
+            title={t('Start a new shader — offers to export the current one first; can be undone with Ctrl+Z / ⌘Z', language)}
+          >
+            {t('New', language)}
+          </button>
+          {/* IMPORT: the system file picker, then an explicit OPEN — a picked
+              file is already an instruction to open it, so it never asks Open
+              or Add (that question belongs to a DROP). */}
+          <button
+            type="button"
+            className="node-editor__new-btn node-editor__import-btn"
+            onClick={() => importInputRef.current?.click()}
+            title={t('Open a shader file (.js / .zip) from your computer — replaces the current shader; can be undone with Ctrl+Z / ⌘Z', language)}
+          >
+            {t('Import', language)}
+          </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".js,.mjs,.tsl,.zip"
+            style={{ display: 'none' }}
+            onChange={onImportFileChange}
+          />
+        </div>
         <ReactFlow
           nodes={nodes}
           edges={edges}
