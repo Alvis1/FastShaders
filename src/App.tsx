@@ -21,7 +21,8 @@ import { makeTypedEdge } from './utils/edgeUtils';
 import { readStoredViewport } from './utils/viewportMemory';
 import { lazyOr } from './utils/lazyOr';
 import { t } from './i18n';
-import { INTRO_OPEN_EVENT, shouldShowIntro } from './intro/introGate';
+import { INTRO_OPEN_EVENT, introOpenVia, shouldShowIntro, type IntroVia } from './intro/introGate';
+import { evalTask, introInStudy } from './eval/evalTask';
 /**
  * The study STYLESHEET stays eager even though every module that draws with it
  * is now lazy, and that is not an oversight.
@@ -100,7 +101,7 @@ const EvalGate = lazyOr(
  * first one, or `?intro`). A failed fetch shows nothing — the intro is
  * optional, and a broken one must never stand in front of the app.
  */
-const IntroWindow = lazyOr<{ onClose: () => void }>(
+const IntroWindow = lazyOr<{ onClose: () => void; via: IntroVia; study: boolean }>(
   () => import('./intro/IntroWindow').then((m) => m.IntroWindow),
   () => null,
 );
@@ -277,11 +278,16 @@ export default function App() {
   // Desktop only: the file-store read runs before the graph is seeded.
   const [desktopBooting, setDesktopBooting] = useState<boolean>(__FS_DESKTOP__);
   // Decided once, at the first render (intro/introGate.ts); the toolbar's
-  // "i" button opens it again (never drawn in a study session).
-  const [introOpen, setIntroOpen] = useState(() => shouldShowIntro(isEvalMode()));
+  // "i" button opens it again. In a study session it never opens at boot —
+  // every study entry opens it after Agree (EvalGate) and keeps the "i"
+  // (`introInStudy`). `introVia` (null = closed)
+  // is what opened it, for the study log.
+  const [introVia, setIntroVia] = useState<IntroVia | null>(() =>
+    shouldShowIntro(isEvalMode()) ? 'boot' : null,
+  );
   useEffect(() => {
-    if (isEvalMode()) return;
-    const open = () => setIntroOpen(true);
+    if (isEvalMode() && !introInStudy(evalTask())) return;
+    const open = (e: Event) => setIntroVia((cur) => cur ?? introOpenVia(e));
     window.addEventListener(INTRO_OPEN_EVENT, open);
     return () => window.removeEventListener(INTRO_OPEN_EVENT, open);
   }, []);
@@ -356,10 +362,11 @@ export default function App() {
       )}
       <AppLayout />
       {desktopBooting && <DesktopBootOverlay />}
-      {introOpen && !desktopBooting && (
+      {introVia && !desktopBooting && (
         <Suspense fallback={null}>
-          {/* The window writes its own "Don't show this again" on close. */}
-          <IntroWindow onClose={() => setIntroOpen(false)} />
+          {/* The window writes its own "Don't show this again" on close —
+              outside a study session; inside one it logs instead. */}
+          <IntroWindow onClose={() => setIntroVia(null)} via={introVia} study={isEvalMode()} />
         </Suspense>
       )}
     </ReactFlowProvider>

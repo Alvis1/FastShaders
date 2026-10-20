@@ -34,6 +34,11 @@ const HOOKS: { file: string; events: string[] }[] = [
       "evalLog('undo')",
       "evalLog('redo')",
       "evalLog('gesture'",
+      // A DISCRETE setting edit — updateNodeData is the authoring chokepoint
+      // (every caller a node widget or settings menu).
+      "evalLog('node-edit'",
+      // The two deferred halves of a canvas file drop (wide CSV, "Add anyway").
+      "evalLog('asset-drop'",
       "evalLog('lang-switch'",
     ],
   },
@@ -52,6 +57,12 @@ const HOOKS: { file: string; events: string[] }[] = [
     // import path, which would count imports as user Applies.
     file: 'components/CodeEditor/CodeEditor.tsx',
     events: ["evalLog('code-apply')"],
+  },
+  {
+    // The intro slides (every study entry opens them after Agree): opened,
+    // each slide shown, closed — the training a participant had.
+    file: 'intro/IntroWindow.tsx',
+    events: ["evalLog('intro-open'", "evalLog('intro-slide'", "evalLog('intro-close'"],
   },
   {
     file: 'engine/exportShader.ts',

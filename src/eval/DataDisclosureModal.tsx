@@ -115,7 +115,7 @@ export function DataDisclosureModal({ onClose }: Props) {
             {item(
               'What you did, step by step',
               'telemetry-events.json',
-              'a timestamped list of your actions: nodes added or removed (by type), connections made and broken, undo and redo, code applied, assets dropped, language switches, the app shown or hidden, and a periodic graph-size count. What you did, never what you typed: no keystrokes, text, file contents, clipboard or addresses.',
+              'a timestamped list of your actions: nodes added or removed (by type), node settings changed (which setting, never its value), connections made and broken, undo and redo, code applied, assets dropped, the intro hints you looked at, language switches, the app shown or hidden, and a periodic graph-size count. What you did, never what you typed: no keystrokes, text, file contents, clipboard or addresses.',
             )}
             {item(
               'Totals derived from those steps',
@@ -135,7 +135,7 @@ export function DataDisclosureModal({ onClose }: Props) {
             {item(
               'The session record',
               'session.json',
-              'your participant code, your confirmation that you are 18 or older (if you were asked), start and submit times, time zone, your task and cost-budget condition, the price table used for your shader, graph counts, and the technical facts about this computer.',
+              'your participant code, your confirmation that you are 18 or older (if you were asked), start and submit times, time zone, which study link you opened, your task and cost-budget condition, the price table used for your shader, graph counts, and the technical facts about this computer.',
             )}
             {item(
               'The shader you built',

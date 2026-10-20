@@ -143,6 +143,28 @@ describe('summary.csv + README', () => {
     expect([cells.exp_blender, cells.exp_unreal, cells.exp_shaderCode]).toEqual(['3', '0', '4']);
   });
 
+  it('carries the study arm and the ready-made, edit and intro columns', () => {
+    const events: EvalEvent[] = [
+      { seq: 1, t: 0, type: 'session-start' },
+      { seq: 2, t: 100, type: 'intro-open', via: 'start', slide: 'connect' },
+      { seq: 3, t: 30_100, type: 'intro-close', slide: 'connect' },
+      { seq: 4, t: 34_000, type: 'asset-drop', kind: 'preset', id: 'vertex-wave', nodes: 11 },
+      { seq: 5, t: 40_000, type: 'node-edit', nodeType: 'perlin', fields: ['values.scale'] },
+      { seq: 6, t: 50_000, type: 'session-end' },
+    ];
+    const csv = buildSummaryCsv('P01', 50, deriveSummary(events, { idleThresholdMs: 60_000 }), {
+      arm: 'evalpro',
+      pointsVisible: true,
+    });
+    const [header, row] = csv.split('\n');
+    const cells = Object.fromEntries(header.split(',').map((h, i) => [h, row.split(',')[i]]));
+    expect(cells).toMatchObject({
+      arm: 'evalpro', points_visible: 'true',
+      preset_drops: '1', asset_nodes: '11', node_edits: '1', gestures: '0',
+      intro_opens: '1', intro_s: '30.0', intro_slides_seen: '1',
+    });
+  });
+
   it('README declares the idle threshold and the schema', () => {
     const input = fixtureInput(true);
     const readme = buildEvalReadme(input);

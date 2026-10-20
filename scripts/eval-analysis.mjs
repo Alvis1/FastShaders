@@ -203,9 +203,14 @@ for (const zp of zipPaths) {
       // Session id is how a server-inbox package is reconciled against one
       // returned by hand — the same session must never be counted twice.
       sessionId: session.session?.id ?? '?',
+      // The study entry (/eval, /evalp, /evalpro) — the grouping variable.
+      // Absent from packages made before 2026-10-20: '' rather than a guess,
+      // since /eval?points=off and /evalp carry identical flags.
+      arm: task.arm ?? '',
       task: task.id ?? '',
       briefBudget: task.briefBudget ?? '',
       costBarVisible: task.costBarVisible == null ? '' : String(task.costBarVisible),
+      pointsVisible: task.pointsVisible == null ? '' : String(task.pointsVisible),
       costTable: session.costTable?.source ?? '',
       device: session.device ? `${session.device.gpu ?? '?'} · ${session.device.cores ?? '?'} cores` : '',
       hasShot: entries.has('preview.png'),
@@ -227,6 +232,16 @@ for (const zp of zipPaths) {
       events: s.eventCount,
       nodeAdds: Object.values(s.nodeAddsByType ?? {}).reduce((a, b) => a + b, 0),
       distinctTypes: s.distinctNodeTypesAdded ?? 0,
+      // Ready-made material (a preset is one drop and no node-add) — absent,
+      // so 0, in packages made before 2026-10-20.
+      presetDrops: s.assetDropsByKind?.preset ?? 0,
+      textureDrops: s.assetDropsByKind?.texture ?? 0,
+      assetNodes: s.assetNodesAdded ?? 0,
+      nodeEdits: s.nodeEditCount ?? 0,
+      gestures: s.gestureCount ?? s.counts?.gesture ?? 0,
+      introOpens: s.introOpenCount ?? 0,
+      introS: (s.introMs ?? 0) / 1000,
+      introSlides: s.introSlidesSeen ?? 0,
       connects: s.counts?.['edge-connect'] ?? 0,
       undos: s.undoCount ?? 0,
       redos: s.redoCount ?? 0,
@@ -270,11 +285,11 @@ console.log(`# FastShaders eval analysis — ${rows.length} package(s)\n`);
 // The questions asked since consent-9. The retired 'otherNodeEditors' level
 // (and its free text) still reach the CSV for older packages — never the table.
 const EXP = ['blender', 'unreal', 'shaderCode'];
-console.log('| participant | task | costbar | lang | SUS | active min | node adds | connects | undos | blend/unreal/code | session |');
-console.log('|---|---|---|---|---|---|---|---|---|---|---|');
+console.log('| participant | arm | task | costbar | lang | SUS | active min | intro s | node adds | asset nodes | edits | connects | undos | blend/unreal/code | session |');
+console.log('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
 for (const r of rows) {
   const exp = EXP.map((k) => (r.exp?.[k] === '' || r.exp?.[k] == null ? '–' : r.exp[k])).join('/');
-  console.log(`| ${r.participant} | ${r.task || '—'} | ${r.costBarVisible === '' ? '—' : (r.costBarVisible === 'true' ? 'on' : 'OFF')} | ${r.language} | ${fmt(r.sus)} | ${fmt(r.activeMin, 2)} | ${r.nodeAdds} | ${r.connects} | ${r.undos} | ${exp} | ${r.sessionId} |`);
+  console.log(`| ${r.participant} | ${r.arm || '—'} | ${r.task || '—'} | ${r.costBarVisible === '' ? '—' : (r.costBarVisible === 'true' ? 'on' : 'OFF')} | ${r.language} | ${fmt(r.sus)} | ${fmt(r.activeMin, 2)} | ${fmt(r.introS)} | ${r.nodeAdds} | ${r.assetNodes} | ${r.nodeEdits + r.gestures} | ${r.connects} | ${r.undos} | ${exp} | ${r.sessionId} |`);
 }
 console.log('\n(experience 0–4 = none…expert, in the order Blender / Unreal / shader code; a package from before consent-9 also answered "other node editors", which is in the CSV only)');
 
@@ -298,7 +313,7 @@ if (scores.length >= 2) {
   // Condition breakdown — the point of recording the task/costbar identity.
   const conds = new Map();
   for (const r of rows) {
-    const key = `${r.task || 'untasked'} / costbar ${r.costBarVisible === 'false' ? 'OFF' : 'on'}`;
+    const key = `${r.arm || 'arm?'} / ${r.task || 'untasked'} / costbar ${r.costBarVisible === 'false' ? 'OFF' : 'on'}`;
     if (!conds.has(key)) conds.set(key, []);
     conds.get(key).push(r.sus);
   }
@@ -333,7 +348,7 @@ if (problems.length) {
 }
 
 // CSV — one row per participant, spreadsheet-ready.
-const cols = ['file', 'sessionId', 'participant', 'expBlender', 'expUnreal', 'expOtherNodeEditors', 'expShaderCode', 'expOther', 'task', 'briefBudget', 'costBarVisible', 'costTable', 'device', 'hasShot', 'budgetCrossings', 'overBudgetMin', 'language', 'languageAtSubmit', 'sus', 'activeMin', 'wallMin', 'idleThresholdS', 'events', 'nodeAdds', 'distinctTypes', 'connects', 'undos', 'redos', 'applies', 'rebuilds', 'ttfConnectS', 'ttfNodeS', 'comment'];
+const cols = ['file', 'sessionId', 'participant', 'expBlender', 'expUnreal', 'expOtherNodeEditors', 'expShaderCode', 'expOther', 'arm', 'task', 'briefBudget', 'costBarVisible', 'pointsVisible', 'costTable', 'device', 'hasShot', 'budgetCrossings', 'overBudgetMin', 'language', 'languageAtSubmit', 'sus', 'activeMin', 'wallMin', 'idleThresholdS', 'events', 'nodeAdds', 'distinctTypes', 'presetDrops', 'textureDrops', 'assetNodes', 'nodeEdits', 'gestures', 'connects', 'undos', 'redos', 'applies', 'rebuilds', 'ttfConnectS', 'ttfNodeS', 'introOpens', 'introS', 'introSlides', 'comment'];
 const esc = (v) => {
   let s = v == null ? '' : String(v);
   if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;

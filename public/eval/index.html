@@ -32,9 +32,15 @@
       // Stored rather than forwarded so the app URL stays clean and the
       // parameters survive a mid-session reload. Parsed and validated
       // app-side by src/eval/evalTask.ts — this only carries the string.
-      var q = location.search || '';
-      if (q.length > 1 && q.length < 2048) sessionStorage.setItem('fs:evalTaskQuery', q);
-      else sessionStorage.removeItem('fs:evalTaskQuery');
+      // `arm` names THIS entry, SET over anything the URL carried, so the
+      // package says which link the participant was handed (evalTask.ts).
+      var p = new URLSearchParams(location.search);
+      p.set('arm', 'eval');
+      var q = '?' + p.toString();
+      // An over-long link keeps only what this entry forces — never NOTHING,
+      // which would drop the participant out of this entry's condition.
+      if (q.length >= 2048) q = '?arm=eval';
+      sessionStorage.setItem('fs:evalTaskQuery', q);
     } catch (e) { /* storage blocked — the app just boots normally */ }
     location.replace('../');
   </script>

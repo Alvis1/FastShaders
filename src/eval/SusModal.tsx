@@ -246,7 +246,9 @@ export function SusModal({ open, onClose }: Props) {
         return { n: i + 1, item: statements[i], language: itemLanguage, response };
       }),
       score,
-      ...(comment.trim() ? { comment: comment.trim() } : {}),
+      // ALWAYS present ('' when left empty), so an empty answer is told apart
+      // from a package made before the box existed.
+      comment: comment.trim(),
       submittedIso,
     };
     const input = {

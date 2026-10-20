@@ -11,7 +11,8 @@ import {
   type EvalSessionRecord,
 } from './evalMode';
 import { evalLog, initEvalBridge, startEvalSession, type EvalBridge } from './telemetry';
-import { evalTask } from './evalTask';
+import { evalTask, introInStudy } from './evalTask';
+import { openIntro } from '@/intro/introGate';
 import { ConsentModal } from './ConsentModal';
 import { VIEWPORT_KEY } from '@/utils/viewportMemory';
 import { DEFAULT_OPTIONAL_CATEGORIES, OPTIONAL_CATEGORY_KEYS } from '@/registry/optionalCategories';
@@ -206,11 +207,18 @@ export function EvalGate() {
     // when the task began — session.json carries the same values.
     const task = evalTask();
     evalLog('task-start', {
+      arm: task.arm,
       task: task.id,
       briefBudget: task.briefBudget,
       costBarVisible: task.costBarVisible,
     });
     setConsented(true);
+    // The intro slides, on every study entry (introInStudy): AFTER
+    // the consent, which must be the first thing a participant sees, and
+    // after task-start, so the timeline reads consent → task → intro. Only
+    // here, never on the resume path: a mid-session reload does not replay
+    // it (the toolbar's "i" still opens it).
+    if (introInStudy(task)) openIntro('start');
   };
 
   const handleDecline = () => {

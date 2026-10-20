@@ -15,6 +15,7 @@ import { useExportPreflight } from '@/components/Modals/ExportPreflightModal';
 import { FeedbackModal } from '@/components/Modals/FeedbackModal';
 import { PalettesModal } from '@/components/Modals/PalettesModal';
 import { isEvalMode } from '@/eval/evalMode';
+import { evalTask, introInStudy } from '@/eval/evalTask';
 import { openIntro } from '@/intro/introGate';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { GLB_IMPORT_MATERIAL_LIMIT } from '@/utils/glbImportLimits';
@@ -587,12 +588,13 @@ export function Toolbar() {
         )}
       </div>
       {/* The intro window again — the slides FastShaders opens with
-          (src/intro/). Never in a study session, which never shows it. */}
-      {!isEvalMode() && (
+          (src/intro/). In a study session too, which shows it after Agree
+          (`introInStudy`). */}
+      {(!isEvalMode() || introInStudy(evalTask())) && (
         <button
           type="button"
           className="toolbar__sc-link toolbar__intro"
-          onClick={openIntro}
+          onClick={() => openIntro('toolbar')}
           aria-haspopup="dialog"
           title={t('Intro — how FastShaders works, in short animated hints', language)}
           aria-label={t('Open the intro', language)}

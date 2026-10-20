@@ -36,7 +36,7 @@ export const EVAL_SCHEMA = 'fs-eval-1';
  * package says which wording its participant agreed to. BUMP IT whenever the
  * text changes materially; the per-version history is in docs/dev/eval-mode.md.
  */
-export const CONSENT_TEXT_VERSION = 'consent-10';
+export const CONSENT_TEXT_VERSION = 'consent-11';
 
 /**
  * The two addresses the study app is served from. Only alvismisjuns.lv has

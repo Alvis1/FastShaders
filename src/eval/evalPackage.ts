@@ -67,9 +67,12 @@ export function buildSummaryCsv(
   /** Identity/condition columns, so one row is self-describing. */
   extra: {
     sessionId?: string;
+    /** The study entry (`/eval`, `/evalp`, `/evalpro`) — the grouping variable. */
+    arm?: string | null;
     task?: string;
     briefBudget?: number | null;
     costBarVisible?: boolean;
+    pointsVisible?: boolean;
     costTable?: string;
     /** The sus.json block, for the experience levels. */
     susBlock?: Record<string, unknown>;
@@ -78,9 +81,11 @@ export function buildSummaryCsv(
   const cols: [string, unknown][] = [
     ['participant', participant],
     ['session_id', extra.sessionId ?? ''],
+    ['arm', extra.arm ?? ''],
     ['task', extra.task ?? ''],
     ['brief_budget', extra.briefBudget ?? ''],
     ['cost_bar_visible', extra.costBarVisible == null ? '' : String(extra.costBarVisible)],
+    ['points_visible', extra.pointsVisible == null ? '' : String(extra.pointsVisible)],
     ['cost_table', extra.costTable ?? ''],
     ['sus_score', susScore],
     // Experience levels 0-4 (none..expert) — the covariate a usability score
@@ -101,8 +106,17 @@ export function buildSummaryCsv(
     ['events', summary.eventCount],
     ['node_adds', Object.values(summary.nodeAddsByType).reduce((a, b) => a + b, 0)],
     ['distinct_node_types', summary.distinctNodeTypesAdded],
+    // Ready-made material: a preset or texture is ONE drop that brings a whole
+    // group and no node-add, so node_adds alone undercounts what was built.
+    ['preset_drops', summary.assetDropsByKind['preset'] ?? 0],
+    ['texture_drops', summary.assetDropsByKind['texture'] ?? 0],
+    ['saved_group_drops', summary.assetDropsByKind['savedGroup'] ?? 0],
+    ['file_drops', summary.assetDropsByKind['file'] ?? 0],
+    ['asset_nodes', summary.assetNodesAdded],
     ['connects', summary.counts['edge-connect'] ?? 0],
     ['disconnects', summary.counts['edge-disconnect'] ?? 0],
+    ['node_edits', summary.nodeEditCount],
+    ['gestures', summary.gestureCount],
     ['undos', summary.undoCount],
     ['redos', summary.redoCount],
     ['code_applies', summary.codeApplyCount],
@@ -112,6 +126,9 @@ export function buildSummaryCsv(
     ['over_budget_min', (summary.overBudgetMs / 60_000).toFixed(2)],
     ['time_to_first_connect_s', summary.timeToFirstConnectMs == null ? '' : (summary.timeToFirstConnectMs / 1000).toFixed(1)],
     ['time_to_first_node_add_s', summary.timeToFirstNodeAddMs == null ? '' : (summary.timeToFirstNodeAddMs / 1000).toFixed(1)],
+    ['intro_opens', summary.introOpenCount],
+    ['intro_s', (summary.introMs / 1000).toFixed(1)],
+    ['intro_slides_seen', summary.introSlidesSeen],
   ];
   return `${cols.map(([k]) => csvCell(k)).join(',')}\n${cols.map(([, v]) => csvCell(v)).join(',')}\n`;
 }
@@ -147,6 +164,22 @@ export function buildEvalReadme(input: EvalPackageInput): string {
     'activity marker at entry — input inside the sandboxed preview is unobservable,',
     'so long uninterrupted preview inspection is counted conservatively (it idles',
     'out after the threshold like any other input gap).',
+    '',
+    'Study entry: session.json task.arm is the link the participant opened (eval,',
+    'evalp or evalpro); the flags beside it say what that condition showed. On the',
+    'eval and evalpro entries the intro slides open right after the consent, so',
+    'time_to_first_* in summary.csv INCLUDE intro_s (intro-open/-slide/-close in the',
+    'event log give the exact intervals).',
+    '',
+    'Actions: node_adds counts nodes added one at a time; a preset, texture or saved',
+    'group arrives as one asset-drop whose `nodes` field says how many it brought',
+    '(asset_nodes). node_edits are discrete setting changes (a typed number, a',
+    'dropdown, a checkbox) — one per burst on the same node and fields within 2 s —',
+    'and name WHICH settings changed, never their values; gestures are continuous',
+    'ones (a drag-scrub or a colour-picker session), one per gesture.',
+    '',
+    'device.memoryGb is null where the browser does not report memory (Safari and',
+    'Firefox never do).',
     '',
     'SUS scoring: odd items contribute (response − 1), even items (5 − response);',
     'sum × 2.5 → 0–100 (Brooke 1996; item 8 uses the "awkward" wording, Finstad 2006).',
@@ -185,9 +218,11 @@ export function buildEvalPackageEntries(input: EvalPackageInput): ZipEntry[] {
       data: enc.encode(
         buildSummaryCsv(participant, susScore, input.summary, {
           sessionId: readPath(input.session, ['session', 'id']),
+          arm: readPath(input.session, ['task', 'arm']),
           task: readPath(input.session, ['task', 'id']),
           briefBudget: readPath(input.session, ['task', 'briefBudget']),
           costBarVisible: readPath(input.session, ['task', 'costBarVisible']),
+          pointsVisible: readPath(input.session, ['task', 'pointsVisible']),
           costTable: readPath(input.session, ['costTable', 'source']),
           susBlock: input.sus,
         }),

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   deriveSummary,
+  nodeEditFields,
   runQualityChecks,
   sanitizeJournal,
   susResponsePattern,
@@ -24,6 +25,8 @@ describe('deriveSummary — active time', () => {
       timeToFirstNodeAddMs: null, timeToFirstConnectMs: null,
       undoCount: 0, redoCount: 0, codeApplyCount: 0, previewRebuildCount: 0, exportCount: 0,
       finalSnapshot: null, budgetCrossings: 0, overBudgetMs: 0,
+      assetDropsByKind: {}, assetNodesAdded: 0, nodeEditCount: 0, gestureCount: 0,
+      introOpenCount: 0, introMs: 0, introSlidesSeen: 0,
     });
   });
 
@@ -354,6 +357,99 @@ describe('budget crossings', () => {
   });
 });
 
+describe('ready-made material, setting edits and the intro', () => {
+  it('counts asset drops by kind and the nodes they brought', () => {
+    // The first test package: one preset brought 11 of the 13 nodes, and
+    // node_adds read 2.
+    const s = deriveSummary(
+      stream([
+        ['session-start', 0],
+        ['asset-drop', 4_000, { kind: 'preset', id: 'vertex-wave', nodes: 11, wired: 1 }],
+        ['asset-drop', 25_000, { kind: 'node', id: 'fbm' }],
+        ['node-add', 25_000, { nodeType: 'fbm' }],
+        ['asset-drop', 50_000, { kind: 'file', id: 'imageNode' }],
+        ['node-add', 50_000, { nodeType: 'imageNode' }],
+        ['asset-drop', 60_000, { kind: 'texture', id: 'gas-giant', nodes: 7 }],
+        ['asset-drop', 61_000, { kind: 'texture', id: 'x', nodes: 'lots' }],
+        ['session-end', 70_000],
+      ]),
+      { idleThresholdMs: T },
+    );
+    expect(s.assetDropsByKind).toEqual({ preset: 1, node: 1, file: 1, texture: 2 });
+    expect(s.assetNodesAdded).toBe(18);
+    expect(Object.values(s.nodeAddsByType).reduce((a, b) => a + b, 0)).toBe(2);
+  });
+
+  it('counts discrete edits apart from continuous gestures', () => {
+    const s = deriveSummary(
+      stream([
+        ['session-start', 0],
+        ['node-edit', 1_000, { nodeType: 'perlin', fields: ['values.scale'] }],
+        ['gesture', 2_000],
+        ['node-edit', 3_000, { nodeType: 'output', fields: ['exposedPorts'] }],
+        ['session-end', 4_000],
+      ]),
+      { idleThresholdMs: T },
+    );
+    expect(s.nodeEditCount).toBe(2);
+    expect(s.gestureCount).toBe(1);
+  });
+
+  it('times the intro, counts its distinct slides, and closes an open one at a reload or the end', () => {
+    const s = deriveSummary(
+      stream([
+        ['session-start', 0],
+        ['intro-open', 100, { via: 'start', slide: 'connect' }],
+        ['intro-slide', 5_000, { slide: 'insert' }],
+        ['intro-slide', 9_000, { slide: 'connect' }],
+        ['intro-close', 20_100, { slide: 'connect' }],
+        // Reopened from the toolbar, then a reload ate the close.
+        ['intro-open', 40_000, { via: 'toolbar', slide: 'connect' }],
+        ['intro-slide', 41_000, { slide: 'model' }],
+        ['recovered', 50_000],
+        // Opened again and still open when the session ended.
+        ['intro-open', 60_000, { via: 'toolbar', slide: 'connect' }],
+        ['session-end', 65_000],
+      ]),
+      { idleThresholdMs: T },
+    );
+    expect(s.introOpenCount).toBe(3);
+    expect(s.introMs).toBe(20_000 + 10_000 + 5_000);
+    expect(s.introSlidesSeen).toBe(3);
+  });
+
+  it('intro events and setting edits keep the participant ACTIVE', () => {
+    // Paging slides for three minutes is not idling.
+    const rows: [EvalEventType, number, Record<string, unknown>?][] = [['session-start', 0], ['intro-open', 0, { slide: 'connect' }]];
+    for (let t = 50_000; t <= 150_000; t += 50_000) rows.push(['intro-slide', t, { slide: `s${t}` }]);
+    rows.push(['intro-close', 180_000], ['session-end', 180_000]);
+    expect(deriveSummary(stream(rows), { idleThresholdMs: T }).activeMs).toBe(180_000);
+  });
+});
+
+describe('nodeEditFields', () => {
+  it('names the settings that changed, never their values', () => {
+    expect(nodeEditFields({ values: { scale: '1', octaves: 3 } }, { values: { scale: '2', octaves: 3 } })).toEqual(['values.scale']);
+    expect(nodeEditFields({ label: 'a', exposedPorts: ['x'] }, { exposedPorts: ['x', 'y'] })).toEqual(['exposedPorts']);
+  });
+
+  it('a removed value key is a change; an identical patch is none', () => {
+    expect(nodeEditFields({ values: { a: 1, b: 2 } }, { values: { a: 1 } })).toEqual(['values.b']);
+    expect(nodeEditFields({ values: { a: 1 } }, { values: { a: 1 } })).toEqual([]);
+  });
+
+  it('drops anything that is not a plain identifier, and caps the list', () => {
+    expect(nodeEditFields({ values: {} }, { values: { 'my name': 1, ok_1: 2, '': 3 } })).toEqual(['values.ok_1']);
+    const many = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`k${String(i).padStart(2, '0')}`, i]));
+    expect(nodeEditFields({ values: {} }, { values: many })).toHaveLength(8);
+  });
+
+  it('survives a node with no data and a non-object values', () => {
+    expect(nodeEditFields(undefined, { label: 'x' })).toEqual(['label']);
+    expect(nodeEditFields({ values: 5 }, { values: { a: 1 } })).toEqual(['values.a']);
+  });
+});
+
 describe('SUS sequence integrity', () => {
   const base: [string, number, Record<string, unknown>?][] = [
     ['session-start', 0],
@@ -365,6 +461,40 @@ describe('SUS sequence integrity', () => {
     const checks = runQualityChecks(ev, deriveSummary(ev, { idleThresholdMs: T }));
     expect(checks.find((c) => c.id === 'sus-in-one-sitting')?.ok).toBe(true);
     expect(checks.find((c) => c.id === 'no-edits-after-sus-open')?.ok).toBe(true);
+  });
+
+  it('a questionnaire that takes longer than the threshold passes when input runs through it', () => {
+    // The first test package (2026-10-20): 62 s on the form with an `activity`
+    // every 5–11 s, failed because activity was excluded and the whole span
+    // became the "gap". Answering logs nothing BUT activity.
+    const acts: [string, number][] = [];
+    for (let t = 15_000; t < 170_000; t += 8_000) acts.push(['activity', t]);
+    const ev = stream([
+      ...base,
+      ['sus-open', 10_000],
+      ...acts,
+      ['snapshot', 40_000],
+      ['sus-submit', 172_000],
+      ['session-end', 172_000],
+    ] as never);
+    const checks = runQualityChecks(ev, deriveSummary(ev, { idleThresholdMs: T }));
+    expect(checks.find((c) => c.id === 'sus-in-one-sitting')?.ok).toBe(true);
+  });
+
+  it('a real pause inside the form still fails, even with input on both sides of it', () => {
+    const ev = stream([
+      ...base,
+      ['sus-open', 10_000],
+      ['activity', 15_000],
+      ['snapshot', 45_000],
+      ['snapshot', 75_000],
+      ['activity', 100_000],
+      ['sus-submit', 105_000],
+      ['session-end', 105_000],
+    ] as never);
+    const check = runQualityChecks(ev, deriveSummary(ev, { idleThresholdMs: T })).find((c) => c.id === 'sus-in-one-sitting');
+    expect(check?.ok).toBe(false);
+    expect(check?.detail).toContain('85 s gap');
   });
 
   it('flags a long gap inside the questionnaire phase', () => {

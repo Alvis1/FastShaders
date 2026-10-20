@@ -100,6 +100,10 @@ let teardown: (() => void)[] = [];
 let snapshotTimer: number | null = null;
 let lastActivityLogT = -Infinity;
 
+/** The pure field differ for the store's `node-edit` chokepoint — re-exported
+ *  so the store keeps ONE eval import (`evalHooks.test.ts`). */
+export { nodeEditFields } from './telemetryModel';
+
 export function initEvalBridge(b: EvalBridge): void {
   bridge = b;
 }

@@ -60,6 +60,7 @@ import { ImageImportModal, type ImageImportChoice } from '@/components/Modals/Im
 import { ImageConvertInfoModal } from '@/components/Modals/ImageConvertInfoModal';
 import { buildShaderExportChecked, downloadShader } from '@/engine/exportShader';
 import { evalLog, isEvalSessionActive } from '@/eval/telemetry';
+import { countProject } from '@/utils/feedbackReport';
 import { evalTask } from '@/eval/evalTask';
 import { SAVED_GROUP_DRAG_TYPE } from './SavedGroupCard';
 import { BUILTIN_TEXTURE_DRAG_TYPE } from './TextureCard';
@@ -2487,17 +2488,29 @@ export function NodeEditor() {
 
       // Eval telemetry: which ready-made asset (or palette node) was placed.
       // Node-kind drops ALSO produce a node-add via addNode — this event is
-      // the "came from the palette" marker, not a duplicate count. A wired
-      // press logs once it has landed, with how many Output wires it brought
-      // (`wired`); they are deliberately not `edge-connect`s — the participant
-      // drew none of them, and `connects` counts their own wiring.
-      const logAssetDrop = (wired: number) =>
+      // the "came from the palette" marker, not a duplicate count. A group
+      // asset (preset, texture, saved group) logs once it has LANDED, with
+      // how many graph nodes it brought (`nodes`, counted as `snapshot.nodes`
+      // counts them): it adds no `node-add`, so without this a session built
+      // on one preset read as two nodes of work. A wired press also says how
+      // many Output wires it brought (`wired`); they are deliberately not
+      // `edge-connect`s — the participant drew none of them, and `connects`
+      // counts their own wiring.
+      const isGroupAsset = payload.kind !== 'node';
+      const logAssetDrop = (wired: number) => {
+        let nodes: number | undefined;
+        if (isGroupAsset && isEvalSessionActive()) {
+          const now = useAppStore.getState();
+          nodes = Math.max(0, countProject(now.nodes, now.edges).nodes - countProject(state.nodes, state.edges).nodes);
+        }
         evalLog('asset-drop', {
           kind: payload.kind,
           id: payload.kind === 'node' ? payload.nodeType : payload.id,
+          ...(nodes !== undefined ? { nodes } : {}),
           ...(wired > 0 ? { wired } : {}),
         });
-      if (!wireTarget) logAssetDrop(0);
+      };
+      if (!isGroupAsset) logAssetDrop(0);
 
       // A DRAGGED group lands with its frame's top-right corner on the pointer
       // or finger; a click/Enter add keeps the top-left at its scattered
@@ -2507,6 +2520,7 @@ export function NodeEditor() {
       const anchor: GroupDropAnchor = activate ? 'top-left' : 'top-right';
       if (payload.kind === 'savedGroup') {
         useAppStore.getState().instantiateSavedGroup(payload.id, position, { anchor });
+        logAssetDrop(0);
         return;
       }
       if (wireTarget && (payload.kind === 'texture' || payload.kind === 'preset')) {
@@ -2526,6 +2540,7 @@ export function NodeEditor() {
         const place =
           payload.kind === 'texture' ? state.instantiateBuiltinTexture : state.instantiateBuiltinPreset;
         void place(payload.id, position, 'top-right').then((placed) => {
+          logAssetDrop(0);
           if (placed) revealLibraryCorner(placed.groupId);
         });
         return;
@@ -2667,6 +2682,9 @@ export function NodeEditor() {
           return;
         }
         const cost = getBaseCosts().dataNode ?? 2;
+        // Eval telemetry: this node came from a FILE the participant dropped,
+        // not from the palette — the node-add alone cannot say which.
+        evalLog('asset-drop', { kind: 'file', id: 'dataNode' });
         addNode({
           id: generateId(),
           type: 'shader',
@@ -2825,6 +2843,8 @@ export function NodeEditor() {
         // stored the glTF way — decided now, from the LIVE store (the `store`
         // above is the pre-encode snapshot), and never revisited; a picture
         // dropped WITH a model was decided against that model above.
+        // Eval telemetry: a picture dropped from a FILE (see the CSV drop).
+        evalLog('asset-drop', { kind: 'file', id: 'imageNode' });
         addNode({
           id: generateId(),
           type: 'shader',

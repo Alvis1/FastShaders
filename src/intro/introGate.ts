@@ -3,8 +3,11 @@
  * static graph (App.tsx reads it synchronously at its first render), so the
  * window itself stays a lazy chunk nobody fetches once it has been seen.
  *
- * - Never in a study session: what a participant meets is part of the
- *   condition, and the consent dialog must be the first thing they see.
+ * - Never at BOOT in a study session: the consent dialog must be the first
+ *   thing a participant sees. Every study entry opens it right after Agree
+ *   instead (`openIntro('start')` from EvalGate; `introInStudy` in
+ *   eval/evalTask.ts — /evalp without the point-budget slide), and every opening, page and close is
+ *   logged there.
  * - `?intro` opens it again on any boot — the way back after it was closed.
  * - Otherwise it opens on every boot until the user closes it with "Don't
  *   show this again" ticked (`fs:introSeen`, listed in
@@ -55,9 +58,21 @@ export function setIntroHidden(hidden: boolean): void {
 }
 
 /** The toolbar's "i" button asks App to open the window (App owns whether it
- *  is mounted; the toolbar has no other line to it). */
+ *  is mounted; the toolbar has no other line to it). EvalGate asks the same
+ *  way after Agree. */
 export const INTRO_OPEN_EVENT = 'fs:open-intro';
 
-export function openIntro(): void {
-  window.dispatchEvent(new Event(INTRO_OPEN_EVENT));
+/** What opened the window: the boot decision, the toolbar's "i", or a study
+ *  session's Agree. Rides the study log's `intro-open`. */
+export type IntroVia = 'boot' | 'toolbar' | 'start';
+
+export function openIntro(via: IntroVia = 'toolbar'): void {
+  window.dispatchEvent(new CustomEvent<IntroVia>(INTRO_OPEN_EVENT, { detail: via }));
+}
+
+/** The opener named by an `INTRO_OPEN_EVENT` — `toolbar` for anything else, as
+ *  a window event is reachable by any script on the page. */
+export function introOpenVia(e: Event): IntroVia {
+  const d = (e as CustomEvent<unknown>).detail;
+  return d === 'boot' || d === 'start' ? d : 'toolbar';
 }

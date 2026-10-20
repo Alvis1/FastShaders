@@ -23,7 +23,21 @@
 // key rather than defining it here also keeps the dependency one-way.
 import { EVAL_TASK_KEY, isEvalMode } from './evalMode';
 
+/** The three study entries. Each redirector stamps its own name. */
+export const EVAL_ARMS = ['eval', 'evalp', 'evalpro'] as const;
+export type EvalArm = (typeof EVAL_ARMS)[number];
+
 export interface EvalTask {
+  /**
+   * Which entry the participant came in through (`?arm=`, written by the
+   * redirector itself: each of the three under `public/` SETS its own name
+   * over whatever the launch URL said). The flags below say what the condition
+   * looked like; this says which link was handed out, which is the grouping
+   * variable the analysis needs and cannot be recovered from the flags: an
+   * `/eval?points=off` session and an `/evalp` one carry identical flags.
+   * Null only for a package made by an older redirector.
+   */
+  arm: EvalArm | null;
   /** Task identifier from `?task=` — null when the session is unlabelled. */
   id: string | null;
   /** Point budget stated in the task brief (`?budget=`), NOT the device budget. */
@@ -56,6 +70,7 @@ export interface EvalTask {
 }
 
 export const DEFAULT_EVAL_TASK: EvalTask = {
+  arm: null,
   id: null,
   briefBudget: null,
   costBarVisible: true,
@@ -105,7 +120,9 @@ export function parseEvalTask(search: string): EvalTask {
   // Opt-IN, unlike the two suppression flags: an absent parameter must not
   // hand a student the professional block.
   const pro = (params.get('pro') ?? '').trim().toLowerCase();
+  const arm = params.get('arm');
   return {
+    arm: (EVAL_ARMS as readonly string[]).includes(arm ?? '') ? (arm as EvalArm) : null,
     id: cleanId(params.get('task')),
     briefBudget: cleanBudget(params.get('budget')),
     // No points at all implies no cost bar — the bar is a point figure.
@@ -140,6 +157,27 @@ const TASK: EvalTask = (() => {
 
 export function evalTask(): EvalTask {
   return TASK;
+}
+
+/**
+ * Whether a study session shows the intro slides — after Agree, and again
+ * from the toolbar's "i". Every study entry does (owner, 2026-10-20), so the
+ * arms differ in their condition and not in their training: /evalp gets the
+ * same intro minus the point-budget slide (`introShowsBudget`). Only a session
+ * with no recorded entry (an older redirector) has none. PURE (the task is a
+ * parameter) so it is node-tested.
+ */
+export function introInStudy(task: EvalTask): boolean {
+  return task.arm !== null;
+}
+
+/**
+ * Whether the intro's point-budget slide belongs in this session's intro: not
+ * where the cost bar is hidden (`?costbar=off`, or no points at all) — a slide
+ * teaching the budget would hand that condition the very feedback it removes.
+ */
+export function introShowsBudget(task: EvalTask): boolean {
+  return task.costBarVisible && task.pointsVisible;
 }
 
 /**

@@ -22,6 +22,9 @@ const EVAL_EVENT_TYPES = [
   // graph actions
   'node-add', 'node-remove', 'edge-connect', 'edge-disconnect',
   'undo', 'redo', 'gesture', 'new-graph',
+  // a DISCRETE edit of a node's settings (`fields` names WHICH, never a value);
+  // a continuous scrub is one `gesture` instead
+  'node-edit',
   // the participant chose which output node drives (several may coexist)
   'output-activate',
   // code / preview / assets
@@ -34,6 +37,9 @@ const EVAL_EVENT_TYPES = [
   'budget-crossed',
   // the participant switched the UI language (`from`/`to`: 'en' | 'lv')
   'lang-switch',
+  // the intro slides (/eval, /evalpro): opened after Agree or from the toolbar
+  // "i", each slide shown (`slide` = the scene id), and closed
+  'intro-open', 'intro-slide', 'intro-close',
   // questionnaire
   'sus-open', 'sus-submit',
 ] as const;
@@ -64,6 +70,7 @@ export const ACTIVITY_EVENT_TYPES: ReadonlySet<EvalEventType> = new Set([
   'undo',
   'redo',
   'gesture',
+  'node-edit',
   'new-graph',
   'output-activate',
   'code-apply',
@@ -71,6 +78,9 @@ export const ACTIVITY_EVENT_TYPES: ReadonlySet<EvalEventType> = new Set([
   'import',
   'export',
   'lang-switch',
+  'intro-open',
+  'intro-slide',
+  'intro-close',
   'sus-open',
   'sus-submit',
 ]);
@@ -102,6 +112,25 @@ export interface EvalSummary {
   /** `node-add` counts by nodeType. */
   nodeAddsByType: Record<string, number>;
   distinctNodeTypesAdded: number;
+  /**
+   * `asset-drop` counts by kind (`preset`, `texture`, `savedGroup`, `node`,
+   * `file`). A preset or texture arrives as a whole group of nodes with ONE
+   * drop and no `node-add`, so `nodeAddsByType` alone reads a session built on
+   * a preset as almost no work — these two say how much came ready-made.
+   */
+  assetDropsByKind: Record<string, number>;
+  /** Nodes (graph nodes, as `snapshot.nodes` counts them) that arrived with
+   *  a preset, texture or saved-group drop — the `nodes` field of those events. */
+  assetNodesAdded: number;
+  /** Discrete node-setting edits (`node-edit`) and continuous ones (`gesture`). */
+  nodeEditCount: number;
+  gestureCount: number;
+  /** How often the intro slides were opened, how long they were open in total
+   *  (an open with no close ends at the next reload or at the session end),
+   *  and how many DISTINCT slides were shown. */
+  introOpenCount: number;
+  introMs: number;
+  introSlidesSeen: number;
   /** ms from session start, null when the event never happened. */
   timeToFirstNodeAddMs: number | null;
   timeToFirstConnectMs: number | null;
@@ -197,6 +226,13 @@ export function deriveSummary(
   // object would no-op on a '__proto__' key and resolve 'constructor' weirdly.
   const counts: Record<string, number> = Object.create(null);
   const nodeAddsByType: Record<string, number> = Object.create(null);
+  const assetDropsByKind: Record<string, number> = Object.create(null);
+  let assetNodesAdded = 0;
+  let introOpenAt: number | null = null;
+  let introMs = 0;
+  // Null-proto for the same reason as the maps above: slide ids are
+  // journal-supplied strings.
+  const introSlides: Record<string, true> = Object.create(null);
   let finalSnapshot: Record<string, unknown> | null = null;
   let firstAdd: number | null = null;
   let firstConnect: number | null = null;
@@ -217,6 +253,26 @@ export function deriveSummary(
       if (firstAdd == null) firstAdd = e.t;
     }
     if (e.type === 'edge-connect' && firstConnect == null) firstConnect = e.t;
+    if (e.type === 'asset-drop') {
+      const kind = typeof e.kind === 'string' ? e.kind : 'unknown';
+      assetDropsByKind[kind] = (assetDropsByKind[kind] ?? 0) + 1;
+      if (typeof e.nodes === 'number' && Number.isFinite(e.nodes) && e.nodes > 0) assetNodesAdded += e.nodes;
+    }
+    if (e.type === 'intro-open' || e.type === 'intro-slide') {
+      if (e.type === 'intro-open') {
+        // A second open with no close between them (a reload ate the close)
+        // closes the first where the second begins.
+        if (introOpenAt != null) introMs += e.t - introOpenAt;
+        introOpenAt = e.t;
+      }
+      if (typeof e.slide === 'string') introSlides[e.slide] = true;
+    }
+    if ((e.type === 'intro-close' || e.type === 'recovered') && introOpenAt != null) {
+      // A reload unmounts the window without its close — the intro is not
+      // reopened on resume, so the recovery is where it ended.
+      introMs += e.t - introOpenAt;
+      introOpenAt = null;
+    }
     if (e.type === 'budget-crossed') {
       budgetCrossings++;
       if (e.direction === 'over') {
@@ -257,6 +313,14 @@ export function deriveSummary(
     counts,
     nodeAddsByType,
     distinctNodeTypesAdded: Object.keys(nodeAddsByType).length,
+    assetDropsByKind,
+    assetNodesAdded,
+    nodeEditCount: counts['node-edit'] ?? 0,
+    gestureCount: counts['gesture'] ?? 0,
+    introOpenCount: counts['intro-open'] ?? 0,
+    // Still open when the session ended — close it there.
+    introMs: introMs + (introOpenAt == null ? 0 : tEnd - introOpenAt),
+    introSlidesSeen: Object.keys(introSlides).length,
     timeToFirstNodeAddMs: firstAdd == null ? null : firstAdd - t0,
     timeToFirstConnectMs: firstConnect == null ? null : firstConnect - t0,
     undoCount: counts['undo'] ?? 0,
@@ -269,6 +333,40 @@ export function deriveSummary(
     // Still above budget when the session ended — close the interval there.
     overBudgetMs: overBudgetMs + (overSince == null ? 0 : tEnd - overSince),
   };
+}
+
+/** A field name safe to log: an identifier, never content. Anything else is
+ *  dropped from the list rather than escaped. */
+const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,39}$/;
+const MAX_EDIT_FIELDS = 8;
+
+/**
+ * WHICH settings a node edit changed — `label`, `exposedPorts`,
+ * `values.scale` — compared against the node's data before the patch. Names
+ * only, never values: a value can be text the participant typed (a property
+ * name, a note), and the consent promises "what you did, never what you
+ * typed". Sorted and capped; empty when the patch changed nothing.
+ */
+export function nodeEditFields(
+  before: Record<string, unknown> | undefined,
+  patch: Record<string, unknown>,
+): string[] {
+  const out = new Set<string>();
+  const prev = before ?? {};
+  for (const key of Object.keys(patch)) {
+    if (key === 'values') {
+      const a = prev.values;
+      const b = patch.values;
+      const av = typeof a === 'object' && a !== null ? (a as Record<string, unknown>) : {};
+      const bv = typeof b === 'object' && b !== null ? (b as Record<string, unknown>) : {};
+      for (const k of new Set([...Object.keys(av), ...Object.keys(bv)])) {
+        if (!Object.is(av[k], bv[k]) && FIELD_NAME.test(k)) out.add(`values.${k}`);
+      }
+    } else if (!Object.is(prev[key], patch[key]) && FIELD_NAME.test(key)) {
+      out.add(key);
+    }
+  }
+  return [...out].sort().slice(0, MAX_EDIT_FIELDS);
 }
 
 export interface QualityCheck {
@@ -286,7 +384,7 @@ export interface QualityCheck {
 /** Events that mean the participant CHANGED THE GRAPH (not merely looked). */
 const EDIT_EVENT_TYPES: ReadonlySet<EvalEventType> = new Set([
   'node-add', 'node-remove', 'edge-connect', 'edge-disconnect',
-  'undo', 'redo', 'gesture', 'new-graph', 'output-activate', 'code-apply', 'asset-drop', 'import',
+  'undo', 'redo', 'gesture', 'node-edit', 'new-graph', 'output-activate', 'code-apply', 'asset-drop', 'import',
 ]);
 
 /**
@@ -406,21 +504,26 @@ export function runQualityChecks(
     // could only ever fire for a tab that was hidden or backgrounded. The
     // scenario it exists to catch is "the participant walked away with the
     // questionnaire open ON SCREEN", which is precisely the case snapshots
-    // masked. Same for `activity`, which is a liveness ping rather than an
-    // answer: the check is about progress through the form.
+    // masked.
+    //
+    // `activity` is KEPT: it is logged only on real input (a click, a key, a
+    // wheel — at most one per 5 s), and answering the form logs nothing else,
+    // so it is the ONLY trace of progress through it. Excluding it too left
+    // just sus-open and sus-submit, made the whole time spent on the form the
+    // "gap", and failed every participant who took longer than a minute over
+    // three experience questions and ten statements (the first test package,
+    // 2026-10-20: 62 s with input every 5–11 s, flagged).
     const phase = events.filter(
-      (e) =>
-        e.t >= susOpen.t &&
-        e.t <= susSubmit.t &&
-        e.type !== 'snapshot' &&
-        e.type !== 'activity',
+      (e) => e.t >= susOpen.t && e.t <= susSubmit.t && e.type !== 'snapshot',
     );
     let worstGap = 0;
     for (let i = 1; i < phase.length; i++) worstGap = Math.max(worstGap, phase[i].t - phase[i - 1].t);
     const span = susSubmit.t - susOpen.t;
     // With snapshots filtered out the phase can legitimately hold only the two
     // bounding events, and then the whole span IS the gap — a participant who
-    // opened the form, sat for ten minutes and submitted logs nothing between.
+    // opened the form, sat for ten minutes and submitted logs nothing between
+    // (submitting is a click, but the click's own `activity` lands only when
+    // the 5 s throttle allows, so it cannot be relied on to split the span).
     const gap = Math.max(worstGap, phase.length < 2 ? span : 0);
     checks.push({
       id: 'sus-in-one-sitting',

@@ -25,10 +25,18 @@
     try {
       sessionStorage.setItem('fs:evalArm', '1');
       sessionStorage.removeItem('fs:evalSession');
-      var q = location.search && location.search.length > 1
-        ? location.search + '&points=off'
-        : '?points=off';
-      if (q.length < 2048) sessionStorage.setItem('fs:evalTaskQuery', q);
+      // SET, never appended: URLSearchParams.get answers the FIRST
+      // occurrence, so appending `&points=off` to a link that already said
+      // `?points=on` left every price on screen in the arm that removes them.
+      // `arm` names this entry the same way (evalTask.ts).
+      var p = new URLSearchParams(location.search);
+      p.set('points', 'off');
+      p.set('arm', 'evalp');
+      var q = '?' + p.toString();
+      // An over-long link keeps only what this entry forces — never NOTHING,
+      // which would drop the participant out of this entry's condition.
+      if (q.length >= 2048) q = '?points=off&arm=evalp';
+      sessionStorage.setItem('fs:evalTaskQuery', q);
     } catch (e) { /* storage blocked — the app just boots normally */ }
     location.replace('../');
   </script>

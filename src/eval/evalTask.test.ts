@@ -1,9 +1,32 @@
 import { describe, it, expect } from 'vitest';
-import { DEFAULT_EVAL_TASK, parseEvalTask } from './evalTask';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
+import { DEFAULT_EVAL_TASK, introInStudy, introShowsBudget, parseEvalTask } from './evalTask';
+
+/**
+ * RUN a redirector's inline script against a launch URL and return what it
+ * stored — the behaviour, not its spelling. sessionStorage and location are
+ * stand-ins; URLSearchParams is Node's, which follows the same spec.
+ */
+function runRedirector(entry: 'eval' | 'evalp' | 'evalpro', search: string): Record<string, string> {
+  const html = readFileSync(fileURLToPath(new URL(`../../public/${entry}/index.html`, import.meta.url)), 'utf8');
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  if (!script) throw new Error(`no inline script in public/${entry}/index.html`);
+  const store: Record<string, string> = {};
+  const sessionStorage = {
+    setItem: (k: string, v: string) => { store[k] = String(v); },
+    removeItem: (k: string) => { delete store[k]; },
+    getItem: (k: string) => store[k] ?? null,
+  };
+  runInNewContext(script, { sessionStorage, location: { search, replace: () => {} }, URLSearchParams });
+  return store;
+}
 
 describe('parseEvalTask', () => {
   it('reads the documented launch URL', () => {
     expect(parseEvalTask('?task=T7-fire&budget=200&costbar=off')).toEqual({
+      arm: null,
       id: 'T7-fire',
       briefBudget: 200,
       costBarVisible: false,
@@ -74,6 +97,7 @@ describe('the pointless arm (/evalp, ?points=off)', () => {
   it('still carries the task label and brief budget', () => {
     // /evalp appends points=off to whatever the researcher launched with.
     expect(parseEvalTask('?task=T7-fire&budget=200&points=off')).toEqual({
+      arm: null,
       id: 'T7-fire',
       briefBudget: 200,
       costBarVisible: false,
@@ -93,15 +117,59 @@ describe('the pointless arm (/evalp, ?points=off)', () => {
 });
 
 describe('the /evalp entry', () => {
-  it('forces points=off while preserving other launch parameters', async () => {
-    const { readFileSync } = await import('node:fs');
-    const { fileURLToPath } = await import('node:url');
-    const html = readFileSync(fileURLToPath(new URL('../../public/evalp/index.html', import.meta.url)), 'utf8');
-    expect(html).toContain("'&points=off'");
-    expect(html).toContain("'?points=off'");
+  it('forces points=off while preserving other launch parameters', () => {
+    const t = parseEvalTask(runRedirector('evalp', '?task=T7-fire&budget=200')['fs:evalTaskQuery']);
+    expect(t).toMatchObject({ arm: 'evalp', id: 'T7-fire', briefBudget: 200, pointsVisible: false, costBarVisible: false });
+    expect(parseEvalTask(runRedirector('evalp', '')['fs:evalTaskQuery'])).toMatchObject({ arm: 'evalp', pointsVisible: false });
+  });
+
+  it('a link that already says points=on (or names another arm) cannot undo it', () => {
+    // The redirector used to APPEND `&points=off`; URLSearchParams.get answers
+    // the FIRST occurrence, so `/evalp?points=on` showed every price.
+    const t = parseEvalTask(runRedirector('evalp', '?points=on&arm=eval')['fs:evalTaskQuery']);
+    expect(t).toMatchObject({ arm: 'evalp', pointsVisible: false });
+  });
+
+  it('an over-long link keeps the forced condition rather than none', () => {
+    const t = parseEvalTask(runRedirector('evalp', `?task=${'x'.repeat(3000)}`)['fs:evalTaskQuery']);
+    expect(t).toMatchObject({ arm: 'evalp', pointsVisible: false, id: null });
+  });
+
+  it('arms through sessionStorage, never localStorage', () => {
+    const store = runRedirector('evalp', '');
     // Same session-scoped arming as /eval — the flag must die with the tab.
-    expect(html).toContain("sessionStorage.setItem('fs:evalArm', '1')");
+    expect(store['fs:evalArm']).toBe('1');
+    const html = readFileSync(fileURLToPath(new URL('../../public/evalp/index.html', import.meta.url)), 'utf8');
     expect(html).not.toMatch(/localStorage\s*\./);
+  });
+});
+
+describe('the study arm', () => {
+  it('each entry names itself, whatever the launch URL said', () => {
+    expect(parseEvalTask(runRedirector('eval', '?arm=evalpro&task=T1')['fs:evalTaskQuery'])).toMatchObject({ arm: 'eval', id: 'T1', proQuestions: false });
+    expect(parseEvalTask(runRedirector('eval', '')['fs:evalTaskQuery']).arm).toBe('eval');
+    expect(parseEvalTask(runRedirector('evalpro', '?arm=evalp')['fs:evalTaskQuery'])).toMatchObject({ arm: 'evalpro', proQuestions: true });
+  });
+
+  it('only the three entry names are an arm', () => {
+    for (const a of ['', 'EVAL', 'evalx', '__proto__', 'eval ']) {
+      expect(parseEvalTask(`?arm=${encodeURIComponent(a)}`).arm, a).toBeNull();
+    }
+  });
+
+  it('every entry shows the intro, and its budget slide only with the cost bar on', () => {
+    const on = (q: string) => parseEvalTask(q);
+    expect(introInStudy(on('?arm=eval'))).toBe(true);
+    expect(introInStudy(on('?arm=evalpro&pro=on'))).toBe(true);
+    // The same training in the no-points arm, minus the budget slide — so an
+    // arm comparison does not also compare having had the intro.
+    expect(introInStudy(on('?arm=evalp&points=off'))).toBe(true);
+    expect(introShowsBudget(on('?arm=evalp&points=off'))).toBe(false);
+    // No recorded entry (an older redirector): no intro.
+    expect(introInStudy(on(''))).toBe(false);
+    expect(introShowsBudget(on('?arm=eval'))).toBe(true);
+    expect(introShowsBudget(on('?arm=eval&costbar=off'))).toBe(false);
+    expect(introShowsBudget(on('?arm=eval&points=off'))).toBe(false);
   });
 });
 
@@ -146,6 +214,7 @@ describe('the professional arm (/evalpro, ?pro=on)', () => {
   it('composes with the other conditions rather than replacing them', () => {
     const t = parseEvalTask('?task=T7-fire&budget=200&costbar=off&pro=on');
     expect(t).toEqual({
+      arm: null,
       id: 'T7-fire',
       briefBudget: 200,
       costBarVisible: false,
@@ -156,13 +225,14 @@ describe('the professional arm (/evalpro, ?pro=on)', () => {
 });
 
 describe('the /evalpro entry', () => {
-  it('forces pro=on while preserving other launch parameters', async () => {
-    const { readFileSync } = await import('node:fs');
-    const { fileURLToPath } = await import('node:url');
+  it('forces pro=on while preserving other launch parameters', () => {
+    const t = parseEvalTask(runRedirector('evalpro', '?task=T7-fire&costbar=off')['fs:evalTaskQuery']);
+    expect(t).toMatchObject({ arm: 'evalpro', id: 'T7-fire', costBarVisible: false, proQuestions: true });
+    // A link saying pro=off cannot drop the block (the FIRST occurrence wins).
+    expect(parseEvalTask(runRedirector('evalpro', '?pro=off')['fs:evalTaskQuery']).proQuestions).toBe(true);
+    const store = runRedirector('evalpro', '');
+    expect(store['fs:evalArm']).toBe('1');
     const html = readFileSync(fileURLToPath(new URL('../../public/evalpro/index.html', import.meta.url)), 'utf8');
-    expect(html).toContain("'&pro=on'");
-    expect(html).toContain("'?pro=on'");
-    expect(html).toContain("sessionStorage.setItem('fs:evalArm', '1')");
     expect(html).not.toMatch(/localStorage\s*\./);
   });
 });

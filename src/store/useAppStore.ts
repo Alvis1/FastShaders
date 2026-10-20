@@ -123,7 +123,7 @@ import type { DesktopAutosaveRuntime } from '@/utils/desktopAutosave';
 // calls cost one boolean check in normal use. The chokepoint set is pinned by
 // src/eval/evalHooks.test.ts. telemetry.ts never imports this store (bridge
 // pattern), so the dependency is one-way.
-import { evalLog } from '@/eval/telemetry';
+import { evalLog, isEvalSessionActive, nodeEditFields } from '@/eval/telemetry';
 import type { PreviewMesh } from '@/utils/previewMesh';
 import type { MeshInventory, PreviewSplatFacts } from '@/utils/meshInventory';
 import type { PreviewShape } from '@/engine/exportModel';
@@ -1969,6 +1969,12 @@ interface AppState {
   ) => Promise<LibraryPlacement | null>;
 }
 
+/** Eval telemetry: the last `node-edit` logged (node + fields) and when, so a
+ *  burst of commits on one field — a text box writing per keystroke, a stepper
+ *  clicked five times — is ONE event. Module scope: it is not graph state. */
+let lastNodeEdit: { key: string; at: number } = { key: '', at: -Infinity };
+const NODE_EDIT_BURST_MS = 2_000;
+
 export const useAppStore = create<AppState>()((set, get) => ({
   nodes: [],
   edges: [],
@@ -2181,10 +2187,17 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   updateNodeData: (nodeId, data) => {
+    // Eval telemetry: a DISCRETE edit (a typed number, a dropdown, a checkbox)
+    // is a `node-edit`. Inside a bracketed gesture the call repeats per
+    // pointermove and the bracket's opening already logged ONE `gesture`, so
+    // nothing is logged here then. Decided BEFORE pushHistory/set, from the
+    // same `coalescingHistory` beginInteraction reads.
+    const logEdit = isEvalSessionActive() && !get().coalescingHistory;
     get().pushHistory();
     // `values` gates the lookup: most callers patch label/exposedPorts/settings,
     // and a value edit is a per-pointermove event on a scrub.
-    const before = 'values' in data ? get().nodes.find((n) => n.id === nodeId) : undefined;
+    const prior = 'values' in data || logEdit ? get().nodes.find((n) => n.id === nodeId) : undefined;
+    const before = 'values' in data ? prior : undefined;
     set((state) => ({
       nodes: state.nodes.map((n) =>
         n.id === nodeId ? { ...n, data: { ...n.data, ...data } } : n
@@ -2213,6 +2226,20 @@ export const useAppStore = create<AppState>()((set, get) => ({
       );
       if (change) {
         window.dispatchEvent(new CustomEvent('fs:uniform-authored', { detail: change }));
+      }
+    }
+    if (logEdit && prior) {
+      // WHICH settings, never their values (a value can be typed text). One
+      // event per BURST on the same node and fields: a text field that commits
+      // per keystroke is one edit, not one per letter.
+      const fields = nodeEditFields(prior.data as Record<string, unknown>, data as Record<string, unknown>);
+      if (fields.length > 0) {
+        const key = `${nodeId}|${fields.join(',')}`;
+        const at = performance.now();
+        if (key !== lastNodeEdit.key || at - lastNodeEdit.at >= NODE_EDIT_BURST_MS) {
+          evalLog('node-edit', { nodeType: (prior.data as { registryType?: string }).registryType ?? prior.type ?? 'unknown', fields });
+        }
+        lastNodeEdit = { key, at };
       }
     }
   },
@@ -2704,6 +2731,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
 
     const cost = (complexityData.costs as Record<string, number>).dataNode ?? 2;
+    // The wide-CSV half of the canvas file drop (NodeEditor logs the other).
+    evalLog('asset-drop', { kind: 'file', id: 'dataNode' });
     get().addNode({
       id: generateId(),
       type: 'shader',
@@ -2739,6 +2768,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // image permanently un-revertible. The orientation, too, is the drop's
     // rule, decided as the node is placed: the glTF way over a glTF model's
     // own UVs (utils/pictureOrientation.ts).
+    // The "Add anyway" half of the canvas image drop (NodeEditor logs the other).
+    evalLog('asset-drop', { kind: 'file', id: 'imageNode' });
     const place = (
       enc: { dataUrl: string; width: number; height: number },
       origin?: ImageOriginInfo,
