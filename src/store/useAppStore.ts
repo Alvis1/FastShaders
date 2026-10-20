@@ -123,7 +123,7 @@ import type { DesktopAutosaveRuntime } from '@/utils/desktopAutosave';
 // calls cost one boolean check in normal use. The chokepoint set is pinned by
 // src/eval/evalHooks.test.ts. telemetry.ts never imports this store (bridge
 // pattern), so the dependency is one-way.
-import { evalLog, isEvalSessionActive, nodeEditFields } from '@/eval/telemetry';
+import { evalLog, evalShaderName, isEvalSessionActive, nodeEditFields } from '@/eval/telemetry';
 import type { PreviewMesh } from '@/utils/previewMesh';
 import type { MeshInventory, PreviewSplatFacts } from '@/utils/meshInventory';
 import type { PreviewShape } from '@/engine/exportModel';
@@ -2256,10 +2256,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // TRACKED file, and a document already at the default name needs the second
     // one because it kebabs to the same file the reset would produce. Not
     // undoable (`shaderName` is absent from HistoryEntry), which is acceptable
-    // for a visible text box.
-    saveString('fs:shaderName', DEFAULT_SHADER_NAME);
+    // for a visible text box. In a study session the reset lands on the
+    // participant code instead (`evalShaderName`), which names the package's
+    // shader file.
+    const shaderName = evalShaderName() ?? DEFAULT_SHADER_NAME;
+    saveString('fs:shaderName', shaderName);
     set((state) => ({
-      shaderName: DEFAULT_SHADER_NAME,
+      shaderName,
       // recordHistory, which does NOT honour `isUndoRedo`: a stale flag would
       // swallow this entry behind an unundoable clear. Snapshot + clear in ONE
       // `set`, so no subscriber sees a cleared graph with its history missing.

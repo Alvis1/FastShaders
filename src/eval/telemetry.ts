@@ -62,6 +62,8 @@ const FLUSH_EVERY_N_EVENTS = 20;
 let active = false;
 let recordingStopped = false;
 let sessionId = '';
+/** The session's participant code ('' when none was typed). */
+let participantCode = '';
 let seq = 0;
 let events: EvalEvent[] = [];
 let dirty = false;
@@ -112,6 +114,17 @@ export function initEvalBridge(b: EvalBridge): void {
  *  skip building an expensive payload for a log that would be dropped. */
 export function isEvalSessionActive(): boolean {
   return active;
+}
+
+/**
+ * The shader name a study document starts with: the participant code, so the
+ * package's artifact is `shader/p01.js` even after the participant pressed NEW
+ * (J0302 of the 2026-10-20 sessions pressed it before their first node, and
+ * their shader came back as `my-shader.js`). `null` outside a session or when
+ * no code was typed — the caller keeps its own default.
+ */
+export function evalShaderName(): string | null {
+  return active && participantCode ? participantCode : null;
 }
 
 /** Wall-clock ms of the session clock's zero — ships in session.json so the
@@ -257,6 +270,7 @@ export function clearEvalJournal(): void {
 export function startEvalSession(rec: EvalSessionRecord, context?: Record<string, unknown>): void {
   if (active) return;
   sessionId = rec.id;
+  participantCode = rec.participant;
   const pageOrigin = Math.round(performance.timeOrigin);
   const journal = readJournal();
   const resumable =
@@ -307,6 +321,7 @@ export function endEvalSession(): void {
   flushJournal();
   active = false;
   recordingStopped = false;
+  participantCode = '';
   for (const fn of teardown) fn();
   teardown = [];
 }

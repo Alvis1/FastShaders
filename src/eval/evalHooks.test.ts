@@ -127,6 +127,20 @@ describe('eval telemetry hooks', () => {
     expect(evalImports).toEqual(["from '@/eval/telemetry'"]);
   });
 
+  it('NEW in a study session keeps the participant code as the shader name', () => {
+    // J0302 (2026-10-20) pressed NEW before their first node and the package's
+    // shader came back as `my-shader.js`. newGraph resets to the session's
+    // code, which telemetry holds from start to end of the session.
+    const store = read('store/useAppStore.ts');
+    const start = store.lastIndexOf('newGraph: () => {');
+    const body = store.slice(start, store.indexOf('nodes: [', start));
+    expect(body).toContain('evalShaderName() ?? DEFAULT_SHADER_NAME');
+    expect(body).not.toMatch(/shaderName:\s*DEFAULT_SHADER_NAME/);
+    const telemetry = read('eval/telemetry.ts');
+    expect(telemetry).toContain('participantCode = rec.participant;');
+    expect(telemetry).toContain("participantCode = '';");
+  });
+
   it("requestCodeSync carries NO code-apply hook (imports call it too)", () => {
     const store = read('store/useAppStore.ts');
     // lastIndexOf: the first occurrences are the interface declarations.
@@ -150,7 +164,7 @@ describe('eval telemetry hooks', () => {
   it('eval mode is armed via sessionStorage, never localStorage', () => {
     // The flag must die with the tab — a localStorage arm would leave a
     // participant's browser in eval mode for every later visit.
-    const evalMode = read('eval/evalMode.ts');
+    const evalMode = read('eval/evalArm.ts');
     expect(evalMode).toContain("sessionStorage.getItem(EVAL_ARM_KEY)");
     expect(evalMode).not.toContain('localStorage.getItem(EVAL_ARM_KEY)');
     const redirector = readFileSync(join(srcRoot, '../public/eval/index.html'), 'utf8');

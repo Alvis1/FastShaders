@@ -23,7 +23,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
-  getBaseCosts, getCost, computeReachableCost, costSeeds,
+  getBaseCosts, getCost, computeReachableCost, computeGraphCost, costSeeds,
   sinkCosts, nodeCostPoints, setCostOverrides,
 } from './nodeCost';
 import { makeNode, makeEdge } from '@/test-utils';
@@ -125,6 +125,31 @@ describe('the ACTIVE sink seeds the reachable-cost walk', () => {
  * is unchanged; these pin the rule so widening the seed set cannot silently
  * start double-counting.
  */
+describe('computeGraphCost prices the whole canvas once (the study snapshot)', () => {
+  const unk = (id: string) => makeNode(id, 'unknown', { functionName: id, rawExpression: `${id}()` });
+
+  it('counts parked nodes the rendered price leaves out, and no sink', () => {
+    const out = makeNode('o1', 'output');
+    const wired = unk('w');
+    const parked = unk('p');
+    const edges = [makeEdge('w', 'out', 'o1', 'color')];
+    const nodes = [out, wired, parked];
+    expect(computeReachableCost(nodes, edges)).toBe(BASE.unknown);
+    expect(computeGraphCost(nodes, edges)).toBe(2 * BASE.unknown);
+  });
+
+  it('a feeder shared by two Outputs is still counted once', () => {
+    const nodes = [makeNode('o1', 'output'), makeNode('o2', 'output'), unk('s')];
+    const edges = [makeEdge('s', 'out', 'o1', 'color'), makeEdge('s', 'out', 'o2', 'color')];
+    expect(computeGraphCost(nodes, edges)).toBe(BASE.unknown);
+  });
+
+  it('an empty document and a lone Output price at 0', () => {
+    expect(computeGraphCost([], [])).toBe(0);
+    expect(computeGraphCost([makeNode('o1', 'output')], [])).toBe(0);
+  });
+});
+
 describe('computeReachableCost takes a seed LIST', () => {
   const unk = (id: string) => makeNode(id, 'unknown', { functionName: id, rawExpression: `${id}()` });
 

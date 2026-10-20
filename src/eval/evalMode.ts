@@ -17,8 +17,11 @@
 
 import { safeJsonReviver } from '@/utils/safeJson';
 import { FEEDBACK_EMAIL } from '@/utils/feedbackReport';
+import { EVAL_ARM_KEY } from './evalArm';
 
-export const EVAL_ARM_KEY = 'fs:evalArm';
+// The flag and its reader live in the leaf `evalArm.ts` (the registry reads it
+// at module init); re-exported so every other consumer keeps this one import.
+export { EVAL_ARM_KEY, isEvalMode } from './evalArm';
 export const EVAL_SESSION_KEY = 'fs:evalSession';
 export const EVAL_JOURNAL_KEY = 'fs:evalJournal';
 /** The raw query string the /eval and /evalp redirectors capture at launch. */
@@ -93,18 +96,6 @@ export function warnIfConsentIncomplete(): void {
  */
 export const IDLE_THRESHOLD_MS = 60_000;
 
-const armed = (() => {
-  try {
-    return sessionStorage.getItem(EVAL_ARM_KEY) === '1';
-  } catch {
-    // node tests / storage-blocked browsers: never in eval mode.
-    return false;
-  }
-})();
-
-export function isEvalMode(): boolean {
-  return armed;
-}
 
 /** The per-tab study session, persisted to sessionStorage so a mid-session
  *  reload resumes instead of re-asking consent. */

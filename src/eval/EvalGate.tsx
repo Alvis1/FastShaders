@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { clearImageOrigins } from '@/utils/imageOriginCache';
 import { useAppStore, resolveDeviceBudget } from '@/store/useAppStore';
 import { countProject } from '@/utils/feedbackReport';
+import { computeGraphCost } from '@/utils/nodeCost';
+import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import {
   CONSENT_TEXT_VERSION,
   clearEvalMode,
@@ -39,7 +41,14 @@ function makeBridge(): EvalBridge {
   return {
     getSnapshot: () => {
       const s = useAppStore.getState();
-      return { ...countProject(s.nodes, s.edges), costPoints: s.totalCost };
+      // `costPoints` is the RENDERED price (the CostBar's number: only what
+      // feeds the counted Outputs); `costPointsAll` is every node on the
+      // canvas priced once, so parked work shows up in the record too.
+      return {
+        ...countProject(s.nodes, s.edges),
+        costPoints: s.totalCost,
+        costPointsAll: computeGraphCost(s.nodes, unwrapCollapsedGroupEdges(s.nodes, s.edges)),
+      };
     },
     // `previewCode` advances per scrub FRAME (the sync engine regenerates code
     // on every node-value change), while the actual iframe rebuild is behind
@@ -199,9 +208,11 @@ export function EvalGate() {
     // The participant code becomes the shader NAME, so the file inside the
     // package is `shader/p01.js` rather than an anonymous `my-shader.js` —
     // the artifact is then identifiable on its own, without opening the zip
-    // to find out whose it is. AFTER cleanSlateForStudy, because newGraph()
-    // resets the name to DEFAULT_SHADER_NAME. Empty code keeps that default;
-    // the participant can still rename the shader themselves afterwards.
+    // to find out whose it is. newGraph() inside a session already resets to
+    // the code (`evalShaderName`, which is also what keeps it across a NEW
+    // pressed mid-session); this explicit set stays as the one statement of
+    // intent. Empty code keeps the default; the participant can still rename
+    // the shader themselves afterwards.
     if (participant) useAppStore.getState().setShaderName(participant);
     // Task / condition identity, logged as its own event so the timeline says
     // when the task began — session.json carries the same values.

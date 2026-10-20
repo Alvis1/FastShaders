@@ -122,6 +122,11 @@ export function buildSummaryCsv(
     ['code_applies', summary.codeApplyCount],
     ['preview_rebuilds', summary.previewRebuildCount],
     ['exports', summary.exportCount],
+    // The last snapshot's two prices: what the shader RENDERS (the CostBar's
+    // number) and every node on the canvas priced once (`costPointsAll`,
+    // absent before 2026-10-20). Apart they show work parked off the Output.
+    ['final_points', summary.finalSnapshot?.costPoints ?? ''],
+    ['final_points_all', summary.finalSnapshot?.costPointsAll ?? ''],
     ['budget_crossings', summary.budgetCrossings],
     ['over_budget_min', (summary.overBudgetMs / 60_000).toFixed(2)],
     ['time_to_first_connect_s', summary.timeToFirstConnectMs == null ? '' : (summary.timeToFirstConnectMs / 1000).toFixed(1)],
@@ -177,6 +182,11 @@ export function buildEvalReadme(input: EvalPackageInput): string {
     'dropdown, a checkbox) — one per burst on the same node and fields within 2 s —',
     'and name WHICH settings changed, never their values; gestures are continuous',
     'ones (a drag-scrub or a colour-picker session), one per gesture.',
+    '',
+    'Points: final_points is what the shader renders (the cost bar\'s number — only',
+    'nodes feeding the counted Outputs); final_points_all prices every node on the',
+    'canvas once, wired or not (snapshot `costPointsAll`). A gap between them is',
+    'work parked off the Output.',
     '',
     'device.memoryGb is null where the browser does not report memory (Safari and',
     'Firefox never do).',

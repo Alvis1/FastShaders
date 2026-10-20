@@ -250,6 +250,9 @@ for (const zp of zipPaths) {
       ttfConnectS: s.timeToFirstConnectMs == null ? null : s.timeToFirstConnectMs / 1000,
       ttfNodeS: s.timeToFirstNodeAddMs == null ? null : s.timeToFirstNodeAddMs / 1000,
       budgetCrossings: s.budgetCrossings ?? 0,
+      // Rendered price vs every node priced once (absent before 2026-10-20).
+      finalPoints: s.finalSnapshot?.costPoints ?? null,
+      finalPointsAll: s.finalSnapshot?.costPointsAll ?? null,
       overBudgetMin: (s.overBudgetMs ?? 0) / 60000,
       comment: sus.comment ?? '',
     });
@@ -348,7 +351,7 @@ if (problems.length) {
 }
 
 // CSV — one row per participant, spreadsheet-ready.
-const cols = ['file', 'sessionId', 'participant', 'expBlender', 'expUnreal', 'expOtherNodeEditors', 'expShaderCode', 'expOther', 'arm', 'task', 'briefBudget', 'costBarVisible', 'pointsVisible', 'costTable', 'device', 'hasShot', 'budgetCrossings', 'overBudgetMin', 'language', 'languageAtSubmit', 'sus', 'activeMin', 'wallMin', 'idleThresholdS', 'events', 'nodeAdds', 'distinctTypes', 'presetDrops', 'textureDrops', 'assetNodes', 'nodeEdits', 'gestures', 'connects', 'undos', 'redos', 'applies', 'rebuilds', 'ttfConnectS', 'ttfNodeS', 'introOpens', 'introS', 'introSlides', 'comment'];
+const cols = ['file', 'sessionId', 'participant', 'expBlender', 'expUnreal', 'expOtherNodeEditors', 'expShaderCode', 'expOther', 'arm', 'task', 'briefBudget', 'costBarVisible', 'pointsVisible', 'costTable', 'device', 'hasShot', 'budgetCrossings', 'finalPoints', 'finalPointsAll', 'overBudgetMin', 'language', 'languageAtSubmit', 'sus', 'activeMin', 'wallMin', 'idleThresholdS', 'events', 'nodeAdds', 'distinctTypes', 'presetDrops', 'textureDrops', 'assetNodes', 'nodeEdits', 'gestures', 'connects', 'undos', 'redos', 'applies', 'rebuilds', 'ttfConnectS', 'ttfNodeS', 'introOpens', 'introS', 'introSlides', 'comment'];
 const esc = (v) => {
   let s = v == null ? '' : String(v);
   if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;

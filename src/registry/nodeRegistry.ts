@@ -1,7 +1,8 @@
 import type { NodeDefinition, NodeCategory, PortDefinition } from '@/types';
 import { nodeSearchLV, nodeLabelLV } from '@/i18n';
 import { SOUND_DEFAULT_VALUES } from '@/utils/soundSettings';
-import { HIDDEN_NODE_TYPES } from './editorVisibility';
+import { HIDDEN_NODE_TYPES, STUDY_WITHHELD_NODE_TYPES } from './editorVisibility';
+import { isEvalMode } from '@/eval/evalArm';
 import { withheldNodeTypes } from './optionalCategories';
 
 const definitions: NodeDefinition[] = [
@@ -2081,17 +2082,21 @@ export function getAllDefinitions(): NodeDefinition[] {
 }
 
 /**
- * `getAllDefinitions()` minus whatever `editorVisibility.json` hides. Computed
- * ONCE, not per call: the hidden set is fixed at module init (it comes from a
- * source file), and every consumer memoizes on this array's identity, so a
+ * `getAllDefinitions()` minus whatever `editorVisibility.json` hides — and, in a
+ * study session, `STUDY_WITHHELD_NODE_TYPES`. Computed ONCE, not per call: the
+ * hidden set is fixed at module init (a source file, plus the eval arm flag,
+ * which is itself sampled once at init), and every consumer memoizes on this array's identity, so a
  * fresh `filter()` per call would quietly make those `useMemo`s recompute — and
  * would give the accessor two different identities within one render.
  * `allDefinitions` itself is reused when nothing is hidden.
  */
+const offeredHidden: ReadonlySet<string> = isEvalMode()
+  ? new Set([...HIDDEN_NODE_TYPES, ...STUDY_WITHHELD_NODE_TYPES])
+  : HIDDEN_NODE_TYPES;
 const editorDefinitions: NodeDefinition[] =
-  HIDDEN_NODE_TYPES.size === 0
+  offeredHidden.size === 0
     ? allDefinitions
-    : allDefinitions.filter((d) => !HIDDEN_NODE_TYPES.has(d.type));
+    : allDefinitions.filter((d) => !offeredHidden.has(d.type));
 
 /**
  * `getEditorDefinitions(hidden)` memo: one array per distinct hidden-category
@@ -2135,7 +2140,7 @@ export function getEditorDefinitions(hidden?: ReadonlySet<NodeCategory>): NodeDe
  * palette never offers it in the first place.
  */
 export function categoryEmptiedByHiding(category: NodeCategory): boolean {
-  if (HIDDEN_NODE_TYPES.size === 0) return false;
+  if (editorDefinitions === allDefinitions) return false;
   const addable = (d: NodeDefinition) => d.category === category && d.type !== 'output';
   return allDefinitions.some(addable) && !editorDefinitions.some(addable);
 }

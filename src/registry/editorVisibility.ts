@@ -30,6 +30,16 @@ const keys = (v: unknown): string[] =>
 /** Node types hidden from the editor's add surfaces. Empty in a finished build. */
 export const HIDDEN_NODE_TYPES: ReadonlySet<string> = new Set(keys(data.nodes));
 
+/**
+ * Node types withheld from the add surfaces in a STUDY session only (decided
+ * by the registry at module init from `isEvalMode()`; never written to the
+ * JSON). The Splat Output: a study refuses every splat file, so the node can
+ * only render the preview's "needs a splat" notice — two of three participants
+ * of the 2026-10-20 sessions added it anyway, and one activated it. A graph
+ * that holds one still loads, like any hidden node.
+ */
+export const STUDY_WITHHELD_NODE_TYPES: ReadonlySet<string> = new Set(['splatOutput']);
+
 /** Built-in texture ids hidden from the content browser. */
 export const HIDDEN_TEXTURE_IDS: ReadonlySet<string> = new Set(keys(data.textures));
 

@@ -319,6 +319,26 @@ export function computeReachableCost(
 }
 
 /**
+ * Every node on the canvas priced ONCE, wired or not — the study snapshot's
+ * `costPointsAll`, the graph's SIZE in points beside `computeReachableCost`'s
+ * RENDERED price. The two differ by whatever is parked off the counted Outputs:
+ * a participant of the 2026-10-20 sessions ended at 65 nodes and 16 points,
+ * which the rendered price alone cannot tell from a small graph. Sinks are not
+ * priced, and no march-step or splat multiplier applies (those describe what
+ * one driving sink RUNS, not what the canvas holds). Same edge contract as
+ * `computeReachableCost`: hand in UNWRAPPED edges.
+ */
+export function computeGraphCost(nodes: AppNode[], edges: AppEdge[]): number {
+  const handles = buildWiredHandles(edges);
+  let total = 0;
+  for (const n of nodes) {
+    if (isSinkNode(n)) continue;
+    total += nodeCostPoints(n, edges, handles.get(n.id) ?? NO_HANDLES);
+  }
+  return total;
+}
+
+/**
  * Every sink's OWN price — what the shader would cost with THAT node active.
  * The badges on inactive outputs show theirs muted, so two candidate outputs
  * can be compared before clicking one. Keyed by node id.
