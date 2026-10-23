@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { EVAL_DPO_CONTACT, EVAL_RETENTION_PERIOD, warnIfConsentIncomplete } from './evalMode';
-import { evalTask } from './evalTask';
+import { asksAge, evalTask } from './evalTask';
 import { DataDisclosureModal } from './DataDisclosureModal';
 import { LangSwitch } from './LangSwitch';
 import { useStudyDialog } from './studyDialog';
@@ -48,7 +48,7 @@ import './eval.css';
  * disabled until it is ticked, and the tick rides the consent record
  * (`ageConfirmed`) so a package shows the participant affirmed it.
  */
-const ASKS_AGE = !evalTask().proQuestions;
+const ASKS_AGE = asksAge(evalTask());
 
 interface Props {
   onAgree: (participant: string, ageConfirmed: boolean) => void;

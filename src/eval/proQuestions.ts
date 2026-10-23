@@ -1,113 +1,420 @@
 /**
- * The professional block — asked only in the `/evalpro` arm.
+ * The professional block — asked only in the `/evalpro` arm, AFTER SUS item 10
+ * and before the comment box (consent-12, 2026-10-24).
  *
- * DRAFT CONTENT. The mechanism is finished; the questions below are a
- * placeholder set chosen to match what this study is actually about, and are
- * meant to be reviewed and replaced by the researcher. Editing them is editing
- * this one array — nothing else knows what the questions are.
+ * Why after the SUS. Everything a participant sees up to SUS item 10 is the
+ * same in every arm, so a professional's SUS is collected in the same context
+ * as a student's. The first draft (consent-6 … consent-11) sat BEFORE the SUS
+ * and ended on "Would a tool like this be useful in your work?" — an
+ * arm-specific lead-in, with a GPU question naming the very thing the study
+ * manipulates. No package ever carried that draft (no /evalpro session ran),
+ * so its ids are retired rather than migrated.
  *
- * Why these five. A professional's answers are only useful next to their
- * working context: how long they have done this, what they ship to, how often
- * they touch shaders at all, and — the one that speaks directly to the
- * cost-feedback experiment — whether GPU performance budgets constrain their
- * everyday work. The last question is the adoption signal a tool paper wants.
+ * What it asks, in order, mostly reused from the dissertation's E1 form
+ * (vault notes 10/11), reworded into the app's formal "jūs" register:
+ *   1. the 2026 pilot's Q5–Q9, word for word (hypothesis H2, pilot continuity);
+ *   2. credibility of the cost points (E1–E7) — the expert half of SQ3;
+ *   3. what the tool suits (form item H2: teaching / prototyping / production);
+ *   4. the work profile: main work, years, platforms, shader code.
+ * Every required question has an honest answer for everyone ("Studying",
+ * "No paid experience", "No", "Can't judge"), and every frequency or count has
+ * a reference period and options that neither overlap nor leave gaps.
  *
- * Two shapes only, so the UI stays the SUS radio strip plus a text field:
- * `scale` (five ordered options, each with its own labels) and `text`.
+ * The Latvian lives BESIDE the English here, as the SUS does (SUS_ITEMS_LV),
+ * never as lv.json keys: those are keyed by English text and shared with
+ * unrelated screens ("Never"/"Always" belonged to the image dropdown), so an
+ * edit made elsewhere would silently reword the instrument.
+ *
+ * Rewording a question changes what it measures: give it a NEW id, bump
+ * PRO_ITEMS_VERSION, and never reuse an id in RETIRED_PRO_IDS.
  *
  * PURE (node-tested).
  */
 
-export interface ProScaleQuestion {
-  kind: 'scale';
-  id: string;
-  question: string;
-  /** Five ordered option labels, low → high. Index IS the stored value. */
-  levels: readonly string[];
+export type ProLang = 'en' | 'lv';
+
+export interface ProText {
+  en: string;
+  lv: string;
 }
 
-export interface ProTextQuestion {
+export interface ProOption extends ProText {
+  id: string;
+}
+
+export type ProGroup = 'pilot' | 'points' | 'fit' | 'work';
+
+interface ProBase {
+  id: string;
+  group: ProGroup;
+  question: ProText;
+}
+
+/** A 1–5 agreement strip (the SUS anchors); `cantJudge` adds a separate
+ *  "Can't judge" answer, stored as 'na', never as a sixth level. */
+export interface ProAgreeItem extends ProBase {
+  kind: 'agree';
+  cantJudge?: boolean;
+}
+
+/** One choice. An option whose id is `otherId` reveals an optional text box. */
+export interface ProChoiceItem extends ProBase {
+  kind: 'choice';
+  options: readonly ProOption[];
+  otherId?: string;
+  otherHint?: ProText;
+}
+
+/** Rows answered on the same columns (Yes / No …): forced choice per row,
+ *  which gets more honest endorsements than a tick-all list (Smyth et al. 2006). */
+export interface ProGridItem extends ProBase {
+  kind: 'grid';
+  rows: readonly ProOption[];
+  columns: readonly ProOption[];
+}
+
+/** Optional free text — never required, never copied into summary.csv. */
+export interface ProTextItem extends ProBase {
   kind: 'text';
-  id: string;
-  question: string;
 }
 
-export type ProQuestion = ProScaleQuestion | ProTextQuestion;
+export type ProQuestion = ProAgreeItem | ProChoiceItem | ProGridItem | ProTextItem;
+
+export const PRO_ITEMS_VERSION = 'pro-2';
+
+/** Ids of the first draft (consent-6 … consent-11). Never reuse one. */
+export const RETIRED_PRO_IDS: readonly string[] = [
+  'role', 'years', 'shaderFrequency', 'performanceBudget', 'platforms', 'wouldUse',
+];
+
+export const PRO_GROUP_HEADINGS: Record<ProGroup, ProText> = {
+  pilot: { en: 'More statements about FastShaders', lv: 'Vēl apgalvojumi par FastShaders' },
+  points: { en: 'The cost points', lv: 'Izmaksu punkti' },
+  fit: { en: 'FastShaders and your work', lv: 'FastShaders un jūsu darbs' },
+  work: { en: 'Your professional work', lv: 'Jūsu profesionālais darbs' },
+};
+
+export const PRO_GROUP_NOTES: Partial<Record<ProGroup, ProText>> = {
+  points: {
+    en: 'About the point numbers you saw on the nodes and in the cost bar.',
+    lv: 'Par punktu skaitļiem, ko redzējāt pie mezgliem un izmaksu joslā.',
+  },
+};
+
+export const CANT_JUDGE: ProText = { en: "Can't judge", lv: 'Nevaru novērtēt' };
+
+const YES: ProOption = { id: 'yes', en: 'Yes', lv: 'Jā' };
+const NO: ProOption = { id: 'no', en: 'No', lv: 'Nē' };
+const CANT: ProOption = { id: 'cantJudge', ...CANT_JUDGE };
 
 export const PRO_ITEMS: readonly ProQuestion[] = [
+  // 1. The pilot's Q5–Q9, word for word: English as published (main.tex),
+  // Latvian from the pilot form (Q7's "mērki" corrected to "mērķi").
   {
-    kind: 'text',
-    id: 'role',
-    question: 'Your role (e.g. technical artist, game developer, lecturer)',
+    kind: 'agree', id: 'pilotQ5', group: 'pilot',
+    question: {
+      en: 'This node editor seemed intuitive and easy to use without technical support.',
+      lv: 'Man šis mezglu redaktors šķita intuitīvs un viegli lietojams bez tehniskā atbalsta.',
+    },
   },
   {
-    kind: 'scale',
-    id: 'years',
-    question: 'How long have you worked professionally with 3D or real-time graphics?',
-    levels: ['Under a year', '1–3 years', '3–5 years', '5–10 years', 'Over 10 years'],
+    kind: 'agree', id: 'pilotQ6', group: 'pilot',
+    question: {
+      en: 'The visual hierarchy of nodes, their shapes and color codes clearly communicated their functions.',
+      lv: 'Mezglu vizuālā hierarhija, formas un krāsu kodi skaidri paziņoja par to funkcijām.',
+    },
   },
   {
-    kind: 'scale',
-    id: 'shaderFrequency',
-    question: 'How often do you create or edit shaders in your work?',
-    levels: ['Never', 'A few times a year', 'Monthly', 'Weekly', 'Daily'],
+    kind: 'agree', id: 'pilotQ7', group: 'pilot',
+    question: {
+      en: 'I felt confident experimenting and connecting various nodes to achieve the set goal.',
+      lv: 'Es jutos pārliecināts(-a), eksperimentējot un savienojot dažādus mezglus (nodes), lai sasniegtu izvirzīto mērķi.',
+    },
   },
   {
-    kind: 'scale',
-    id: 'performanceBudget',
-    question: 'How often does GPU performance constrain what you can build?',
-    levels: ['Never', 'Rarely', 'Sometimes', 'Often', 'Always'],
+    kind: 'agree', id: 'pilotQ8', group: 'pilot',
+    question: {
+      en: 'The system provided clear and immediate visual feedback.',
+      lv: 'Sistēma nodrošināja skaidru un tūlītēju vizuālo atgriezenisko saiti.',
+    },
   },
   {
-    kind: 'text',
-    id: 'platforms',
-    question: 'Which platforms do you target? (e.g. VR headsets, mobile, desktop, web)',
+    kind: 'agree', id: 'pilotQ9', group: 'pilot',
+    question: {
+      en: 'The interface seemed unnecessarily complex for the tasks I wanted to perform.',
+      lv: 'Man saskarne šķita nevajadzīgi sarežģīta tiem uzdevumiem, kurus vēlējos veikt.',
+    },
+  },
+
+  // 2. Credibility of the cost points (E1 form, section E). Points are always
+  // shown on /evalpro (evalTask.ts), so everyone here saw them.
+  {
+    kind: 'agree', id: 'pointsUnderstood', group: 'points', cantJudge: true,
+    question: {
+      en: 'The point meter was understandable without extra explanation.',
+      lv: 'Punktu rādītājs bija saprotams bez papildu skaidrojuma.',
+    },
   },
   {
-    kind: 'scale',
-    id: 'wouldUse',
-    question: 'Would a tool like this be useful in your work?',
-    levels: ['Definitely not', 'Probably not', 'Maybe', 'Probably yes', 'Definitely yes'],
+    kind: 'agree', id: 'pointsInfluenced', group: 'points', cantJudge: true,
+    question: {
+      en: 'The cost display influenced my decisions while authoring.',
+      lv: 'Izmaksu rādītājs ietekmēja manus lēmumus veidošanas laikā.',
+    },
+  },
+  {
+    kind: 'agree', id: 'pointsCredible', group: 'points', cantJudge: true,
+    question: {
+      en: 'The point values seemed credible given my experience with real-time performance.',
+      lv: 'Punktu vērtības šķita ticamas, ņemot vērā manu pieredzi ar reāllaika veiktspēju.',
+    },
+  },
+  {
+    kind: 'agree', id: 'pointsTrusted', group: 'points', cantJudge: true,
+    question: {
+      en: 'I would trust this meter when planning a real VR project.',
+      lv: 'Es uzticētos šim rādītājam, plānojot reālu VR projektu.',
+    },
+  },
+  {
+    kind: 'agree', id: 'pointsRanking', group: 'points', cantJudge: true,
+    question: {
+      en: 'It matters more that the meter ranks effects by cost correctly than that its numbers are exact.',
+      lv: 'Ir svarīgāk, lai rādītājs pareizi sarindo efektus pēc izmaksām, nekā lai tā skaitļi būtu precīzi.',
+    },
+  },
+  {
+    kind: 'choice', id: 'pointsOff20', group: 'points',
+    question: {
+      en: 'If the meter were off by about 20%, would it still be useful?',
+      lv: 'Ja rādītājs kļūdītos par aptuveni 20 %, vai tas joprojām būtu noderīgs?',
+    },
+    options: [
+      { id: 'yes', en: 'Yes', lv: 'Jā' },
+      { id: 'partly', en: 'Partly', lv: 'Daļēji' },
+      { id: 'no', en: 'No', lv: 'Nē' },
+    ],
+  },
+  {
+    kind: 'text', id: 'pointsMisleading', group: 'points',
+    question: {
+      en: 'Where might such a point system mislead its user? (optional)',
+      lv: 'Kur, jūsuprāt, šāda punktu sistēma varētu maldināt lietotāju? (pēc izvēles)',
+    },
+  },
+
+  // 3. What the tool suits today (E1 form H2), one Yes/No row per use.
+  {
+    kind: 'grid', id: 'fitFor', group: 'fit',
+    question: {
+      en: 'What is FastShaders, as you used it today, suited for?',
+      lv: 'Kam FastShaders — tāds, kādu to šodien lietojāt — ir piemērots?',
+    },
+    rows: [
+      { id: 'teaching', en: 'Teaching or learning shader basics', lv: 'Ēnotāju pamatu mācīšanai un apguvei' },
+      { id: 'prototyping', en: 'Quick prototyping of effects', lv: 'Ātrai efektu prototipēšanai' },
+      { id: 'production', en: 'Production work in real projects', lv: 'Darbam reālos projektos' },
+    ],
+    columns: [YES, NO, CANT],
+  },
+
+  // 4. The work profile. Options name ACTIVITIES, not people, so the Latvian
+  // never has to pick a gender for the respondent.
+  {
+    kind: 'choice', id: 'mainWork', group: 'work',
+    question: {
+      en: 'Which best describes your main work?',
+      lv: 'Kas vislabāk raksturo jūsu galveno darbu?',
+    },
+    options: [
+      { id: 'gameDev', en: 'Game development', lv: 'Spēļu izstrāde' },
+      { id: 'xrDev', en: 'XR (VR/AR) development', lv: 'XR (VR/AR) izstrāde' },
+      { id: 'webCreative', en: 'Web 3D or creative coding (e.g. three.js, A-Frame)', lv: 'Tīmekļa 3D vai radošā programmēšana (piem., three.js, A-Frame)' },
+      { id: 'shaderGraphics', en: 'Shader or graphics programming', lv: 'Ēnotāju vai grafikas programmēšana' },
+      { id: 'techArt', en: 'Technical art', lv: 'Tehniskā māksla (technical art)' },
+      { id: 'artDesign', en: '3D or media art and design', lv: '3D, mediju māksla vai dizains' },
+      { id: 'teaching', en: 'Teaching computer graphics or 3D', lv: 'Datorgrafikas vai 3D mācīšana' },
+      { id: 'studying', en: 'Studying', lv: 'Studēju' },
+      { id: 'other', en: 'Other', lv: 'Cits' },
+    ],
+    otherId: 'other',
+    otherHint: {
+      en: 'Job title only — no employer, client or project names (optional)',
+      lv: 'Tikai amats — bez darba devēja, klientu vai projektu nosaukumiem (pēc izvēles)',
+    },
+  },
+  {
+    kind: 'choice', id: 'realtimeYears', group: 'work',
+    question: {
+      en: 'How many years of paid experience do you have in real-time 3D or XR, or in teaching computer graphics (games, VR/AR, installations, 3D on the web)? Count full years.',
+      lv: 'Cik gadu algota darba pieredze jums ir reāllaika 3D vai XR jomā vai datorgrafikas mācīšanā (spēles, VR/AR, instalācijas, 3D tīmeklī)? Skaitiet pilnus gadus.',
+    },
+    options: [
+      { id: 'none', en: 'No paid experience', lv: 'Nav algota darba pieredzes' },
+      { id: 'under2', en: 'Less than 2 years (including a few months)', lv: 'Mazāk par 2 gadiem (arī daži mēneši)' },
+      { id: 'y2to5', en: '2–5 years', lv: '2–5 gadi' },
+      { id: 'y6to10', en: '6–10 years', lv: '6–10 gadi' },
+      { id: 'over10', en: 'More than 10 years', lv: 'Vairāk par 10 gadiem' },
+    ],
+  },
+  {
+    kind: 'grid', id: 'platforms12m', group: 'work',
+    question: {
+      en: 'In the past 12 months, did you make real-time 3D or XR content for these platforms?',
+      lv: 'Vai pēdējos 12 mēnešos veidojāt reāllaika 3D vai XR saturu šīm platformām?',
+    },
+    rows: [
+      { id: 'standaloneVr', en: 'Standalone VR headsets (e.g. Meta Quest)', lv: 'Autonomās VR brilles (piem., Meta Quest)' },
+      { id: 'pcVr', en: 'VR headsets connected to a computer (PC VR)', lv: 'Datoram pieslēgtas VR brilles (PC VR)' },
+      { id: 'webxr', en: 'WebXR (VR or AR in a web browser)', lv: 'WebXR (VR vai AR tīmekļa pārlūkā)' },
+      { id: 'web', en: 'The web without XR (3D in a browser)', lv: 'Tīmeklis bez XR (3D pārlūkā)' },
+    ],
+    columns: [YES, NO],
+  },
+  {
+    kind: 'choice', id: 'shaderCode12m', group: 'work',
+    question: {
+      en: 'Shader code (GLSL, HLSL, WGSL or TSL) in your work in the past 12 months:',
+      lv: 'Ēnotāju kods (GLSL, HLSL, WGSL vai TSL) jūsu darbā pēdējos 12 mēnešos:',
+    },
+    options: [
+      { id: 'regular', en: 'I write it regularly', lv: 'Rakstu regulāri' },
+      { id: 'adapt', en: 'I read and adapt it', lv: 'Lasu un pielāgoju' },
+      { id: 'little', en: 'Very little', lv: 'Ļoti maz' },
+      { id: 'none', en: 'Not at all', lv: 'Nemaz' },
+    ],
   },
 ];
 
-export const PRO_SCALE_ITEMS = PRO_ITEMS.filter(
-  (q): q is ProScaleQuestion => q.kind === 'scale',
-);
-
-export type ProAnswers = Record<string, number | string | null>;
+export const proText = (t: ProText, lang: ProLang): string => t[lang];
 
 /**
- * Every SCALE answered? Free-text questions never block submit — a
- * professional who does not target a platform worth naming must still be able
- * to finish, and an empty string is a real answer.
+ * Answers are keyed by `item.id`, a grid row by `item.id.row`, and a choice's
+ * "Other" text by `item.id.other`. Values: an agree item 1–5 or 'na', a choice
+ * or grid row the option id, a text item its string.
  */
-export function proComplete(answers: ProAnswers): boolean {
-  return PRO_SCALE_ITEMS.every((q) => {
-    const v = answers[q.id];
-    return Number.isInteger(v) && (v as number) >= 0 && (v as number) < q.levels.length;
-  });
+export type ProAnswers = Record<string, number | string | null | undefined>;
+
+export const gridKey = (item: ProGridItem, row: ProOption) => `${item.id}.${row.id}`;
+export const otherKey = (item: ProChoiceItem) => `${item.id}.other`;
+
+/** Every answer key a Submit needs, in the order the form shows them. */
+export function proRequiredKeys(): string[] {
+  const keys: string[] = [];
+  for (const q of PRO_ITEMS) {
+    if (q.kind === 'agree' || q.kind === 'choice') keys.push(q.id);
+    else if (q.kind === 'grid') for (const r of q.rows) keys.push(gridKey(q, r));
+  }
+  return keys;
 }
 
-/** The package's `professional` block: value plus label, like `background`. */
-export function buildProRecord(answers: ProAnswers): Record<string, unknown> {
+function validAnswer(q: ProQuestion, v: unknown): boolean {
+  if (q.kind === 'agree') return (Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 5) || (!!q.cantJudge && v === 'na');
+  if (q.kind === 'choice') return q.options.some((o) => o.id === v);
+  if (q.kind === 'grid') return q.columns.some((c) => c.id === v);
+  return true;
+}
+
+/** The required answer keys still missing (or holding a value the item does not offer). */
+export function proMissing(answers: ProAnswers): string[] {
+  const missing: string[] = [];
+  for (const q of PRO_ITEMS) {
+    if (q.kind === 'agree' || q.kind === 'choice') {
+      if (!validAnswer(q, answers[q.id])) missing.push(q.id);
+    } else if (q.kind === 'grid') {
+      for (const r of q.rows) if (!validAnswer(q, answers[gridKey(q, r)])) missing.push(gridKey(q, r));
+    }
+  }
+  return missing;
+}
+
+/** Every required answer given? Free text never blocks Submit. */
+export function proComplete(answers: ProAnswers): boolean {
+  return proMissing(answers).length === 0;
+}
+
+const TEXT_CAP = 300;
+const OTHER_CAP = 120;
+const cleanText = (raw: unknown, cap: number) => (typeof raw === 'string' ? raw.trim().slice(0, cap) : '');
+
+/**
+ * The package's `professional` block (sus.json). Each answer carries the
+ * English wording it was asked with and the language it was GIVEN in, so a
+ * later rewording or a Latvian answer can always be told apart.
+ */
+export function buildProRecord(
+  answers: ProAnswers,
+  langs: Record<string, ProLang | undefined> = {},
+): Record<string, unknown> {
   return {
+    itemsVersion: PRO_ITEMS_VERSION,
+    placement: 'after-sus',
     items: PRO_ITEMS.map((q) => {
-      if (q.kind === 'text') {
-        const raw = answers[q.id];
-        const text = typeof raw === 'string' ? raw.trim() : '';
-        return { id: q.id, question: q.question, kind: 'text', text };
+      const base = { id: q.id, kind: q.kind, question: q.question.en };
+      if (q.kind === 'agree') {
+        const v = answers[q.id];
+        const ok = validAnswer(q, v);
+        return {
+          ...base,
+          response: ok && typeof v === 'number' ? v : null,
+          na: ok && v === 'na',
+          language: langs[q.id] ?? null,
+        };
       }
-      const v = answers[q.id];
-      const level = Number.isInteger(v) ? (v as number) : null;
-      return {
-        id: q.id,
-        question: q.question,
-        kind: 'scale',
-        levels: q.levels,
-        level,
-        label: level == null ? null : q.levels[level],
-      };
+      if (q.kind === 'choice') {
+        const v = answers[q.id];
+        const opt = q.options.find((o) => o.id === v) ?? null;
+        return {
+          ...base,
+          options: q.options.map((o) => o.id),
+          choice: opt?.id ?? null,
+          label: opt?.en ?? null,
+          ...(q.otherId ? { otherText: opt?.id === q.otherId ? cleanText(answers[otherKey(q)], OTHER_CAP) : '' } : {}),
+          language: langs[q.id] ?? null,
+        };
+      }
+      if (q.kind === 'grid') {
+        return {
+          ...base,
+          columns: q.columns.map((c) => c.id),
+          rows: q.rows.map((r) => {
+            const v = answers[gridKey(q, r)];
+            return {
+              id: r.id,
+              question: r.en,
+              answer: q.columns.some((c) => c.id === v) ? v : null,
+              language: langs[gridKey(q, r)] ?? null,
+            };
+          }),
+        };
+      }
+      return { ...base, text: cleanText(answers[q.id], TEXT_CAP), language: langs[q.id] ?? null };
     }),
   };
+}
+
+/**
+ * summary.csv's professional columns, generated from PRO_ITEMS so a new or
+ * retired item cannot leave a stale or missing column. Empty for every other
+ * arm. Typed text never reaches the CSV — it stays in sus.json.
+ */
+export function proCsvColumns(block: unknown): [string, unknown][] {
+  const items = (block && typeof block === 'object' && Array.isArray((block as { items?: unknown }).items))
+    ? (block as { items: Record<string, unknown>[] }).items
+    : [];
+  const byId = new Map(items.filter((i) => i && typeof i.id === 'string').map((i) => [i.id as string, i]));
+  const version = block && typeof block === 'object' ? (block as { itemsVersion?: unknown }).itemsVersion : undefined;
+  const cols: [string, unknown][] = [['pro_items_version', typeof version === 'string' ? version : '']];
+  for (const q of PRO_ITEMS) {
+    const rec = byId.get(q.id);
+    if (q.kind === 'agree') {
+      cols.push([`pro_${q.id}`, rec ? (rec.na === true ? 'na' : rec.response ?? '') : '']);
+    } else if (q.kind === 'choice') {
+      cols.push([`pro_${q.id}`, rec?.choice ?? '']);
+    } else if (q.kind === 'grid') {
+      const rows = Array.isArray(rec?.rows) ? (rec!.rows as Record<string, unknown>[]) : [];
+      for (const r of q.rows) cols.push([`pro_${q.id}_${r.id}`, rows.find((x) => x?.id === r.id)?.answer ?? '']);
+    }
+  }
+  return cols;
 }

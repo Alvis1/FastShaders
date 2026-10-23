@@ -115,8 +115,10 @@ describe('the consent and disclosure are fully translated', () => {
     const keys = [
       ...BACKGROUND_ITEMS.map((it) => it.question),
       ...EXPERIENCE_LEVELS,
-      ...PRO_ITEMS.flatMap((q) => [q.question, ...(q.kind === 'scale' ? q.levels : [])]),
     ].filter(Boolean);
+    // The professional block carries its own Latvian (proQuestions.ts) and is
+    // checked there; it must not fall back to lv.json keys.
+    expect(PRO_ITEMS.every((q) => q.question.lv.length > 0)).toBe(true);
     const missing = keys.filter((k) => !(k in ui));
     expect(missing, `untranslated: ${missing.join(' | ')}`).toEqual([]);
   });

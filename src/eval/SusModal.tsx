@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { t, type Language } from '@/i18n';
@@ -30,7 +30,19 @@ import {
   buildBackgroundRecord,
   type BackgroundAnswers,
 } from './background';
-import { PRO_ITEMS, buildProRecord, proComplete, type ProAnswers } from './proQuestions';
+import {
+  CANT_JUDGE,
+  PRO_GROUP_HEADINGS,
+  PRO_GROUP_NOTES,
+  PRO_ITEMS,
+  buildProRecord,
+  gridKey,
+  otherKey,
+  proMissing,
+  type ProAnswers,
+  type ProGroup,
+  type ProLang,
+} from './proQuestions';
 import { LangSwitch } from './LangSwitch';
 import { summarizeAnswerLanguages } from './answerLanguage';
 import { useStudyDialog } from './studyDialog';
@@ -122,12 +134,21 @@ export function SusModal({ open, onClose }: Props) {
     () => Array<number | null>(SUS_ITEM_COUNT).fill(null),
   );
   const [comment, setComment] = useState('');
-  // Asked BEFORE the SUS: a usability score is not interpretable without
-  // knowing whose it is, and answering them first keeps thinking about one's
-  // own expertise from colouring the SUS items.
+  // Asked BEFORE the SUS, in every arm, since the first study packages — kept
+  // there for comparability with them and with the pilot, which asked them
+  // first too. That order makes them the SUS's immediate context (it protects
+  // the self-ratings from the SUS answers, not the reverse), so a context
+  // effect on the SUS cannot be ruled out; the paper says so.
   const [background, setBackground] = useState<BackgroundAnswers>({});
-  // The professional block — only in the /evalpro arm.
+  // The professional block — only in the /evalpro arm, AFTER SUS item 10, so
+  // every arm reaches the SUS the same way (proQuestions.ts).
   const [pro, setPro] = useState<ProAnswers>({});
+  // The UI language each professional answer was given in, keyed like `pro`.
+  const proAnswerLangRef = useRef<Record<string, ProLang>>({});
+  // Set by a Submit press on an incomplete form: every unanswered question is
+  // then marked, and the first one is scrolled into view.
+  const [showMissing, setShowMissing] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
   const submittingRef = useRef(false);
   // Submit → thank-you screen. See handleSubmit.
   const [busy, setBusy] = useState(false);
@@ -160,8 +181,33 @@ export function SusModal({ open, onClose }: Props) {
   const anchorHigh = language === 'lv' ? SUS_ANCHOR_HIGH_LV : SUS_ANCHOR_HIGH_EN;
   const answered = useMemo(() => responses.filter((r) => r != null).length, [responses]);
   const proAsked = evalTask().proQuestions;
-  const complete =
-    answered === SUS_ITEM_COUNT && backgroundComplete(background) && (!proAsked || proComplete(pro));
+  // Every required answer still missing, as the `data-q` keys the form's rows
+  // carry, in screen order: experience, SUS, then the professional block.
+  const missing = useMemo(() => [
+    ...BACKGROUND_ITEMS.filter((it) => !backgroundComplete({ [it.id]: background[it.id] }, [it])).map((it) => `bg-${it.id}`),
+    ...responses.flatMap((r, i) => (r == null ? [`sus-${i}`] : [])),
+    ...(proAsked ? proMissing(pro).map((k) => `pro-${k}`) : []),
+  ], [background, responses, pro, proAsked]);
+  const complete = missing.length === 0;
+  const missingSet = useMemo(() => new Set(missing), [missing]);
+  const isMissing = (key: string) => showMissing && missingSet.has(key);
+  const setProAnswer = (key: string, value: ProAnswers[string]) => {
+    proAnswerLangRef.current[key] = language;
+    setPro((prev) => ({ ...prev, [key]: value }));
+  };
+
+  // A press on Submit while answers are missing: mark them all and take the
+  // participant to the first one. Submit is aria-disabled then, not disabled,
+  // so the press arrives and can explain itself (a disabled button's only
+  // explanation was a hover tooltip, which touch never shows).
+  const showFirstMissing = () => {
+    setShowMissing(true);
+    const first = missing[0];
+    if (!first) return;
+    const row = panelRef.current?.querySelector<HTMLElement>(`[data-q="${first}"]`);
+    row?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    row?.querySelector<HTMLElement>('input')?.focus({ preventScroll: true });
+  };
 
   const handleSubmit = async () => {
     // A REF, not the `done` state: `capturePreviewShot()` below waits up to 4 s
@@ -199,6 +245,7 @@ export function SusModal({ open, onClose }: Props) {
     // Taken with `filled`, before the await below: both must describe the
     // same moment, the click.
     const answerLangs = susAnswerLangRef.current.slice();
+    const proLangs = { ...proAnswerLangRef.current };
     const score = computeSusScore(filled);
     const submittedIso = new Date().toISOString();
     const session = readEvalSession();
@@ -238,7 +285,7 @@ export function SusModal({ open, onClose }: Props) {
       language: answeredIn.language,
       languageAtSubmit: language,
       background: buildBackgroundRecord(background),
-      ...(proAsked ? { professional: buildProRecord(pro) } : {}),
+      ...(proAsked ? { professional: buildProRecord(pro, proLangs) } : {}),
       itemsVersion: 'brooke-1996-item8-awkward',
       items: filled.map((response, i) => {
         const itemLanguage = answeredIn.perItem[i];
@@ -279,6 +326,11 @@ export function SusModal({ open, onClose }: Props) {
           textVersion: session?.consentVersion ?? '',
           // Present only where the consent asked (every arm but /evalpro).
           ...(session?.ageConfirmed ? { ageConfirmed: true } : {}),
+          // The code given at Agree. The questionnaire's field stays editable
+          // (a mistyped code can be fixed), so the package keeps both and
+          // says when they differ (consent-12).
+          participantAtConsent: session?.participant ?? '',
+          ...(session && trimmedParticipant !== session.participant ? { participantEdited: true } : {}),
         },
         // Which task and which experimental condition this session ran under.
         task: evalTask(),
@@ -444,9 +496,150 @@ export function SusModal({ open, onClose }: Props) {
     );
   }
 
+  const lang: ProLang = language === 'lv' ? 'lv' : 'en';
+  const proStr = (text: { en: string; lv: string }) => text[lang];
+  // The data-q / aria-invalid pair every required row wears.
+  const rowMarks = (key: string) => ({ 'data-q': key, 'aria-invalid': isMissing(key) || undefined });
+
+  const agreeStrip = (key: string, labelId: string, cantJudge?: boolean) => (
+    <span className="sus-modal__scale" role="radiogroup" aria-labelledby={labelId}>
+      {[1, 2, 3, 4, 5].map((v) => (
+        <label key={v} title={v === 1 ? anchorLow : v === 5 ? anchorHigh : undefined}>
+          <input
+            type="radio"
+            name={`pro-${key}`}
+            value={v}
+            checked={pro[key] === v}
+            disabled={busy}
+            onChange={() => setProAnswer(key, v)}
+          />
+          {v}
+        </label>
+      ))}
+      {cantJudge && (
+        <label className="sus-modal__na">
+          <input
+            type="radio"
+            name={`pro-${key}`}
+            value="na"
+            checked={pro[key] === 'na'}
+            disabled={busy}
+            onChange={() => setProAnswer(key, 'na')}
+          />
+          {proStr(CANT_JUDGE)}
+        </label>
+      )}
+    </span>
+  );
+
+  const optionStrip = (key: string, labelId: string, options: readonly { id: string; en: string; lv: string }[]) => (
+    <span className="sus-modal__scale sus-modal__scale--wide" role="radiogroup" aria-labelledby={labelId}>
+      {options.map((o) => (
+        <label key={o.id}>
+          <input
+            type="radio"
+            name={`pro-${key}`}
+            value={o.id}
+            checked={pro[key] === o.id}
+            disabled={busy}
+            onChange={() => setProAnswer(key, o.id)}
+          />
+          <span className="sus-modal__level-label">{proStr(o)}</span>
+        </label>
+      ))}
+    </span>
+  );
+
+  // The professional block, after SUS item 10 (proQuestions.ts says why).
+  const proBlock = () => {
+    let group: ProGroup | null = null;
+    return PRO_ITEMS.map((q) => {
+      const head: ReactNode[] = [];
+      if (q.group !== group) {
+        group = q.group;
+        const note = PRO_GROUP_NOTES[q.group];
+        head.push(
+          <div className="sus-modal__section-head" key={`h-${q.group}`}>{proStr(PRO_GROUP_HEADINGS[q.group])}</div>,
+        );
+        if (note) head.push(<div className="csv-import-modal__message" key={`n-${q.group}`}>{proStr(note)}</div>);
+        if (q.kind === 'agree') {
+          head.push(
+            <div className="sus-modal__anchors" aria-hidden="true" key={`a-${q.group}`}>
+              <span>1 — {anchorLow}</span>
+              <span>5 — {anchorHigh}</span>
+            </div>,
+          );
+        }
+      }
+      const labelId = `pro-item-${q.id}`;
+      let body: ReactNode;
+      if (q.kind === 'agree') {
+        body = (
+          <div className="sus-modal__item" {...rowMarks(`pro-${q.id}`)}>
+            <span className="sus-modal__statement" id={labelId}>{proStr(q.question)}</span>
+            {agreeStrip(q.id, labelId, q.cantJudge)}
+          </div>
+        );
+      } else if (q.kind === 'choice') {
+        const otherOn = q.otherId != null && pro[q.id] === q.otherId;
+        body = (
+          <div className="sus-modal__pro-scale" {...rowMarks(`pro-${q.id}`)}>
+            <span className="sus-modal__statement" id={labelId}>{proStr(q.question)}</span>
+            {optionStrip(q.id, labelId, q.options)}
+            {otherOn && (
+              <input
+                type="text"
+                className="sus-modal__followup-input"
+                aria-label={q.otherHint ? proStr(q.otherHint) : undefined}
+                placeholder={q.otherHint ? proStr(q.otherHint) : undefined}
+                value={typeof pro[otherKey(q)] === 'string' ? (pro[otherKey(q)] as string) : ''}
+                maxLength={120}
+                disabled={busy}
+                onChange={(e) => setProAnswer(otherKey(q), e.target.value)}
+              />
+            )}
+          </div>
+        );
+      } else if (q.kind === 'grid') {
+        body = (
+          <div className="sus-modal__pro-scale">
+            <span className="sus-modal__statement">{proStr(q.question)}</span>
+            {q.rows.map((r) => {
+              const key = gridKey(q, r);
+              const rowId = `pro-item-${q.id}-${r.id}`;
+              return (
+                <div className="sus-modal__pro-row" key={r.id} {...rowMarks(`pro-${key}`)}>
+                  <span className="sus-modal__pro-row-label" id={rowId}>{proStr(r)}</span>
+                  {optionStrip(key, rowId, q.columns)}
+                </div>
+              );
+            })}
+          </div>
+        );
+      } else {
+        body = (
+          <div className="sus-modal__pro-scale">
+            <label className="sus-modal__statement" htmlFor={`pro-${q.id}`}>{proStr(q.question)}</label>
+            <input
+              id={`pro-${q.id}`}
+              type="text"
+              className="sus-modal__followup-input"
+              value={typeof pro[q.id] === 'string' ? (pro[q.id] as string) : ''}
+              maxLength={300}
+              disabled={busy}
+              onChange={(e) => setProAnswer(q.id, e.target.value)}
+            />
+          </div>
+        );
+      }
+      return [...head, <div key={q.id}>{body}</div>];
+    });
+  };
+
   return createPortal(
     <div className="csv-import-modal__backdrop">
       <div
+        ref={panelRef}
         className="csv-import-modal__panel eval-modal__panel"
         role="dialog"
         aria-modal="true"
@@ -460,18 +653,19 @@ export function SusModal({ open, onClose }: Props) {
           <LangSwitch disabled={busy} />
         </div>
         <div className="csv-import-modal__message">
-          {t('Every scale question is required; the text boxes are optional.', language)}
+          {t('Every question with answer options is required; the text boxes are optional.', language)}
         </div>
 
         <div className="sus-modal__meta">
           <div className="eval-consent__code-row">
-            <label htmlFor="sus-participant">{t('Participant code:', language)}</label>
+            <label htmlFor="sus-participant">{t('Participant code (from the researcher):', language)}</label>
             <input
               id="sus-participant"
               type="text"
               value={participant}
               maxLength={40}
               placeholder="P01"
+              aria-describedby="sus-participant-hint"
               disabled={busy}
               onChange={(e) => setParticipant(e.target.value)}
             />
@@ -479,6 +673,9 @@ export function SusModal({ open, onClose }: Props) {
           <div className="sus-modal__progress">
             {answered}/{SUS_ITEM_COUNT}
           </div>
+        </div>
+        <div className="sus-modal__hint" id="sus-participant-hint">
+          {t('Type the code the researcher gave you, not your name.', language)}
         </div>
 
         {/* Experience questions — BEFORE the SUS. Same radio-strip shape as
@@ -491,7 +688,7 @@ export function SusModal({ open, onClose }: Props) {
         </div>
         <div className="sus-modal__items">
           {BACKGROUND_ITEMS.map((it) => (
-            <div className="sus-modal__item" key={it.id}>
+            <div className="sus-modal__item" key={it.id} {...rowMarks(`bg-${it.id}`)}>
               <span className="sus-modal__statement" id={`bg-item-${it.id}`}>
                 {t(it.question, language)}
               </span>
@@ -514,53 +711,6 @@ export function SusModal({ open, onClose }: Props) {
           ))}
         </div>
 
-        {proAsked && (
-          <>
-            <div className="sus-modal__section-head">{t('Your professional work', language)}</div>
-            {PRO_ITEMS.map((q) =>
-              q.kind === 'text' ? (
-                <label className="sus-modal__followup" key={q.id} htmlFor={`pro-${q.id}`}>
-                  {t(q.question, language)}
-                  <input
-                    id={`pro-${q.id}`}
-                    type="text"
-                    className="sus-modal__followup-input"
-                    value={typeof pro[q.id] === 'string' ? (pro[q.id] as string) : ''}
-                    maxLength={300}
-                    disabled={busy}
-                    onChange={(e) => setPro((prev) => ({ ...prev, [q.id]: e.target.value }))}
-                  />
-                </label>
-              ) : (
-                <div className="sus-modal__pro-scale" key={q.id}>
-                  <span className="sus-modal__statement" id={`pro-item-${q.id}`}>
-                    {t(q.question, language)}
-                  </span>
-                  <span
-                    className="sus-modal__scale sus-modal__scale--wide"
-                    role="radiogroup"
-                    aria-labelledby={`pro-item-${q.id}`}
-                  >
-                    {q.levels.map((label, level) => (
-                      <label key={label} title={t(label, language)}>
-                        <input
-                          type="radio"
-                          name={`pro-${q.id}`}
-                          value={level}
-                          checked={pro[q.id] === level}
-                          disabled={busy}
-                          onChange={() => setPro((prev) => ({ ...prev, [q.id]: level }))}
-                        />
-                        <span className="sus-modal__level-label">{t(label, language)}</span>
-                      </label>
-                    ))}
-                  </span>
-                </div>
-              ),
-            )}
-          </>
-        )}
-
         <div className="sus-modal__section-head">{t('Statements about FastShaders', language)}</div>
         {/* Brooke's own instruction, placed on the SUS block it applies to: the
             experience strip above runs none→expert, where "centre point"
@@ -575,7 +725,7 @@ export function SusModal({ open, onClose }: Props) {
 
         <div className="sus-modal__items">
           {items.map((text, i) => (
-            <div className="sus-modal__item" key={i}>
+            <div className="sus-modal__item" key={i} {...rowMarks(`sus-${i}`)}>
               <span className="sus-modal__statement" id={`sus-item-${i}`}>
                 {i + 1}. {text}
               </span>
@@ -609,6 +759,8 @@ export function SusModal({ open, onClose }: Props) {
           ))}
         </div>
 
+        {proAsked && proBlock()}
+
         <label className="csv-import-modal__message" htmlFor="sus-comment">
           {t('Comments (optional)', language)}
         </label>
@@ -626,16 +778,23 @@ export function SusModal({ open, onClose }: Props) {
             {t('Packing your answers and the session data…', language)}
           </div>
         )}
+        {!busy && !complete && (
+          <div className={`sus-modal__unanswered${showMissing ? ' sus-modal__unanswered--shown' : ''}`} role="status">
+            {fillTemplate(t('Unanswered questions: {n}', language), { n: String(missing.length) })}
+          </div>
+        )}
         <div className="csv-import-modal__buttons">
           <button type="button" className="csv-import-modal__button" disabled={busy} onClick={onClose}>
             {t('Back to the editor', language)}
           </button>
+          {/* aria-disabled, not disabled, while answers are missing: the press
+              must arrive so it can take the participant to the first gap. */}
           <button
             type="button"
             className="csv-import-modal__button csv-import-modal__button--yes"
-            disabled={!complete || busy}
-            title={complete ? undefined : t('Answer every scale question first', language)}
-            onClick={handleSubmit}
+            disabled={busy}
+            aria-disabled={!complete || undefined}
+            onClick={complete ? handleSubmit : showFirstMissing}
           >
             {t('Submit', language)}
           </button>

@@ -4,9 +4,14 @@
  * They exist because a usability score is not interpretable without knowing
  * who gave it: "this editor is easy to learn" means something different from
  * someone who has used Blender's shader graph for years than from someone who
- * has never seen a node editor. They are asked before the SUS rather than
- * after so that thinking about one's own expertise does not colour the SUS
- * answers — and they are quick, so they cost the participant almost nothing.
+ * has never seen a node editor. They are asked before the SUS in every arm,
+ * as they have been since the first study packages and as the 2026 pilot
+ * asked them, and that order is kept for comparability. It does NOT keep
+ * self-assessment from colouring the SUS — it makes the self-ratings the
+ * SUS's immediate context, so a context effect cannot be ruled out (the
+ * paper says so); what it protects is the self-ratings from the SUS answers.
+ * They are self-ratings against one's own peers, so students' and
+ * professionals' levels are never compared directly.
  *
  * Before consent-9 a third item asked about "other node-based editors" with a
  * free-text "Which software?" box (`otherNodeEditors`, `otherNodeEditorsText`
@@ -50,8 +55,11 @@ export type BackgroundAnswers = Record<string, number | null>;
 
 /** Every scale answered? They are the covariate the SUS is read against, so
  *  all of them gate submit. */
-export function backgroundComplete(answers: BackgroundAnswers): boolean {
-  return BACKGROUND_ITEMS.every((it) => {
+export function backgroundComplete(
+  answers: BackgroundAnswers,
+  items: readonly BackgroundItem[] = BACKGROUND_ITEMS,
+): boolean {
+  return items.every((it) => {
     const v = answers[it.id];
     return Number.isInteger(v) && (v as number) >= BACKGROUND_SCALE_MIN && (v as number) <= BACKGROUND_SCALE_MAX;
   });

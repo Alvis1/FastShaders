@@ -107,7 +107,10 @@ describe('the questionnaire', () => {
     // then was dropped while its language note was read late.
     expect(sus).toMatch(/useStudyDialog\(open, \(\) => \{\s*if \(!busy\) onClose\(\);/);
     expect(sus).toMatch(/disabled=\{busy\} onClick=\{onClose\}/);
-    expect(sus).toMatch(/disabled=\{!complete \|\| busy\}/);
+    // Submit is real-disabled only while packing; an incomplete form leaves it
+    // pressable (aria-disabled) so the press can show the first gap.
+    expect(sus).toMatch(/disabled=\{busy\}\s*aria-disabled=\{!complete \|\| undefined\}\s*onClick=\{complete \? handleSubmit : showFirstMissing\}/);
+    expect(sus).toMatch(/if \(!complete \|\| done \|\| submittingRef\.current\) return;/);
     expect(sus).toMatch(/setBusy\(true\);\s*try \{\s*await submitPackage\(\);/);
     expect(sus).toContain('<LangSwitch disabled={busy} />');
     // Every answer control: participant code, experience radios, the pro text

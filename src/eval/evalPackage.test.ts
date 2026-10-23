@@ -9,6 +9,7 @@ import {
 } from './evalPackage';
 import { deriveSummary, runQualityChecks, type EvalEvent } from './telemetryModel';
 import { BACKGROUND_ITEMS } from './background';
+import { PRO_ITEMS_VERSION, buildProRecord } from './proQuestions';
 
 function fixtureInput(withShader: boolean): EvalPackageInput {
   const events: EvalEvent[] = [
@@ -141,6 +142,27 @@ describe('summary.csv + README', () => {
     expect(expCols).toEqual(BACKGROUND_ITEMS.map((it) => `exp_${it.id}`));
     expect(expCols).toEqual(['exp_blender', 'exp_unreal', 'exp_shaderCode']);
     expect([cells.exp_blender, cells.exp_unreal, cells.exp_shaderCode]).toEqual(['3', '0', '4']);
+  });
+
+  it('carries the pro_* columns: empty for a student, the choices for a professional', () => {
+    const input = fixtureInput(true);
+    const parse = (csv: string) => {
+      const [header, row] = csv.split('\n');
+      return Object.fromEntries(header.split(',').map((h, i) => [h, row.split(',')[i]]));
+    };
+    const student = parse(buildSummaryCsv('J01', 50, input.summary, { susBlock: {} }));
+    expect(student.pro_items_version).toBe('');
+    expect(student.pro_pilotQ5).toBe('');
+    const pro = parse(buildSummaryCsv('FS_LD_01', 70, input.summary, {
+      susBlock: { professional: buildProRecord({ pilotQ5: 4, pointsCredible: 'na', mainWork: 'techArt', 'platforms12m.webxr': 'yes' }) },
+    }));
+    expect(pro).toMatchObject({
+      pro_items_version: PRO_ITEMS_VERSION,
+      pro_pilotQ5: '4',
+      pro_pointsCredible: 'na',
+      pro_mainWork: 'techArt',
+      pro_platforms12m_webxr: 'yes',
+    });
   });
 
   it('carries the study arm and the ready-made, edit and intro columns', () => {

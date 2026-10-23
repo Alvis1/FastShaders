@@ -61,12 +61,10 @@ export interface EvalTask {
    */
   pointsVisible: boolean;
   /**
-   * `?pro=on` (and the `/evalpro` entry) adds a block of professional
-   * questions after the experience ones — role, how long, which platforms,
-   * how often shaders are authored, whether GPU budgets constrain the work.
-   * They are asked only of professionals because they are meaningless (and
-   * mildly alienating) to a student participant, and because keeping them out
-   * of the ordinary arm keeps that questionnaire short.
+   * The `/evalpro` entry — and ONLY that entry (consent-12) — adds the
+   * professional block after SUS item 10 (proQuestions.ts). It used to follow
+   * a bare `?pro=on`, so `/eval/?pro=on` handed a student link the block,
+   * dropped its 18+ check and filed the session under a student arm.
    */
   proQuestions: boolean;
 }
@@ -118,19 +116,23 @@ export function parseEvalTask(search: string): EvalTask {
     const t = (v ?? '').trim().toLowerCase();
     return t === 'off' || t === '0' || t === 'false';
   };
-  const pointsVisible = !isOff(params.get('points'));
-  // Opt-IN, unlike the two suppression flags: an absent parameter must not
-  // hand a student the professional block.
-  const pro = (params.get('pro') ?? '').trim().toLowerCase();
-  const arm = params.get('arm');
+  const rawArm = params.get('arm');
+  const arm = (EVAL_ARMS as readonly string[]).includes(rawArm ?? '') ? (rawArm as EvalArm) : null;
+  // The professional block and its exemptions follow the ENTRY, never a
+  // parameter: `?pro=` is ignored, so no student link can carry the block.
+  const pro = arm === 'evalpro';
+  // Professionals always see the points: the block asks how credible the
+  // prices were, and nobody can judge a price they never saw. The hidden-cost
+  // conditions are the student experiment's.
+  const pointsVisible = pro || !isOff(params.get('points'));
   return {
-    arm: (EVAL_ARMS as readonly string[]).includes(arm ?? '') ? (arm as EvalArm) : null,
+    arm,
     id: cleanId(params.get('task')),
     briefBudget: cleanBudget(params.get('budget')),
     // No points at all implies no cost bar — the bar is a point figure.
-    costBarVisible: pointsVisible && !isOff(params.get('costbar')),
+    costBarVisible: pointsVisible && (pro || !isOff(params.get('costbar'))),
     pointsVisible,
-    proQuestions: pro === 'on' || pro === '1' || pro === 'true',
+    proQuestions: pro,
   };
 }
 
@@ -159,6 +161,16 @@ const TASK: EvalTask = (() => {
 
 export function evalTask(): EvalTask {
   return TASK;
+}
+
+/**
+ * Whether the consent asks "I am 18 or older" (consent-10). Every entry does
+ * except `/evalpro`, whose participants are invited professionals — keyed on
+ * the ENTRY, so a parameter can never remove the check from a student link.
+ * PURE, like introInStudy.
+ */
+export function asksAge(task: EvalTask): boolean {
+  return task.arm !== 'evalpro';
 }
 
 /**

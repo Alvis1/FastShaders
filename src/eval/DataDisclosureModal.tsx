@@ -125,7 +125,7 @@ export function DataDisclosureModal({ onClose }: Props) {
             {item(
               'Your questionnaire answers',
               'sus.json',
-              'the three experience answers; in a professional session also your role, years, platforms and the other work questions; the ten statements, the score computed from them, and your free-text comment. Text you type in those boxes is stored word for word.',
+              'the three experience answers; the ten statements, the score computed from them, and your free-text comment; in a professional session also five more statements about the editor, your view of the cost points, what the tool suits, your main work, years of experience, platforms and shader-code use, each with the language you answered in. Text you type in a box is stored word for word.',
             )}
             {item(
               'The main numbers as one spreadsheet row',
@@ -135,7 +135,7 @@ export function DataDisclosureModal({ onClose }: Props) {
             {item(
               'The session record',
               'session.json',
-              'your participant code, your confirmation that you are 18 or older (if you were asked), start and submit times, time zone, which study link you opened, your task and cost-budget condition, the price table used for your shader, graph counts, and the technical facts about this computer.',
+              'your participant code (as given at the start, and as on the questionnaire if you changed it), your confirmation that you are 18 or older (if you were asked), start and submit times, time zone, which study link you opened, your task and cost-budget condition, the price table used for your shader, graph counts, and the technical facts about this computer.',
             )}
             {item(
               'The shader you built',

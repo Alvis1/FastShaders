@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
-import { DEFAULT_EVAL_TASK, introInStudy, introShowsBudget, parseEvalTask } from './evalTask';
+import { DEFAULT_EVAL_TASK, asksAge, introInStudy, introShowsBudget, parseEvalTask } from './evalTask';
 
 /**
  * RUN a redirector's inline script against a launch URL and return what it
@@ -160,7 +160,7 @@ describe('the study arm', () => {
   it('every entry shows the intro, and its budget slide only with the cost bar on', () => {
     const on = (q: string) => parseEvalTask(q);
     expect(introInStudy(on('?arm=eval'))).toBe(true);
-    expect(introInStudy(on('?arm=evalpro&pro=on'))).toBe(true);
+    expect(introInStudy(on('?arm=evalpro'))).toBe(true);
     // The same training in the no-points arm, minus the budget slide — so an
     // arm comparison does not also compare having had the intro.
     expect(introInStudy(on('?arm=evalp&points=off'))).toBe(true);
@@ -201,33 +201,36 @@ describe('leaving the study returns the STANDARD app', () => {
   });
 });
 
-describe('the professional arm (/evalpro, ?pro=on)', () => {
-  it('is opt-IN — an absent parameter must never hand a student the pro block', () => {
-    for (const q of ['', '?task=T1', '?points=off', '?pro=', '?pro=off', '?pro=yes']) {
+describe('the professional arm is the /evalpro ENTRY, never a parameter', () => {
+  it('?pro=on on a student link adds nothing and keeps the 18+ check', () => {
+    // Until consent-12 a bare ?pro=on added the pro block, dropped the age
+    // check and filed the session under the student arm it came from.
+    for (const q of ['?pro=on', '?arm=eval&pro=on', '?arm=evalp&pro=on&points=off', '?pro=1']) {
       expect(parseEvalTask(q).proQuestions, q).toBe(false);
+      expect(asksAge(parseEvalTask(q)), q).toBe(true);
     }
-    for (const v of ['on', 'ON', '1', 'true']) {
-      expect(parseEvalTask(`?pro=${v}`).proQuestions, v).toBe(true);
-    }
+    expect(parseEvalTask(runRedirector('eval', '?pro=on')['fs:evalTaskQuery'])).toMatchObject({ arm: 'eval', proQuestions: false });
+    expect(parseEvalTask(runRedirector('evalp', '?pro=on&task=T1')['fs:evalTaskQuery'])).toMatchObject({ arm: 'evalp', proQuestions: false });
   });
 
-  it('composes with the other conditions rather than replacing them', () => {
-    const t = parseEvalTask('?task=T7-fire&budget=200&costbar=off&pro=on');
+  it('professionals always see the points — they rate how credible the prices were', () => {
+    const t = parseEvalTask('?arm=evalpro&task=T7-fire&budget=120&points=off&costbar=off');
     expect(t).toEqual({
-      arm: null,
+      arm: 'evalpro',
       id: 'T7-fire',
-      briefBudget: 200,
-      costBarVisible: false,
+      briefBudget: 120,
+      costBarVisible: true,
       pointsVisible: true,
       proQuestions: true,
     });
+    expect(asksAge(t)).toBe(false);
   });
 });
 
 describe('the /evalpro entry', () => {
   it('forces pro=on while preserving other launch parameters', () => {
     const t = parseEvalTask(runRedirector('evalpro', '?task=T7-fire&costbar=off')['fs:evalTaskQuery']);
-    expect(t).toMatchObject({ arm: 'evalpro', id: 'T7-fire', costBarVisible: false, proQuestions: true });
+    expect(t).toMatchObject({ arm: 'evalpro', id: 'T7-fire', costBarVisible: true, proQuestions: true });
     // A link saying pro=off cannot drop the block (the FIRST occurrence wins).
     expect(parseEvalTask(runRedirector('evalpro', '?pro=off')['fs:evalTaskQuery']).proQuestions).toBe(true);
     const store = runRedirector('evalpro', '');

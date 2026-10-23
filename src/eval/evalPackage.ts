@@ -20,6 +20,7 @@ import type { ZipEntry } from '@/utils/zipWriter';
 import { toKebabCase } from '@/utils/nameUtils';
 import type { EvalEvent, EvalSummary, QualityCheck } from './telemetryModel';
 import { BACKGROUND_ITEMS } from './background';
+import { proCsvColumns } from './proQuestions';
 
 export interface EvalPackageInput {
   schema: string;
@@ -104,6 +105,10 @@ export function buildSummaryCsv(
         ) ?? []).find((it) => it.id === id)?.level ?? '',
       ],
     ),
+    // The professional block (/evalpro only; empty elsewhere): one column per
+    // answer, generated from PRO_ITEMS like the exp_* columns. Typed text
+    // never reaches the CSV — it stays in sus.json.
+    ...proCsvColumns(readPath<unknown>(extra.susBlock ?? {}, ['professional'])),
     ['wall_min', (summary.wallMs / 60_000).toFixed(2)],
     ['active_min', (summary.activeMs / 60_000).toFixed(2)],
     ['idle_threshold_s', summary.idleThresholdMs / 1000],
@@ -184,6 +189,16 @@ export function buildEvalReadme(input: EvalPackageInput): string {
     'eval and evalpro entries the intro slides open right after the consent, so',
     'time_to_first_* in summary.csv INCLUDE intro_s (intro-open/-slide/-close in the',
     'event log give the exact intervals).',
+    '',
+    'Questionnaire (sus.json): `background` holds the three experience self-ratings,',
+    'asked before the SUS and shown as radios 1-5 labelled only at the ends (None,',
+    'Expert) but STORED 0-4. On evalpro, `professional` (itemsVersion) follows SUS',
+    'item 10: the pilot\'s Q5-Q9 (1-5 agreement), credibility of the cost points',
+    '(1-5, or na = "can\'t judge"), what the tool suits, and the work profile; every',
+    'answer records the English wording it was asked with and the language it was',
+    'given in. The pro_* columns of summary.csv repeat the choices (never typed text).',
+    'session.json consent.participantAtConsent is the code given at Agree;',
+    'participantEdited marks a package whose code was changed on the form.',
     '',
     'Actions: node_adds counts nodes added one at a time; a preset, texture or saved',
     'group arrives as one asset-drop whose `nodes` field says how many it brought',

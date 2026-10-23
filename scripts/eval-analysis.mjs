@@ -198,6 +198,27 @@ for (const zp of zipPaths) {
     }
 
     const task = session.task ?? {};
+    // The professional block (sus.json `professional`, /evalpro only since
+    // consent-12): flattened to pro_<id> / pro_<id>_<row>, choices only —
+    // typed text stays out of the CSV.
+    const pro = {};
+    for (const it of sus.professional?.items ?? []) {
+      if (it.kind === 'agree') pro[`pro_${it.id}`] = it.na ? 'na' : (it.response ?? '');
+      else if (it.kind === 'choice') pro[`pro_${it.id}`] = it.choice ?? '';
+      else if (it.kind === 'grid') for (const r of it.rows ?? []) pro[`pro_${it.id}_${r.id}`] = r.answer ?? '';
+    }
+    if (sus.professional && task.arm !== 'evalpro') {
+      problems.push(`${name}: a professional block under arm "${task.arm ?? '?'}" — only /evalpro asks it; analyse apart`);
+    }
+    const consent = session.consent ?? {};
+    if (consent.participantEdited) {
+      problems.push(`${name}: participant code changed on the questionnaire ("${consent.participantAtConsent}" at consent → "${sus.participant}") — key on participantAtConsent`);
+    }
+    // Answers survive "Back to the editor", and the integrity checks start at
+    // the LAST opening — a form opened more than once may hold a SUS answered
+    // before further editing.
+    const susOpens = (events.events ?? []).filter((e) => e.type === 'sus-open').length;
+    if (susOpens > 1) problems.push(`${name}: questionnaire opened ${susOpens}× before submit — report its SUS with and without such packages`);
     rows.push({
       file: name,
       // Session id is how a server-inbox package is reconciled against one
@@ -259,6 +280,10 @@ for (const zp of zipPaths) {
       shownBudget: session.costTable?.shownBudget ?? '',
       overBudgetMin: (s.overBudgetMs ?? 0) / 60000,
       comment: sus.comment ?? '',
+      proItemsVersion: sus.professional?.itemsVersion ?? '',
+      participantAtConsent: consent.participantAtConsent ?? '',
+      susOpens,
+      ...pro,
     });
   } catch (e) {
     problems.push(`${name}: UNREADABLE — ${e.message}`);
@@ -300,13 +325,17 @@ for (const r of rows) {
 }
 console.log('\n(experience 0–4 = none…expert, in the order Blender / Unreal / shader code; a package from before consent-9 also answered "other node editors", which is in the CSV only)');
 
-const scores = rows.map((r) => r.sus).filter((v) => typeof v === 'number');
+// Professionals are never pooled with the students: the headline SUS is the
+// student arms', and /evalpro is reported per person and by its median
+// (descriptive only — a different population, recruitment and setting).
+const proRows = rows.filter((r) => r.arm === 'evalpro');
+const scores = rows.filter((r) => r.arm !== 'evalpro').map((r) => r.sus).filter((v) => typeof v === 'number');
 if (scores.length >= 2) {
   const n = scores.length;
   const mean = scores.reduce((a, b) => a + b, 0) / n;
   const sd = Math.sqrt(scores.map((v) => (v - mean) ** 2).reduce((a, b) => a + b, 0) / (n - 1));
   const half = t95(n - 1) * sd / Math.sqrt(n);
-  console.log(`\n## SUS aggregate`);
+  console.log(`\n## SUS aggregate${proRows.length ? ' (student arms — /evalpro is reported apart below)' : ''}`);
   console.log(`- N = ${n}, mean = ${mean.toFixed(1)}, SD = ${sd.toFixed(1)}`);
   console.log(`- 95% t-CI: ${(mean - half).toFixed(1)} … ${(mean + half).toFixed(1)} (±${half.toFixed(1)})`);
   // A t-CI at n=2..4 routinely runs outside SUS's own 0-100 range: it is
@@ -349,13 +378,22 @@ if (scores.length >= 2) {
   console.log(`\n## SUS aggregate\n- N = 1, score = ${scores[0]} — no CI at N=1; collect more sessions before interpreting.`);
 }
 
+if (proRows.length) {
+  const xs = proRows.map((r) => r.sus).filter((v) => typeof v === 'number').sort((a, b) => a - b);
+  const med = xs.length ? (xs.length % 2 ? xs[(xs.length - 1) / 2] : (xs[xs.length / 2 - 1] + xs[xs.length / 2]) / 2) : null;
+  console.log(`\n## Professionals (/evalpro) — descriptive, never pooled with the students`);
+  console.log(`- n = ${proRows.length}; SUS median ${fmt(med)} (range ${xs.length ? `${xs[0]}–${xs[xs.length - 1]}` : '—'}); per person: ${proRows.map((r) => `${r.participant} ${fmt(r.sus)}`).join(', ')}`);
+  console.log('- answers per person in the pro_* CSV columns (itemsVersion in proItemsVersion)');
+}
+
 if (problems.length) {
   console.log(`\n## PROBLEMS (${problems.length})`);
   for (const p of problems) console.log(`- ${p}`);
 }
 
 // CSV — one row per participant, spreadsheet-ready.
-const cols = ['file', 'sessionId', 'participant', 'expBlender', 'expUnreal', 'expOtherNodeEditors', 'expShaderCode', 'expOther', 'arm', 'task', 'briefBudget', 'costBarVisible', 'pointsVisible', 'costTable', 'device', 'hasShot', 'budgetCrossings', 'finalPoints', 'finalPointsAll', 'deviceBudget', 'shownBudget', 'overBudgetMin', 'language', 'languageAtSubmit', 'sus', 'activeMin', 'wallMin', 'idleThresholdS', 'events', 'nodeAdds', 'distinctTypes', 'presetDrops', 'textureDrops', 'assetNodes', 'nodeEdits', 'gestures', 'connects', 'undos', 'redos', 'applies', 'rebuilds', 'ttfConnectS', 'ttfNodeS', 'introOpens', 'introS', 'introSlides', 'comment'];
+const proCols = [...new Set(rows.flatMap((r) => Object.keys(r).filter((k) => k.startsWith('pro_'))))];
+const cols = ['file', 'sessionId', 'participant', 'participantAtConsent', 'susOpens', 'expBlender', 'expUnreal', 'expOtherNodeEditors', 'expShaderCode', 'expOther', 'arm', 'task', 'briefBudget', 'costBarVisible', 'pointsVisible', 'costTable', 'device', 'hasShot', 'budgetCrossings', 'finalPoints', 'finalPointsAll', 'deviceBudget', 'shownBudget', 'overBudgetMin', 'language', 'languageAtSubmit', 'sus', 'activeMin', 'wallMin', 'idleThresholdS', 'events', 'nodeAdds', 'distinctTypes', 'presetDrops', 'textureDrops', 'assetNodes', 'nodeEdits', 'gestures', 'connects', 'undos', 'redos', 'applies', 'rebuilds', 'ttfConnectS', 'ttfNodeS', 'introOpens', 'introS', 'introSlides', 'comment', 'proItemsVersion', ...proCols];
 const esc = (v) => {
   let s = v == null ? '' : String(v);
   if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
