@@ -17,11 +17,28 @@ gitignored `.vscode/eval-endpoint.json` and are rendered in at deploy time by
 
 The site runs as a Docker container (`php:8.5-apache` behind Traefik), with the
 host directory `/var/www/alvis/src` mounted at `/app` and `DocumentRoot
-/app/public`. Two consequences, both learned the hard way and both load-bearing:
+/app/public`. Three consequences, all learned the hard way and all load-bearing:
 
-* **The inbox must be addressed by its CONTAINER path** (`/app/eval-inbox-…`).
+* **The inbox must be addressed by its CONTAINER path** (`/app/data/eval-inbox-…`).
   A host-absolute path is invisible to PHP — only the mount exists inside the
   container.
+* **The inbox must sit under `/app/data`, the only WRITABLE mount.** The site's
+  container was recreated on 2026-10-08 with `/app` mounted read-only
+  (`${SITE_DIR}:/app:ro` in the site's `deploy/docker-compose.yml`, plus a
+  read-write `${SITE_DIR}/data:/app/data`). The inbox was then at
+  `/app/eval-inbox-…`, so every real package answered `500` ("Read-only file
+  system" in the container log) and read "Upload failed." until 2026-10-20,
+  while every check the deploy scripts ran stayed green, since all of them are
+  answered before the write. It moved to `/app/data/eval-inbox-…` that day
+  (host `/var/www/alvis/src/data/`, owned by `www-data`). `data/` is also the
+  one directory the site's own `deploy/deploy.sh` excludes from its
+  `rsync --delete`, and the site serves nothing from it by path (`media_resolve`
+  refuses `/` and `..`).
+* **The store step is checked, not assumed.** `list.php?health` (behind the
+  inbox login) makes a real write in the inbox and removes it, answering
+  `200 inbox ok: writable, … MB free` or `503 inbox FAILING: …`. The listing
+  page shows the same failure as a red banner, and both deploy scripts stop
+  unless the answer is `inbox ok`.
 * **The inbox must sit OUTSIDE `/app/public`.** With it under the docroot the
   packages were downloadable by URL with no password: `AllowOverride` is `None`
   in that image, so the `.htaccess` guard is ignored, and Apache runs as the
@@ -58,9 +75,11 @@ echoed back, and every header the upload sends allowed (asked for as this
 template lists them) — and `deploy-eval-endpoint.sh` also checks that a foreign
 origin gets none. `deploy-sferas.sh` runs the same check from the app side
 BEFORE it builds or uploads anything, so a lagging endpoint stops that deploy
-with the study host untouched: deploy the endpoint first. Only the CORS answer
-is checked — any other template change (`$MAX_BYTES`, the name pattern, the
-key) goes live only when this endpoint is redeployed by hand.
+with the study host untouched: deploy the endpoint first. Both scripts also
+ask `list.php?health` and stop unless the inbox can store (see above). Beyond
+those two answers nothing is compared — any other template change
+(`$MAX_BYTES`, the name pattern, the key) goes live only when this endpoint is
+redeployed by hand.
 
 ## Checklist
 
@@ -80,8 +99,9 @@ written for today's layout: the endpoint here, the study on fs.sferas.lv.)*
      from the upload key: this page exposes participant data.
 3. **Upload both files** to `…/fastshaders-eval/` (a sibling of the app's
    `/fastshaders/` directory, so the app's CSP already allows the POST as
-   same-origin). Optionally point `$INBOX` in BOTH files at a directory
-   outside the web root.
+   same-origin). Point `$INBOX` in BOTH files at a directory outside the web
+   root that PHP can WRITE (here `/app/data/eval-inbox-<token>`, rendered from
+   `inboxDir`), and confirm `list.php?health` answers `inbox ok`.
 4. **Point the client at it.** `EVAL_UPLOAD_URL` in `src/eval/evalUpload.ts` is
    the build's `FS_EVAL_UPLOAD_URL` when one is set, else the relative
    `/fastshaders-eval/upload.php` (which `evalUpload.test.ts` pins). A build

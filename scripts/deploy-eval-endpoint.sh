@@ -73,6 +73,12 @@ BASE="https://alvismisjuns.lv/$(basename "$REMOTE_DIR")"
 UP_CODE="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/upload.php")"                    # GET → 405
 LS_CODE="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/list.php")"                      # anon → 401
 LS_AUTH="$(curl -s -o /dev/null -w '%{http_code}' -u "$VIEW_USER:$VIEW_PW" "$BASE/list.php")"
+# The STORE step, which nothing else here reaches: every other check is
+# answered before upload.php writes. list.php?health makes a real write in the
+# inbox and removes it — the 2026-10-08 rebuild of the site's container left
+# /app read-only, and every real package answered 500 for twelve days while
+# all of these checks stayed green.
+HEALTH="$(curl -s -u "$VIEW_USER:$VIEW_PW" "$BASE/list.php?health" | head -1 || true)"
 # The study host's CORS preflight (fs.sferas.lv posts here cross-origin — see
 # $ALLOWED_ORIGINS in the template), judged the way a browser judges it: a 2xx
 # status, that exact origin back, and every header the upload sends allowed —
@@ -97,9 +103,10 @@ case "$STUDY_STATUS" in 2??) STUDY_OK=1 ;; *) STUDY_OK=0 ;; esac
 echo "  upload.php (GET, expect 405): $UP_CODE"
 echo "  list.php   (anon, expect 401): $LS_CODE"
 echo "  list.php   (auth, expect 200): $LS_AUTH"
+echo "  inbox      (expect inbox ok): ${HEALTH:-no answer}"
 echo "  upload.php (preflight from fs.sferas.lv, expect 2xx + that origin + all headers): status ${STUDY_STATUS:-none}, origin ${CORS_STUDY:-none}${MISSING:+, headers NOT allowed:$MISSING}"
 echo "  upload.php (preflight from example.com, expect no origin): ${CORS_OTHER:-none}"
-[ "$UP_CODE" = "405" ] && [ "$LS_CODE" = "401" ] && [ "$LS_AUTH" = "200" ] \
+[ "$UP_CODE" = "405" ] && [ "$LS_CODE" = "401" ] && [ "$LS_AUTH" = "200" ] && [ "${HEALTH#inbox ok:}" != "$HEALTH" ] \
   && [ "$STUDY_OK" = 1 ] && [ "$CORS_STUDY" = "https://fs.sferas.lv" ] && [ -z "$MISSING" ] && [ -z "$CORS_OTHER" ] \
   && echo "endpoint live ✓  →  $BASE/list.php" \
   || { echo "UNEXPECTED — check the output above" >&2; exit 1; }

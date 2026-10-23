@@ -35,7 +35,9 @@ $SECRET    = 'CHANGE-ME';
 $MAX_BYTES = 64 * 1024 * 1024;
 // Where packages are stored. SAFEST is a path OUTSIDE the web root, e.g.
 // '/var/www/alvis/eval-inbox' — then no Apache config can ever serve it and
-// list.php's streaming is the only way in. The default below keeps the two
+// list.php's streaming is the only way in. It must also be WRITABLE by PHP,
+// which no refusal ever tests: list.php?health makes a real write there, and
+// both deploy scripts stop unless it passes. The default below keeps the two
 // files self-contained and relies on the 0700 mode + the deny-all .htaccess
 // written on first use (which needs AllowOverride to be on).
 $INBOX     = __DIR__ . '/eval-inbox';   // ← set an ABSOLUTE path outside the web root

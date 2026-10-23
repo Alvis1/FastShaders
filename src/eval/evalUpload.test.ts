@@ -234,6 +234,38 @@ describe('the study host posts to alvismisjuns cross-origin', () => {
     expect(endpoint.indexOf('REQ_HEADERS="$(sed')).toBeLessThan(endpoint.indexOf('==> uploading'));
   });
 
+  it('both deploy gates prove the inbox can STORE, through list.php?health', () => {
+    // Every other check is answered before upload.php writes, so all of them
+    // stayed green from 2026-10-08 to 10-20 while the site's rebuilt container
+    // had /app read-only and every real package answered 500.
+    const list = read('../../scripts/eval-endpoint/fastshaders-eval-list.php');
+    const at = (src: string, needle: string) => {
+      const i = src.indexOf(needle);
+      expect(i, needle).toBeGreaterThan(-1);
+      return i;
+    };
+    // A real write, behind the inbox's own login, under a name the listing
+    // (which shows only .zip) never displays.
+    expect(at(list, 'http_response_code(401)')).toBeLessThan(at(list, "if (isset($_GET['health']))"));
+    expect(list).toContain("$probe = $dir . '/.fs-health-'");
+    expect(list).toContain("@fopen($probe, 'x')");
+    expect(list).toContain('@unlink($probe)');
+    expect(list).toContain("http_response_code($healthy ? 200 : 503)");
+    expect(list).toContain("'inbox ok: '");
+    // The listing page raises the same alarm, so the researcher sees it too.
+    expect(list).toContain('[$inboxOk, $inboxWhy] = inbox_health($INBOX);');
+
+    const endpoint = read('../../scripts/deploy-eval-endpoint.sh');
+    const gate = '[ "${HEALTH#inbox ok:}" != "$HEALTH" ]';
+    for (const script of [sferas, endpoint]) {
+      expect(script).toContain('list.php?health');
+      expect(script).toContain(gate);
+    }
+    expect(at(sferas, gate)).toBeLessThan(at(sferas, '==> building'));
+    expect(at(sferas, gate)).toBeLessThan(at(sferas, '==> uploading'));
+    expect(at(endpoint, gate)).toBeLessThan(at(endpoint, 'endpoint live ✓'));
+  });
+
   it("the gates' header extraction reads the template's Allow-Headers line", () => {
     // Both scripts take REQ_HEADERS with this sed expression; if the PHP line
     // is ever reformatted they stop with "cannot read Access-Control-Allow-Headers"

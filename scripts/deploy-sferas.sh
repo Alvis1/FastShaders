@@ -12,9 +12,10 @@
 #     vite.config.ts adds its origin to connect-src): this host is static nginx
 #     with no endpoint, so the app's relative default 404ed here and every
 #     participant's package read "Upload failed." until 2026-10-02. The LIVE
-#     endpoint must pass this origin's CORS preflight, and that is checked
-#     FIRST: if it does not, nothing is built or uploaded (deploy the endpoint
-#     with `bash scripts/deploy-eval-endpoint.sh`, then run this again);
+#     endpoint must pass this origin's CORS preflight AND be able to store
+#     (list.php?health), and both are checked FIRST: if either fails, nothing
+#     is built or uploaded (deploy the endpoint with
+#     `bash scripts/deploy-eval-endpoint.sh`, then run this again);
 #   • the target is /var/www/fs/src, the docroot of the dedicated `fs`
 #     container (nginx). NB `/var/www/sferas/src` is a DIFFERENT, shared
 #     directory holding a dozen unrelated projects — never deploy there.
@@ -64,6 +65,22 @@ case "$PF_STATUS" in 2??) PF_OK=1 ;; *) PF_OK=0 ;; esac
 echo "  upload preflight: status ${PF_STATUS:-none}, origin ${CORS:-none}${MISSING:+, headers NOT allowed:$MISSING} (expected 2xx, $ORIGIN)"
 [ "$PF_OK" = 1 ] && [ "$CORS" = "$ORIGIN" ] && [ -z "$MISSING" ] \
   || { echo "  → the live endpoint does not admit $ORIGIN's upload; nothing was uploaded. Run  bash scripts/deploy-eval-endpoint.sh  first." >&2; exit 1; }
+
+# ...and that it can STORE what it admits. The preflight is answered before any
+# write, so it stayed green from 2026-10-08 to 10-20 while the site's rebuilt
+# container had /app read-only and every real package answered 500.
+# list.php?health makes a real write in the inbox; it needs the inbox's private
+# login, from the endpoint's gitignored config.
+EVAL_CONF="$ROOT/.vscode/eval-endpoint.json"
+[ -f "$EVAL_CONF" ] || { echo "missing $EVAL_CONF (the inbox login for the store check)"; exit 1; }
+read -r VIEW_USER VIEW_PW <<< "$(node -e '
+  const c = require(process.argv[1]);
+  console.log(c.viewUser, c.viewPassword);
+' "$EVAL_CONF")"
+HEALTH="$(curl -sS -u "$VIEW_USER:$VIEW_PW" "${UPLOAD_URL%/upload.php}/list.php?health" | head -1 || true)"
+echo "  upload inbox: ${HEALTH:-no answer} (expected inbox ok)"
+[ "${HEALTH#inbox ok:}" != "$HEALTH" ] \
+  || { echo "  → the endpoint cannot store a package; nothing was uploaded. Fix the inbox (scripts/eval-endpoint/README.md), then run  bash scripts/deploy-eval-endpoint.sh." >&2; exit 1; }
 
 if [ "${1:-}" != "--no-build" ]; then
   # public/js is generated from the submodule: build only from a committed pointer.

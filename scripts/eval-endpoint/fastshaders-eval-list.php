@@ -33,6 +33,41 @@ if (!$ok) {
   exit("Authentication required.\n");
 }
 
+// --- inbox health -------------------------------------------------------
+/**
+ * Can upload.php STORE a package right now? Answered by a real write: an empty
+ * dot-file created and removed again in the inbox (or, before the first upload
+ * has created it, in the directory upload.php will mkdir it in). Every other
+ * check the deploy scripts run stops BEFORE the write, which is how a read-only
+ * inbox went unnoticed from 2026-10-08 to 10-20: the site's container was
+ * recreated with /app mounted read-only, every real package answered 500, and
+ * every probe stayed green. The name is never a .zip, so a probe that cannot
+ * be removed never shows up in the listing.
+ */
+function inbox_health(string $inbox): array {
+  $dir = is_dir($inbox) ? $inbox : dirname($inbox);
+  $probe = $dir . '/.fs-health-' . bin2hex(random_bytes(6));
+  $fh = @fopen($probe, 'x');
+  if ($fh === false) {
+    $why = error_get_last()['message'] ?? 'unknown error';
+    return [false, ($dir === $inbox ? 'inbox' : 'inbox parent') . " not writable ($why)"];
+  }
+  fclose($fh);
+  @unlink($probe);
+  $free = @disk_free_space($dir);
+  return [true, 'writable' . ($free !== false ? sprintf(', %.0f MB free', $free / 1048576) : '')];
+}
+
+// `?health` is what both deploy scripts ask (deploy-eval-endpoint.sh after it
+// uploads, deploy-sferas.sh before it builds): they pass only on "inbox ok".
+if (isset($_GET['health'])) {
+  [$healthy, $why] = inbox_health($INBOX);
+  header('Content-Type: text/plain; charset=utf-8');
+  header('Cache-Control: no-store');
+  http_response_code($healthy ? 200 : 503);
+  exit(($healthy ? 'inbox ok: ' : 'inbox FAILING: ') . $why . "\n");
+}
+
 // --- download one package ----------------------------------------------
 if (isset($_GET['get'])) {
   $name = (string)$_GET['get'];
@@ -77,6 +112,7 @@ $files = is_dir($INBOX)
   : [];
 usort($files, fn($a, $b) => filemtime("$INBOX/$b") <=> filemtime("$INBOX/$a"));
 $total = array_sum(array_map(fn($f) => filesize("$INBOX/$f"), $files));
+[$inboxOk, $inboxWhy] = inbox_health($INBOX);
 $h = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
 ?><!doctype html>
 <html lang="en"><head>
@@ -93,8 +129,13 @@ $h = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
   a{color:#31688e}
   code{background:#eef0ec;padding:.1em .35em}
   .empty{color:#5b6570}
+  .alarm{background:#b3261e;color:#fff;padding:.8rem 1rem;max-width:60rem;font-weight:600}
 </style></head><body>
 <h1>FastShaders eval inbox</h1>
+<?php if (!$inboxOk): ?>
+  <p class="alarm">Uploads are FAILING: <?= $h($inboxWhy) ?>. Participants read "Upload failed."
+    and their packages exist only in their own downloads until this is fixed.</p>
+<?php endif; ?>
 <p class="sub"><?= count($files) ?> package<?= count($files) === 1 ? '' : 's' ?> ·
   <?= number_format($total / 1048576, 1) ?> MB total ·
   analyse with <code>npm run eval:analysis -- &lt;folder&gt;</code> after downloading</p>
