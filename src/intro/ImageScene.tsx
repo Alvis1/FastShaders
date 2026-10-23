@@ -48,7 +48,6 @@ interface IntroImage {
   bytes: number;
   /** The node's values, built the way a drop builds them. */
   values: Record<string, string | number>;
-  cost: number;
   /** The device-downscale notice's numbers, when the photo was over the cap. */
   downscale: { cap: number; sourceW: number; sourceH: number; finalW: number; finalH: number } | null;
 }
@@ -67,7 +66,6 @@ async function buildIntroImage(cap: number): Promise<IntroImage | null> {
   return {
     bytes: file.size,
     values: data.values as Record<string, string | number>,
-    cost,
     downscale:
       Math.max(res.sourceWidth, res.sourceHeight) > cap
         ? {
@@ -112,7 +110,11 @@ export function ImageScene() {
   }, [cap]);
 
   const chrome = useCardChrome(imageDef);
-  const costChrome = useCostChrome(image?.cost ?? 0);
+  // Priced LIVE from its resolution, as a canvas Image node is (nodeCostPoints):
+  // the image is built once per session and cap, under whichever device was
+  // selected then, and useCostChrome re-renders this on a device change.
+  const cost = image ? imageNodeCost(getCost('imageNode'), image.values.width, image.values.height) : 0;
+  const costChrome = useCostChrome(cost);
 
   const nodeRef = useRef<HTMLDivElement>(null);
   const askRef = useRef<HTMLDivElement>(null);
@@ -201,7 +203,7 @@ export function ImageScene() {
             className="react-flow__node fs-intro__node"
             style={{ left: DROP.x, top: DROP.y, visibility: state.node ? 'visible' : 'hidden' }}
           >
-            <ShaderCardContent {...chrome} {...costChrome} cost={image.cost} values={image.values} />
+            <ShaderCardContent {...chrome} {...costChrome} cost={cost} values={image.values} />
           </div>
 
           {/* The file as the operating system drags it in — no app chrome

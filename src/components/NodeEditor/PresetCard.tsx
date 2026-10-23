@@ -46,7 +46,115 @@ function cellHash(ix: number, iy: number, iz: number): number {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
+/** A 0xRRGGBB colour as the shade functions' 0–1 triple. */
+const rgb = (hex: number): [number, number, number] =>
+  [((hex >> 16) & 255) / 255, ((hex >> 8) & 255) / 255, (hex & 255) / 255];
+
+/** The tiles' dark backdrop behind a sphere. */
+const BACKDROP: [number, number, number] = [0.12, 0.13, 0.17];
+
+/** Perlin in the recipes' 0–1 range at `scale` on the sphere's ±0.8 domain
+ *  (×0.33 tames perlin2D's ±1.5 spread — the file-wide convention). */
+const noise01 = (x: number, y: number, scale: number, drift = 0) =>
+  clamp01(perlin2D(x * scale * 0.8 + drift, y * scale * 0.8 + drift) * 0.33 + 0.5);
+
+/** The Bumps / Wobble silhouette: a sphere pushed OUT by a 0–1 noise × 0.2. */
+function bumpySphere(x: number, y: number, drift: number): [number, number, number] {
+  const r = Math.hypot(x, y);
+  const dx = r > 1e-4 ? x / r : 0;
+  const dy = r > 1e-4 ? y / r : 0;
+  const R = 0.72 + noise01(dx, dy, 2, drift) * 0.2;
+  if (r > R) return BACKDROP;
+  const q = r / R;
+  const nz = Math.sqrt(Math.max(0, 1 - q * q));
+  const g = clamp01(0.3 + 0.5 * nz + 0.35 * noise01(x, y, 2, drift));
+  return [clamp01(g * 1.04), clamp01(g * 0.96), clamp01(g * 0.88)];
+}
+
 const PRESET_SHADES: Record<string, Shade> = {
+  // ── Recipes (tier 0) ──
+  'recipe-solid':
+  (x, y) => {
+    const r2 = x * x + y * y;
+    if (r2 > 0.64) return BACKDROP;
+    const nz = Math.sqrt(1 - r2 / 0.64);
+    const c = rgb(0x4FC3F7);
+    const lit = 0.45 + 0.55 * nz;
+    return [c[0] * lit, c[1] * lit, c[2] * lit];
+  },
+  'recipe-gradient':
+  (x, y) => lerp3(rgb(0x1565C0), rgb(0xFF8A65), clamp01((1 - y) / 2)),
+  'recipe-stripes':
+  (x) => {
+    const u = ((x + 1) / 2) * 8;
+    return u - Math.floor(u) < 0.5 ? rgb(0x263238) : rgb(0xECEFF1);
+  },
+  'recipe-snow':
+  (x, y) => {
+    const r2 = x * x + y * y;
+    if (r2 > 1) return BACKDROP;
+    // Sphere normal (x, -y, nz); y = -1 is the top row, so n.y = -y.
+    return lerp3(rgb(0x5D4037), rgb(0xFAFAFA), clamp01((-y - 0.35) / 0.2));
+  },
+  'recipe-tiles':
+  (x, y) => {
+    const r2 = x * x + y * y;
+    if (r2 > 1) return BACKDROP;
+    const nz = Math.sqrt(1 - r2);
+    const S = 4 * 0.8;
+    const id = cellHash(Math.floor(x * S), Math.floor(-y * S), Math.floor(nz * S));
+    const stops = [0x0B3C5D, 0x328CC1, 0xF2C14E, 0xD9483B];
+    return rgb(stops[Math.min(3, Math.floor(id * 4))]);
+  },
+  'recipe-pulse':
+  (x, y) => {
+    const r2 = x * x + y * y;
+    if (r2 > 0.64) return BACKDROP;
+    const nz = Math.sqrt(1 - r2 / 0.64);
+    const c = lerp3(rgb(0x311B92), rgb(0xFFEA00), 0.6); // frozen mid-beat
+    const lit = 0.45 + 0.55 * nz;
+    return [c[0] * lit, c[1] * lit, c[2] * lit];
+  },
+  'recipe-edge':
+  (x, y) => {
+    const r2 = x * x + y * y;
+    if (r2 > 1) return [0.01, 0.02, 0.04];
+    const facing = 1 - Math.sqrt(1 - r2);
+    const k = clamp01((facing - 0.4) / 0.6);
+    const c = rgb(0x00E5FF);
+    return [c[0] * k, c[1] * k, c[2] * k];
+  },
+  'recipe-ghost':
+  (x, y) => {
+    const r2 = x * x + y * y;
+    if (r2 > 1) return BACKDROP;
+    const opacity = 1 - Math.sqrt(1 - r2); // Fresnel Facing
+    return lerp3(BACKDROP, rgb(0x80DEEA), opacity);
+  },
+  'recipe-mix':
+  (x, y) => {
+    const r2 = x * x + y * y;
+    if (r2 > 1) return BACKDROP;
+    // Round(noise) is the Mix factor: exactly A or exactly B, never between.
+    const c = Math.round(noise01(x, y, 3)) ? rgb(0xFFC107) : rgb(0x4A148C);
+    const lit = 0.45 + 0.55 * Math.sqrt(1 - r2);
+    return [c[0] * lit, c[1] * lit, c[2] * lit];
+  },
+  'recipe-holes':
+  (x, y) => {
+    const r2 = x * x + y * y;
+    if (r2 > 1 || noise01(x, y, 4) > 0.6) return BACKDROP;
+    const c = rgb(0xFFB74D);
+    const lit = 0.45 + 0.55 * Math.sqrt(1 - r2);
+    return [c[0] * lit, c[1] * lit, c[2] * lit];
+  },
+  'recipe-noise':
+  (x, y) => lerp3(rgb(0x1B5E20), rgb(0xFFF9C4), clamp01((noise01(x, y, 3) - 0.4) / 0.2)),
+  'recipe-bumps':
+  (x, y) => bumpySphere(x, y, 0),
+  'recipe-wobble':
+  (x, y) => bumpySphere(x, y, 0.6),
+  // ── The original library (Presets 2) ──
   'gradient':
   (x, y) => {
     const t = clamp01((1 - y) / 2);
@@ -468,7 +576,7 @@ export const PresetCard = memo(function PresetCard({ preset }: PresetCardProps) 
       activationLabel={fillTemplate(t('Add {name} preset', language), { name })}
       countLabel={countLabel}
       color={preset.color}
-      totalCost={preset.totalCost}
+      nodes={preset.nodes}
       paint={paint}
     />
   );

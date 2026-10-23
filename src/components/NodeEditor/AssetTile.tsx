@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
+import type { AppNode } from '@/types';
 import { startTileDrag, tileGhostZoom, tileActivationProps, setHtml5TileDrag } from './tileDrag';
 import { useAssetTooltip } from './AssetTooltip';
 import { AssetCostBadge } from './AssetCostBadge';
@@ -15,14 +16,16 @@ interface AssetTileProps {
   activationLabel: string;
   countLabel: string;
   color: string;
-  totalCost: number;
+  /** The asset's nodes, which its cost badge prices under the selected
+   *  device's table (AssetCostBadge). */
+  nodes: readonly AppNode[];
   /** Paints the picture. Must be STABLE per asset: the canvas repaints when it changes. */
   paint?: (ctx: CanvasRenderingContext2D) => void;
 }
 
 /** The ready-made asset tile (PresetCard, TextureCard): picture, frame, drag and click-to-add. */
 export function AssetTile({
-  kind, id, dragType, name, tooltipText, activationLabel, countLabel, color, totalCost, paint,
+  kind, id, dragType, name, tooltipText, activationLabel, countLabel, color, nodes, paint,
 }: AssetTileProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -68,7 +71,7 @@ export function AssetTile({
       {...tooltipHandlers}
     >
       {tooltip}
-      <AssetCostBadge cost={totalCost} />
+      <AssetCostBadge nodes={nodes} />
       <div
         className="saved-group-card__frame"
         style={{ background: `${color}1A`, borderColor: `${color}66` }}

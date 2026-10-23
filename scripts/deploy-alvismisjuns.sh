@@ -88,3 +88,20 @@ else
   echo "Last-Modified header). As of 2026-08-24: /var/www/alvis/src/public" >&2
   exit 1
 fi
+
+# The device-comparison page: a DIRECTORY url and its own Vite entry
+# (dist/compare/index.html), so a path or DirectoryIndex mistake shows up here
+# while index.html still looks perfect. It must answer 200 with ITS page (the
+# title names it — a fallback to index.html would carry the right version too)
+# at the version just built.
+COMPARE_URL="https://alvismisjuns.lv/fastshaders/compare/"
+COMPARE="$(curl -sS -H 'Cache-Control: no-cache' -w '\n%{http_code}' "${COMPARE_URL}?cb=$(date +%s)" || true)"
+COMPARE_CODE="$(printf '%s' "$COMPARE" | tail -n 1)"
+COMPARE_VER="$(printf '%s' "$COMPARE" | sed -n 's/.*<meta name="version" content="\([^"]*\)".*/\1/p')"
+COMPARE_OK="$(printf '%s' "$COMPARE" | grep -c 'Device comparison' || true)"
+if [ "$COMPARE_CODE" = "200" ] && [ "$COMPARE_VER" = "$EXPECTED" ] && [ "$COMPARE_OK" -ge 1 ]; then
+  echo "compare page $COMPARE_VER live ✓"
+else
+  echo "DEPLOY VERIFICATION FAILED: $COMPARE_URL answered ${COMPARE_CODE:-nothing}, version '${COMPARE_VER:-<none>}'$([ "$COMPARE_OK" -ge 1 ] || echo ', and it is NOT the comparison page')" >&2
+  exit 1
+fi

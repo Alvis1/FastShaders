@@ -20,6 +20,7 @@
 import type { AppEdge, AppNode } from '@/types';
 import { unwrapCollapsedGroupEdges } from './edgeUtils';
 import { isSplatKind } from './splatSniff';
+import { POINT_BUDGET, formatPoints, toBudgetPoints } from './budgetPoints';
 
 export type FeedbackKind = 'bug' | 'idea' | 'comment';
 
@@ -67,7 +68,9 @@ export interface FeedbackProject {
   connections: number;
   groups: number;
   notes: number;
-  /** GPU cost points, and the headset profile they are being judged against. */
+  /** GPU cost in TABLE points, and the device it is judged against with that
+   *  device's budget in table points; the row prints the figures the cost bar
+   *  shows — the total as a share of a budget of 100 (utils/budgetPoints.ts). */
   totalCost: number;
   headset: string;
   budget: number;
@@ -155,7 +158,7 @@ function projectRows(p: FeedbackProject): [string, string][] {
     ],
     [
       'Cost',
-      `${group(p.totalCost)} / ${group(p.budget)} pts` +
+      `${formatPoints(toBudgetPoints(p.totalCost, p.budget)).text} / ${POINT_BUDGET} pts` +
         ` · ${p.headset}${over ? ' · OVER BUDGET' : ''}`,
     ],
   ];
@@ -233,7 +236,7 @@ export function previewBackend(
 
 /**
  * Aligned `Label: value` lines for the technical-details block. The project
- * rows come FIRST — "42 nodes, 1830/200 pts on a Quest 3" is what makes a
+ * rows come FIRST — "42 nodes, 915/100 pts on a Quest 3" is what makes a
  * report reproducible, while the browser string is the tiebreak underneath.
  */
 export function envLines(env: FeedbackEnv, project?: FeedbackProject | null): string[] {

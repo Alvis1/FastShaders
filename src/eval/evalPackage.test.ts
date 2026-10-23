@@ -165,6 +165,22 @@ describe('summary.csv + README', () => {
     });
   });
 
+  it('carries the device budget and what the screen printed it as, beside final_points', () => {
+    // final_points is TABLE points; since 2026-10-23 the bar printed it out of
+    // 100, so without these two a 186 read against a brief of 100 looks 86 %
+    // over budget for a participant whose bar said 93 / 100.
+    const csv = buildSummaryCsv('P01', 50, fixtureInput(true).summary, { deviceBudget: 200, shownBudget: 100 });
+    const [header, row] = csv.split('\n');
+    const cols = header.split(',');
+    const cells = Object.fromEntries(cols.map((h, i) => [h, row.split(',')[i]]));
+    expect([cells.device_budget, cells.shown_budget]).toEqual(['200', '100']);
+    expect(cols.indexOf('device_budget')).toBe(cols.indexOf('final_points_all') + 1);
+    const readme = buildEvalReadme(fixtureInput(true));
+    expect(readme).toContain('TABLE points');
+    expect(readme).toContain('final_points x shown_budget / device_budget');
+    expect(readme).not.toContain("the cost bar's number");
+  });
+
   it('README declares the idle threshold and the schema', () => {
     const input = fixtureInput(true);
     const readme = buildEvalReadme(input);

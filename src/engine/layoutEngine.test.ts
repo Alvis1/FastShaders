@@ -1,11 +1,14 @@
-import { describe, it, expect } from 'vitest';
-import { autoLayout, estimateNodeSize, measuredSize } from './layoutEngine';
+import { describe, it, expect, afterEach } from 'vitest';
+import {
+  autoLayout, estimateNodeSize, measuredSize, socketOrder, wireInversions, drawnCostScale, COST_SCALED_TYPES,
+} from './layoutEngine';
 import { makeNode, makeEdge } from '@/test-utils';
 import { COLOR_NODE_SIZE } from '@/components/NodeEditor/nodes/ColorNode';
 import type { AppNode, AppEdge } from '@/types';
 import { getCostScale } from '@/utils/colorUtils';
-import { getCost } from '@/utils/costTable';
+import { getCost, setCostOverrides } from '@/utils/costTable';
 import { nodeCostPoints } from '@/utils/nodeCost';
+import { budgetPointsOf, setDeviceBudget } from '@/utils/budgetPoints';
 import { edgePortRailHeight } from '@/components/NodeEditor/nodes/edgePorts';
 
 /** Top edge of a node in the laid-out graph. */
@@ -160,6 +163,14 @@ describe('estimateNodeSize — art drawn above the rows', () => {
     expect(ramp.height).toBeGreaterThanOrEqual(20 + 2 * 16 + 8 + 18);
   });
 
+  it('a Color Ramp and an RGB Curves node are reserved at least as WIDE as their art', () => {
+    // A title-length width put the ramp at the 72px floor while its 96px strip
+    // rendered the card 110px wide — out past the right edge of every recipe
+    // frame that ends in one. The cost scale only ever grows a card.
+    expect(estimateNodeSize(makeNode('c', 'colorRamp')).width).toBeGreaterThanOrEqual(96 + 12 + 2);
+    expect(estimateNodeSize(makeNode('k', 'rgbCurves')).width).toBeGreaterThanOrEqual(72 + 12 + 2);
+  });
+
   it('an RGB Curves node reserves its 62px curves art on top of its rows', () => {
     const curves = estimateNodeSize(makeNode('k', 'rgbCurves'));
     // Two rows (Color in+out, Factor), no glyph, + .shader-node__curves-art 56 + margins.
@@ -175,30 +186,76 @@ describe('estimateNodeSize — art drawn above the rows', () => {
 });
 
 describe('a card is laid out at the price it is DRAWN at', () => {
-  // ShaderNode prices itself LIVE (`nodeCostPoints`), while `data.cost` is a
-  // creation snapshot nothing restamps. Sized by the snapshot, an RGB Curves
-  // node dropped from the palette (1) and then bent (drawn at 40) was reserved
-  // ~20px short, and Organize put the next card's cost badge on top of it.
+  // Every cost-scaled card prices itself LIVE (`useLiveNodeCost` →
+  // `nodeCostPoints`), while `data.cost` is a creation snapshot nothing
+  // restamps. Sized by the snapshot, an RGB Curves node dropped from the
+  // palette (1) and then bent (drawn at 40) was reserved ~20px short, and
+  // Organize put the next card's cost badge on top of it.
+  afterEach(() => {
+    setCostOverrides(null);
+    setDeviceBudget(200);
+  });
   const withCost = (n: AppNode, cost: number): AppNode => {
     (n.data as { cost: number }).cost = cost;
     return n;
   };
   const bent = (cost: number) => withCost(makeNode('k', 'rgbCurves', { curveC: '0 0,0.25 0.15,0.75 0.85,1 1' }), cost);
   const measured = (n: AppNode): AppNode => Object.assign(n, { measured: { width: 100, height: 80 } });
+  /** What the card's own `useCostChrome` scales by: the live price as budget points. */
+  const drawnAt = (raw: number) => getCostScale(budgetPointsOf(raw));
 
   it('a bent RGB Curves node is reserved at its baking price, whatever its snapshot says', () => {
-    const drawn = getCostScale(nodeCostPoints(bent(1), []));
-    expect(drawn).toBeGreaterThan(getCostScale(1));
+    const drawn = drawnAt(nodeCostPoints(bent(1), []));
+    expect(drawn).toBeGreaterThan(drawnAt(1));
     expect(estimateNodeSize(bent(1))).toEqual(estimateNodeSize(bent(40)));
     expect(measuredSize(measured(bent(1)))).toEqual({ width: 100 * drawn, height: 80 * drawn });
   });
 
-  it('a card drawn from its snapshot (Preview, Clock, MathPreview, Sound) keeps it — that is what its component draws', () => {
+  it('so is every other cost-scaled card (Preview, Clock, MathPreview, Sound) — they price live too', () => {
+    // The noise card drew its creation-time snapshot until 2026-10-23, and was
+    // reserved by it; under the Steam Frame row that kept the shipped price.
     const perlin = (cost: number) => withCost(makeNode('p', 'perlin'), cost);
-    expect(estimateNodeSize(perlin(80)).width).toBeCloseTo(111 * getCostScale(80), 5);
-    expect(estimateNodeSize(perlin(0)).width).toBeCloseTo(111, 5);
+    const live = drawnAt(getCost('perlin'));
+    expect(live).toBeGreaterThan(1);
+    expect(estimateNodeSize(perlin(80)).width).toBeCloseTo(111 * live, 5);
+    expect(estimateNodeSize(perlin(0))).toEqual(estimateNodeSize(perlin(80)));
     const asPreview = (n: AppNode): AppNode => Object.assign(n, { type: 'preview' });
-    expect(measuredSize(measured(asPreview(perlin(80))))).toEqual({ width: 100 * getCostScale(80), height: 80 * getCostScale(80) });
+    expect(measuredSize(measured(asPreview(perlin(0))))).toEqual({ width: 100 * live, height: 80 * live });
+    // A device's table reprices the reservation with no edit to the node.
+    setCostOverrides({ perlin: 25 });
+    expect(estimateNodeSize(perlin(80)).width).toBeCloseTo(111 * drawnAt(25), 5);
+  });
+
+  it('every card that scales itself is in the ONE set the hit boxes read — the Sound card too', () => {
+    expect([...COST_SCALED_TYPES].sort()).toEqual(['clock', 'mathPreview', 'preview', 'shader', 'sound']);
+    // Sound is 0 in the shipped table, so only a profile that prices it shows a difference.
+    const sound = Object.assign(makeNode('s', 'soundNode'), { type: 'sound', measured: { width: 100, height: 80 } }) as AppNode;
+    expect(measuredSize(sound)).toEqual({ width: 100, height: 80 });
+    setCostOverrides({ soundNode: 40 });
+    expect(measuredSize(sound)).toEqual({ width: 100 * drawnAt(40), height: 80 * drawnAt(40) });
+  });
+
+  it('grows a card by its share of the device budget — under the 200-point devices, exactly the old table-point rule', () => {
+    // Before the display went to 100 the rule read TABLE points over an 80-point
+    // span; the share of a 200-point budget over the 40-point span is the same
+    // number, so no size on the default devices moved.
+    for (const type of ['perlin', 'fbm', 'sin', 'imageNode', 'mul', 'voronoi']) {
+      const raw = getCost(type);
+      expect(drawnCostScale(makeNode('n', type), []), type).toBeCloseTo(1 + Math.min(raw / 80, 1) * 0.35, 12);
+    }
+    // A stricter device makes the same node a bigger share of its frame.
+    const perlin = makeNode('p', 'perlin');
+    const at200 = drawnCostScale(perlin, []);
+    setDeviceBudget(100);
+    expect(drawnCostScale(perlin, [])).toBeGreaterThan(at200);
+    expect(drawnCostScale(perlin, [])).toBeCloseTo(1 + Math.min(getCost('perlin') / 40, 1) * 0.35, 12);
+  });
+
+  it('the canvas hit box prices a grown variadic fold by its wires; the layout by two operands', () => {
+    const add = makeNode('m', 'add');
+    const wires = ['a', 'b', 'c', 'd'].map((h, i) => makeEdge(`x${i}`, 'out', 'm', h));
+    expect(drawnCostScale(add, wires)).toBeCloseTo(drawnAt(3 * getCost('add')), 12);
+    expect(drawnCostScale(add, [])).toBeCloseTo(drawnAt(getCost('add')), 12);
   });
 });
 
@@ -247,8 +304,9 @@ describe('estimateNodeSize — the Image node', () => {
   // picture, floored by the rail those sockets need (`edgePortRailHeight`,
   // read from the renderer's own module, never restated here). The card is
   // scaled by the price it is DRAWN at — its live price, which for a node with
-  // no stored resolution is the table entry — never the `data.cost` snapshot.
-  const s = getCostScale(getCost('imageNode'));
+  // no stored resolution is the table entry — never the `data.cost` snapshot,
+  // as the share of the device's budget the card's own chrome grows by.
+  const s = getCostScale(budgetPointsOf(getCost('imageNode')));
   const RAIL = edgePortRailHeight(6, 5); // the Image node's 6 inputs / 5 outputs
   const withImage = (id = 'i') =>
     makeNode(id, 'imageNode', { imageB64: 'data:image/png;base64,AAAA', fileName: 'x.png' });
@@ -282,3 +340,39 @@ describe('estimateNodeSize — the Image node', () => {
   });
 });
 
+describe('socketOrder + wireInversions — the layout reads sockets top to bottom', () => {
+  // Mix Two Colors: two Colors feed Mix's A and B, a Fresnel its Factor (the
+  // BOTTOM socket). dagre floats the Fresnel (the costlier spine) to the top
+  // and every wire into the Mix crosses (owner, 2026-10-20).
+  const rows: Record<string, string[]> = { mix: ['a', 'b', 't'], out: ['color'] };
+  const typeOf: Record<string, string> = { c1: 'color', c2: 'color', f: 'fresnel', m: 'mix', o: 'out' };
+  const rank = (target: string, handle: string | null | undefined) =>
+    (rows[typeOf[target]] ?? []).indexOf(handle ?? '') >>> 0;
+  const edges = [
+    makeEdge('f', 'facing', 'm', 't'),
+    makeEdge('c2', 'out', 'm', 'b'),
+    makeEdge('c1', 'out', 'm', 'a'),
+  ];
+  const root = [makeEdge('m', 'out', 'o', 'color')];
+
+  it('keys every feeder by the socket it reaches, top socket first', () => {
+    const order = socketOrder([...edges, ...root], root, rank);
+    expect([...order.keys()]).toEqual(['m', 'c1', 'c2', 'f']);
+  });
+
+  it('counts a pair of wires into one node that arrives upside down — and only those', () => {
+    const at = (id: string, y: number) => ({ ...makeNode(id, typeOf[id]), position: { x: 0, y } }) as AppNode;
+    const upsideDown = [at('f', 0), at('c1', 100), at('c2', 200), at('m', 0)];
+    expect(wireInversions(upsideDown, edges, rank)).toBe(2); // f above both of A's and B's feeders
+    const inOrder = [at('c1', 0), at('c2', 100), at('f', 200), at('m', 0)];
+    expect(wireInversions(inOrder, edges, rank)).toBe(0);
+    // Two wires from ONE node never cross each other, whatever their sockets.
+    expect(wireInversions([at('c1', 0), at('m', 0)], [makeEdge('c1', 'out', 'm', 'a'), makeEdge('c1', 'out', 'm', 'b')], rank)).toBe(0);
+  });
+
+  it('a laid-out graph fed the order lands with the feeders in socket order', () => {
+    const nodes = ['c1', 'c2', 'f', 'm'].map((id) => makeNode(id, typeOf[id]));
+    const laid = autoLayout(nodes, edges, { nodesep: 10, ranksep: 30 }, socketOrder([...edges, ...root], root, rank));
+    expect(wireInversions(laid, edges, rank)).toBe(0);
+  });
+});

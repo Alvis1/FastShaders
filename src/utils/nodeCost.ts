@@ -1,26 +1,21 @@
 import type { AppNode, AppEdge } from '@/types';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
-import { getCost, getBaseCosts } from '@/utils/costTable';
+import { getCost } from '@/utils/costTable';
+import { lutNodeCost } from '@/utils/typeCost';
 import {
   activeSink, isSinkNode, isMarchOutput, isSplatOutput, isCustomSink, marchPartition,
   buildIncoming, closure,
 } from '@/utils/sdfPartition';
 import { contributingOutputs } from '@/utils/outputMaterials';
-import { readRgbCurves } from '@/utils/rgbCurves';
-
-/** RGB Curves' ALU beyond its six fetches, AUTHORED (not measured) at the table's own per-op prices: each of the
- *  two stages of engine/lutHelperText.ts's expression is `v + min(v,0)·s0 + max(v−1,0)·s1` — add ×2, mul ×2, min,
- *  sub, max, 7 one-point ops — and the final `mix(base, post, fac)` is mix's 2: 7 + 7 + 2. The six taps' inset
- *  mul/add (`fsLut.at`) is inside colormap's price, as it is for the Colormap node. */
-const RGB_CURVES_ALU = 16;
-/** The identity RGB Curves form bakes no texture and emits a bare `vec3(col)`. */
-const RGB_CURVES_IDENTITY_COST = 1;
 
 /**
- * GPU cost READERS that need the node graph — the per-instance price and the
- * reachable-subtree total. The TABLE lives in the leaf `costTable.ts` and is
- * re-exported here so consumers keep one import site for "costs".
+ * GPU cost READERS that need the node graph — the per-instance price, a
+ * ready-made group's price and the reachable-subtree total. The TABLE lives in the leaf `costTable.ts`, a node
+ * TYPE's price in the store-free `typeCost.ts`, and the point display in
+ * `budgetPoints.ts`; all are re-exported here so consumers keep one import
+ * site for "costs". Every figure here is in TABLE points: a surface divides
+ * by the selected device's budget only to print it.
  *
  * This module sits in the store's import cycle (nodeCost → outputMaterials →
  * exposedPorts → edgeUtils → useAppStore): evaluate NOTHING at module scope.
@@ -33,6 +28,8 @@ export {
   getCost,
   getBaseCosts,
 } from '@/utils/costTable';
+export { freshNodeCost, freshNodeCostUnder } from '@/utils/typeCost';
+export { budgetPointsOf, getDeviceBudget, POINT_BUDGET } from '@/utils/budgetPoints';
 
 /**
  * The Image node's price scales with its stored RESOLUTION — as a DISCOUNT from
@@ -80,8 +77,9 @@ export {
  * `Number([])` are all 0 and `Number(true)` is 1, which a finiteness check
  * would pass and then price at the FLOOR — a 50 % silent underprice on junk;
  * and `Math.max(0, NaN)` is NaN, so a clamp alone would let `sqrt(-1 × 4)`
- * reach the badge as `#NaNNaNNaN`. The result is rounded: every other price
- * in the table is an integer and every surface renders the number raw.
+ * reach the badge as `#NaNNaNNaN`. The result is rounded to a whole TABLE
+ * point, as every other authored price in the table is one (a surface prints
+ * it divided by the device budget, utils/budgetPoints.ts).
  */
 export const IMAGE_COST_REF_SIDE = 2048;
 export const IMAGE_COST_FLOOR_SIDE = 256;
@@ -100,59 +98,6 @@ export function imageNodeCost(base: number, width: unknown, height: unknown): nu
   const span = Math.log2(IMAGE_COST_REF_SIDE / IMAGE_COST_FLOOR_SIDE);
   const t = Math.min(1, Math.max(0, Math.log2(side / IMAGE_COST_FLOOR_SIDE) / span));
   return Math.round(base * (IMAGE_COST_MIN_SCALE + (1 - IMAGE_COST_MIN_SCALE) * t));
-}
-
-/** The table a price is read from: `getCost` (the ACTIVE, override-aware one) for a live node, `baseCost` (the
- *  shipped complexity.json) for a node TYPE. */
-type CostOf = (type: string) => number;
-function baseCost(type: string): number {
-  return getBaseCosts()[type] ?? 0;
-}
-
-/**
- * A LUT node that BAKES — Color Ramp, a non-identity RGB Curves — IS `fetches`
- * fetches of one 257-texel table (`fsLut.at`, the Colormap node's fetch + inset)
- * plus its own arithmetic, so it is charged at colormap's price: a measured
- * profile, which prices `colormap` and never these, reprices all three LUT
- * nodes together. Under the shipped table that sum IS the type's complexity.json
- * entry (pinned). A profile that moves the node's OWN entry off the shipped
- * price is charged that entry instead — only a hand-authored one can (the bench
- * never measures these), and "New profile…" seeds every entry at its shipped
- * price, so an untouched entry still follows colormap.
- */
-function lutBakeCost(type: 'colorRamp' | 'rgbCurves', fetches: number, alu: number, cost: CostOf): number {
-  const own = cost(type);
-  return own !== baseCost(type) ? own : fetches * cost('colormap') + alu;
-}
-
-/** THE price of a Color Ramp or RGB Curves node holding `values` — null for any other type. Color Ramp is one
- *  fetch (Color/Alpha are swizzles of it); RGB Curves six (C per channel, then R/G/B) + RGB_CURVES_ALU, or 1 in
- *  its identity form, which bakes nothing. */
-function lutNodeCost(type: string, values: unknown, cost: CostOf): number | null {
-  if (type === 'colorRamp') return lutBakeCost('colorRamp', 1, 0, cost);
-  if (type === 'rgbCurves') {
-    return readRgbCurves(values).identity ? RGB_CURVES_IDENTITY_COST : lutBakeCost('rgbCurves', 6, RGB_CURVES_ALU, cost);
-  }
-  return null;
-}
-
-/**
- * THE price of a node TYPE: what a FRESH node of it — one holding its
- * definition's defaults — is charged under the shipped table. It is the number
- * the palette tile, the Add-node menu row, the Designer card and the
- * node-editor overview print (and the palette strip sorts by), and the
- * `data.cost` every creation path stamps — a snapshot nothing restamps on an
- * edit, which only the Preview/Clock/MathPreview/Sound cards draw (a ShaderNode card
- * prices itself live, and layoutEngine reserves it at that live price) — so
- * the number a node is picked by is the number it shows once dropped. The table entry, except for a
- * type priced by its values: a fresh RGB Curves node holds no curves, so it is
- * the identity form (1) — its table entry is what a node that BAKES is charged.
- * undefined for a type the table does not price; callers keep their fallback.
- */
-export function freshNodeCost(type: string): number | undefined {
-  const base = getBaseCosts()[type];
-  if (base === undefined) return undefined;
-  return lutNodeCost(type, NODE_REGISTRY.get(type)?.defaultValues, baseCost) ?? base;
 }
 
 /**
@@ -187,6 +132,38 @@ export function nodeCostPoints(node: AppNode, edges: AppEdge[], wiredHandles?: r
   const connected = wiredHandles ?? wiredHandlesOf(node.id, edges);
   const operands = effectiveInputs(def, connected, false, Object.keys(getNodeValues(node))).length;
   return base * Math.max(1, operands - 1);
+}
+
+const NO_EDGES: AppEdge[] = [];
+
+/**
+ * What a READY-MADE group costs — the price a built-in preset, recipe or
+ * texture tile prints (AssetCostBadge) and its strip sorts by (ContentBrowser's
+ * `byCost`) — in table points, under the ACTIVE (selected device's) table.
+ *
+ * The creation snapshot's own rule, re-read live. A library is built once a
+ * session, so `CodeGroupAsset.totalCost`, the sum of its members' `data.cost`
+ * stamps (codeGroupBuilder), stays frozen under whichever device was selected
+ * when the chunk landed, and a tile printing it would ignore a device change
+ * that reprices every node card. Each member is priced as its stamp was taken:
+ * `nodeCostPoints` — a fresh node's table price (codeToGraph's createNode
+ * stamps `freshNodeCost`), RGB Curves by its curves (codeToGraph restamps a
+ * parsed one), Color Ramp through colormap, an Image by its resolution —
+ * except that a variadic fold is charged its base ONCE. No stamp ever carried
+ * the base × (N−1) multiplier, the strips have always sorted by the stamped
+ * sum, and folding here would make a badge disagree with that sum (studio-shine
+ * 76, where the cost bar charges the dropped graph 78). The frame and the note
+ * have no price. Equal to `totalCost` for every built-in under the table it was
+ * built under (assetCostPoints.test.ts).
+ */
+export function assetCostPoints(nodes: readonly AppNode[]): number {
+  let total = 0;
+  for (const n of nodes) {
+    const type = n.data.registryType;
+    if (!type) continue;
+    total += NODE_REGISTRY.get(type)?.chainable ? getCost(type) : nodeCostPoints(n, NO_EDGES);
+  }
+  return total;
 }
 
 /** One node's wired input handles. One pass, one array: this runs inside a

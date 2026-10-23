@@ -19,6 +19,9 @@ import { hiddenOptionalCategories } from '@/registry/optionalCategories';
 import { formatCategoryLabel, formatNodeLabel, t, type Language } from '@/i18n';
 import { freshNodeCost } from '@/utils/nodeCost';
 import { getCostTextColor } from '@/utils/colorUtils';
+import { useBudgetPoints } from '@/hooks/useDeviceBudget';
+import { evalTask } from '@/eval/evalTask';
+import { Points } from '@/components/Points/Points';
 import {
   CardSocketLabels,
   NoiseCardContent,
@@ -87,6 +90,9 @@ function MenuRow({ def, focused, language, costLow, costHigh, probe }: {
   probe?: boolean;
 }) {
   const cost = freshNodeCost(def.type) ?? 0;
+  // As the Add-node menu prints it: the selected device's budget points, which
+  // also re-renders the row when a device change reprices it.
+  const points = useBudgetPoints(cost);
   return (
     <button
       tabIndex={-1}
@@ -95,9 +101,12 @@ function MenuRow({ def, focused, language, costLow, costHigh, probe }: {
     >
       <span>
         {formatNodeLabel(def.label, def.type, language)}
-        {cost > 0 && (
-          <span className="context-menu__item-cost" style={{ color: getCostTextColor(cost, costLow, costHigh) }}>
-            {cost}
+        {/* Gated as the Add-node menu's row is: the intro opens in every
+            study arm, and /evalp (points off) must see no point figure —
+            eval.css's points-off sweep does not reach a menu row. */}
+        {cost > 0 && evalTask().pointsVisible && (
+          <span className="context-menu__item-cost" style={{ color: getCostTextColor(points, costLow, costHigh) }}>
+            <Points value={points} />
           </span>
         )}
       </span>

@@ -2,7 +2,7 @@ import { memo, useContext, useEffect, useRef, useCallback, useState, type RefObj
 import type { NodeDefinition, NodeCategory, PortDefinition } from '@/types';
 import { socketTooltip } from './handles/TypedHandle';
 import { startTileDrag, tileGhostZoom, tileActivationProps } from './tileDrag';
-import { getTypeColor, getCostColor, getCostTextColor, getCostScale, CATEGORY_COLORS, getContrastColor, hexToRgb01 } from '@/utils/colorUtils';
+import { getTypeColor, CATEGORY_COLORS, hexToRgb01 } from '@/utils/colorUtils';
 import { getFlowNodeType, displayDescription } from '@/registry/nodeRegistry';
 import { formatNodeLabel, nodeDescription, portLabel, t } from '@/i18n';
 import { useAssetTooltip } from './AssetTooltip';
@@ -11,7 +11,9 @@ import { useAppStore } from '@/store/useAppStore';
 import { NodeVisual, type NodeVisualProps } from './nodes/NodeVisual';
 import { CardSocketLabels } from './cardSocketLabels';
 import { NodeTitle } from './nodes/NodeTitle';
-import { useSinkBadgeClass } from './nodes/useCostChrome';
+import { useCostChrome, useSinkBadgeClass } from './nodes/useCostChrome';
+import { useBudgetPoints } from '@/hooks/useDeviceBudget';
+import { Points } from '@/components/Points/Points';
 import { DragNumberInput } from './inputs/DragNumberInput';
 import { nodeTextScale } from './nodes/glyphs/NodeGlyph';
 import { WaveformSvg, type WaveformDynamicRefs } from './nodes/WaveformSvg';
@@ -54,9 +56,13 @@ interface NodePreviewCardProps {
 export interface ContentProps {
   def: NodeDefinition;
   catColor: string;
+  // The cost-driven looks — header fill, badge colour, card scale — are judged
+  // in BUDGET points (useCostChrome), as on the canvas.
   costColor: string;
   costTextColor: string;
   costScale: number;
+  /** In TABLE points; the badge prints it as the selected device's budget
+   *  points (CardCostBadge, NodeVisual). */
   cost: number;
   headerTextColor: string;
 }
@@ -256,14 +262,21 @@ function CardSocket({ side, dataType, style, port }: {
 export { CardSocketLabels };
 
 /**
- * Sockets that carry what a canvas handle carries: React Flow's `data-handleid`
- * and the name label (`data-tooltip`, TypedHandle's text). OFF for the asset
- * tiles — their sockets are never hovered (the card is `pointer-events: none`),
- * and an invisible label still hangs outside the frame, where it would count
- * toward the strip's scroll width. ON for a surface that shows a connection
- * being made (the intro, `src/intro/`), which rings a socket and shows its
- * label with the canvas's own `.fs-connect-socket` rule.
+ * A card's cost badge: `cost` arrives in TABLE points (ContentProps) and is
+ * printed as the selected device's budget points through <Points>, in the
+ * colour the card's chrome judged from those same budget points. Absent at a
+ * price of 0, as on the canvas. A component so its budget hook is called
+ * unconditionally while the badge itself is not.
  */
+function CardCostBadge({ cost, color, className = 'node-base__cost-badge' }: { cost: number; color: string; className?: string }) {
+  const points = useBudgetPoints(cost);
+  if (!(cost > 0)) return null;
+  return (
+    <span className={className} style={{ color }}>
+      <Points value={points} />
+    </span>
+  );
+}
 
 /**
  * `nodeClassName` carries the LIVE node's own class (`clock-node`,
@@ -280,9 +293,7 @@ function CardShell({ def, catColor, costColor, costTextColor, costScale, cost, h
       className={`node-base node-preview-card__node${nodeClassName ? ` ${nodeClassName}` : ''}`}
       style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid ${catColor}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
     >
-      {cost > 0 && (
-        <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
-      )}
+      <CardCostBadge cost={cost} color={costTextColor} />
 
       {/* NodeTitle, not a hand-written span: it is the ONE renderer of
           `.node-base__title`, so these five hand-written cards (math preview,
@@ -572,9 +583,7 @@ export function OutputCardContent({
 
   return (
     <div className="output-node node-preview-card__node" style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid var(--cat-output)` }}>
-      {cost > 0 && (
-        <span className={badgeClass} style={{ color: costTextColor }}>{cost}</span>
-      )}
+      <CardCostBadge cost={cost} color={costTextColor} className={badgeClass} />
       <div className="output-node__header" style={{ background: costColor }}>
         <span className="output-node__title" style={{ color: headerTextColor }}>{formatNodeLabel(def.label, def.type, language, false)}</span>
       </div>
@@ -652,9 +661,7 @@ function SinkCardContent({
     ));
   return (
     <div className={className} style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid ${frame}` }}>
-      {cost > 0 && (
-        <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
-      )}
+      <CardCostBadge cost={cost} color={costTextColor} />
       <div className="output-node__header" style={{ background: costColor }}>
         <OutputTitle title={config.title} type={def.type} original={config.original} language={language} color={headerTextColor} />
       </div>
@@ -740,9 +747,7 @@ function ColorCardContent({ def, cost, costTextColor }: { def: NodeDefinition; c
         className={`color-node${isProperty ? ' color-node--rect' : ''}`}
         style={{ width: COLOR_NODE_SIZE, height: COLOR_NODE_SIZE, background: hex }}
       >
-        {cost > 0 && (
-          <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
-        )}
+        <CardCostBadge cost={cost} color={costTextColor} />
         <span ref={labelRef} className="color-node__label" style={{ color: labelColor }}>
           {label}
         </span>
@@ -779,19 +784,15 @@ function ColorCardContent({ def, cost, costTextColor }: { def: NodeDefinition; c
  * (`src/intro/`), which stages these same cards at canvas size.
  */
 export function useCardChrome(def: NodeDefinition): ContentProps {
-  // A FRESH node's price — the number the node shows once dropped (a fresh RGB Curves node is its identity form).
+  // A FRESH node's price — the number the node shows once dropped (a fresh RGB Curves node is its identity form) —
+  // in table points, under the selected device's table.
   const cost = freshNodeCost(def.type) ?? 0;
-  const costColorLow = useAppStore((s) => s.costColorLow);
-  const costColorHigh = useAppStore((s) => s.costColorHigh);
-  // The header mixes into the card, and the card follows the theme
-  // (getCostColor). `codeEditorTheme` is the app-wide dark switch; the store
-  // field keeps its historical name.
-  const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
+  // The canvas cards' own chrome rule: header, badge colour and scale judged
+  // in budget points, the header mixed into the themed card. Its device
+  // subscription is also what re-renders this tile when a device change
+  // reprices it.
+  const { costColor, costTextColor, costScale, headerTextColor } = useCostChrome(cost);
   const catColor = CATEGORY_COLORS[def.category as NodeCategory] ?? 'var(--type-any)';
-  const costColor = getCostColor(cost, costColorLow, costColorHigh, darkTheme);
-  const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
-  const headerTextColor = getContrastColor(costColor);
-  const costScale = getCostScale(cost);
   return { def, catColor, costColor, costTextColor, costScale, cost, headerTextColor };
 }
 

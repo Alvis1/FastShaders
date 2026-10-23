@@ -11,10 +11,18 @@
  * the store): a static import from the boot path puts `codeGroupBuilder` →
  * `codeToGraph` → @babel/* on the entry wave.
  *
- * Three tiers, ordered easy→advanced in PRESET_ENTRIES:
+ * Four tiers, ordered easy→advanced in PRESET_ENTRIES:
+ *   0 — RECIPES: the beginner set, and the only one the Presets tab shows.
+ *       One idea in one to five nodes, built from the palette's high-level
+ *       nodes (Color Ramp, Fresnel, 0–1 Perlin) — see the Recipes block below.
  *   1 — primitives: one concept, instant feedback (gradient, stripes, fresnel…)
  *   2 — composites: two primitives combined (noise mask, toon ramp…)
  *   3 — effect recipes: the classics people come for (dissolve, hologram…)
+ * Tiers 1–3 are the original library, written as flat maths with a Property
+ * node per knob; they live on the "Presets 2" tab, an OPTIONAL category that
+ * is off by default (registry/optionalCategories.ts). They stay in this ONE
+ * list so the store's lookup by id, the intro's model slide and every saved
+ * id keep working unchanged.
  *
  * Every snippet is fully flattened (no nested calls) for codeToGraph
  * compatibility; builtinPresets.test.ts asserts each parses with zero errors
@@ -28,16 +36,209 @@
  * in source.
  */
 
-import { buildCodeGroup, type CodeGroupAsset, type CodeGroupEntry } from '@/registry/codeGroupBuilder';
+import { buildCodeGroup, layoutPricingKey, type CodeGroupAsset, type CodeGroupEntry } from '@/registry/codeGroupBuilder';
 
 export interface BuiltinPreset extends CodeGroupAsset {
-  /** 1 = primitive, 2 = composite, 3 = effect recipe. */
-  tier: 1 | 2 | 3;
+  /** 0 = beginner recipe, 1 = primitive, 2 = composite, 3 = effect recipe. */
+  tier: 0 | 1 | 2 | 3;
 }
 
 interface PresetEntry extends CodeGroupEntry {
-  tier: 1 | 2 | 3;
+  tier: 0 | 1 | 2 | 3;
 }
+
+/** A beginner recipe (the Presets tab); every other tier is "Presets 2". */
+export function isRecipe(preset: { tier: number }): boolean {
+  return preset.tier === 0;
+}
+
+// ─── Recipes (tier 0) ───────────────────────────────────────────────────
+//
+// The beginner set. Each one teaches ONE idea in one to five nodes, so the
+// whole graph fits in a glance and can be rebuilt from the palette:
+//
+// - Values sit ON the nodes (a Multiply's 0.2, a Greater Than's 0.6), never in
+//   Property nodes: a knob a beginner can scrub where they are already looking
+//   beats a second node wired into the first. So a recipe has NO uniforms.
+// - Colours come from a Color Ramp — one node, its gradient drawn on the card —
+//   instead of two colour Properties and a Mix.
+// - Each node is written in the exact form graphToCode emits for it, so the
+//   parse rebuilds the same node a palette add would. That is why two lines
+//   look nested: `mul(uv(), vec2(8, 1))` is ONE UV node with U tiling 8, and
+//   `mx_noise_float(positionGeometry.mul(3)).mul(0.5).add(0.5)` is ONE Perlin
+//   node at scale 3 in the 0–1 range (`signed: 0`) — the range a Perlin added
+//   from the palette has. These are the only built-ins that carry that flag;
+//   noiseRangeCorpus.test.ts holds the original library to the absent key.
+// - `fsColorRamp` / `fsFresnel` are the module helpers the Color Ramp and
+//   Fresnel nodes emit; codeToGraph reads the calls back as those nodes, and
+//   `.y` on the Fresnel call is its Facing socket.
+// - The return names the Output sockets, so a press wires them for you.
+
+// ── Solid Color ───────────────────────────────────────────────────────────────
+const RECIPE_SOLID_CODE = `import { color, Fn } from "three/tsl";
+
+const shader = Fn(() => {
+  const paint = color(0x4FC3F7);
+  return paint;
+});
+export default shader;`;
+
+// ── Gradient ──────────────────────────────────────────────────────────────────
+// A Color Ramp blends in LINEAR light, which pulls the middle toward the
+// brighter stop: from the original Gradient's navy (0x1A237E) the sphere read
+// as all coral. A mid blue keeps both ends on screen.
+const RECIPE_GRADIENT_CODE = `import { Fn, uv } from "three/tsl";
+
+const shader = Fn(() => {
+  const u = uv();
+  const ramp = fsColorRamp(u.y, "0 #1565C0 1,1 #FF8A65 1", "linear");
+  return ramp.rgb;
+});
+export default shader;`;
+
+// ── Stripes ───────────────────────────────────────────────────────────────────
+// Constant interpolation is what makes the edges hard: below 0.5 the ramp
+// holds its first stop, above it the second.
+const RECIPE_STRIPES_CODE = `import { Fn, fract, mul, uv, vec2 } from "three/tsl";
+
+const shader = Fn(() => {
+  const u = mul(uv(), vec2(8, 1));
+  const repeat = fract(u.x);
+  const ramp = fsColorRamp(repeat, "0 #263238 1,0.5 #ECEFF1 1", "constant");
+  return ramp.rgb;
+});
+export default shader;`;
+
+// ── Snow on Top ───────────────────────────────────────────────────────────────
+// World-space normal, so the snow line stays level while the preview spins
+// (Top Cover's reason, in its own comment below).
+const RECIPE_SNOW_CODE = `import { Fn, normalWorld } from "three/tsl";
+
+const shader = Fn(() => {
+  const nrm = normalWorld;
+  const ramp = fsColorRamp(nrm.y, "0.35 #5D4037 1,0.55 #FAFAFA 1", "linear");
+  return ramp.rgb;
+});
+export default shader;`;
+
+// ── Random Tiles ──────────────────────────────────────────────────────────────
+// Cell Noise is already 0–1 and never carries the range flag.
+const RECIPE_TILES_CODE = `import { Fn, mx_cell_noise_float, positionGeometry } from "three/tsl";
+
+const shader = Fn(() => {
+  const cells = mx_cell_noise_float(positionGeometry.mul(4));
+  const ramp = fsColorRamp(cells, "0 #0B3C5D 1,0.25 #328CC1 1,0.5 #F2C14E 1,0.75 #D9483B 1", "constant");
+  return ramp.rgb;
+});
+export default shader;`;
+
+// ── Pulse ─────────────────────────────────────────────────────────────────────
+// `time.mul(2)` is the Time node at speed 2. Remap, not Multiply + Add: one
+// node that SAYS "from -1..1 to 0..1" on its own value boxes.
+const RECIPE_PULSE_CODE = `import { Fn, remap, sin, time } from "three/tsl";
+
+const shader = Fn(() => {
+  const t = time.mul(2);
+  const wave = sin(t);
+  const k = remap(wave, -1, 1, 0, 1);
+  const ramp = fsColorRamp(k, "0 #311B92 1,1 #FFEA00 1", "linear");
+  return ramp.rgb;
+});
+export default shader;`;
+
+// ── Glowing Edge ──────────────────────────────────────────────────────────────
+// One ramp into BOTH Color and Emissive: the body is black, so all that shows
+// is the rim, and Emissive keeps the rim lit on the unlit side too.
+const RECIPE_EDGE_CODE = `import { Fn, normalWorld, positionWorld } from "three/tsl";
+
+const shader = Fn(() => {
+  const fres = fsFresnel(1.5, normalWorld, positionWorld);
+  const ramp = fsColorRamp(fres.y, "0.4 #000000 1,1 #00E5FF 1", "linear");
+  return { color: ramp.rgb, emissive: ramp.rgb };
+});
+export default shader;`;
+
+// ── Ghost ─────────────────────────────────────────────────────────────────────
+const RECIPE_GHOST_CODE = `import { color, Fn, normalWorld, positionWorld } from "three/tsl";
+
+const shader = Fn(() => {
+  const body = color(0x80DEEA);
+  const fres = fsFresnel(1.5, normalWorld, positionWorld);
+  return { color: body, opacity: fres.y };
+});
+export default shader;`;
+
+// ── Mix Two Colors ────────────────────────────────────────────────────────────
+// The Mix node on its own terms: two Color nodes are A and B, so the ends are
+// colours a beginner can double-click, and the Factor is 0–1 Perlin snapped by
+// Round to exactly 0 or 1 (owner, 2026-10-20) — every spot is pure A or pure
+// B, and deleting Round (the delete splices noise → Factor) shows the blend a
+// smooth factor gives. `mix(a, b, t)` as a FUNCTION — the method form puts the
+// receiver in the factor slot (the mix convention).
+const RECIPE_MIX_CODE = `import { color, Fn, mix, mx_noise_float, positionGeometry, round } from "three/tsl";
+
+const shader = Fn(() => {
+  const colorA = color(0x4A148C);
+  const colorB = color(0xFFC107);
+  const n = mx_noise_float(positionGeometry.mul(3)).mul(0.5).add(0.5);
+  const pick = round(n);
+  const blend = mix(colorA, colorB, pick);
+  return blend;
+});
+export default shader;`;
+
+// ── Holes ─────────────────────────────────────────────────────────────────────
+// Discard is a truthiness test, so the mask is a Greater Than, not a ramp. The
+// Color node is not decoration: Discard is a STATEMENT, not a channel, so an
+// Output fed by Discard alone emits the red "nothing wired" sentinel
+// (graphToCode's `return vec3(1, 0, 0)`) and the lesson came out red.
+const RECIPE_HOLES_CODE = `import { color, Fn, greaterThan, mx_noise_float, positionGeometry } from "three/tsl";
+
+const shader = Fn(() => {
+  const paint = color(0xFFB74D);
+  const n = mx_noise_float(positionGeometry.mul(4)).mul(0.5).add(0.5);
+  const cut = greaterThan(n, 0.6);
+  return { color: paint, discard: cut };
+});
+export default shader;`;
+
+// ── Noise Patches ─────────────────────────────────────────────────────────────
+const RECIPE_NOISE_CODE = `import { Fn, mx_noise_float, positionGeometry } from "three/tsl";
+
+const shader = Fn(() => {
+  const n = mx_noise_float(positionGeometry.mul(3)).mul(0.5).add(0.5);
+  const ramp = fsColorRamp(n, "0.4 #1B5E20 1,0.6 #FFF9C4 1", "linear");
+  return ramp.rgb;
+});
+export default shader;`;
+
+// ── Bumps ─────────────────────────────────────────────────────────────────────
+// The Displacement socket takes the AMOUNT and pushes along the normal (Vertex
+// Wave's comment below). A 0–1 noise only ever pushes OUT, which is the
+// easier picture for a first displacement; Noise Blob keeps it signed.
+const RECIPE_BUMPS_CODE = `import { Fn, mul, mx_noise_float, positionGeometry } from "three/tsl";
+
+const shader = Fn(() => {
+  const n = mx_noise_float(positionGeometry.mul(2)).mul(0.5).add(0.5);
+  const h = mul(n, 0.2);
+  return { position: h };
+});
+export default shader;`;
+
+// ── Wobble ────────────────────────────────────────────────────────────────────
+// Bumps plus one Add: a float added to a vec3 shifts all three axes, so the
+// noise field slides along its diagonal and the lumps keep re-forming.
+const RECIPE_WOBBLE_CODE = `import { add, Fn, mul, mx_noise_float, positionGeometry, time } from "three/tsl";
+
+const shader = Fn(() => {
+  const pos = positionGeometry;
+  const t = time;
+  const moved = add(pos, t);
+  const n = mx_noise_float(moved.mul(2)).mul(0.5).add(0.5);
+  const h = mul(n, 0.2);
+  return { position: h };
+});
+export default shader;`;
 
 // ─── Preset TSL code definitions ────────────────────────────────────────
 
@@ -848,6 +1049,86 @@ const shader = Fn(() => {
 export default shader;`;
 
 const PRESET_ENTRIES: PresetEntry[] = [
+  // ── Recipes (tier 0): plain words, one idea each, and a "Try:" to end on.
+  { id: 'recipe-solid', tier: 0, name: 'Solid Color', color: '#4FC3F7', code: RECIPE_SOLID_CODE,
+    description: 'The simplest shader there is: one Color node in the Output node\'s Color socket paints the whole model sky blue. Double-click the Color node to pick another color.',
+    note: {
+      heading: 'One Color, Whole Model',
+      text: 'The Output node paints the model with whatever reaches its Color socket. Here that is one Color node. Try: double-click it and pick a new color.',
+    } },
+  { id: 'recipe-gradient', tier: 0, name: 'Gradient', color: '#FF8A65', code: RECIPE_GRADIENT_CODE,
+    description: 'Blue at the bottom fading to coral at the top. UV.y is a number that runs from 0 at the bottom of the model to 1 at the top, and the Color Ramp turns each of those numbers into a color. Goes into the Output node\'s Color socket.',
+    note: {
+      heading: 'A Number Becomes a Color',
+      text: 'UV.y is 0 at the bottom of the model and 1 at the top. Color Ramp turns each number into a color. Try: right-click Color Ramp and drag a color stop.',
+    } },
+  { id: 'recipe-stripes', tier: 0, name: 'Stripes', color: '#78909C', code: RECIPE_STRIPES_CODE,
+    description: 'Dark and light stripes running round the model. The UV node is tiled 8 times, so its U counts from 0 to 8; Fract keeps only the part after the decimal point, so the count starts again at 0 eight times; and a Color Ramp set to Constant gives two hard-edged colors. Goes into the Output node\'s Color socket.',
+    note: {
+      heading: 'Fract Repeats',
+      text: 'UV tiled 8 times counts from 0 to 8. Fract keeps only the part after the decimal point, so it starts again at 0 eight times. Try: change U on the UV node.',
+    } },
+  { id: 'recipe-snow', tier: 0, name: 'Snow on Top', color: '#6D8B9E', code: RECIPE_SNOW_CODE,
+    description: 'White snow on every part of the model that faces up, brown ground everywhere else. The world normal points straight out of the surface: its y part is 1 on top, 0 on the sides and -1 underneath, and the Color Ramp makes the high values white. The snow line stays level while the model turns. Goes into the Output node\'s Color socket.',
+    note: {
+      heading: 'Facing Up Means Snow',
+      text: 'Normal tells which way the surface faces. Its y part is 1 on top and -1 underneath. Color Ramp makes the high values white. Try: drag the white stop left.',
+    } },
+  { id: 'recipe-tiles', tier: 0, name: 'Random Tiles', color: '#F2C14E', code: RECIPE_TILES_CODE,
+    description: 'The model split into blocky cells, each painted one of four colors. Cell Noise gives one random number for each cell, and a Color Ramp set to Constant picks a color for that number. Goes into the Output node\'s Color socket.',
+    note: {
+      heading: 'One Random Number a Cell',
+      text: 'Cell Noise cuts space into cubes and gives each cube one random number from 0 to 1. Color Ramp picks a color for it. Try: right-click Cell Noise, change Scale.',
+    } },
+  { id: 'recipe-pulse', tier: 0, name: 'Pulse', color: '#9C27B0', code: RECIPE_PULSE_CODE,
+    description: 'The whole model beats slowly between deep purple and bright yellow. Time counts seconds, Sine turns them into a wave from -1 to 1, Remap moves that wave to 0 to 1, and the Color Ramp turns it into a color. Goes into the Output node\'s Color socket.',
+    note: {
+      heading: 'Time Makes It Move',
+      text: 'Time counts seconds. Sine turns them into a wave from -1 to 1, and Remap moves it to 0 to 1 for Color Ramp. Try: right-click Time and change its speed.',
+    } },
+  { id: 'recipe-edge', tier: 0, name: 'Glowing Edge', color: '#00B8D4', code: RECIPE_EDGE_CODE,
+    description: 'A black model whose outline glows cyan, even on the side the light does not reach. The Fresnel node\'s Facing output is 0 where the surface looks straight at you and 1 at the outline. The same color goes into the Output node\'s Color and Emissive sockets, and Emissive makes a color shine by itself.',
+    note: {
+      heading: 'Edges Face Away',
+      text: 'Fresnel\'s Facing is 0 where the surface faces you and 1 at the outline. Color Ramp colors it; Emissive makes it shine on its own. Try: drag the black stop.',
+    } },
+  { id: 'recipe-ghost', tier: 0, name: 'Ghost', color: '#80DEEA', code: RECIPE_GHOST_CODE,
+    description: 'A see-through pale blue model: clear in the middle, solid at the outline. The Fresnel node\'s Facing output goes into the Output node\'s Opacity socket, where 0 means invisible and 1 means solid, while a Color node paints it.',
+    note: {
+      heading: 'Opacity 0 Is Invisible',
+      text: 'Opacity 0 is invisible and 1 is solid. Fresnel\'s Facing is 0 in the middle and 1 at the outline, so only the edge stays. Try: use its Fresnel output instead.',
+    } },
+  { id: 'recipe-mix', tier: 0, name: 'Mix Two Colors', color: '#7B1FA2', code: RECIPE_MIX_CODE,
+    description: 'Purple and gold patches with hard edges, like a camouflage print. The Mix node blends its A and B inputs by its Factor: 0 gives A, 1 gives B, 0.5 half of each. Here two Color nodes are A and B, Perlin Noise gives a smooth number from 0 to 1, and Round snaps it to exactly 0 or 1, so every spot is pure A or pure B. Goes into the Output node\'s Color socket.',
+    note: {
+      heading: 'Mix Picks A or B',
+      text: 'Mix shows A where Factor is 0, B where it is 1, and a blend in between. Round snaps the noise to exactly 0 or 1, so no blend is left. Try: delete Round to see it.',
+    } },
+  { id: 'recipe-holes', tier: 0, name: 'Holes', color: '#5D4037', code: RECIPE_HOLES_CODE,
+    description: 'An orange model full of holes you can see straight through. Perlin Noise gives a smooth random number from 0 to 1 everywhere; Greater Than answers 1 wherever that number is above 0.6, and the Output node\'s Discard socket removes every spot that gets a 1. A Color node paints what is left.',
+    note: {
+      heading: 'Discard Cuts Holes',
+      text: 'Perlin Noise gives a smooth random number from 0 to 1. Greater Than answers 1 where it is above 0.6, and Discard removes those spots. Try: change the 0.6.',
+    } },
+  { id: 'recipe-noise', tier: 0, name: 'Noise Patches', color: '#558B2F', code: RECIPE_NOISE_CODE,
+    description: 'Soft patches of dark green and cream, like moss or camouflage. Perlin Noise gives every point of the model a smooth random number from 0 to 1, and the Color Ramp turns it into a color. Goes into the Output node\'s Color socket.',
+    note: {
+      heading: 'Smooth Random Numbers',
+      text: 'Perlin Noise gives every point a smooth random number from 0 to 1. Color Ramp turns it into green or cream. Try: right-click Perlin Noise, change Scale.',
+    } },
+  { id: 'recipe-bumps', tier: 0, name: 'Bumps', color: '#8D6E63', code: RECIPE_BUMPS_CODE,
+    description: 'The surface of the model pushed out into soft lumps. The Output node\'s Displacement socket moves each point outward by the amount it receives: Perlin Noise picks an amount from 0 to 1, and Multiply shrinks it to at most 0.2.',
+    note: {
+      heading: 'Displacement Moves Points',
+      text: 'Displacement pushes each point of the surface outward. Perlin Noise picks how far, and Multiply by 0.2 keeps the lumps small. Try: change the 0.2.',
+    } },
+  { id: 'recipe-wobble', tier: 0, name: 'Wobble', color: '#6D4C41', code: RECIPE_WOBBLE_CODE,
+    description: 'Bumps that never stop moving. Adding Time to Position slides the noise through the model, so the lumps keep growing and melting away. Goes into the Output node\'s Displacement socket.',
+    note: {
+      heading: 'Bumps That Move',
+      text: 'Bumps with one change: Add puts Time into Position, so the noise slides through the model and the lumps keep changing. Try: right-click Time, change speed.',
+    } },
+  // ── The original library (tiers 1–3): the "Presets 2" tab.
   { id: 'gradient', tier: 1, name: 'Gradient (UV Mix)', color: '#43A047', code: GRADIENT_CODE,
     description: 'The hello-world of shading: the vertical texture coordinate drives a mix from deep indigo at the bottom to warm coral at the top. Wire it to the Output node\'s Color channel and scrub topColor first.',
     note: {
@@ -996,15 +1277,19 @@ const PRESET_ENTRIES: PresetEntry[] = [
 
 /**
  * Parse each preset's TSL code into a group. Built by the FIRST call and
- * cached; this module is loaded on demand, never at boot.
+ * cached until the selected device's pricing moves (`layoutPricingKey` — the
+ * layout is measured in it); this module is loaded on demand, never at boot.
  */
-let _cachedPresets: BuiltinPreset[] | null = null;
+let _cachedPresets: { key: string; list: BuiltinPreset[] } | null = null;
 
 export function getBuiltinPresets(): BuiltinPreset[] {
-  if (_cachedPresets) return _cachedPresets;
-  _cachedPresets = PRESET_ENTRIES.map((entry) => ({
-    ...buildCodeGroup(entry, 'builtin-preset-'),
+  const key = layoutPricingKey();
+  if (_cachedPresets?.key === key) return _cachedPresets.list;
+  const list = PRESET_ENTRIES.map((entry) => ({
+    // Recipes lay their wires out in socket order (codeGroupBuilder's option).
+    ...buildCodeGroup(entry, 'builtin-preset-', { socketOrdered: isRecipe(entry) }),
     tier: entry.tier,
   }));
-  return _cachedPresets;
+  _cachedPresets = { key, list };
+  return list;
 }

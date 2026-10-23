@@ -42,10 +42,12 @@ describe('node-designer.html is a module entry, not a snapshot page', () => {
     expect(html).not.toMatch(/\.shader-node__op\s*\{/);
   });
 
-  it('vite.config names both entries (main must never be dropped)', () => {
+  it('vite.config names every entry (main must never be dropped)', () => {
     const config = readFileSync(path.join(ROOT, 'vite.config.ts'), 'utf8');
     expect(config).toMatch(/input:\s*\{[^}]*main:[^}]*index\.html[^}]*\}/s);
     expect(config).toMatch(/input:\s*\{[^}]*designer:[^}]*node-designer\.html[^}]*\}/s);
+    // The device-comparison page (src/compare/compareEntry.test.ts pins the rest).
+    expect(config).toMatch(/input:\s*\{[^}]*compare:[^}]*compare\/index\.html[^}]*\}/s);
   });
 
   it('the retired public/ copies stay deleted', () => {

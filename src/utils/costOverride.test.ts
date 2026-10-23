@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   parseCostFile, buildMergedComplexity, profileFromParsed, sanitizeCostMeta, mergedComplexityFileName,
   createManualProfile, buildProfileFile, buildProfileBundle, parseCostProfileBundle, profileFileName,
+  parseStoredCostProfiles,
 } from './costOverride';
 import {
   setCostOverrides, getCost, nodeCostPoints, sanitizeCostMap, computeReachableCost,
@@ -413,5 +414,54 @@ describe('hand-authored profiles (New / Edit / Export)', () => {
   it('a hand-authored table says so in the committed complexity.json', () => {
     const merged = buildMergedComplexity({ voronoi: 7 }, manual().meta);
     expect((merged.meta.calibratedFrom as { manual: boolean }).manual).toBe(true);
+  });
+});
+
+describe('parseStoredCostProfiles — fs:costProfiles is adversarial, one entry at a time', () => {
+  const good = { id: 'cp:pico', label: 'Pico 4', maxPoints: 200, maxTextureDim: 2048, costs: { perlin: 30 }, meta: { device: 'Pico 4' } };
+  const read = (list: unknown[]) => parseStoredCostProfiles(JSON.stringify(list));
+
+  it('one entry with an object where a number belongs no longer empties the list', () => {
+    // {"toString":1} makes Number() THROW; the whole-list try used to return []
+    // and the next profile write persisted that, deleting the good runs.
+    const evil = { toString: 1 };
+    for (const bad of [
+      { id: 'cp:bad', costs: { perlin: 1 }, maxPoints: evil },
+      { id: 'cp:bad', costs: { perlin: 1 }, maxTextureDim: evil },
+      { id: 'cp:bad', costs: { perlin: 1 }, meta: { count: evil } },
+    ]) {
+      const list = read([good, bad]);
+      expect(list.map((p) => p.id)).toContain('cp:pico');
+      expect(list.find((p) => p.id === 'cp:pico')!.maxPoints).toBe(200);
+    }
+  });
+
+  it('bounds the stored budget as a file claim is bounded — it is the point display\'s divisor', () => {
+    const budget = (maxPoints: unknown) => read([{ ...good, maxPoints }])[0].maxPoints;
+    expect(budget(150)).toBe(150);
+    expect(budget('150')).toBe(150);
+    expect(budget(1e-320)).toBe(1);          // printed every figure as 0 before
+    expect(budget(1e300)).toBe(1_000_000);
+    // Junk takes the default rather than a clamp to 1 (×200 every figure).
+    for (const junk of [0, -5, 'junk', null, true]) expect(budget(junk), String(junk)).toBe(200);
+  });
+
+  it('never throws on a malformed key', () => {
+    for (const raw of [null, '', '{', '{}', '"x"', '[1,2]', '[{"id":7}]']) {
+      expect(parseStoredCostProfiles(raw), String(raw)).toEqual([]);
+    }
+  });
+});
+
+describe('a bench file whose resolution is not a number', () => {
+  it('is read, flagged resolution-unknown, and does not throw', () => {
+    const raw = {
+      metadata: { resolution: { width: { toString: 1 }, height: 1024 } },
+      shaders: [{ id: 'ref_baseline', stats: { marginalPoints: 0 } }, { id: 'noise_perlin', stats: { marginalPoints: 5 } }],
+    };
+    const parsed = parseCostFile(JSON.stringify(raw));
+    expect(parsed?.costs).toEqual({ perlin: 5 });
+    expect(parsed?.meta.valid).toBe(false);
+    expect(parsed?.meta.reasons.some((r) => r.startsWith('resolution-unknown'))).toBe(true);
   });
 });

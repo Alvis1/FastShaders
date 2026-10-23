@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Substituted at build time by the fs-version-html plugin in vite.config.ts;
+         the host deploy scripts read it back from /compare/ to prove the page
+         went up with the build. -->
+    <meta name="version" content="%APP_VERSION%" />
+    <title>FastShaders · Device comparison</title>
+    <link rel="icon" type="image/svg+xml" href="/images/favicon-app.svg" />
+    <!--
+      VITE ENTRY (`compare` in vite.config.ts's rollupOptions.input), built to
+      dist/compare/index.html and served at the DIRECTORY url <base>compare/ —
+      https://fs.sferas.lv/compare/, /FastShaders/compare/ on GitHub Pages,
+      /fastshaders/compare/ on alvismisjuns.lv. A real entry, not a public/
+      copy: a public/compare/ would ship beside the built page and shadow it
+      (compareEntry.test.ts fails if one appears). The page reads the editor's
+      cost profiles but never imports the store (src/compare/main.tsx).
+
+      Theme and language are stamped before first paint, as in index.html, by
+      the same rules: dark when fs:codeEditorTheme is 'vs-dark', and lang 'lv'
+      only for the exact stored 'lv' (English is the default, the store's own
+      resolution). The inline background is tokens.css --bg-app, so the
+      pre-CSS frame matches.
+    -->
+    <script>
+      try {
+        var dark = localStorage.getItem('fs:codeEditorTheme') === 'vs-dark';
+        var el = document.documentElement;
+        el.setAttribute('data-theme', dark ? 'dark' : 'light');
+        el.style.background = dark ? '#33363b' : '#F5F5F5';
+        el.setAttribute('lang', localStorage.getItem('fs:lang') === 'lv' ? 'lv' : 'en');
+      } catch (e) { /* private mode / storage disabled — light, English */ }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/compare/main.tsx"></script>
+  </body>
+</html>

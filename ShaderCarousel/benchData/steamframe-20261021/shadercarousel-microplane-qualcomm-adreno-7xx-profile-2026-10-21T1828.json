@@ -1,0 +1,30 @@
+{
+  "meta": {
+    "schemaVersion": 2,
+    "kind": "complexity-patch",
+    "source": "shadercarousel-microplane-qualcomm-adreno-7xx-2026-10-21T1828.json",
+    "bench": "microplane",
+    "device": "qualcomm / adreno-7xx",
+    "generatedAt": "2026-10-21T18:28:37.912Z",
+    "valid": true,
+    "reasons": [],
+    "timingMethod": "gpu-timestamp",
+    "resolution": {
+      "width": 1024,
+      "height": 1024,
+      "label": "microplane"
+    },
+    "refPixels": 4557312,
+    "note": "Partial complexity.json patch. Drag onto FastShaders (the cost bar) to reprice these nodes live; it merges over the current table. Trust the numbers only when valid:true."
+  },
+  "costs": {
+    "perlin": 19,
+    "perlinVec3": 42,
+    "fbm": 72,
+    "fbmVec3": 134,
+    "cellNoise": 0,
+    "voronoi": 181,
+    "voronoiVec2": 187,
+    "voronoiVec3": 200
+  }
+}

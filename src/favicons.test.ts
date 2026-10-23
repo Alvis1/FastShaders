@@ -5,7 +5,7 @@
  * which nobody files a bug about:
  *
  *  1. **The reference form differs per page, and swapping them 404s.**
- *     index.html / node-designer.html are Vite entries, so a root-absolute
+ *     index.html / node-designer.html / compare/index.html are Vite entries, so a root-absolute
  *     `/images/favicon-app.svg` is the documented public-asset form and Vite prefixes the
  *     deploy base (`/FastShaders/`, `/fastshaders/`, or `/` on desktop).
  *     podest.html and ShaderCarousel/index.html are copied VERBATIM — nothing
@@ -42,6 +42,10 @@ const PAGES = [
   { file: 'index.html', href: '/images/favicon-app.svg', asset: 'public/images/favicon-app.svg' },
   { file: 'node-designer.html', href: '/images/favicon-app.svg', asset: 'public/images/favicon-app.svg' },
   { file: 'node-editor.html', href: '/images/favicon-app.svg', asset: 'public/images/favicon-app.svg' },
+  // A Vite entry one directory down (served at <base>compare/): root-absolute
+  // all the same — Vite prefixes the base whatever the depth, while a relative
+  // `images/…` would resolve to <base>compare/images/ and 404 on every host.
+  { file: 'compare/index.html', href: '/images/favicon-app.svg', asset: 'public/images/favicon-app.svg' },
   // Copied verbatim — must be relative. `images/` sits beside each of these
   // pages (public/images, ShaderCarousel/images), which is why each suite
   // keeps its OWN folder rather than sharing one: the carousel is copied as a

@@ -151,7 +151,7 @@ export function profileFromParsed(
 export function sanitizeCostMeta(m: unknown): CostOverrideMeta {
   const o = (m && typeof m === 'object' ? m : {}) as Record<string, unknown>;
   const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
-  const count = Number(o.count);
+  const count = plainNumber(o.count);
   return {
     source: str(o.source),
     device: str(o.device),
@@ -166,6 +166,54 @@ export function sanitizeCostMeta(m: unknown): CostOverrideMeta {
     // re-badge a hand-authored profile as a benchmark result.
     manual: o.manual === true,
   };
+}
+
+/**
+ * The profiles stored under `fs:costProfiles`, from the raw string — the ONE
+ * reader of that key: the store's boot and the compare page (src/compare),
+ * which lists this browser's profiles beside the built-in rows. Never throws.
+ */
+export function parseStoredCostProfiles(raw: string | null): CostProfile[] {
+  let parsed: unknown;
+  try {
+    if (!raw) return [];
+    // The shared deny-list reviver, like every other untrusted parse
+    // (fs:graph, fs:savedGroups). Belt and braces here — the rebuild below
+    // names every field it keeps and sanitizeCostMap whitelists keys against
+    // BASE_COSTS — but "this one site happens to be safe" is the reasoning
+    // safeJson.ts exists to stop each parse having to redo.
+    parsed = JSON.parse(raw, safeJsonReviver) as unknown;
+  } catch { return []; }
+  if (!Array.isArray(parsed)) return [];
+  const out: CostProfile[] = [];
+  for (const p of parsed) {
+    if (!p || typeof p !== 'object' || typeof (p as Record<string, unknown>).id !== 'string') continue;
+    // ONE entry at a time: a throw used to empty the whole list, and the next
+    // profile write (import, New, Delete) then persisted that empty list over
+    // the good measured runs. Nothing below coerces with Number() any more
+    // (plainNumber), so the catch is the second layer, not the first.
+    try {
+      const e = p as Record<string, unknown>;
+      // Adversarial: a tampered fs:costProfiles must not inject unknown keys,
+      // junk budgets, or a non-array meta.reasons (which would crash the
+      // CostBar's reasons.join). sanitizeCostMap + sanitizeCostMeta + the
+      // clamps are the full trust boundary for a persisted profile. The budget
+      // is the point display's DIVISOR (utils/budgetPoints.ts), so it takes
+      // the bounds a file's claimed budget takes (readIdentity): a stored
+      // 1e-320 printed every figure as 0.
+      const costs = sanitizeCostMap(e.costs);
+      if (Object.keys(costs).length === 0) continue;
+      out.push({
+        id: e.id as string,
+        label: typeof e.label === 'string' ? e.label : 'measured',
+        maxPoints: storedPositive(e.maxPoints, MIN_BUDGET, MAX_BUDGET, 200),
+        maxTextureDim: storedPositive(e.maxTextureDim, MIN_TEXTURE_DIM, MAX_TEXTURE_DIM, 2048),
+        costs,
+        meta: sanitizeCostMeta(e.meta),
+      });
+    } catch { /* drop this entry, keep the rest */ }
+  }
+  return out;
 }
 
 /**
@@ -208,8 +256,23 @@ function cleanLabel(v: unknown): string | null {
   return s || null;
 }
 
+/** A number out of untrusted JSON: a number, or a non-blank numeric string;
+ *  anything else is NaN. Never `Number(v)` on an object — ToPrimitive THROWS
+ *  on `{"toString":1}`, and one such field emptied every stored profile. */
+function plainNumber(v: unknown): number {
+  return typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
+}
+
+/** A stored positive figure: clamped like a file's claim when it is one, the
+ *  `fallback` when it is not (0, negative, junk) — a junk budget clamped up to
+ *  1 would print every figure 200× too large, so it takes the default. */
+function storedPositive(v: unknown, min: number, max: number, fallback: number): number {
+  const n = plainNumber(v);
+  return Number.isFinite(n) && n > 0 ? Math.min(Math.max(n, min), max) : fallback;
+}
+
 function clampedNumber(v: unknown, min: number, max: number): number | null {
-  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
+  const n = plainNumber(v);
   if (!Number.isFinite(n)) return null;
   return Math.min(Math.max(n, min), max);
 }
@@ -313,7 +376,7 @@ function parseCostObject(obj: unknown, fileName?: string): ParsedCostFile | null
     if (!sawBaseline) reasons.push('baseline-missing: no ref_baseline in this run — marginal cost cannot be derived');
     if (md.vsyncClamping) reasons.push('vsync-clamped: frametimes pinned to the display refresh — values reflect display cadence, not shader cost');
     const res = (md.resolution && typeof md.resolution === 'object' ? md.resolution : null) as { width?: unknown; height?: unknown } | null;
-    if (!(Number(res?.width) > 0 && Number(res?.height) > 0)) reasons.push('resolution-unknown: marginal ms could not be normalized to the reference pixel count');
+    if (!(plainNumber(res?.width) > 0 && plainNumber(res?.height) > 0)) reasons.push('resolution-unknown: marginal ms could not be normalized to the reference pixel count');
     if (md.timingMethod === 'raf-delta') reasons.push('raf-delta timing: refresh-quantized frame deltas resolve budget fit, not per-node cost');
     if (insufficient.length) reasons.push(`insufficient-data: ${insufficient.join(', ')} had <2 samples`);
     md = { ...md, valid: reasons.length === 0, reasons };

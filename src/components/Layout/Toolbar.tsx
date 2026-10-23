@@ -141,6 +141,7 @@ const ALLOW_MANY_MATERIALS_HINT =
 const OPTIONAL_CATEGORY_HINTS: Readonly<Record<OptionalCategory, string>> = {
   texture: 'Show the Textures tab in the asset browser, and its textures in search.',
   sdf: 'Show the SDF tab, and its nodes in the Add-node menu and search.',
+  presets2: 'Show the Presets 2 tab (the larger original presets), and its presets in search.',
 };
 
 /**
@@ -1270,7 +1271,7 @@ export function Toolbar() {
             />
             <span className="toolbar__prefs-label">{t('Trackpad scrolling', language)}</span>
           </label>
-          {/* The optional palette categories (Textures, Distance fields) — OFF
+          {/* The optional palette categories (Textures, Distance fields, Presets 2) — OFF
               by default, on for good once ticked. Labelled with the category's
               own tab name (formatCategoryLabel, Latvian-aware), so the switch
               and the tab it summons read as one thing. */}

@@ -22,7 +22,7 @@
  * scattered, unwired add.
  */
 
-import type { AppEdge, AppNode } from '@/types';
+import type { AppEdge, AppNode, MaterialSettings } from '@/types';
 import { activeSink } from '@/utils/sdfPartition';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { absoluteNodePosition, groupFrameSize, isCollapsedMember, measuredNodeSize } from '@/utils/groupFrame';
@@ -226,4 +226,34 @@ export function exposeWiredChannels(output: AppNode, handles: readonly string[])
   const missing = handles.filter((h, i) => !current.includes(h) && handles.indexOf(h) === i);
   if (missing.length === 0) return output;
   return { ...output, data: { ...output.data, exposedPorts: [...current, ...missing] } } as AppNode;
+}
+
+/** The Output's material settings, or `{}` when the field is absent or not a
+ *  plain object (node data is adversarial — a restored graph may hold junk). */
+function materialSettingsOf(output: AppNode): MaterialSettings {
+  const s = (output.data as { materialSettings?: unknown }).materialSettings;
+  return s && typeof s === 'object' && !Array.isArray(s) ? (s as MaterialSettings) : {};
+}
+
+/**
+ * The Output with Transparent switched ON when a press lands a wire on its
+ * Opacity socket and nothing reads Opacity yet — a FRESH node — or the same
+ * node otherwise.
+ *
+ * Opacity is read only by a transparent or alpha-clipped material, so a wire
+ * into an opaque one changes nothing on screen: the Ghost recipe, pressed, drew
+ * a solid sphere. The Output menu pairs the two the other way round (ticking
+ * Transparent exposes Opacity, ShaderSettingsMenu), so a press that wires
+ * Opacity ticks Transparent. An Alpha Clip already set (`alphaTest > 0`) reads
+ * Opacity too and is left as it is.
+ */
+export function makeOpacityReadable(output: AppNode, handles: readonly string[]): AppNode {
+  if (!handles.includes('opacity')) return output;
+  const settings = materialSettingsOf(output);
+  const clipped = typeof settings.alphaTest === 'number' && settings.alphaTest > 0;
+  if (settings.transparent === true || clipped) return output;
+  return {
+    ...output,
+    data: { ...output.data, materialSettings: { ...settings, transparent: true } },
+  } as AppNode;
 }

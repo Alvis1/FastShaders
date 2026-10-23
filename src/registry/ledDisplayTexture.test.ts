@@ -379,9 +379,11 @@ describe('LED Display texture', () => {
   });
 
   it('costs what its tile says, and the tile counts its shader nodes', () => {
-    // BINARY arithmetic only. The badge sums `data.cost`; the CostBar sums
-    // nodeCostPoints, which prices a chain base x (operands - 1) — so one
-    // three-operand Multiply would make the tile print less than the graph costs.
+    // BINARY arithmetic only. The badge prices each member as its `data.cost`
+    // stamp was taken (assetCostPoints: a variadic fold at its base, once); the
+    // CostBar sums nodeCostPoints, which prices a chain base x (operands - 1) —
+    // so one three-operand Multiply would make the tile print less than the
+    // graph costs.
     const { nodes, edges, totalCost } = led();
     const bar = members(nodes).reduce((sum, n) => sum + nodeCostPoints(n, edges), 0);
     expect(totalCost).toBe(bar);

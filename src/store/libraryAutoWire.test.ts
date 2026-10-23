@@ -70,6 +70,46 @@ describe('a press with a plain Output on the canvas', () => {
     expect((out.data as { exposedPorts?: string[] }).exposedPorts).toContain('emissive');
   });
 
+  it('the Ghost recipe brings colour AND opacity, and exposes opacity', async () => {
+    const placed = await useAppStore.getState().instantiateBuiltinPreset('recipe-ghost', SCATTER, 'top-left', WIRE);
+    expect(placed?.wired).toBe(2);
+    expect(intoOutput().map((e) => e.targetHandle).sort()).toEqual(['color', 'opacity']);
+    const out = useAppStore.getState().nodes.find((n) => n.id === 'out')!;
+    expect((out.data as { exposedPorts?: string[] }).exposedPorts).toContain('opacity');
+    // Opacity is fed by the Fresnel's FACING socket, not its first output.
+    const opacity = intoOutput().find((e) => e.targetHandle === 'opacity')!;
+    expect(opacity.sourceHandle).toBe('facing');
+    // …and is READ: an opaque material ignores Opacity, so the press ticks
+    // Transparent too — in the same history entry, which one undo takes back.
+    expect((out.data as { materialSettings?: { transparent?: boolean } }).materialSettings?.transparent).toBe(true);
+    expect(useAppStore.getState().past.length).toBe(1);
+    useAppStore.getState().undo();
+    const restored = useAppStore.getState().nodes.find((n) => n.id === 'out')!;
+    expect((restored.data as { materialSettings?: unknown }).materialSettings).toBeUndefined();
+  });
+
+  it('a wire into Opacity keeps an Alpha Clip the Output already reads it through', async () => {
+    useAppStore.setState({
+      nodes: [{ ...lone(), data: { ...lone().data, materialSettings: { alphaTest: 0.5 } } } as AppNode],
+      edges: [],
+    });
+    await useAppStore.getState().instantiateBuiltinPreset('recipe-ghost', SCATTER, 'top-left', WIRE);
+    const out = useAppStore.getState().nodes.find((n) => n.id === 'out')!;
+    expect((out.data as { materialSettings?: unknown }).materialSettings).toEqual({ alphaTest: 0.5 });
+  });
+
+  it('a preset that wires no Opacity leaves the material settings alone', async () => {
+    await useAppStore.getState().instantiateBuiltinPreset('teleport-beam', SCATTER, 'top-left', WIRE);
+    const out = useAppStore.getState().nodes.find((n) => n.id === 'out')!;
+    expect((out.data as { materialSettings?: unknown }).materialSettings).toBeUndefined();
+  });
+
+  it('the Holes recipe wires Discard AND a colour — Discard alone draws the red sentinel', async () => {
+    const placed = await useAppStore.getState().instantiateBuiltinPreset('recipe-holes', SCATTER, 'top-left', WIRE);
+    expect(placed?.wired).toBe(2);
+    expect(intoOutput().map((e) => e.targetHandle).sort()).toEqual(['color', 'discard']);
+  });
+
   it('a texture wires too', async () => {
     const { getBuiltinTextures } = await import('@/registry/builtinTextures');
     const tex = getBuiltinTextures()[0];

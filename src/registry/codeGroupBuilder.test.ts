@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildCodeGroup, type CodeGroupEntry } from './codeGroupBuilder';
 import { graphToCode } from '@/engine/graphToCode';
-import type { AppNode } from '@/types';
+import type { AppNode, AppEdge } from '@/types';
 
 /**
  * Geometry + inertness of the optional explainer note that ships inside a
@@ -138,6 +138,76 @@ describe('buildCodeGroup — explainer note', () => {
       const note = noted.nodes.find((n) => n.type === 'note')!;
       expect(e.source).not.toBe(note.id);
       expect(e.target).not.toBe(note.id);
+    }
+  });
+});
+
+describe('built-in assets land with as few crossing wires as their layouts allow', () => {
+  // dagre knows nothing about SOCKETS: the Ghost recipe stacked its Opacity
+  // feeder above its Color one, Mix Two Colors put the Fresnel feeding Mix's
+  // bottom socket above the Colors feeding A and B, and the wires crossed
+  // (owner, 2026-10-20). buildCodeGroup now also tries the socket-ordered
+  // layout and keeps whichever crosses less.
+  const load = async () => {
+    const { getBuiltinPresets, isRecipe } = await import('./builtinPresets');
+    const { getBuiltinTextures } = await import('./builtinTextures');
+    const { NODE_REGISTRY } = await import('./nodeRegistry');
+    const { codeToGraph } = await import('@/engine/codeToGraph');
+    const { autoLayout, wireInversions } = await import('@/engine/layoutEngine');
+    const rankFor = (nodes: AppNode[], outputIds: Set<string>) => {
+      const rowsOf = (type: string) => new Map((NODE_REGISTRY.get(type)?.inputs ?? []).map((p, i) => [p.id, i] as const));
+      const rows = new Map<string, Map<string, number>>();
+      for (const n of nodes) rows.set(n.id, rowsOf(String(n.data.registryType)));
+      for (const id of outputIds) rows.set(id, rowsOf('output'));
+      return (t: string, h?: string | null) => rows.get(t)?.get(h ?? '') ?? 99;
+    };
+    /** Crossings as SHIPPED, and as the plain (socket-blind) layout would have them. */
+    const crossings = (asset: { code: string; nodes: AppNode[]; edges: AppEdge[]; outputEdges: AppEdge[] }) => {
+      // Shipped: the asset's OWN members, wires and Output wires — a fresh
+      // parse mints new ids, so it cannot be compared with these positions.
+      const members = asset.nodes.filter((n) => n.type !== 'group' && n.type !== 'note');
+      const shipped = wireInversions(
+        members,
+        [...asset.edges, ...asset.outputEdges],
+        rankFor(members, new Set(asset.outputEdges.map((e) => e.target))),
+      );
+      // Plain: a fresh parse laid out socket-blind, measured on ITS ids.
+      const raw = codeToGraph(asset.code);
+      const outputIds = new Set(raw.nodes.filter((n) => n.data.registryType === 'output').map((n) => n.id));
+      const parsed = raw.nodes.filter((n) => !outputIds.has(n.id));
+      const ids = new Set(parsed.map((n) => n.id));
+      const inner = raw.edges.filter((e) => ids.has(e.source) && ids.has(e.target));
+      const toOut = raw.edges.filter((e) => ids.has(e.source) && outputIds.has(e.target));
+      const plain = wireInversions(
+        autoLayout(parsed, inner, { nodesep: 10, ranksep: 30 }),
+        [...inner, ...toOut],
+        rankFor(parsed, outputIds),
+      );
+      return { shipped, plain };
+    };
+    return { assets: [...getBuiltinPresets(), ...getBuiltinTextures()], isRecipe, crossings };
+  };
+
+  it('a beginner recipe crosses NO wire, into the Output or into any node', async () => {
+    const { assets, isRecipe, crossings } = await load();
+    const recipes = assets.filter((a) => 'tier' in a && isRecipe(a as { tier: number }));
+    expect(recipes.length).toBeGreaterThan(10);
+    for (const r of recipes) expect(crossings(r).shipped, r.id).toBe(0);
+    // Teeth: the count does see crossings — Mix Two Colors laid out
+    // socket-blind crosses two wires into its Mix.
+    expect(crossings(recipes.find((r) => r.id === 'recipe-mix')!).plain).toBe(2);
+  });
+
+  it('every other built-in keeps its socket-blind layout — the wired node stays on the top row', async () => {
+    // The ordering is opt-in for the recipes only: it moves the wired node off
+    // the top row, which a press's top-right reveal and the intro's budget
+    // slide (Gas Giant) rely on. Presets 2 and the Textures are untouched.
+    const { assets, isRecipe, crossings } = await load();
+    const others = assets.filter((a) => !('tier' in a) || !isRecipe(a as { tier: number }));
+    expect(others.length).toBeGreaterThan(30);
+    for (const a of others) {
+      const { shipped, plain } = crossings(a);
+      expect(shipped, a.id).toBe(plain);
     }
   });
 });

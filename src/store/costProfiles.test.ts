@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { useAppStore, VR_HEADSETS, resolveDeviceBudget, resolveDeviceTextureDim } from './useAppStore';
 import { getCost, setCostOverrides } from '@/utils/nodeCost';
+import { setDeviceBudget } from '@/utils/budgetPoints';
 import { parseCostFile, buildProfileFile } from '@/utils/costOverride';
 import complexityData from '@/registry/complexity.json';
 import { makeNode, makeEdge, stubLocalStorage } from '@/test-utils';
@@ -15,7 +16,6 @@ function seedGraph() {
     nodes: [makeNode('out', 'output'), makeNode('v', 'voronoi')],
     edges: [makeEdge('v', 'out', 'out', 'color')],
     costProfiles: [],
-    costBudgetOverrides: Object.create(null) as Record<string, number>,
     selectedHeadsetId: 'quest3',
     totalCost: 0,
   });
@@ -29,6 +29,10 @@ describe('cost profiles (store lifecycle)', () => {
 
   afterEach(() => {
     setCostOverrides(null);   // reset the nodeCost module singleton between tests
+    // …and the point display's divisor: selecting a profile that claims its own
+    // budget (111 below) set it, and isolate:false hands it to the next file in
+    // this worker, whose cards would lay out at that budget's scale.
+    setDeviceBudget(VR_HEADSETS[0].maxPoints);
     vi.unstubAllGlobals();
   });
 
@@ -198,7 +202,8 @@ describe('cost profiles (store lifecycle)', () => {
     // A budget nobody measured certifies shaders for hardware nobody ran. A
     // device earns a row by being benchmarked — run ShaderCarousel on it and
     // import the result JSON — so this list only ever grows with evidence.
-    expect(VR_HEADSETS.map((h) => h.id)).toEqual(['quest3']);
+    // Steam Frame joined 2026-10-21 on its own run (steamFrameHeadset.test.ts).
+    expect(VR_HEADSETS.map((h) => h.id)).toEqual(['quest3', 'steamframe']);
     expect(VR_HEADSETS[0].maxPoints).toBe(200); // the quest3-20260723 calibration basis
   });
 

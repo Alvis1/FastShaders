@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useAppStore, VR_HEADSETS } from '@/store/useAppStore';
+import { useAppStore, resolveDeviceBudget } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { countMeshVertices } from '@/utils/previewMesh';
 import {
@@ -73,7 +73,9 @@ export function collectEnv(): Omit<FeedbackEnv, 'uiLanguage'> {
  */
 export function collectProject(): FeedbackProject {
   const s = useAppStore.getState();
-  const headset = VR_HEADSETS.find((h) => h.id === s.selectedHeadsetId) ?? VR_HEADSETS[0];
+  // The cost bar's own resolver: a selected cost profile reports its own name
+  // and budget (a VR_HEADSETS-only lookup fell back to the Quest 3 for one).
+  const headset = resolveDeviceBudget(s.selectedHeadsetId, s.costProfiles);
   const mesh = s.previewMesh;
   // The preview geometry lives in localStorage (usePersistedState in
   // ShaderPreview), not the store — read the persisted value, which is the

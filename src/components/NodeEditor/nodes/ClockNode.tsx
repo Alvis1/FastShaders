@@ -5,7 +5,8 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { valueNum } from '@/utils/valueCoerce';
 import { useAppStore } from '@/store/useAppStore';
 import { CAT_HEX } from '@/utils/colorUtils';
-import { useCostChrome } from './useCostChrome';
+import { Points } from '@/components/Points/Points';
+import { useCostChrome, useLiveNodeCost, useRemeasureOnScale } from './useCostChrome';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { makeConnectionRevealSelector, REVEAL_TEMP_OPACITY } from './connectionReveal';
@@ -47,7 +48,12 @@ export const ClockNode = memo(function ClockNode({
   const language = useAppStore((s) => s.language);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const catHex = CAT_HEX[def.category as NodeCategory] ?? CAT_HEX.unknown;
-  const { costColor, headerTextColor, costTextColor, costScale } = useCostChrome(data.cost);
+  // Priced LIVE under the selected device's table, never the creation-time
+  // `data.cost` snapshot (useLiveNodeCost says why). Time is 0 in the shipped
+  // table, so the badge shows only under a profile that prices it.
+  const cost = useLiveNodeCost(id, data);
+  const { costColor, headerTextColor, costTextColor, costScale, points } = useCostChrome(cost);
+  useRemeasureOnScale(id, costScale);
 
   // Speed multiplier (Node Settings → speed). Adversarial input: a missing key,
   // a string, NaN or ±Infinity must all read as 1x — and with a phase
@@ -156,7 +162,7 @@ export const ClockNode = memo(function ClockNode({
       className={`node-base clock-node ${selected ? 'node-base--selected' : ''}`}
       style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid ${catHex}`, transform: `scale(${costScale})`, transformOrigin: 'top left' } as CSSProperties}
     >
-      {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}
+      {cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}><Points value={points} /></span>}
 
       <div className="node-base__header" style={{ background: costColor }} {...headerTip}>
         <NodeTitle text={varName ?? data.label} style={{ color: headerTextColor }} bare={headerTip !== null} />

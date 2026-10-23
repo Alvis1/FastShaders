@@ -5,8 +5,8 @@ FastShaders is a visual 3D graphics editor for web-based virtual reality content
 Main features:
 
 - **Nodes and code in sync**: build a shader as a node graph or write it as [TSL (Three.js Shading Language)](https://github.com/mrdoob/three.js/wiki/Three.js-Shading-Language). The code follows every graph edit, and **Apply** turns edited code back into nodes.
-- **Performance cost while you build**: each node's GPU cost is measured on the target VR headset, and the editor shows the shader's total against that device's budget.
-- **Visual-effect presets** to start from or take apart, plus reconstructed TSL textures and distance-field (SDF) nodes. Switch the Textures and SDF tabs on from the toolbar's right-click menu.
+- **Performance cost while you build**: each node's GPU cost is measured on the target VR headset. Every device's budget reads as 100 points, so a node's points are its share of that device's frame, and the editor shows the shader's total out of 100.
+- **Beginner recipes** — one idea in one to five nodes, wired into the Output with one click — and the larger **visual-effect presets** (Presets 2) to start from or take apart, plus reconstructed TSL textures and distance-field (SDF) nodes. Switch the Presets 2, Textures and SDF tabs on from the toolbar's right-click menu.
 - **Your own material**: images, 3D models (`.obj`, `.glb`, `.gltf`), Gaussian splats, colour palettes, microphone or desktop audio, and CSV data.
 - **Export for the web**: a `.js` module for A-Frame or plain Three.js, a `.zip` with its images and model, or one `.glb` that holds the model, its textures and the shader.
 - **Browser or desktop**: runs in the browser, or offline as a desktop app for Windows and macOS. The interface is in English and Latvian.
@@ -29,6 +29,11 @@ Every export carries the editor project inside it, so dragging an exported file 
 - **[ShaderCarousel](ShaderCarousel/README.md)** — the benchmark suite that
   measures per-node GPU cost on the target headset, so the editor's cost bar
   shows measured numbers rather than guesses.
+- **[Device comparison](https://alvismisjuns.lv/fastshaders/compare/)** — every
+  node's points on the devices you pick, side by side, each column with its
+  difference from the first. It is served at `compare/` beside the editor (the
+  cost bar's device menu opens it: **Compare devices…**) and also lists the
+  device profiles stored in your browser.
 - **[a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader#readme)** — the A-Frame
   component that runs an exported shader on any entity (a git submodule, and the
   source of the scripts below, including the Gaussian-splat runtime).

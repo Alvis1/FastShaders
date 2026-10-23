@@ -80,8 +80,12 @@ export function CostProfileModal({
 
         {mode === 'new' ? (
           <>
+            {/* The profile also inherits the selected device's budget —
+                `maxPoints`, kept with it and written into its file, what its
+                points are divided by — but on screen every budget reads 100
+                (utils/budgetPoints.ts), so the dialog never mentions one. */}
             <div className="csv-import-modal__message">
-              {t('Starts from the shipped node prices and this device’s budget, so nothing changes until you edit it. Use “Edit profile…” to download it as JSON, type your own numbers, and drop the file back here.', language)}
+              {t('Starts from the shipped node prices, so nothing changes until you edit it. Use “Edit profile…” to download it as JSON, type your own numbers, and drop the file back here.', language)}
             </div>
             <label className="cost-profile-modal__field">
               <span>{t('Profile name', language)}</span>

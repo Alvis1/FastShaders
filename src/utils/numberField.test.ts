@@ -14,7 +14,8 @@ import {
 /**
  * The ONE text rule of every number field (utils/numberField.ts). The defect it
  * closes: only the LUT editors' field had moved off `<input type="number">`, so
- * the settings menus, a node's edit box, the uniform bounds and the point cap
+ * the settings menus, a node's edit box, the uniform bounds and the cost bar's
+ * point cap (that field was retired 2026-10-23 with the fixed 100-point budget)
  * still drew `0,5958` on a Latvian machine and read typed text the browser's
  * way. Every field now shows a dot and takes a dot or a comma through these.
  */

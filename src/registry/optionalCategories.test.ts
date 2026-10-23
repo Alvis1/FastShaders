@@ -22,8 +22,8 @@ import type { NodeCategory } from '@/types';
 import { stubLocalStorage } from '@/test-utils';
 
 /**
- * The palette's optional categories — Textures and Distance fields, OFF by
- * default, switched on from the toolbar's right-click list.
+ * The palette's optional categories — Textures, Distance fields and Presets 2,
+ * OFF by default, switched on from the toolbar's right-click list.
  *
  * Nothing here fails loudly. A surface that forgets to pass the hidden set
  * still renders a perfectly good palette (with a family the user switched off
@@ -47,6 +47,9 @@ function sourceFiles(dir: string): string[] {
 }
 
 const hide = (...ids: NodeCategory[]) => new Set<NodeCategory>(ids);
+/** The defaults (every category off) with the named ones switched. */
+const flags = (on: Partial<Record<keyof typeof DEFAULT_OPTIONAL_CATEGORIES, boolean>>) =>
+  ({ ...DEFAULT_OPTIONAL_CATEGORIES, ...on });
 
 describe('the flags', () => {
   it('are OFF by default, for every optional category', () => {
@@ -86,24 +89,28 @@ describe('the flags', () => {
 
   it('turn into the set of categories to WITHHOLD', () => {
     expect([...hiddenOptionalCategories(DEFAULT_OPTIONAL_CATEGORIES)].sort()).toEqual([...OPTIONAL_CATEGORIES].sort());
-    expect(hiddenOptionalCategories({ texture: true, sdf: true }).size).toBe(0);
-    expect([...hiddenOptionalCategories({ texture: true, sdf: false })]).toEqual(['sdf']);
+    expect(hiddenOptionalCategories(flags({ texture: true, sdf: true, presets2: true })).size).toBe(0);
+    expect([...hiddenOptionalCategories(flags({ texture: true, presets2: true }))]).toEqual(['sdf']);
   });
 
   it('decide the tab strip by value: an optional tab is drawn only while on', () => {
-    const tabs = [{ id: 'presets' }, { id: 'texture' }, { id: 'noise' }, { id: 'sdf' }, { id: 'output' }];
+    const tabs = [{ id: 'presets' }, { id: 'presets2' }, { id: 'texture' }, { id: 'noise' }, { id: 'sdf' }, { id: 'output' }];
     expect(visibleTabs(tabs, DEFAULT_OPTIONAL_CATEGORIES).map((t) => t.id)).toEqual(['presets', 'noise', 'output']);
-    expect(visibleTabs(tabs, { texture: true, sdf: false }).map((t) => t.id)).toEqual(['presets', 'texture', 'noise', 'output']);
-    expect(visibleTabs(tabs, { texture: true, sdf: true })).toEqual(tabs);
+    expect(visibleTabs(tabs, flags({ texture: true })).map((t) => t.id)).toEqual(['presets', 'texture', 'noise', 'output']);
+    expect(visibleTabs(tabs, flags({ texture: true, sdf: true, presets2: true }))).toEqual(tabs);
     // Order and the non-optional tabs are untouched — it is a filter, never a sort.
-    expect(visibleTabs(tabs, { texture: false, sdf: true }).map((t) => t.id)).toEqual(['presets', 'noise', 'sdf', 'output']);
+    expect(visibleTabs(tabs, flags({ sdf: true })).map((t) => t.id)).toEqual(['presets', 'noise', 'sdf', 'output']);
+    // Presets 2 (the original library) sits right after the beginner Presets tab.
+    expect(visibleTabs(tabs, flags({ presets2: true })).map((t) => t.id)).toEqual(['presets', 'presets2', 'noise', 'output']);
   });
 
   it('derive the shown tab: a stored optional tab falls back to All only while off', () => {
     expect(effectiveTab('sdf', DEFAULT_OPTIONAL_CATEGORIES)).toBe('all');
     expect(effectiveTab('texture', DEFAULT_OPTIONAL_CATEGORIES)).toBe('all');
-    expect(effectiveTab('sdf', { texture: false, sdf: true })).toBe('sdf');
-    expect(effectiveTab('texture', { texture: true, sdf: false })).toBe('texture');
+    expect(effectiveTab('presets2', DEFAULT_OPTIONAL_CATEGORIES)).toBe('all');
+    expect(effectiveTab('sdf', flags({ sdf: true }))).toBe('sdf');
+    expect(effectiveTab('texture', flags({ texture: true }))).toBe('texture');
+    expect(effectiveTab('presets2', flags({ presets2: true }))).toBe('presets2');
     // Every other tab is passed through whatever the switches say.
     for (const tab of ['all', 'saved', 'presets', 'noise', 'math', 'output']) {
       expect(effectiveTab(tab, DEFAULT_OPTIONAL_CATEGORIES), tab).toBe(tab);
@@ -324,6 +331,10 @@ describe('every add surface passes the hidden set', () => {
     // has its own gate, above the lazy ~84 ms build.
     const memo = src.slice(src.indexOf('const filteredTextures'));
     expect(memo.slice(0, 400)).toMatch(/if \(!optional\.texture\) return \[\];/);
+    // The same gate for the original presets: switched off, a search for
+    // "dissolve" must not hand the Presets 2 tiles back on another tab.
+    const presets2 = src.slice(src.indexOf('const filteredPresets2'));
+    expect(presets2.slice(0, 400)).toMatch(/if \(!optional\.presets2\) return \[\];/);
   });
 
   it('the Add-node menu narrows its browse list, its search AND its recents', () => {

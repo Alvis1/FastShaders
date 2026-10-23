@@ -57,9 +57,11 @@ import { nodeCostPoints, computeReachableCost, imageNodeCost, getCost, sinkCosts
 // reaching them through it re-entered a half-initialised module and threw a
 // TDZ ReferenceError depending on which module the entry point hit first.
 // costTable.ts imports nothing and therefore can never be caught mid-init.
-import { setCostOverrides, sanitizeCostMap } from '@/utils/costTable';
+import { setCostOverrides } from '@/utils/costTable';
+import { setDeviceBudget } from '@/utils/budgetPoints';
+import { VR_HEADSETS, deviceCostOverrides, type VRHeadset } from '@/registry/vrHeadsets';
 import {
-  type ParsedCostFile, type CostProfile, profileFromParsed, sanitizeCostMeta, createManualProfile,
+  type ParsedCostFile, type CostProfile, profileFromParsed, createManualProfile, parseStoredCostProfiles,
 } from '@/utils/costOverride';
 import { makeDataNodeData, sanitizeDataNodes } from '@/utils/dataNode';
 import { sanitizeDataRangeNodes } from '@/utils/dataRangeFormula';
@@ -100,6 +102,7 @@ import { stashImageOrigin } from '@/utils/imageOriginCache';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import {
   exposeWiredChannels,
+  makeOpacityReadable,
   freeFrameSpot,
   libraryWireEdges,
   libraryWireOutput,
@@ -422,8 +425,9 @@ function cloneGroupSnapshot(
  *
  * `wire` (a PRESS while the graph has a plain Output, utils/libraryAutoWire.ts)
  * wires the asset's own Output channels into every socket that is still EMPTY
- * — never replacing a wire — exposing any it lands on, in the same history
- * entry, and puts the frame BESIDE the Output. When none of the asset's
+ * — never replacing a wire — exposing any it lands on (and switching
+ * Transparent on for a wire into Opacity, `makeOpacityReadable`), in the same
+ * history entry, and puts the frame BESIDE the Output. When none of the asset's
  * sockets is free, `position`/`anchor` (the press's scattered point, or the
  * drop point) is used and nothing is wired. Either way the frame takes the
  * nearest spot from there that lands on nothing drawn (`freeFrameSpot`).
@@ -463,7 +467,7 @@ function placeLibraryGroup(
     nodes: [
       group,
       ...(target && wires.length > 0
-        ? s.nodes.map((n) => (n.id === target.id ? exposeWiredChannels(n, handles) : n))
+        ? s.nodes.map((n) => (n.id === target.id ? makeOpacityReadable(exposeWiredChannels(n, handles), handles) : n))
         : s.nodes),
       ...members,
     ] as AppNode[],
@@ -788,92 +792,18 @@ function persistCostProfiles(list: CostProfile[]): void {
 
 function loadCostProfiles(): CostProfile[] {
   try {
-    const raw = localStorage.getItem('fs:costProfiles');
-    if (!raw) return [];
-    // The shared deny-list reviver, like every other untrusted parse in this
-    // file (fs:graph, fs:savedGroups). Belt and braces here — the rebuild below
-    // names every field it keeps and sanitizeCostMap whitelists keys against
-    // BASE_COSTS — but "this one site happens to be safe" is the reasoning
-    // safeJson.ts exists to stop each parse having to redo.
-    const parsed = JSON.parse(raw, safeJsonReviver) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((p): p is Record<string, unknown> => !!p && typeof p === 'object' && typeof (p as Record<string, unknown>).id === 'string')
-      .map((p) => {
-        // Adversarial: a tampered fs:costProfiles must not inject unknown keys,
-        // junk budgets, or a non-array meta.reasons (which would crash the
-        // CostBar's reasons.join). sanitizeCostMap + sanitizeCostMeta + the
-        // Number guards are the full trust boundary for a persisted profile.
-        const costs = sanitizeCostMap((p as { costs?: unknown }).costs);
-        const maxPoints = Number((p as { maxPoints?: unknown }).maxPoints);
-        const maxTextureDim = Number((p as { maxTextureDim?: unknown }).maxTextureDim);
-        return {
-          id: String((p as { id: string }).id),
-          label: typeof (p as { label?: unknown }).label === 'string' ? String((p as { label: string }).label) : 'measured',
-          maxPoints: Number.isFinite(maxPoints) && maxPoints > 0 ? maxPoints : 200,
-          maxTextureDim: Number.isFinite(maxTextureDim) && maxTextureDim > 0 ? maxTextureDim : 2048,
-          costs,
-          meta: sanitizeCostMeta((p as { meta?: unknown }).meta),
-        } as CostProfile;
-      })
-      .filter((p) => Object.keys(p.costs).length > 0);
+    return parseStoredCostProfiles(localStorage.getItem('fs:costProfiles'));
   } catch { return []; }
-}
-/**
- * User-set point caps, keyed by device id (a VR_HEADSETS id OR a cost-profile
- * id). The CostBar's right-click editor is the ONE writer.
- *
- * Why a separate map rather than editing the device: VR_HEADSETS is a module
- * constant carrying a MEASURED budget (see its comment — an unmeasured budget
- * certifies shaders for hardware nobody ran), and a profile's `maxPoints` is
- * part of the file it was imported from, which the download → edit → drop-back
- * loop round-trips byte-for-byte. An override map leaves both intact, survives
- * a profile re-import, and makes Reset mean exactly "forget my number" with
- * the device's own budget still underneath it.
- */
-const MAX_BUDGET_ENTRIES = 64;
-const MAX_BUDGET_POINTS = 1000000;
-
-function persistCostBudgets(map: Record<string, number>): void {
-  try { localStorage.setItem('fs:costBudgets', JSON.stringify(map)); } catch { /* quota */ }
-}
-
-/**
- * Null-prototype BY CONSTRUCTION: the keys are device ids out of localStorage,
- * which anything at this origin can write, and a plain object would resolve
- * `__proto__` / `constructor` / `toString` to inherited values — the
- * Record-vs-Map trap this codebase documents for every other externally-keyed
- * map. Reads are plain property access, never `in`.
- */
-function loadCostBudgets(): Record<string, number> {
-  const out = Object.create(null) as Record<string, number>;
-  try {
-    const raw = localStorage.getItem('fs:costBudgets');
-    if (!raw) return out;
-    // Same reviver as every other untrusted parse here; the null-prototype
-    // target above is the control that actually matters, this is the second
-    // layer. No legitimate device id is `__proto__` / `constructor`.
-    const parsed = JSON.parse(raw, safeJsonReviver) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return out;
-    let n = 0;
-    for (const [id, v] of Object.entries(parsed as Record<string, unknown>)) {
-      if (n >= MAX_BUDGET_ENTRIES) break;
-      if (!id || id.length > 200) continue;
-      const points = Number(v);
-      if (!Number.isFinite(points) || points < 1 || points > MAX_BUDGET_POINTS) continue;
-      out[id] = Math.round(points);
-      n++;
-    }
-  } catch { /* corrupt data */ }
-  return out;
 }
 
 const bootCostProfiles = loadCostProfiles();
-const bootCostBudgets = loadCostBudgets();
 const bootSelectedId = loadString('fs:headsetId', 'quest3');
-// Apply the active profile's measured costs to the nodeCost module BEFORE React
-// mounts, so the first CostBar/badge render already reflects the selected device.
-setCostOverrides(bootCostProfiles.find((p) => p.id === bootSelectedId)?.costs ?? null);
+// `fs:costBudgets` held the cost bar's typed point caps until 2026-10-23, when
+// every device's budget became a fixed 100 (utils/budgetPoints.ts) and the cap
+// editor went. Nothing reads the key; forget it so no stale condition lingers.
+try { localStorage.removeItem('fs:costBudgets'); } catch { /* storage blocked */ }
+// The selected device's measured costs and budget are applied below, beside
+// the device lookups they go through.
 
 /**
  * Per-theme node-editor canvas defaults. The canvas backdrop is a user
@@ -1436,30 +1366,16 @@ export function reportOutputSectionsTrimmed(slot: StorageSlot | undefined, count
   });
 }
 
-export interface VRHeadset {
-  id: string;
-  label: string;
-  maxPoints: number;
-  /** Recommended max texture (longest-side) dimension for this device's GPU.
-   *  Dropped images are downscaled to fit it (see `encodeImageFile`); it is an
-   *  upper bound, not a target — the per-image byte budget can shrink further. */
-  maxTextureDim: number;
-}
+// The device rows live in registry/vrHeadsets.ts (a leaf the compare page
+// reads too); re-exported so every existing importer keeps one import site.
+export { VR_HEADSETS, deviceCostOverrides };
+export type { VRHeadset };
 
-export const VR_HEADSETS: VRHeadset[] = [
-  // The ONE measured device — ShaderCarousel/benchData/quest3-20260723 is the
-  // calibration basis for complexity.json's prices AND this budget. The
-  // paper-spec presets (Quest 2/3S, Steam Frame, Pico 4, Vision Pro) were
-  // REMOVED 2026-08-14 by owner decision: an unmeasured budget certifies
-  // shaders for hardware nobody ran, and the CostBar's benchmark import is
-  // exactly how a device earns a row — run ShaderCarousel on it, import the
-  // result JSON, and it appears under "Measured" with its own prices. A
-  // persisted fs:headsetId naming a removed preset degrades to this entry
-  // (every resolver falls back to VR_HEADSETS[0]). For the record, the
-  // pixel-scaling arithmetic for a same-GPU sibling: Quest 3S = 200 ×
-  // (2064·2208)/(1832·1920) ≈ 260 (same Adreno 740, fewer pixels to fill).
-  { id: 'quest3', label: 'Meta Quest 3', maxPoints: 200, maxTextureDim: 2048 },
-];
+// Apply the active device's measured costs to the nodeCost module, and its
+// budget to the point display, BEFORE React mounts, so the first CostBar/badge
+// render already reflects the selected device.
+setCostOverrides(deviceCostOverrides(bootSelectedId, bootCostProfiles));
+setDeviceBudget(resolveDeviceBudget(bootSelectedId, bootCostProfiles).maxPoints);
 
 /** Recommended max texture dimension for a headset id (falls back to the first
  *  preset for an unknown id — matches CostBar's headset lookup). */
@@ -1468,34 +1384,24 @@ export function deviceMaxTextureDim(headsetId: string): number {
 }
 
 /**
- * Resolve the active device's label + points budget from a selection id that
- * may be either a built-in headset id OR a measured cost-profile id. Shared by
- * the CostBar and the Output-node settings so both show the same budget when a
- * measured profile is selected. Unknown ids fall back to the first headset.
+ * Resolve the active device's label + budget from a selection id that may be
+ * either a built-in headset id OR a measured cost-profile id. `maxPoints` is
+ * the device's measured budget in TABLE points — what every surface prints as
+ * 100 (utils/budgetPoints.ts) — so the store hands it to `setDeviceBudget`
+ * and the study package records it. Unknown ids fall back to the first
+ * headset. (A user-typed cap layered over it went 2026-10-23 with the fixed
+ * 100: `fs:costBudgets` is retired.)
  */
 export function resolveDeviceBudget(
   id: string,
   profiles: { id: string; label: string; maxPoints: number }[],
-  budgetOverrides?: Record<string, number>,
-): { label: string; maxPoints: number; isProfile: boolean; deviceMaxPoints: number; overridden: boolean } {
+): { label: string; maxPoints: number; isProfile: boolean } {
   const p = profiles.find((x) => x.id === id);
   const h = VR_HEADSETS.find((x) => x.id === id) ?? VR_HEADSETS[0];
-  const label = p ? p.label : h.label;
-  // The device's OWN number, kept alongside the effective one so a surface can
-  // say what Reset would restore without re-deriving it (and getting it wrong).
-  const deviceMaxPoints = p ? p.maxPoints : h.maxPoints;
-  // Keyed by the id PASSED IN, not the resolved device: a dangling id (a
-  // profile id from an imported project the user doesn't have) resolves to the
-  // fallback headset, and its override has to travel with the id the rest of
-  // this call is about, or the editor writes to a key nothing reads.
-  const raw = budgetOverrides ? Number(budgetOverrides[id]) : NaN;
-  const overridden = Number.isFinite(raw) && raw > 0;
   return {
-    label,
-    maxPoints: overridden ? raw : deviceMaxPoints,
+    label: p ? p.label : h.label,
+    maxPoints: p ? p.maxPoints : h.maxPoints,
     isProfile: p != null,
-    deviceMaxPoints,
-    overridden,
   };
 }
 
@@ -1611,11 +1517,6 @@ interface AppState {
   // table changes so cost readers (badges) re-render.
   costProfiles: CostProfile[];
   costVersion: number;
-
-  // Point caps the USER typed, by device id — the CostBar's right-click
-  // editor. Layered over the device's own budget by resolveDeviceBudget; see
-  // loadCostBudgets for why it is a map rather than an edit of the device.
-  costBudgetOverrides: Record<string, number>;
 
   // Node editor background color (canvas backdrop). `nodeEditorBgColor` is the
   // EFFECTIVE value for the active theme (what the canvas + edge-contrast read);
@@ -1797,8 +1698,6 @@ interface AppState {
   /** "New profile…" — a hand-authored profile, selected on creation. */
   createCostProfile: (label: string) => CostProfile;
   deleteCostProfile: (id: string) => void;
-  /** Set (or, with null, forget) the user's point cap for one device id. */
-  setCostBudgetOverride: (id: string, points: number | null) => void;
 
   // Sync actions
   setSyncInProgress: (v: boolean) => void;
@@ -2023,7 +1922,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
   costColorLow: loadHexColor('fs:costColorLow', '#8BC34A'),
   costColorHigh: loadHexColor('fs:costColorHigh', '#FF5722'),
   costProfiles: bootCostProfiles,
-  costBudgetOverrides: bootCostBudgets,
   costVersion: 0,
   nodeEditorBgColorLight: loadHexColor('fs:nodeEditorBgColor', DEFAULT_CANVAS_BG_LIGHT),
   nodeEditorBgColorDark: loadHexColor('fs:nodeEditorBgColorDark', DEFAULT_CANVAS_BG_DARK),
@@ -2490,12 +2388,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // bar's scale doesn't jump on import; the meaningful change is the repriced
     // table. (A file this app WROTE carries its own budget — profileFromParsed
     // prefers that.) Re-importing the same run replaces its entry (stable id).
-    const { costProfiles, selectedHeadsetId, costBudgetOverrides } = get();
+    const { costProfiles, selectedHeadsetId } = get();
     // Resolved ONCE, from the pre-import state: resolving per entry would make
     // each profile in a bundle inherit the budget/cap of the one before it.
-    // Overrides included on purpose — a typed cap is the budget the user is
-    // working to, and that is exactly what "don't let the scale jump" means.
-    const { maxPoints } = resolveDeviceBudget(selectedHeadsetId, costProfiles, costBudgetOverrides);
+    const { maxPoints } = resolveDeviceBudget(selectedHeadsetId, costProfiles);
     const maxTextureDim = resolveDeviceTextureDim(selectedHeadsetId, costProfiles);
     let nextProfiles = costProfiles;
     let last: CostProfile | null = null;
@@ -2528,8 +2424,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   createCostProfile: (label) => {
-    const { costProfiles, selectedHeadsetId, costBudgetOverrides } = get();
-    const { maxPoints } = resolveDeviceBudget(selectedHeadsetId, costProfiles, costBudgetOverrides);
+    const { costProfiles, selectedHeadsetId } = get();
+    const { maxPoints } = resolveDeviceBudget(selectedHeadsetId, costProfiles);
     const maxTextureDim = resolveDeviceTextureDim(selectedHeadsetId, costProfiles);
     const profile = createManualProfile(label, maxPoints, maxTextureDim);
     const nextProfiles = [...costProfiles.filter((p) => p.id !== profile.id), profile];
@@ -2547,24 +2443,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // If the removed profile was active, fall back to the default headset — this
     // clears the override (base costs) and recomputes via setSelectedHeadsetId.
     if (selectedHeadsetId === id) get().setSelectedHeadsetId(VR_HEADSETS[0].id);
-  },
-
-  setCostBudgetOverride: (id, points) => {
-    // Rebuilt rather than mutated: the map is a store value React compares by
-    // reference, and it is rebuilt null-prototype so a device id can never
-    // reach Object.prototype (loadCostBudgets documents the rule).
-    const next = Object.create(null) as Record<string, number>;
-    for (const [k, v] of Object.entries(get().costBudgetOverrides)) if (k !== id) next[k] = v;
-    if (points !== null) {
-      const n = Math.round(Number(points));
-      // Out-of-range input CLEARS rather than clamping: the editor already
-      // shows what the device's own budget is, so "forget my number" is the
-      // honest reading of a value this can't represent — a silent clamp would
-      // put a number on screen that nobody typed.
-      if (Number.isFinite(n) && n >= 1 && n <= MAX_BUDGET_POINTS) next[id] = n;
-    }
-    persistCostBudgets(next);
-    set({ costBudgetOverrides: next });
   },
 
   setSyncInProgress: (v) => set({ syncInProgress: v }),
@@ -2975,7 +2853,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const isKnown = VR_HEADSETS.some((h) => h.id === id) || costProfiles.some((p) => p.id === id);
     if (!isKnown) return;
     saveString('fs:headsetId', id);
-    setCostOverrides(costProfiles.find((p) => p.id === id)?.costs ?? null);
+    setCostOverrides(deviceCostOverrides(id, costProfiles));
+    // The budget the points are printed against moves with the device; the
+    // costVersion bump below re-renders every reader (useDeviceBudget).
+    setDeviceBudget(resolveDeviceBudget(id, costProfiles).maxPoints);
     const unwrapped = unwrapCollapsedGroupEdges(nodes, edges);
     // The seed is OMITTED on purpose, which means `costSeeds` — the same
     // resolver useSyncEngine's cost effect goes through. Passing a seed here
@@ -3417,12 +3298,16 @@ export const useAppStore = create<AppState>()((set, get) => ({
       return data.label || undefined;
     };
 
-    /** Sum of GPU costs of every member node, displayed above the collapsed
-     *  pill as an informational badge and refreshed at every collapse. It is
-     *  DELIBERATELY not the budget: `computeReachableCost` walks the members
-     *  themselves (via `unwrapCollapsedGroupEdges`), so this number may include
-     *  members the Output never reaches. Uses nodeCostPoints so variadic
-     *  arithmetic members are priced at their operand-scaled cost. */
+    /** Sum of GPU costs of every member node, snapshotted onto the collapsed
+     *  group as `data.cost` at every collapse. Nothing DRAWS it any more: the
+     *  pill's badge re-sums the same members LIVE (GroupNode.tsx
+     *  `groupMemberCost`, 2026-10-23), so a device change or an edit reprices
+     *  it; the snapshot rides saved files and is the layout spine's tie-break
+     *  weight for a collapsed unit. Like the badge it is DELIBERATELY not the
+     *  budget: `computeReachableCost` walks the members themselves (via
+     *  `unwrapCollapsedGroupEdges`), so this number may include members the
+     *  Output never reaches. Uses nodeCostPoints so variadic arithmetic
+     *  members are priced at their operand-scaled cost. */
     let groupCostSum = 0;
     for (const m of state.nodes) {
       if (!memberIds.has(m.id)) continue;
@@ -3554,8 +3439,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
             data.height = collapsedH;
             data.collapsedInputs = collapsedInputs;
             data.collapsedOutputs = collapsedOutputs;
-            // Sum of GPU cost across all members — drives the cost badge above
-            // the pill so users can see the perf impact without expanding.
+            // Sum of GPU cost across all members, as a snapshot (see
+            // groupCostSum) — the badge above the pill prices them live.
             data.cost = groupCostSum;
             return {
               ...n,
@@ -3740,7 +3625,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
           data.height = rh === null ? padded.h : Math.max(rh, contain?.h ?? 0);
           delete data.collapsedInputs;
           delete data.collapsedOutputs;
-          // Drop the cached cost — the expanded frame doesn't show a badge.
+          // Drop the collapse's cost snapshot — only a collapsed pill carries one.
           delete data.cost;
           return {
             ...n,

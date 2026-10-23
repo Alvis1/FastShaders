@@ -331,7 +331,8 @@ describe('RGB Curves — the CPU twin, the range and the price', () => {
     const fresh = makeNode('k', 'rgbCurves', { ...def.defaultValues });
     expect(freshNodeCost('rgbCurves')).toBe(1);
     expect(nodeCostPoints(fresh, [])).toBe(freshNodeCost('rgbCurves'));
-    // codeToGraph stamps a parsed node's own price into the snapshot layoutEngine sizes its card by.
+    // codeToGraph stamps a parsed node's own price into its snapshot — what codeGroupBuilder totals for a
+    // ready-made group (the layout and the card both price it live, never by the snapshot).
     const parsed = (call: string) => curvesNode(codeToGraph(wrap(call))).data.cost;
     expect(parsed('fsRgbCurves(1, 1, "0 0,1 1", "0 0,1 1", "0 0,1 1", "0 0,1 1", "extrapolate")')).toBe(1);
     expect(parsed(`fsRgbCurves(1, 1, "${S}", "0 0,1 1", "0 0,1 1", "0 0,1 1", "extrapolate")`)).toBe(40);

@@ -6,7 +6,8 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { valueNum } from '@/utils/valueCoerce';
 import { useAppStore } from '@/store/useAppStore';
 import { CAT_HEX } from '@/utils/colorUtils';
-import { useCostChrome } from './useCostChrome';
+import { Points } from '@/components/Points/Points';
+import { useCostChrome, useLiveNodeCost, useRemeasureOnScale } from './useCostChrome';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { WaveformSvg, applyWaveFrame, type WaveformDynamicRefs } from './WaveformSvg';
@@ -58,7 +59,11 @@ export const MathPreviewNode = memo(function MathPreviewNode({
 
   const func = MATH_FUNCTIONS[data.registryType] ?? Math.sin;
   const catHex = CAT_HEX[def.category as NodeCategory] ?? CAT_HEX.unknown;
-  const { costColor, headerTextColor, costTextColor, costScale } = useCostChrome(data.cost);
+  // Priced LIVE under the selected device's table, never the creation-time
+  // `data.cost` snapshot (useLiveNodeCost says why).
+  const cost = useLiveNodeCost(id, data);
+  const { costColor, headerTextColor, costTextColor, costScale, points } = useCostChrome(cost);
+  useRemeasureOnScale(id, costScale);
 
   // ── Upstream-derived render inputs, without a whole-array subscription ──
   // Subscribing to s.nodes/s.edges re-rendered every sin/cos card on every
@@ -161,7 +166,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
       style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid ${catHex}`, transform: `scale(${costScale})`, transformOrigin: 'top left' } as CSSProperties}
     >
       {/* Cost badge above node */}
-      {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}
+      {cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}><Points value={points} /></span>}
 
       {/* Header */}
       <div className="node-base__header" style={{ background: costColor }} {...headerTip}>

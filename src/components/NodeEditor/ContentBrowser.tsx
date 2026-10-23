@@ -24,9 +24,9 @@ import { SeamLens, aimSeamLens } from '@/components/Layout/SeamLens';
 import { registerAssetBarDrag } from '@/components/Layout/assetBarDrag';
 import { assetText, formatCategoryLabel, t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
-import type { NodeCategory, NodeDefinition } from '@/types';
+import type { AppNode, NodeCategory, NodeDefinition } from '@/types';
 import { CAT_HEX } from '@/utils/colorUtils';
-import { freshNodeCost } from '@/utils/nodeCost';
+import { assetCostPoints, freshNodeCost } from '@/utils/nodeCost';
 import { ScrollArrow, useScrollArrows } from '@/components/Layout/ScrollArrows';
 import './ContentBrowser.css';
 
@@ -39,9 +39,11 @@ import './ContentBrowser.css';
 // simply ADD a node — a graph may hold several outputs with exactly one ACTIVE
 // (utils/sdfPartition.ts), so the old "glide to the existing one" redirect is
 // gone.
-// The ready-made-asset tabs (Presets, Textures, Noise, DataViz) lead; the
-// building-block categories follow in their canonical CATEGORIES order.
-const ASSET_TABS_FIRST: NodeCategory[] = ['presets', 'texture', 'noise', 'dataviz'];
+// The ready-made-asset tabs (Presets, Presets 2, Textures, Noise, DataViz)
+// lead; the building-block categories follow in their canonical CATEGORIES
+// order. Presets holds the beginner recipes; Presets 2 — the original library,
+// an optional category that is off by default — sits right after it.
+const ASSET_TABS_FIRST: NodeCategory[] = ['presets', 'presets2', 'texture', 'noise', 'dataviz'];
 // …and a tab whose every entry has been switched off in node-editor.html goes
 // with them: hiding the last unfinished node of a category would otherwise leave
 // a tab that opens to "Nothing here yet.", which is exactly the unfinished look
@@ -80,6 +82,9 @@ type BrowserCategory = NodeCategory | 'all' | 'saved';
 interface BuiltinLibraries {
   getBuiltinTextures: typeof import('@/registry/builtinTextures').getBuiltinTextures;
   getBuiltinPresets: typeof import('@/registry/builtinPresets').getBuiltinPresets;
+  /** Splits the one preset list into the Presets tab and Presets 2 — carried
+   *  with the chunk, since a static import of it would be the boot-wave edge. */
+  isRecipe: typeof import('@/registry/builtinPresets').isRecipe;
 }
 
 /**
@@ -243,22 +248,23 @@ export const ContentBrowser = memo(function ContentBrowser() {
     return () => window.clearTimeout(id);
   }, [search, settledSearch]);
   // The built-in libraries, fetched when the strip first has to DRAW them: the
-  // Presets tab, the Textures tab (only while that optional category is
-  // switched on), or a settled search, which surfaces matching assets on every
-  // tab. `null` until the chunk lands, and again after a load that failed: the
+  // Presets tab, the Presets 2 and Textures tabs (only while those optional
+  // categories are switched on), or a settled search, which surfaces matching
+  // assets on every tab. `null` until the chunk lands, and again after a load that failed: the
   // memos below hand back nothing while it is null, so the strip stays empty
   // and nothing throws (this app has no error boundary).
   const [libraries, setLibraries] = useState<BuiltinLibraries | null>(null);
   const wantsLibraries =
     activeCategory === 'presets' ||
+    (activeCategory === 'presets2' && optional.presets2) ||
     (activeCategory === 'texture' && optional.texture) ||
     settledSearch.trim() !== '';
   useEffect(() => {
     if (!wantsLibraries || libraries) return;
     let live = true;
     Promise.all([import('@/registry/builtinTextures'), import('@/registry/builtinPresets')])
-      .then(([{ getBuiltinTextures }, { getBuiltinPresets }]) => {
-        if (live) setLibraries({ getBuiltinTextures, getBuiltinPresets });
+      .then(([{ getBuiltinTextures }, { getBuiltinPresets, isRecipe }]) => {
+        if (live) setLibraries({ getBuiltinTextures, getBuiltinPresets, isRecipe });
       })
       .catch(() => console.warn('[fs] the built-in preset and texture libraries failed to load'));
     return () => { live = false; };
@@ -312,6 +318,11 @@ export const ContentBrowser = memo(function ContentBrowser() {
   }, []);
   const savedGroups = useAppStore((s) => s.savedGroups);
   const language = useAppStore((s) => s.language);
+  // The version of the selected device's price table, which every number on
+  // this strip is read from: a device change bumps it. The tiles reprice
+  // themselves (their own subscriptions); the strips below must re-sort by
+  // what the tiles now print, so the sorting memos key on it.
+  const costVersion = useAppStore((s) => s.costVersion);
   const savedTabLabel = `${t('Saved Groups', language)}${savedGroups.length > 0 ? ` (${savedGroups.length})` : ''}`;
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -388,8 +399,12 @@ export const ContentBrowser = memo(function ContentBrowser() {
     // `libraries`: the preset and texture tiles mount when their chunk LANDS,
     // which is after the tab or query change that asked for it, so without
     // this dep they would never get their silhouettes or be measured.
+    //
+    // `costVersion`: a device change reprices the tiles, which re-orders the
+    // strips and re-scales every cost-scaled replica — FitNodeHeading cancels
+    // that scale, except for a design held at its width/height caps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCategory, settledSearch, savedGroups, language, barHeight, tabsH, tileH, fontsReady, optional, libraries]);
+  }, [activeCategory, settledSearch, savedGroups, language, barHeight, tabsH, tileH, fontsReady, optional, libraries, costVersion]);
 
   /**
    * Live gesture state: bounds measured once at pointerdown, plus the latest
@@ -664,7 +679,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
   );
 
   const filteredDefs = useMemo<NodeDefinition[]>(() => {
-    // saved/texture/presets render their own tiles; defs unused there.
+    // saved/texture/presets/presets2 render their own tiles; defs unused there.
     let defs: NodeDefinition[];
     if (
       activeCategory === 'all' || activeCategory === 'saved' ||
@@ -681,7 +696,8 @@ export const ContentBrowser = memo(function ContentBrowser() {
     // keeps `allDefs`' identity stable for the other branches. The key is
     // `freshNodeCost` — what the tile prints — never the raw table: RGB Curves'
     // entry (40) prices a node that BAKES, while its tile prints 1, and the
-    // strip sorted it after the 15s.
+    // strip sorted it after the 15s. It reads the SELECTED device's table, so
+    // `costVersion` re-sorts the strip when a device change reprices a tile.
     defs = [...defs].sort((a, b) => (freshNodeCost(a.type) ?? 50) - (freshNodeCost(b.type) ?? 50));
     if (!q) return defs;
     const scoped = rankDefs(defs);
@@ -689,7 +705,8 @@ export const ContentBrowser = memo(function ContentBrowser() {
     // so the user isn't left staring at an empty panel while typing.
     if (scoped.length === 0 && activeCategory !== 'all') return rankDefs(allDefs);
     return scoped;
-  }, [allDefs, activeCategory, q, rankDefs]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- costVersion versions the table freshNodeCost reads
+  }, [allDefs, activeCategory, q, rankDefs, costVersion]);
 
   const filteredSavedGroups = useMemo(() => {
     if (!q) return savedGroups;
@@ -700,14 +717,18 @@ export const ContentBrowser = memo(function ContentBrowser() {
    * BOTH ready-made strips read cheapest-first, on the SAME number their tile
    * prints.
    *
-   * `totalCost` is what `AssetCostBadge` draws, so the strip reads as a price
-   * ladder you can scan — which is the point of a library whose whole pedagogy
-   * is that a tier-3 look need not be expensive (Iridescence is 45 and cheaper
-   * than the tier-2 Noise Mask at 49; Studio Shine is 78 and the priciest thing
-   * here). Deliberately NOT `nodeCostPoints`: that re-derives a variadic fold's
-   * price as base x (N-1) and can disagree with the badge by a point or two
-   * (studio-shine 78 vs 76), and a sort that contradicts the number on screen
-   * reads as a bug.
+   * `assetCostPoints` is what `AssetCostBadge` draws — the group's members
+   * priced under the SELECTED device's table — so the strip reads as a price
+   * ladder you can scan, which is the point of a library whose whole pedagogy
+   * is that a tier-3 look need not be expensive (in table points, on the
+   * shipped table: Iridescence is 45 and cheaper than the tier-2 Noise Mask at
+   * 49; Studio Shine is 76 and the priciest thing here). Not the asset's own
+   * `totalCost`: that is the same sum stamped ONCE, when the library was
+   * built, so after a device change it would order the strip by prices no tile
+   * shows any more. And deliberately NOT `nodeCostPoints`: that re-derives a
+   * variadic fold's price as base x (N-1) and can disagree with the badge by a
+   * point or two (studio-shine 78 vs 76), and a sort that contradicts the
+   * number on screen reads as a bug.
    *
    * This orders ACROSS tiers, so the strip is no longer the easy->advanced
    * ladder `PRESET_ENTRIES` still encodes — the tier survives in each preset's
@@ -721,9 +742,22 @@ export const ContentBrowser = memo(function ContentBrowser() {
    * They are one ladder now (Grid 22 -> Crumpled Fabric 510), and node count
    * turns out to be a poor proxy for it anyway — Static Noise is the smallest
    * texture at 16 nodes and the third most expensive of the cheap half.
+   *
+   * Each asset is priced once per table version (the comparator runs n log n
+   * times), and a new version is a new comparator, which re-runs the strips'
+   * memos below.
    */
-  const byCost = <T extends { totalCost: number; name: string }>(a: T, b: T) =>
-    a.totalCost - b.totalCost || a.name.localeCompare(b.name);
+  const byCost = useMemo(() => {
+    const prices = new Map<readonly AppNode[], number>();
+    const priceOf = (nodes: readonly AppNode[]): number => {
+      let price = prices.get(nodes);
+      if (price === undefined) prices.set(nodes, (price = assetCostPoints(nodes)));
+      return price;
+    };
+    return <T extends { nodes: readonly AppNode[]; name: string }>(a: T, b: T) =>
+      priceOf(a.nodes) - priceOf(b.nodes) || a.name.localeCompare(b.name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- costVersion versions the table assetCostPoints reads
+  }, [costVersion]);
 
   const filteredTextures = useMemo(() => {
     // Lazily built, same rule as the presets memo below: the first
@@ -747,30 +781,45 @@ export const ContentBrowser = memo(function ContentBrowser() {
     const all = getBuiltinTextures().filter((t) => !isTextureHiddenFromEditor(t.id)).sort(byCost);
     if (!q) return all;
     return all.filter((t) => assetMatches(t, q));
-  }, [q, activeCategory, optional.texture, libraries]);
+  }, [q, activeCategory, optional.texture, libraries, byCost]);
 
   const filteredPresets = useMemo(() => {
-    // Lazily built: the first getBuiltinPresets() call parses 24 TSL snippets
-    // through codeToGraph and lays them out — MEASURED at ~95 ms of synchronous
-    // Babel + dagre work, not the ~40 ms this comment used to claim — so don't
-    // pay it at first render for a tab that may never open. A live search needs
-    // them too — matching presets surface in the generic strip (see `items`
-    // below) — and unlike the textures above there is no optional-category
-    // escape, so ANY non-empty query on ANY tab pays it once per session. That
-    // is why `q` is debounced (see `settledSearch`): the parse then lands in a
-    // timer callback after the user pauses, instead of inside the keystroke's
-    // own frame where it swallowed the characters typed on top of it.
+    // The Presets tab: the beginner RECIPES (tier 0 of builtinPresets.ts).
+    // Lazily built: the first getBuiltinPresets() call parses all 37 TSL
+    // snippets (the recipes AND the Presets 2 library — one list) through
+    // codeToGraph and lays them out — the 24 alone MEASURED at ~95 ms of
+    // synchronous Babel + dagre work — so don't pay it at first render for a
+    // tab that may never open. A live search needs them too — matching presets
+    // surface in the generic strip (see `items` below) — and unlike the
+    // textures below there is no optional-category escape, so ANY non-empty
+    // query on ANY tab pays it once per session. That is why `q` is debounced
+    // (see `settledSearch`): the parse then lands in a timer callback after the
+    // user pauses, instead of inside the keystroke's own frame where it
+    // swallowed the characters typed on top of it.
     // The build now runs when the library's chunk LANDS (`libraries` going
     // non-null re-runs this memo), which is later still: a fetch after the
     // debounce, in a render of its own.
     if (activeCategory !== 'presets' && !q) return [];
     if (!libraries) return [];
-    const { getBuiltinPresets } = libraries;
+    const { getBuiltinPresets, isRecipe } = libraries;
     // Sorted by GPU cost, NOT by the registry's tier order — see byCost.
-    const all = [...getBuiltinPresets()].sort(byCost);
+    const all = getBuiltinPresets().filter(isRecipe).sort(byCost);
     if (!q) return all;
     return all.filter((p) => assetMatches(p, q));
-  }, [q, activeCategory, libraries]);
+  }, [q, activeCategory, libraries, byCost]);
+
+  const filteredPresets2 = useMemo(() => {
+    if (!optional.presets2) return [];
+    // The Presets 2 tab: the original library (tiers 1–3). Switched off, the
+    // tab is not drawn, and this gate — above the tab test, like the textures'
+    // — keeps a live search on any other tab from handing its tiles back.
+    if (activeCategory !== 'presets2' && !q) return [];
+    if (!libraries) return [];
+    const { getBuiltinPresets, isRecipe } = libraries;
+    const all = getBuiltinPresets().filter((p) => !isRecipe(p)).sort(byCost);
+    if (!q) return all;
+    return all.filter((p) => assetMatches(p, q));
+  }, [q, activeCategory, optional.presets2, libraries, byCost]);
 
   const onDragStart = useCallback((event: React.DragEvent, def: NodeDefinition) => {
     event.dataTransfer.setData('application/reactflow-type', def.type);
@@ -829,10 +878,17 @@ export const ContentBrowser = memo(function ContentBrowser() {
     items = filteredTextures.length === 0
       ? (libraries ? noMatch('No textures match “{query}”.') : null)
       : filteredTextures.map((t) => <TextureCard key={t.id} texture={t} />);
-  } else if (activeCategory === 'presets') {
-    items = filteredPresets.length === 0
+  } else if (activeCategory === 'presets' || activeCategory === 'presets2') {
+    // A query on either preset tab searches BOTH halves of the one library,
+    // the tab's own half first — "dissolve" typed on Presets still finds
+    // Dissolve. The original half answers only while its switch is on
+    // (filteredPresets2's own gate).
+    const shown = activeCategory === 'presets'
+      ? [...filteredPresets, ...(q ? filteredPresets2 : [])]
+      : [...filteredPresets2, ...(q ? filteredPresets : [])];
+    items = shown.length === 0
       ? (libraries ? noMatch('No presets match “{query}”.') : null)
-      : filteredPresets.map((p) => <PresetCard key={p.id} preset={p} />);
+      : shown.map((p) => <PresetCard key={p.id} preset={p} />);
   } else {
     const defCards = filteredDefs.map((item) => (
       <NodePreviewCard key={item.type} def={item} onDragStart={onDragStart} />
@@ -843,6 +899,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
     const assetCards = q
       ? [
           ...filteredPresets.map((p) => <PresetCard key={`preset-${p.id}`} preset={p} />),
+          ...filteredPresets2.map((p) => <PresetCard key={`preset-${p.id}`} preset={p} />),
           ...filteredTextures.map((tx) => <TextureCard key={`texture-${tx.id}`} texture={tx} />),
         ]
       : [];

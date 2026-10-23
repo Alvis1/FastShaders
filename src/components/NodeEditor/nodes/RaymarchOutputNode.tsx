@@ -9,6 +9,8 @@ import { t, portLabel } from '@/i18n';
 import { isActiveSinkSelector } from './activeSinkSelector';
 import { effectiveExposedPorts } from '@/utils/exposedPorts';
 import { useCostChrome, useSinkBadgeClass } from './useCostChrome';
+import { storedCost } from '@/utils/costTable';
+import { Points } from '@/components/Points/Points';
 import { TypedHandle } from '../handles/TypedHandle';
 import { OutputTitle } from './OutputTitle';
 import { useWiredLabels } from './ShaderNode';
@@ -108,7 +110,7 @@ export const RaymarchOutputNode = memo(function RaymarchOutputNode({ id, data, s
   // Is THIS node the active sink? (utils/sdfPartition.ts `activeSink`.)
   const activeSel = useMemo(() => isActiveSinkSelector(id), [id]);
   const isActive = useAppStore(activeSel);
-  const cost = data.cost ?? 0;
+  const cost = storedCost(data.cost);
   // Only EXPOSED sockets render — the main chains by default, every setting
   // hidden until ticked in the settings menu (utils/exposedPorts.ts
   // MARCH_DEFAULT_EXPOSED; the Output's channel rule). Handles mount and
@@ -121,7 +123,9 @@ export const RaymarchOutputNode = memo(function RaymarchOutputNode({ id, data, s
   useEffect(() => {
     updateNodeInternals(id);
   }, [id, exposedKey, updateNodeInternals]);
-  const { costColor, headerTextColor, costTextColor } = useCostChrome(cost);
+  // `cost` is this sink's own price in table points (OutputNode.tsx says who
+  // stamps it); the badge prints `points`, its share of the device's 100.
+  const { costColor, headerTextColor, costTextColor, points } = useCostChrome(cost);
   const badgeClass = useSinkBadgeClass(cost);
   const values = getNodeValues({ id, data } as unknown as ShaderFlowNode);
 
@@ -196,7 +200,7 @@ export const RaymarchOutputNode = memo(function RaymarchOutputNode({ id, data, s
     >
       {cost > 0 && (
         <span className={badgeClass} style={{ color: costTextColor }}>
-          {cost}
+          <Points value={points} />
         </span>
       )}
       <div className="output-node__header" style={{ background: costColor }}>

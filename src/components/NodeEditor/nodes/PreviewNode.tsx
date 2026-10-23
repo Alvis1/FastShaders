@@ -5,7 +5,8 @@ import type { PreviewFlowNode, NodeCategory, AppNode, AppEdge, TSLDataType } fro
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
 import { CAT_HEX } from '@/utils/colorUtils';
-import { useCostChrome } from './useCostChrome';
+import { Points } from '@/components/Points/Points';
+import { useCostChrome, useLiveNodeCost, useRemeasureOnScale } from './useCostChrome';
 import { useFrameLoop } from '@/hooks/useFrameLoop';
 import { evaluateEdgeSource, getTargetEdges, getTimeUpstreamSet } from '@/engine/cpuEvaluator';
 import { TypedHandle } from '../handles/TypedHandle';
@@ -182,7 +183,11 @@ export const PreviewNode = memo(function PreviewNode({
   const hasAnyTime = Object.values(timeInputs).some(Boolean);
 
   const catHex = CAT_HEX[def.category as NodeCategory] ?? CAT_HEX.unknown;
-  const { costColor, headerTextColor, costTextColor, costScale } = useCostChrome(data.cost);
+  // Priced LIVE under the selected device's table, as ShaderNode is — never
+  // the creation-time `data.cost` snapshot (useLiveNodeCost says why).
+  const cost = useLiveNodeCost(id, data);
+  const { costColor, headerTextColor, costTextColor, costScale, points } = useCostChrome(cost);
+  useRemeasureOnScale(id, costScale);
 
   /**
    * Resolve each scalar input: connected edge → evaluate upstream, else →
@@ -285,7 +290,7 @@ export const PreviewNode = memo(function PreviewNode({
       style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid ${catHex}`, transform: `scale(${costScale})`, transformOrigin: 'top left' } as CSSProperties}
     >
       {/* Cost badge above node */}
-      {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}
+      {cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}><Points value={points} /></span>}
 
       {/* Header */}
       <div className="node-base__header" style={{ background: costColor }} {...headerTip}>

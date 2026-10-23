@@ -18,6 +18,7 @@ export const CATEGORIES: CategoryInfo[] = [
   { id: 'dataviz', label: 'DataViz' },
   { id: 'texture', label: 'Textures' },
   { id: 'presets', label: 'Presets' },
+  { id: 'presets2', label: 'Presets 2' },
   { id: 'unknown', label: 'Unknown' },
   { id: 'output', label: 'Output' },
 ];

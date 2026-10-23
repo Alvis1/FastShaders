@@ -106,6 +106,28 @@ benchData/
     shadercarousel-<bench>-<device>-complexity-suggestion-<ts>.json
 ```
 
+## Committed runs
+
+- **`quest3-20260723/`** — Meta Quest 3, MicroPlane + Static, raw + suggestion
+  + CSV. The calibration basis of `complexity.json` and of the 200-point budget.
+- **`steamframe-20261021/`** — Valve Steam Frame (Snapdragon, WebGPU reports
+  `qualcomm / adreno-7xx`, the SAME string as the Quest 3, so the folder name
+  is the provenance, not the file). What came back from the headset:
+  - MicroPlane **profile only** (`…-profile-….json`, GPU timestamps, `valid:
+    true`, the eight noise nodes). The raw file and suggestion were not kept, so
+    `fit-calibration.mjs` cannot be run on it and its wall time cannot be
+    checked against the GPU sums. It prices the app's `steamframe` headset row,
+    RATIO-BRIDGED to the Quest 3 Static table (table × this ÷ the Quest 3
+    MicroPlane run): the noises run at 0.70–0.89 of the Quest 3's cost.
+    `src/store/steamFrameHeadset.test.ts` re-derives the row from these files.
+  - InOut suggestion + CSV (WebXR stereo, `valid: false` — rAF deltas pinned
+    to the 72 Hz refresh, eye-buffer size unknown). Budget fit only, never
+    prices: at 72 Hz only **Crumpled Fabric** missed (50.5 fps average, p95
+    41.8 ms). Gas Giant, Marble, Wood and the three Voronoi variants held a
+    13.9 ms median but stalled a frame regularly (p95 ≈ 28.5 ms, thermal drift
+    1.32–1.42), fBm (vec3) less so (p95 27.8 ms, drift 1.08); everything else
+    kept p95 ≤ 15.6 ms.
+
 **A raw run carrying texture atoms changes what the test suite asserts.**
 `src/registry/textureSampleCost.test.ts` looks through this directory by file
 CONTENT, not by name. The moment a raw JSON here holds a `calib_tex_*` or

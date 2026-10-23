@@ -80,7 +80,9 @@ npm run deploy:alvismisjuns
 ```
 Run it from the SAME tagged state: it deploys the working tree. Do not run `tauri build` between steps 3 and 4,
 because a desktop build overwrites `dist/` with the desktop profile. The script checks the served
-version meta with curl. Requires `psftp` (`brew install putty`) and the gitignored `.vscode/sftp.json`.
+version meta with curl, then that `/fastshaders/compare/` serves the device-comparison page itself: 200, its own
+title ("Device comparison" — an `index.html` fallback would answer 200 at the right version too) and the version
+just built. Requires `psftp` (`brew install putty`) and the gitignored `.vscode/sftp.json`.
 
 ## 5. fs.sferas.lv — the STUDY host
 
@@ -91,8 +93,12 @@ Base `/`, target `/var/www/fs/src`. NEVER use `/var/www/sferas/src`, which is sh
 projects. BEFORE building, the script checks that the live upload endpoint passes this host's CORS preflight
 the way a browser judges it (2xx, the origin echoed, every upload header allowed) and stops with NOTHING
 uploaded if not — the endpoint is behind the template (no CORS block, or a header the client now sends): run
-`bash scripts/deploy-eval-endpoint.sh`, then `npm run deploy:sferas` again. After the upload it checks the
-version meta, that `/evalp/` returns 200, and that the served CSP names `https://alvismisjuns.lv`. If the user
+`bash scripts/deploy-eval-endpoint.sh`, then `npm run deploy:sferas` again. It also stops when
+`list.php?health` does not answer `inbox ok` — the endpoint cannot STORE a package (the inbox must be under the
+site container's writable `/app/data`; see `scripts/eval-endpoint/README.md`). Fix the inbox, never the
+gate. After the upload it checks the
+version meta, that `/evalp/` returns 200, that the served CSP names `https://alvismisjuns.lv`, and that
+`/compare/` serves the comparison page by its title at the version just built. If the user
 has said a study cohort is currently running, HOLD this step: a participant's preview would
 change loader mid-study. Say that you held it.
 
@@ -104,7 +110,9 @@ for u in https://alvis1.github.io/FastShaders/ https://alvismisjuns.lv/fastshade
   printf '%-40s ' "$u"; curl -sS -H 'Cache-Control: no-cache' "${u}index.html?cb=$(date +%s)" | grep -o 'name="version" content="[^"]*"'
 done
 ```
-Pages can lag a few minutes after the workflow finishes, so re-check before calling it behind.
+Pages can lag a few minutes after the workflow finishes, so re-check before calling it behind. The
+device-comparison page (`compare/`) ships in the same `dist/`; the two host scripts verify it, and on Pages the
+same check is `curl -sS "https://alvis1.github.io/FastShaders/compare/?cb=$(date +%s)" | grep -o 'Device comparison\|name="version" content="[^"]*"'`.
 Report one table: target, served version, status. Include the three `/releases/latest/download/`
 assets (`FastShaders-macOS.dmg`, `FastShaders-Windows-Setup.exe`, `FastShaders-Windows-Portable.zip`)
 checked with `curl -sIL -o /dev/null -w '%{http_code}'`.

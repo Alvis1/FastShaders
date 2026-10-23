@@ -5,7 +5,8 @@ import type { ShaderFlowNode, NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
 import { CAT_HEX } from '@/utils/colorUtils';
-import { useCostChrome } from './useCostChrome';
+import { Points } from '@/components/Points/Points';
+import { useCostChrome, useLiveNodeCost, useRemeasureOnScale } from './useCostChrome';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { makeConnectionRevealSelector, REVEAL_TEMP_OPACITY } from './connectionReveal';
@@ -70,7 +71,12 @@ export const SoundNode = memo(function SoundNode({ id, data, selected }: NodePro
   const language = useAppStore((s) => s.language);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const catHex = CAT_HEX[def.category as NodeCategory] ?? CAT_HEX.unknown;
-  const { costColor, headerTextColor, costTextColor, costScale } = useCostChrome(data.cost);
+  // Priced LIVE under the selected device's table, never the creation-time
+  // `data.cost` snapshot (useLiveNodeCost says why). Sound is 0 in the shipped
+  // table, so the badge shows only under a profile that prices it.
+  const cost = useLiveNodeCost(id, data);
+  const { costColor, headerTextColor, costTextColor, costScale, points } = useCostChrome(cost);
+  useRemeasureOnScale(id, costScale);
 
   // Opt-in parameter sockets, same rules as the noise nodes' pos/scale: hidden
   // until ticked in Node Settings, revealed dimmed while a wire is dragged
@@ -144,8 +150,8 @@ export const SoundNode = memo(function SoundNode({ id, data, selected }: NodePro
         } as CSSProperties
       }
     >
-      {data.cost > 0 && (
-        <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>
+      {cost > 0 && (
+        <span className="node-base__cost-badge" style={{ color: costTextColor }}><Points value={points} /></span>
       )}
 
       <div className="node-base__header" style={{ background: costColor }} {...headerTip}>

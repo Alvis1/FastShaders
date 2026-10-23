@@ -152,13 +152,23 @@ const NODE_WHITE: [number, number, number] = [0xf1, 0xf2, 0xf3];
  */
 const NODE_DARK: [number, number, number] = [0x2b, 0x2e, 0x34];
 
-/** Interpolate between low and high color poles based on cost. */
+/**
+ * Where the cost gradient tops out, in BUDGET points (utils/budgetPoints.ts):
+ * a node worth 40 % of the selected device's frame paints the high pole, and a
+ * cost-scaled card stops growing there. It was 80 table points when the budget
+ * printed as 200 — the same price on both measured headsets — and is now a
+ * share of whichever device is selected, so a stricter device runs hotter.
+ * Every `cost` argument below is in budget points.
+ */
+export const COST_GRADIENT_SPAN = 40;
+
+/** Interpolate between low and high color poles based on cost (budget points). */
 function costLerp(
   cost: number,
   low: [number, number, number],
   high: [number, number, number],
 ): [number, number, number] {
-  const t = Math.min(cost / 80, 1);
+  const t = Math.min(cost / COST_GRADIENT_SPAN, 1);
   return [
     lerp(low[0], high[0], t),
     lerp(low[1], high[1], t),
@@ -211,9 +221,10 @@ export function getCostTextColor(
   return rgbToHex(r, g, b);
 }
 
+/** How much larger a cost-scaled card paints, from its price in budget points. */
 export function getCostScale(cost: number): number {
   if (cost <= 0) return 1;
-  return 1 + Math.min(cost / 80, 1) * 0.35;
+  return 1 + Math.min(cost / COST_GRADIENT_SPAN, 1) * 0.35;
 }
 
 /**
@@ -292,6 +303,7 @@ export const CAT_HEX: Record<NodeCategory | 'saved', string> = {
   dataviz: '#FF5722',
   texture: '#8D6E63',
   presets: '#009688',
+  presets2: '#00796B',
   unknown: '#9E9E9E',
   output: '#f44336',
   saved: '#6366f1',

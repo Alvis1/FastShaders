@@ -64,8 +64,9 @@ export interface FieldRange {
  * number the field SHOWS — or, while that text does not parse, from `value`,
  * the number it stands for (0 when that is no number either, as the number
  * input stepped an empty field) — clamped and formatted. Plain `± step`, never
- * snapped to a `min + k·step` grid: with the point cap's min of 1 the number
- * input stepped 200 to 201 instead of 210.
+ * snapped to a `min + k·step` grid: with the min of 1 on the cost bar's point
+ * cap (a field retired 2026-10-23, when every device's budget became a fixed
+ * 100) the number input stepped 200 to 201 instead of 210.
  */
 export function stepFieldText(text: string, value: number, dir: 1 | -1, shift: boolean, range: FieldRange): string {
   const from = parseFieldNumber(text) ?? (Number.isFinite(value) ? value : 0);

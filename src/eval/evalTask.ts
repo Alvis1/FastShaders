@@ -2,16 +2,18 @@
  * Task / condition identity for the study (EVAL_MODE_PLAN.md §7.20).
  *
  * A session is launched as e.g.
- *   …/fastshaders/eval/?task=T7-fire&budget=200&costbar=off
+ *   …/fastshaders/eval/?task=T7-fire&budget=100&costbar=off
  * and the parameters ride into `session.json` plus a `task-start` event, so a
  * package can say WHICH task it is and WHICH experimental condition it was
  * collected under. Without that, a between-conditions comparison (the
  * cost-feedback arm) cannot label its own data after the fact.
  *
  * `briefBudget` is deliberately separate from the headset budget the CostBar
- * shows: the number stated in a task brief ("stay under 200 points") and the
+ * shows: the number stated in a task brief ("stay under 80 points") and the
  * device profile's `maxPoints` are different claims, and a package that
- * carries only one of them leaves the other ambiguous.
+ * carries only one of them leaves the other ambiguous. Since 2026-10-23 every
+ * device's budget PRINTS as 100 (utils/budgetPoints.ts), so a brief states its
+ * figure out of 100 — earlier links carried Quest 3's table figure, 200.
  *
  * PURE (node-tested). The DOM side is `public/eval/index.html`, which copies
  * its own query string into sessionStorage before handing over to the app —

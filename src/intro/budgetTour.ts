@@ -7,9 +7,11 @@
  * Nothing the app decides is scripted: the asset is the real built-in (loaded
  * on demand — building it needs the Babel chunk), its last node is the one its
  * own `return` names (`outputEdges`), and both totals are
- * `computeReachableCost` — the number the bar prints — on the graph before and
- * after that wire. If the texture is ever made cheaper than the budget, the
- * scene shows that and `budgetTour.test.ts` says so.
+ * `computeReachableCost` — the total the bar sums — on the graph before and
+ * after that wire, in TABLE points like the store's; the stage divides them
+ * into the bar's budget points for print (utils/budgetPoints.ts). If the
+ * texture is ever made cheaper than the budget, the scene shows that and
+ * `budgetTour.test.ts` says so.
  *
  * Pure and node-testable, like connectTour.ts.
  */
@@ -40,7 +42,8 @@ export interface BudgetGraph {
    *  wired values and the channel counts are read from. */
   nodesAfter: AppNode[];
   edgesAfter: AppEdge[];
-  /** The point total with the group unwired, and with the wire. */
+  /** The point total with the group unwired, and with the wire — in table
+   *  points, summed under the ACTIVE price table (the selected device's). */
   before: number;
   after: number;
 }

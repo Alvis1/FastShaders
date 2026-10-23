@@ -21,6 +21,9 @@ import { initialNodeValues } from '@/utils/newNodeValues';
 import { getRecentNodeTypes, noteNodeUsed } from './recentNodes';
 import { hiddenOptionalCategories } from '@/registry/optionalCategories';
 import { freshNodeCost } from '@/utils/nodeCost';
+import { toBudgetPoints } from '@/utils/budgetPoints';
+import { useDeviceBudget } from '@/hooks/useDeviceBudget';
+import { Points } from '@/components/Points/Points';
 import { evalTask } from '@/eval/evalTask';
 import { noteMatchesQuery } from '../noteSearch';
 
@@ -69,6 +72,9 @@ export function AddNodeMenu() {
   const organizeSelection = useAppStore((s) => s.organizeSelection);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
+  // What a row's price is divided by to print (utils/budgetPoints.ts); it
+  // re-renders the rows on a device change, which reprices them.
+  const deviceBudget = useDeviceBudget();
   const language = useAppStore((s) => s.language);
   const { screenToFlowPosition, fitView } = useReactFlow();
 
@@ -396,6 +402,8 @@ export function AddNodeMenu() {
     // it's a distinct focus stop from the same def down in its category.
     const key = keyOverride ?? def.type;
     const cost = freshNodeCost(def.type) ?? 0;
+    // Printed, and coloured, as the selected device's budget points.
+    const points = toBudgetPoints(cost, deviceBudget);
     // displayDescription strips the `Also: …` alias tail — that tail is search
     // fodder for nodeMatchRank, never UI text, and the inline line printed it.
     const desc = def.description
@@ -421,9 +429,9 @@ export function AddNodeMenu() {
           {cost > 0 && evalTask().pointsVisible && (
             <span
               className="context-menu__item-cost"
-              style={{ color: getCostTextColor(cost, costColorLow, costColorHigh) }}
+              style={{ color: getCostTextColor(points, costColorLow, costColorHigh) }}
             >
-              {cost}
+              <Points value={points} />
             </span>
           )}
         </span>

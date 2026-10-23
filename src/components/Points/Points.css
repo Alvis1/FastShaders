@@ -1,0 +1,19 @@
+/* A rounded point figure (Points.tsx). Only the figure that carries a tooltip
+   takes the pointer back: its host badge is `pointer-events: none`, and a
+   title on an element the pointer passes through never shows. */
+.fs-points--tip {
+  pointer-events: auto;
+}
+
+/* The "this was rounded" mark: a small dot at the digits' middle, tucked
+   against the last digit so it cannot be read as a decimal point or as a
+   separator from whatever follows. Inherits the figure's colour. */
+.fs-points__dot {
+  display: inline-block;
+  margin-left: 0.04em;
+  font-weight: 900;
+  transform: translateY(-0.06em);
+  /* A mark on the figure, not part of it: a copied "23.33" carries no dot. */
+  user-select: none;
+  -webkit-user-select: none;
+}

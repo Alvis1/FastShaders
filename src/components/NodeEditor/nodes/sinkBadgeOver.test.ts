@@ -9,9 +9,10 @@ import { readFileSync } from 'node:fs';
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 
 describe('the over-budget sink badge', () => {
-  it('compares against the SELECTED device\'s budget, through the one resolver', () => {
+  it('compares against the SELECTED device\'s budget, through the one budget hook', () => {
     const hook = read('./useCostChrome.ts');
-    expect(hook).toContain('resolveDeviceBudget(s.selectedHeadsetId, s.costProfiles, s.costBudgetOverrides).maxPoints');
+    // The device budget in table points, i.e. the printed 100 (utils/budgetPoints.ts).
+    expect(hook).toContain('const max = useDeviceBudget();');
     expect(hook).toContain("return `node-base__cost-badge${cost > max ? ' node-base__cost-badge--over' : ''}`;");
   });
 
@@ -20,6 +21,8 @@ describe('the over-budget sink badge', () => {
       const src = read(f);
       expect(src, f).toContain('const badgeClass = useSinkBadgeClass(cost);');
       expect(src, f).toContain('<span className={badgeClass} style={{ color: costTextColor }}>');
+      // The snapshot is file data until the restamp: never arithmetic on it raw.
+      expect(src, f).toContain('const cost = storedCost(data.cost);');
     }
     const card = read('../NodePreviewCard.tsx');
     const output = card.slice(card.indexOf('export function OutputCardContent('));

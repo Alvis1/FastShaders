@@ -186,6 +186,46 @@ describe('the main app boot wave', () => {
   });
 });
 
+/**
+ * The device-comparison page (compare/index.html → src/compare/main.tsx) reads
+ * the editor's cost profiles and prices every node type under several devices,
+ * and it must do so WITHOUT booting the store: the store's module scope
+ * applies the selected device to the shared price table and arms the graph
+ * autosave, and nodeCost.ts sits in its import cycle. So the page prices
+ * through the store-free half (utils/typeCost.ts, costTable.ts,
+ * budgetPoints.ts, registry/vrHeadsets.ts) — and Babel has no business on a
+ * page that parses no code.
+ */
+describe('the compare page entry', () => {
+  const graph = walkStatic(join(SRC, 'compare/main.tsx'));
+
+  it('walks the real page (the guard is not vacuous)', () => {
+    for (const reached of [
+      'compare/ComparePage.tsx', 'compare/compareModel.ts', 'utils/typeCost.ts', 'utils/costTable.ts',
+      'utils/costOverride.ts', 'utils/budgetPoints.ts', 'registry/vrHeadsets.ts', 'registry/nodeRegistry.ts',
+      'components/Points/Points.tsx', 'i18n/index.ts',
+    ]) {
+      expect(graph.importerOf.has(join(SRC, reached)), reached).toBe(true);
+    }
+    expect(graph.packages.has('react-dom/client')).toBe(true);
+  });
+
+  it.each(['store/useAppStore.ts', 'utils/nodeCost.ts'])('never reaches %s through static imports', (file) => {
+    const abs = join(SRC, file);
+    expect(existsSync(abs), `${file} moved: update this list`).toBe(true);
+    expect(
+      graph.importerOf.has(abs) ? chainTo(graph, abs) : null,
+      'the compare page boots the store: price through utils/typeCost.ts and the leaves it imports',
+    ).toBeNull();
+  });
+
+  it('never reaches Babel', () => {
+    const offenders = BABEL_BEARING.map((f) => join(SRC, f)).filter((abs) => graph.importerOf.has(abs)).map((abs) => chainTo(graph, abs));
+    expect(offenders).toEqual([]);
+    expect([...graph.packages.keys()].filter((spec) => spec.startsWith('@babel/'))).toEqual([]);
+  });
+});
+
 describe('the built-in texture ids leaf', () => {
   it('imports nothing', () => {
     const src = readFileSync(join(SRC, 'registry/builtinTextureIds.ts'), 'utf8');

@@ -35,6 +35,7 @@ import complexityData from '@/registry/complexity.json';
 const BASE_COSTS: Record<string, number> =
   Object.assign(Object.create(null), complexityData.costs as Record<string, number>);
 let overrides: Record<string, number> = {};
+let overridesKey = '';
 let ACTIVE: Record<string, number> = BASE_COSTS;
 
 /** Sane per-node cost ceiling. Real prices are ≤ ~1000; this only exists to
@@ -70,6 +71,7 @@ export function sanitizeCostMap(map: unknown): Record<string, number> {
  */
 export function setCostOverrides(map: Record<string, number> | null | undefined): Record<string, number> {
   overrides = sanitizeCostMap(map);
+  overridesKey = Object.keys(overrides).sort().map((k) => `${k}:${overrides[k]}`).join(',');
   // Null-prototype target for the same reason BASE_COSTS is one — an object
   // spread would hand the merged table `Object.prototype` back and re-open the
   // inherited-key lookup above.
@@ -79,6 +81,13 @@ export function setCostOverrides(map: Record<string, number> | null | undefined)
   return overrides;
 }
 
+/** The applied override as text — equal exactly when the ACTIVE table is
+ *  equal ('' = the shipped table), so a cache of something PRICED under it can
+ *  tell it went stale (codeGroupBuilder's `layoutPricingKey`). */
+export function costOverridesKey(): string {
+  return overridesKey;
+}
+
 /** Cost for one node type from the ACTIVE (override-aware) table. */
 export function getCost(type: string | undefined): number {
   return type ? (ACTIVE[type] ?? 0) : 0;
@@ -86,3 +95,14 @@ export function getCost(type: string | undefined): number {
 
 /** The authored table with no override applied. */
 export function getBaseCosts(): Record<string, number> { return BASE_COSTS; }
+
+/**
+ * A node's stored `data.cost` snapshot as a number a reader can do arithmetic
+ * on. It arrives verbatim from a `.fastshader` or `fs:graph` (no restore path
+ * checks it), and arithmetic on `{"toString":1}` THROWS (ToPrimitive): a sink
+ * badge's render did exactly that and blanked the app until the restamp
+ * (measured 2026-10-23). Anything but a finite, non-negative number reads 0.
+ */
+export function storedCost(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0;
+}

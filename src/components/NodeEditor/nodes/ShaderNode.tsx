@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, type CSSProperties, type ReactNode } from 'react';
 import { Position, useStore, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import type { ShaderFlowNode, PortDefinition, NodeCategory } from '@/types';
 import { NODE_REGISTRY, effectiveInputs, growsOperands } from '@/registry/nodeRegistry';
@@ -10,8 +10,8 @@ import { isEvalMode } from '@/eval/evalMode';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 import { portLabel, t } from '@/i18n';
 import { CAT_HEX } from '@/utils/colorUtils';
-import { useCostChrome } from './useCostChrome';
-import { nodeCostPoints } from '@/utils/nodeCost';
+import { Points } from '@/components/Points/Points';
+import { useCostChrome, useLiveNodeCost, useRemeasureOnScale } from './useCostChrome';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { NodeTitle } from './NodeTitle';
@@ -793,46 +793,11 @@ export const ShaderNode = memo(function ShaderNode({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, edgeKey]);
 
-  // Always price from the live (override-aware) table via nodeCostPoints, so a
-  // measured benchmark dropped on the CostBar reprices this badge too — reading
-  // `costVersion` re-runs the selector when the table changes. Non-chainable
-  // nodes short-circuit inside nodeCostPoints (no edge scan); only variadic
-  // arithmetic pays the O(E) operand count. The number result bails re-renders.
-  //
-  // …but the SELECTOR still runs on every store notification, and a node drag
-  // notifies at pointer rate while changing nothing this answer depends on:
-  // `setNodes` rebuilds the nodes array and keeps each node's `data` AND the
-  // whole `edges` array by reference (the same identity contract
-  // `selectionOnlyGraphChange` and the edgeKey selectors above rely on). So a
-  // chainable node re-walked every edge in the graph, per node, per frame, to
-  // return the number it returned last frame. Four inputs decide it — this
-  // node's id and `data`, the edges array, and the cost table's version — so a
-  // one-slot cache keyed on exactly those turns a position-only notify into
-  // four reference compares.
-  //
-  // A cache written from inside a selector is safe here because the selector
-  // stays a pure function of that key: a StrictMode double-invoke, or a
-  // notification arriving outside render, can only ever recompute the same
-  // number for the same key, and `useSyncExternalStore` still sees a stable
-  // snapshot. It must NOT be turned into a useMemo — the value has to be read
-  // through the store subscription, or a cost-table swap (which touches
-  // neither `data` nor `edges`) would never re-render the badge.
-  const costMemo = useRef<
-    { id: string; data: unknown; edges: unknown; version: number; cost: number } | null
-  >(null);
-  const cost = useAppStore((s) => {
-    const m = costMemo.current;
-    if (m && m.id === id && m.data === data && m.edges === s.edges && m.version === s.costVersion) {
-      return m.cost;
-    }
-    const points = nodeCostPoints(
-      { id, type: 'shader', position: { x: 0, y: 0 }, data } as ShaderFlowNode,
-      s.edges,
-    );
-    costMemo.current = { id, data, edges: s.edges, version: s.costVersion, cost: points };
-    return points;
-  });
-  const { costColor, headerTextColor, costTextColor, costScale } = useCostChrome(cost);
+  // The live, device-aware price — the memoized selector's rationale is on
+  // useLiveNodeCost (useCostChrome.ts), shared with every card that prints one.
+  const cost = useLiveNodeCost(id, data);
+  const { costColor, headerTextColor, costTextColor, costScale, points } = useCostChrome(cost);
+  useRemeasureOnScale(id, costScale);
   // Per-node box override (designer): minimum width. Frame style (corner
   // radius, border thickness) is fixed app-wide — only the color varies (category).
   const box = nodeBox(data.registryType);
@@ -1112,7 +1077,7 @@ export const ShaderNode = memo(function ShaderNode({
           className={cardClass}
           style={nodeStyle}
         >
-        {cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>}
+        {cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}><Points value={points} /></span>}
 
         <div className="node-base__header" style={headerStyle} {...headerTip}>
           <NodeTitle text={headerText} style={{ color: headerTextColor }} bare={headerTip !== null} />
@@ -1230,7 +1195,7 @@ export const ShaderNode = memo(function ShaderNode({
         style={nodeStyle}
       >
       {/* Cost badge above node */}
-      {cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>}
+      {cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}><Points value={points} /></span>}
 
       {/* Header — colored by performance impact (cost) */}
       <div className="node-base__header" style={headerStyle} {...headerTip}>

@@ -2345,7 +2345,13 @@ function renderInfo() {
   const n = NODE_BY_TYPE[state.type]; const cat = ND.categoryHex(n.cat); const cost = COSTS[state.type] ?? 0;
   el('iType').textContent = n.type;
   const ic = el('iCat'); ic.querySelector('.dot').style.background = cat; ic.querySelector('span:last-child').textContent = ndCatLabel(n.cat);
-  const io = el('iCost'); io.querySelector('.dot').style.background = ND.costColorOf(cost); io.querySelector('span:last-child').textContent = cost + ' pts';
+  const io = el('iCost'); io.querySelector('.dot').style.background = ND.costColorOf(cost);
+  /* The price as every card prints it (<Points>'s rule, in plain DOM): budget
+     points at two decimals, a centred dot when that rounded it, the exact
+     figure on hover. */
+  const pts = ND.costLabelOf(cost); const iv = io.querySelector('span:last-child');
+  iv.textContent = pts.text + (pts.rounded ? '·' : '') + ' pts';
+  if (pts.rounded) iv.title = pts.exact; else iv.removeAttribute('title');
   el('pasteBtn').disabled = !copyBuf;
   syncNameInputs();
 }

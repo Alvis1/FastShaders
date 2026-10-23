@@ -211,7 +211,10 @@ describe('feedbackReport — project counts', () => {
   it('renders graph, cost and geometry rows, flagging an over-budget shader', () => {
     const joined = envLines(ENV, PROJECT).join('\n');
     expect(joined).toContain('42 nodes (38 connected) · 51 connections · 3 groups · 2 notes');
-    expect(joined).toContain('1,830 / 200 pts · Meta Quest 3 · OVER BUDGET');
+    // The cost bar's figures: 1830 table points of a 200-point device is 915 of 100.
+    expect(joined).toContain('915 / 100 pts · Meta Quest 3 · OVER BUDGET');
+    // Rounded to 0.01, as on screen.
+    expect(envLines(ENV, { ...PROJECT, totalCost: 35, budget: 150 }).join('\n')).toContain('23.33 / 100 pts · Meta Quest 3\n');
     expect(joined).toContain('sphere (built-in)');
   });
 

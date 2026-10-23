@@ -9,7 +9,7 @@
  * the store): a static import from the boot path puts Babel on the entry wave.
  */
 
-import { buildCodeGroup, type CodeGroupAsset, type CodeGroupEntry } from '@/registry/codeGroupBuilder';
+import { buildCodeGroup, layoutPricingKey, type CodeGroupAsset, type CodeGroupEntry } from '@/registry/codeGroupBuilder';
 
 export type BuiltinTexture = CodeGroupAsset;
 
@@ -615,10 +615,11 @@ const TEXTURE_ENTRIES: CodeGroupEntry[] = [
 
 /**
  * Parse each texture's TSL code into nodes/edges, wrap in a group container,
- * and apply auto-layout. Built by the FIRST call and cached; this module is
- * loaded on demand, never at boot.
+ * and apply auto-layout. Built by the FIRST call and cached until the selected
+ * device's pricing moves (`layoutPricingKey` — the layout is measured in it);
+ * this module is loaded on demand, never at boot.
  */
-let _cachedTextures: BuiltinTexture[] | null = null;
+let _cachedTextures: { key: string; list: BuiltinTexture[] } | null = null;
 
 /**
  * The texture ids, WITHOUT building the textures. The list itself lives in the
@@ -631,7 +632,9 @@ let _cachedTextures: BuiltinTexture[] | null = null;
 export { getBuiltinTextureIds } from './builtinTextureIds';
 
 export function getBuiltinTextures(): BuiltinTexture[] {
-  if (_cachedTextures) return _cachedTextures;
-  _cachedTextures = TEXTURE_ENTRIES.map((entry) => buildCodeGroup(entry, 'builtin-texture-'));
-  return _cachedTextures;
+  const key = layoutPricingKey();
+  if (_cachedTextures?.key === key) return _cachedTextures.list;
+  const list = TEXTURE_ENTRIES.map((entry) => buildCodeGroup(entry, 'builtin-texture-'));
+  _cachedTextures = { key, list };
+  return list;
 }

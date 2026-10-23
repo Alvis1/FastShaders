@@ -528,7 +528,10 @@ describe('the cost pill CYCLES through the Output nodes (owner request, D4)', ()
       expect(css).not.toMatch(/^\.output-node \.node-base__cost-badge\s*\{/m);
       const card = readFileSync(path.resolve(__dirname, 'NodePreviewCard.tsx'), 'utf8');
       expect(card).toContain('className="output-node node-preview-card__node"');
-      expect(card).toContain('className="node-base__cost-badge"');
+      // Every card badge is CardCostBadge, wearing the canvas badge's class;
+      // the Output card hands it useSinkBadgeClass's (that class + `--over`).
+      expect(card).toContain("className = 'node-base__cost-badge'");
+      expect(card).toContain('<CardCostBadge cost={cost} color={costTextColor} className={badgeClass} />');
     });
   });
 });

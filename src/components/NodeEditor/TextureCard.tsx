@@ -242,7 +242,7 @@ export const TextureCard = memo(function TextureCard({ texture }: TextureCardPro
       activationLabel={fillTemplate(t('Add {name} texture', language), { name })}
       countLabel={countLabel}
       color={texture.color}
-      totalCost={texture.totalCost}
+      nodes={texture.nodes}
       paint={PREVIEW_RENDERERS[texture.id]}
     />
   );

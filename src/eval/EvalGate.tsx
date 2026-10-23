@@ -41,9 +41,11 @@ function makeBridge(): EvalBridge {
   return {
     getSnapshot: () => {
       const s = useAppStore.getState();
-      // `costPoints` is the RENDERED price (the CostBar's number: only what
-      // feeds the counted Outputs); `costPointsAll` is every node on the
-      // canvas priced once, so parked work shows up in the record too.
+      // `costPoints` is the RENDERED price (only what feeds the counted
+      // Outputs); `costPointsAll` is every node on the canvas priced once, so
+      // parked work shows up in the record too. Both in TABLE points — the cost
+      // bar prints them divided by the device budget, ×100 (the package's
+      // costTable.budget / shownBudget say so).
       return {
         ...countProject(s.nodes, s.edges),
         costPoints: s.totalCost,
@@ -106,12 +108,6 @@ function cleanSlateForStudy(): void {
     // against the PREVIOUS user's graph, so a reload mid-session would restore
     // this participant's blank document to wherever the last one was looking.
     localStorage.removeItem(VIEWPORT_KEY);
-    // Per-device budget overrides (the CostBar's right-click point cap). This
-    // is a study CONDITION, not a preference: it decides where the cost bar
-    // turns red and therefore what `budget-crossed` measures, and it persists
-    // across participants. Leaving it set meant participant 2 silently
-    // inherited a cap someone had typed during participant 1.
-    localStorage.removeItem('fs:costBudgets');
     // The optional palette categories (Textures, Distance fields — OFF by
     // default, switched on per browser from the toolbar's right-click list).
     // What the palette OFFERS is part of the condition every participant
@@ -128,15 +124,6 @@ function cleanSlateForStudy(): void {
   }
   useAppStore.setState({
     past: [], future: [],
-    // `Object.create(null)`, never `{}` — the store's `loadCostBudgets` and
-    // `setCostBudgetOverride` both build this map null-prototype and say why:
-    // the keys are device ids out of localStorage, which anything at this
-    // origin can write, and a plain object resolves `__proto__` /
-    // `constructor` / `toString` to inherited values on a plain property read
-    // (`resolveDeviceBudget` does exactly that). This was the one writer that
-    // handed the slice back a prototype, so a clean slate left the invariant
-    // broken for the rest of the study session.
-    costBudgetOverrides: Object.create(null) as Record<string, number>,
     optionalCategories: DEFAULT_OPTIONAL_CATEGORIES,
     allowManyMaterials: false,
   });
@@ -163,18 +150,13 @@ export function EvalGate() {
     if (!readEvalSession()) return undefined;
     let over: boolean | null = null;
     return useAppStore.subscribe((state) => {
-      // `costBudgetOverrides` is the THIRD argument and it is not optional here:
-      // the CostBar passes it, so on a machine where the researcher has set a
-      // per-device cap the participant sees a red bar at 150 while this watcher
-      // compares against the device default of 200 — budgetCrossings 0 and
-      // overBudgetMs 0 for a session spent visibly over budget. Cost feedback is
-      // the study's independent variable, so the dependent measure must be taken
-      // against the same threshold that was on screen.
-      const budget = resolveDeviceBudget(
-        state.selectedHeadsetId,
-        state.costProfiles,
-        state.costBudgetOverrides,
-      ).maxPoints;
+      // The same resolver the cost bar divides by, so the dependent measure is
+      // taken against the threshold that was on screen (cost feedback is the
+      // study's independent variable): the bar turns red past 100, i.e. past
+      // this budget in table points. A user-typed cap could once move that
+      // line on one machine and not here; it is gone (fs:costBudgets retired
+      // 2026-10-23). The event keeps TABLE points, as every snapshot does.
+      const budget = resolveDeviceBudget(state.selectedHeadsetId, state.costProfiles).maxPoints;
       if (!Number.isFinite(budget) || budget <= 0) return;
       const now = state.totalCost > budget;
       if (over === null) {

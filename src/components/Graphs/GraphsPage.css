@@ -433,6 +433,14 @@
   cursor: inherit;
 }
 
+/* A rounded point figure takes the pointer back so its exact value shows on
+   hover (Points.css). Inside this inert preview that would revive, over the
+   badge's few pixels, the tile's drag, its click-to-add and its stale tooltip
+   — everything the rule above drops. The cell's button keeps the pointer. */
+.gp__preview .fs-points--tip {
+  pointer-events: none;
+}
+
 .gp__graphbtn,
 .gp__codebtn {
   display: inline-flex;

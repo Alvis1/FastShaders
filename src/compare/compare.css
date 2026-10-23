@@ -1,0 +1,426 @@
+/* ===== The device-comparison page (compare/index.html) =====
+   The app's flat TECHNICAL style on tokens.css: square corners, hard zero-blur
+   shadows, no backdrop blur, chrome text at --font-size-sm. The page FITS the
+   viewport like the app does (reset.css keeps html/body/#root unscrolled):
+   `.cmp` scrolls only when the window is too short for its head, and the
+   table scrolls inside its own frame, its header row and node column sticky. */
+
+.cmp {
+  /* The difference colours: the cost gradient's poles (colorUtils'
+     getCostColor defaults #FF5722 high / #8BC34A low) darkened in light mode
+     and lightened in dark until small text clears 4.5:1 on the panel
+     (#BF360C 5.6:1 and #33691E 6.6:1 on white; #FFAB91 4.9:1 and #AED581
+     5.4:1 on the dark panel). Page-local because tokens.css has no green, and
+     its --cost-high is 3.2:1 on white — fine for the bar's bold over-budget
+     total, too faint for a 10px figure. The SIGN carries the meaning too:
+     colour is never the only signal. */
+  --cmp-more: #bf360c;
+  --cmp-less: #33691e;
+
+  height: 100%;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  /* 16px side gutter at every width. */
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+}
+
+:root[data-theme='dark'] .cmp {
+  --cmp-more: #ffab91;
+  --cmp-less: #aed581;
+}
+
+/* A file dragged over the page: the whole page is the drop target. */
+.cmp--dropping {
+  outline: 2px dashed var(--border-focus);
+  outline-offset: -4px;
+}
+
+/* ---------- head ---------- */
+
+.cmp-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: none;
+}
+
+.cmp-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+}
+
+.cmp-brand {
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.cmp-brand:hover {
+  color: var(--text-primary);
+}
+
+.cmp-title h1 {
+  /* A one-off above the token scale, like a modal title. */
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.cmp-intro {
+  max-width: 72ch;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* ---------- device chooser ---------- */
+
+.cmp-devices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* Thirty stored profiles must not push the table off the screen. */
+  max-height: 40vh;
+  overflow: auto;
+  flex: none;
+}
+
+.cmp-devgroup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+
+.cmp-devgroup__title {
+  min-width: 7rem;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.cmp-chip,
+.cmp-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  min-height: var(--ctl-size);
+  padding: 0 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-sm);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  line-height: 1.2;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.cmp-chip:hover,
+.cmp-btn:hover {
+  background: var(--bg-surface-hover);
+}
+
+.cmp-chip[aria-pressed='true'] {
+  border-color: var(--text-accent);
+  background: var(--text-accent);
+  color: #ffffff;
+  box-shadow: var(--shadow-sm);
+}
+
+.cmp-chip[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cmp-btn {
+  border-style: dashed;
+}
+
+.cmp-chip:focus-visible,
+.cmp-btn:focus-visible,
+.cmp-mini:focus-visible,
+.cmp-brand:focus-visible,
+.cmp-table-wrap:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+}
+
+.cmp-mark {
+  margin-right: 2px;
+}
+
+/* ---------- search, switch, notices ---------- */
+
+.cmp-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  flex: none;
+}
+
+.cmp-search {
+  width: 16rem;
+  max-width: 100%;
+  height: var(--ctl-size);
+  padding: 0 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-sm);
+  background: var(--bg-input);
+}
+
+.cmp-search:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.cmp-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.cmp-legend,
+.cmp-notice {
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.cmp-notice {
+  font-weight: 500;
+  color: var(--text-primary);
+  /* A profile label or file name can be one unbroken word; at phone width it
+     scrolled the whole page sideways. */
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+/* ---------- the table ---------- */
+
+.cmp-table-wrap {
+  /* The ONE item that shrinks: its basis is the table's height, so a short
+     table (a search, "only differences") gets a short frame, and a long one
+     gives up height until it fits the window and scrolls inside — which is
+     what keeps its header row sticky. Never below 240px: on a short window
+     the page scrolls to it instead. */
+  flex: 0 1 auto;
+  min-height: 240px;
+  /* The frame hugs the table, so a figure sits near its node's name; a table
+     wider than the page scrolls inside it. */
+  align-self: flex-start;
+  max-width: 100%;
+  overflow: auto;
+  border: 1px solid var(--border-default);
+  background: var(--bg-panel);
+}
+
+.cmp-table {
+  /* `separate`: a sticky cell keeps its borders only outside the collapsed model. */
+  border-collapse: separate;
+  border-spacing: 0;
+  width: max-content;
+  /* A table is read, and copied from. */
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.cmp-table th,
+.cmp-table td {
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  font-weight: 400;
+}
+
+.cmp-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  vertical-align: bottom;
+  text-align: right;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.cmp-table thead th.cmp-corner {
+  left: 0;
+  z-index: 3;
+  text-align: left;
+  font-weight: 600;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.cmp-col {
+  min-width: 8.5rem;
+}
+
+.cmp-col__name {
+  display: block;
+  font-weight: 600;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.cmp-col__kind {
+  display: block;
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+
+.cmp-col__actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.cmp-ref {
+  padding: 1px 6px;
+  border: 1px solid var(--text-accent);
+  /* Filled, like a pressed chip: accent TEXT on the dark panel is ~2:1. */
+  background: var(--text-accent);
+  color: #ffffff;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+}
+
+/* Compact in-header controls — sized by the header row, not --ctl-size. */
+.cmp-mini {
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: var(--font-size-xs);
+}
+
+.cmp-mini:hover {
+  background: var(--bg-surface-hover);
+}
+
+.cmp-group th {
+  padding-top: 10px;
+  background: var(--bg-surface);
+  text-align: left;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+/* The group label stays at the left while the columns scroll under it. */
+.cmp-group th > span {
+  position: sticky;
+  left: 10px;
+}
+
+.cmp-node {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 9rem;
+  max-width: 16rem;
+  text-align: left;
+  white-space: normal;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.cmp-table tbody tr:not(.cmp-group):hover > * {
+  background: var(--bg-surface-hover);
+}
+
+.cmp-note-mark {
+  margin-left: 2px;
+  color: var(--text-muted);
+}
+
+/* Read by a screen reader, drawn nowhere (the note is the label's title). */
+.cmp-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.cmp-cell {
+  text-align: right;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Fixed slots, so a column's figures line up whether or not a row differs. */
+.cmp-val {
+  display: inline-block;
+  min-width: 6ch;
+  text-align: right;
+}
+
+.cmp-cell--zero .cmp-val {
+  color: var(--text-muted);
+}
+
+/* The reference column, a step off the panel: the column every sign is against. */
+.cmp-table td.cmp-cell--ref,
+.cmp-table thead th.cmp-col--ref {
+  background: var(--bg-surface);
+}
+
+.cmp-delta-slot {
+  display: inline-block;
+  min-width: 8ch;
+  margin-left: 6px;
+  text-align: left;
+  font-size: var(--font-size-xs);
+  /* The table is copied from: a copied row is its values, never "12.5−5". */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.cmp-delta--up {
+  color: var(--cmp-more);
+}
+
+.cmp-delta--down {
+  color: var(--cmp-less);
+}
+
+.cmp-empty {
+  padding: var(--space-4);
+  color: var(--text-secondary);
+}
+
+@media (max-width: 600px) {
+  .cmp-devgroup__title {
+    flex-basis: 100%;
+  }
+
+  .cmp-search {
+    width: 100%;
+  }
+
+  .cmp-node {
+    min-width: 7.5rem;
+  }
+
+  .cmp-col {
+    min-width: 7rem;
+  }
+}

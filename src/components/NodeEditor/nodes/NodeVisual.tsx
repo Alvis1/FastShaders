@@ -8,6 +8,9 @@ import { formatNodeLabel } from '@/i18n';
 import { socketTooltip } from '../handles/TypedHandle';
 import { CardSocketLabels } from '../cardSocketLabels';
 import { useAppStore } from '@/store/useAppStore';
+import { useDeviceBudget } from '@/hooks/useDeviceBudget';
+import { toBudgetPoints } from '@/utils/budgetPoints';
+import { Points } from '@/components/Points/Points';
 import { buildRows, visiblePortRows, outputRowLabel, ImageCardPicture, IMAGE_EMPTY_HINT_EVAL, PortValueCell } from './ShaderNode';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
@@ -75,7 +78,13 @@ export interface NodeVisualProps {
   costColor: string;
   costTextColor: string;
   costScale: number;
+  /** The node's price in TABLE points (utils/budgetPoints.ts) — what the
+   *  badge's `> 0` test reads, as on the canvas card. */
   cost: number;
+  /** The figure the badge PRINTS, in budget points (useCostChrome's
+   *  `points`). Absent → `cost` divided by the selected device's budget here,
+   *  so a caller holding only the table price still prints the share of 100. */
+  points?: number;
   headerTextColor: string;
   /** Draft design override (Node Designer) — replaces the saved CUSTOM_GLYPHS
    *  entry outright. Absent → the saved design, exactly like the app. */
@@ -145,6 +154,7 @@ export function NodeVisual({
   costTextColor,
   costScale,
   cost,
+  points,
   headerTextColor,
   design,
   headerText,
@@ -157,6 +167,9 @@ export function NodeVisual({
   cardClassName = '',
 }: NodeVisualProps) {
   const language = useAppStore((s) => s.language);
+  // Unconditional (a hook): re-renders on a device change like the canvas card.
+  const deviceBudget = useDeviceBudget();
+  const shownPoints = points ?? toBudgetPoints(cost, deviceBudget);
   // A replica shows the node AS IT LANDS ON THE CANVAS: nothing exposed, so
   // the opt-in ramp-colour sockets of Data Stripes / Data Viz are hidden here
   // exactly as ShaderNode hides them on a fresh node. Applied INSIDE the
@@ -298,7 +311,7 @@ export function NodeVisual({
   const header = (
     <>
       {cost > 0 && (
-        <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
+        <span className="node-base__cost-badge" style={{ color: costTextColor }}><Points value={shownPoints} /></span>
       )}
       <div className="node-base__header" style={{ background: costColor }}>
         <NodeTitle text={titleText} style={{ color: headerTextColor }} />

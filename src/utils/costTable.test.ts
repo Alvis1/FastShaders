@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { getBaseCosts, getCost, sanitizeCostMap, setCostOverrides } from './costTable';
+import { getBaseCosts, getCost, sanitizeCostMap, setCostOverrides, storedCost } from './costTable';
 // STATIC, not a dynamic `await import()` inside the test. Pulling nodeCost in
 // drags the whole store graph with it, which under load can take longer than the
 // 5s test timeout — and a timed-out test is not cancelled, so the override this
@@ -54,15 +54,18 @@ describe('costTable stays a leaf', () => {
 
   it('the store reaches the table directly, not through nodeCost', () => {
     const store = read('../store/useAppStore.ts');
-    // The two the store calls during its OWN module evaluation.
+    // What the store calls during its OWN module evaluation: the boot table and
+    // the boot device budget, each from its leaf, and the persisted profiles
+    // through costOverride (whose sanitizeCostMap comes from this leaf too).
     expect(store).toMatch(/import \{[^}]*setCostOverrides[^}]*\} from '@\/utils\/costTable'/);
-    expect(store).toMatch(/import \{[^}]*sanitizeCostMap[^}]*\} from '@\/utils\/costTable'/);
+    expect(store).toMatch(/import \{[^}]*setDeviceBudget[^}]*\} from '@\/utils\/budgetPoints'/);
+    expect(store).toMatch(/import \{[^}]*parseStoredCostProfiles[^}]*\} from '@\/utils\/costOverride'/);
     // nodeCost may still be imported for the graph-aware readers — they are only
     // ever called from inside store actions, never at module scope — but these
-    // two must not come from there.
+    // must not come from there.
     const viaNodeCost = store.match(/import \{([^}]*)\} from '@\/utils\/nodeCost'/);
     if (viaNodeCost) {
-      expect(viaNodeCost[1]).not.toMatch(/setCostOverrides|sanitizeCostMap/);
+      expect(viaNodeCost[1]).not.toMatch(/setCostOverrides|sanitizeCostMap|setDeviceBudget/);
     }
   });
 });
@@ -82,5 +85,17 @@ describe('costTable behaviour survived the move out of nodeCost', () => {
   it('still drops unknown keys and clamps hostile values', () => {
     expect(sanitizeCostMap({ voronoi: 230, bogus: 1, perlin: -1 })).toEqual({ voronoi: 230 });
     expect(sanitizeCostMap({ mul: 1e308 }).mul).toBe(1_000_000);
+  });
+});
+
+describe('storedCost — a data.cost snapshot out of a file, read without coercion', () => {
+  it('keeps a finite non-negative number', () => {
+    expect([storedCost(0), storedCost(12.5), storedCost(230)]).toEqual([0, 12.5, 230]);
+  });
+
+  it('reads anything else as 0 and never throws (arithmetic on {"toString":1} does)', () => {
+    for (const bad of [-1, Number.NaN, Number.POSITIVE_INFINITY, '12', null, undefined, true, [3], { toString: 1 }]) {
+      expect(storedCost(bad), String(typeof bad)).toBe(0);
+    }
   });
 });

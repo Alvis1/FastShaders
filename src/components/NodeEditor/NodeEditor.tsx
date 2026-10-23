@@ -104,8 +104,9 @@ import { CostBar } from '@/components/Layout/CostBar';
 import { PreviewLink } from '@/components/Layout/PreviewLink';
 import { PreviewRail } from '@/components/Layout/PreviewRail';
 import { RAIL_ADD_OUTPUT_EVENT, RAIL_FOCUS_EVENT, focusRequestId } from '@/components/Layout/previewRailEvents';
-import { getCostScale, canvasInkColor, canvasInkShadow, canvasGridColor } from '@/utils/colorUtils';
-import { nodeCostPoints, imageNodeCost, getCost, getBaseCosts, freshNodeCost } from '@/utils/nodeCost';
+import { canvasInkColor, canvasInkShadow, canvasGridColor } from '@/utils/colorUtils';
+import { imageNodeCost, getCost, getBaseCosts, freshNodeCost } from '@/utils/nodeCost';
+import { COST_SCALED_TYPES, drawnCostScale } from '@/engine/layoutEngine';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import { findSingletonNode } from './singletonNodes';
@@ -406,9 +407,6 @@ function connectSnapOffset(
   };
 }
 
-/** Node types whose card renders CSS-scaled by cost (transform-origin top-left). */
-const COST_SCALED_TYPES = new Set(['shader', 'clock', 'preview', 'mathPreview']);
-
 /** Whether dropping this tile could splice into an edge — only node tiles
  *  with both inputs and outputs qualify (placeTilePayload's own guard).
  *  Anything else must not get the drop-on-edge highlight: it would promise
@@ -420,26 +418,22 @@ function tileCanSplice(payload: TilePayload): boolean {
 }
 
 /**
- * Visible size of a node's card. Cost-scaled node types render up to 1.35×
- * LARGER than the measured layout box (transform-origin top-left, transform
- * doesn't affect layout), so anything aiming at what the user SEES — target
- * boxes and the dragged node's own center alike — must scale the measured box.
- * The scale must be the number the CARD scales by: ShaderNode prices itself
- * live through `nodeCostPoints` (override-aware, and a grown variadic fold
- * costs base × (N−1)), while PreviewNode/ClockNode/MathPreviewNode read the
- * creation-time `data.cost` snapshot — so each type is asked the way its own
- * component asks, or a measured cost profile would leave a band of the card
- * outside the box the drag-connect gate tests.
+ * Visible size of a node's card. Cost-scaled node types (COST_SCALED_TYPES,
+ * the one set the layout engine reserves by) render up to 1.35× LARGER than
+ * the measured layout box (transform-origin top-left, transform doesn't affect
+ * layout), so anything aiming at what the user SEES — target boxes and the
+ * dragged node's own center alike — must scale the measured box. The scale
+ * must be the number the CARD scales by, and every one of those cards prices
+ * itself LIVE (`useLiveNodeCost` → `nodeCostPoints`: override-aware, under the
+ * selected device, and a grown variadic fold costs base × (N−1)) and grows by
+ * its share of the device's 100 — `drawnCostScale`, handed the same raw store
+ * edges the card's own price reads. Any other number (the creation-time
+ * `data.cost` snapshot included) leaves a band of the card outside the box the
+ * drag-connect gate tests.
  */
 function nodeVisualSize(node: AppNode, edges: AppEdge[]): { w: number; h: number } {
   const s = getNodeSize(node);
-  const scale = COST_SCALED_TYPES.has(node.type ?? '')
-    ? getCostScale(
-        node.type === 'shader'
-          ? nodeCostPoints(node, edges)
-          : ((node.data as { cost?: number }).cost ?? 0),
-      )
-    : 1;
+  const scale = COST_SCALED_TYPES.has(node.type ?? '') ? drawnCostScale(node, edges) : 1;
   return { w: s.w * scale, h: s.h * scale };
 }
 
@@ -3128,7 +3122,11 @@ export function NodeEditor() {
    * How far the SELECTED cards overhang React Flow's selection rectangle on the
    * right and bottom, in flow px — cost-scaled nodes paint larger than the box
    * it measures. A difference of UNIONS, never a per-node max; NodeEditor.css.
+   * Keyed on `costVersion` too: a device change or a dropped profile rescales
+   * every card (its price, and the budget it is a share of) without touching
+   * `nodes`, and the rectangle must follow the cards.
    */
+  const costVersion = useAppStore((s) => s.costVersion);
   const selectionOverflow = useMemo(() => {
     let measuredR = -Infinity, measuredB = -Infinity;
     let visualR = -Infinity, visualB = -Infinity;
@@ -3147,7 +3145,8 @@ export function NodeEditor() {
       dr: Math.max(0, visualR - measuredR),
       db: Math.max(0, visualB - measuredB),
     };
-  }, [nodes, edges]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- costVersion is the cache key for the module-level price table and device budget nodeVisualSize reads
+  }, [nodes, edges, costVersion]);
 
   const canvasCssVars = {
     '--node-cost-text': contrastColor,

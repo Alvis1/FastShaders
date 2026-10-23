@@ -38,6 +38,8 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
 import { isActiveSinkSelector } from './activeSinkSelector';
 import { useCostChrome, useSinkBadgeClass } from './useCostChrome';
+import { storedCost } from '@/utils/costTable';
+import { Points } from '@/components/Points/Points';
 import { TypedHandle } from '../handles/TypedHandle';
 // Also pulls in ShaderNode.css transitively — the shared .shader-node__edge-val
 // class (one font size for every number on a node) lives there.
@@ -182,8 +184,12 @@ export const OutputNode = memo(function OutputNode({
   const shownMesh = useAppStore(shownPreviewMesh);
   const loaded = useMemo(() => loadedModelOf(shownMesh), [shownMesh]);
   const gltfNotShown = useAppStore((s) => s.previewShowsModel === false && !!s.previewMesh && loadedModelOf(s.previewMesh).kind !== 'not-gltf');
-  const cost = data.cost ?? 0;
-  const { costColor, headerTextColor, costTextColor } = useCostChrome(cost);
+  // What the shader costs with THIS node driving, in table points — stamped by
+  // `sinkCosts` from the cost pass (useSyncEngine) and on a device change
+  // (setSelectedHeadsetId), so on a sink `data.cost` is not a creation
+  // snapshot. The badge prints it as `points`, the share of the device's 100.
+  const cost = storedCost(data.cost);
+  const { costColor, headerTextColor, costTextColor, points } = useCostChrome(cost);
   const badgeClass = useSinkBadgeClass(cost);
 
   const exposedPorts = data.exposedPorts ?? OUTPUT_DEFAULT_EXPOSED;
@@ -547,10 +553,12 @@ export const OutputNode = memo(function OutputNode({
       style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid var(--cat-output)` }}
     >
       {/* Bare number, matching every ShaderNode badge — the unit is spelled out
-          once on the CostBar meter rather than repeated on every node. */}
+          once on the CostBar meter rather than repeated on every node. Printed
+          as the share of the device's 100 (<Points>: a rounded figure gets
+          its dot and its exact value on hover). */}
       {cost > 0 && (
         <span className={badgeClass} style={{ color: costTextColor }}>
-          {cost}
+          <Points value={points} />
         </span>
       )}
 

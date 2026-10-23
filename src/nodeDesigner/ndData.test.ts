@@ -1,7 +1,10 @@
-import { describe, it, expect } from 'vitest';
-import { designerNodes, NODE_COSTS, TYPE_CHANNELS, definitionOf } from './ndData';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { designerNodes, NODE_COSTS, TYPE_CHANNELS, definitionOf, costColorOf, costLabelOf, costScaleOf } from './ndData';
 import { getAllDefinitions, getFlowNodeType } from '@/registry/nodeRegistry';
 import { freshNodeCost } from '@/utils/nodeCost';
+import { getDeviceBudget, setDeviceBudget } from '@/utils/budgetPoints';
+import { getCostColor, getCostScale } from '@/utils/colorUtils';
+import { useAppStore } from '@/store/useAppStore';
 
 /**
  * The designer's node list is DERIVED from the registry (this is what killed
@@ -55,5 +58,40 @@ describe('ndData — designer node list derives from the live registry', () => {
         expect(TYPE_CHANNELS[ty], `missing TYPE_CHANNELS entry for "${ty}" (node ${n.type})`).toBeGreaterThan(0);
       }
     }
+  });
+});
+
+/**
+ * NODE_COSTS stays in TABLE points; the cost row, its colour dot and the
+ * overlays' px-per-unit read it as the selected device's BUDGET points, as
+ * every card does (utils/budgetPoints.ts) — so the overlays still scale by the
+ * same factor the stage card (bridge.tsx) is drawn at. The device budget is a
+ * worker-wide singleton (isolate:false): restored after every test.
+ */
+describe('ndData — the cost row and overlays print and scale budget points', () => {
+  let saved = 0;
+  beforeEach(() => { saved = getDeviceBudget(); });
+  afterEach(() => setDeviceBudget(saved));
+
+  it('prints a price as the selected device\'s share of 100, rounded to 0.01 and flagged when rounded', () => {
+    setDeviceBudget(200);
+    expect(costLabelOf(35)).toEqual({ text: '17.5', rounded: false, exact: '17.5' });
+    setDeviceBudget(150);
+    expect(costLabelOf(35)).toEqual({ text: '23.33', rounded: true, exact: '23.333333' });
+    expect(costLabelOf(0)).toEqual({ text: '0', rounded: false, exact: '0' });
+  });
+
+  it('colours the dot and scales the overlays by the same budget points the stage card is drawn at', () => {
+    const { costColorLow, costColorHigh } = useAppStore.getState();
+    setDeviceBudget(200);
+    // 80 table points of a 200 budget = 40 budget points: the gradient's top.
+    expect(costScaleOf(80)).toBe(getCostScale(40));
+    expect(costScaleOf(80)).toBeCloseTo(1.35);
+    expect(costColorOf(80)).toBe(getCostColor(40, costColorLow, costColorHigh));
+    // A stricter device runs the same price hotter.
+    setDeviceBudget(100);
+    expect(costScaleOf(20)).toBe(getCostScale(20));
+    expect(costColorOf(20)).toBe(getCostColor(20, costColorLow, costColorHigh));
+    expect(costScaleOf(0)).toBe(1);
   });
 });

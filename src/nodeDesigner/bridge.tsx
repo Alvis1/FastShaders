@@ -25,6 +25,8 @@ import { CUSTOM_GLYPHS } from '@/components/NodeEditor/nodes/glyphs/customGlyphs
 import { formatCategoryLabel, type Language } from '@/i18n';
 import { getCostColor, getCostScale, getContrastColor } from '@/utils/colorUtils';
 import { freshNodeCost } from '@/utils/nodeCost';
+import { toBudgetPoints } from '@/utils/budgetPoints';
+import { useDeviceBudget } from '@/hooks/useDeviceBudget';
 import { useAppStore } from '@/store/useAppStore';
 import { definitionOf, categoryHex } from './ndData';
 
@@ -79,6 +81,10 @@ export interface NdPreviewInput {
 function NdPreview(p: NdPreviewInput) {
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
+  // The card's colour and scale are judged in budget points, as on every
+  // surface (ndData's costColorOf/costScaleOf, which the overlays read, agree).
+  // Up here because it is a hook and the render returns early below.
+  const deviceBudget = useDeviceBudget();
   // Layout effect, not a passive one: the vanilla overlays (corner grip, snap
   // ruler, edge stubs) are positioned from this callback, and a passive effect
   // runs AFTER paint — during a corner-resize drag the grip would visibly
@@ -89,7 +95,8 @@ function NdPreview(p: NdPreviewInput) {
   const def = definitionOf(p.type);
   if (!def) return null;
   const cost = freshNodeCost(def.type) ?? 0;
-  const costColor = getCostColor(cost, costColorLow, costColorHigh);
+  const points = toBudgetPoints(cost, deviceBudget);
+  const costColor = getCostColor(points, costColorLow, costColorHigh);
   return (
     <NodeVisual
       def={def}
@@ -101,13 +108,14 @@ function NdPreview(p: NdPreviewInput) {
       onValueChange={p.onValueChange}
       snapCol={p.snapCol}
       catColor={categoryHex(def.category)}
+      // Table points: NodeVisual's badge prints them as budget points.
       cost={cost}
       costColor={costColor}
       // Overridden by the stage's `--node-cost-text` var rule (the same
       // mechanism the React Flow canvas uses), so the badge auto-contrasts
       // against the pickable stage background.
       costTextColor="#000000"
-      costScale={getCostScale(cost)}
+      costScale={getCostScale(points)}
       headerTextColor={getContrastColor(costColor)}
     />
   );

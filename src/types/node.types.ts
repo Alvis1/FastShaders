@@ -39,6 +39,7 @@ export type NodeCategory =
   | 'dataviz'
   | 'texture'
   | 'presets'
+  | 'presets2'
   | 'unknown'
   | 'output';
 
@@ -341,7 +342,9 @@ export interface GroupNodeData {
   collapsedInputs?: BoundarySocket[];
   /** While collapsed: output sockets exposed on the group (one per upstream pin). */
   collapsedOutputs?: BoundarySocket[];
-  /** Sum of GPU costs of all members — populated while collapsed for the cost badge. */
+  /** Sum of GPU costs of all members (table points) — a snapshot the collapse
+   *  takes. The pill's badge does not print it: GroupNode re-sums the members
+   *  live (`groupMemberCost`). */
   cost?: number;
   /** Title font size multiplier (1 = default, 2 = 2x, etc.). */
   titleSize?: number;

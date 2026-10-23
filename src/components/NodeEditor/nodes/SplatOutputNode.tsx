@@ -9,6 +9,8 @@ import { t, portLabel } from '@/i18n';
 import { isActiveSinkSelector } from './activeSinkSelector';
 import { effectiveExposedPorts } from '@/utils/exposedPorts';
 import { useCostChrome, useSinkBadgeClass } from './useCostChrome';
+import { storedCost } from '@/utils/costTable';
+import { Points } from '@/components/Points/Points';
 import { TypedHandle } from '../handles/TypedHandle';
 import { OutputTitle } from './OutputTitle';
 import { useWiredLabels } from './ShaderNode';
@@ -149,7 +151,7 @@ export const SplatOutputNode = memo(function SplatOutputNode({ id, data, selecte
   // Is THIS node the active sink? (utils/sdfPartition.ts `activeSink`.)
   const activeSel = useMemo(() => isActiveSinkSelector(id), [id]);
   const isActive = useAppStore(activeSel);
-  const cost = data.cost ?? 0;
+  const cost = storedCost(data.cost);
   // Only EXPOSED sockets render — Color, Opacity, Cut and Move by default,
   // Feather and Size one tick away in the settings menu (utils/exposedPorts.ts
   // SPLAT_DEFAULT_EXPOSED).
@@ -157,7 +159,9 @@ export const SplatOutputNode = memo(function SplatOutputNode({ id, data, selecte
   const exposedKey = exposedList.join('|');
   const exposed = useMemo(() => new Set(exposedKey.split('|')), [exposedKey]);
   const lit = isSplatLit((data as { values?: unknown }).values);
-  const { costColor, headerTextColor, costTextColor } = useCostChrome(cost);
+  // `cost` is this sink's own price in table points (OutputNode.tsx says who
+  // stamps it); the badge prints `points`, its share of the device's 100.
+  const { costColor, headerTextColor, costTextColor, points } = useCostChrome(cost);
   const badgeClass = useSinkBadgeClass(cost);
   const values = getNodeValues({ id, data } as unknown as ShaderFlowNode);
 
@@ -260,7 +264,7 @@ export const SplatOutputNode = memo(function SplatOutputNode({ id, data, selecte
     >
       {cost > 0 && (
         <span className={badgeClass} style={{ color: costTextColor }}>
-          {cost}
+          <Points value={points} />
         </span>
       )}
       <div className="output-node__header" style={{ background: costColor }}>

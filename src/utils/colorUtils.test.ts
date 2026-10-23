@@ -6,6 +6,7 @@ import {
   getCostColor,
   getCostTextColor,
   getCostScale,
+  COST_GRADIENT_SPAN,
   getGroupFrameColors,
 } from './colorUtils';
 
@@ -72,8 +73,10 @@ describe('getCostColor', () => {
     expect(getCostColor(1000)).toMatch(/^#[0-9a-fA-F]{6}$/);
   });
 
-  it('clamps at cost = 80 so larger costs do not change the color', () => {
-    expect(getCostColor(80)).toBe(getCostColor(200));
+  it('clamps at COST_GRADIENT_SPAN (40 budget points) so larger costs do not change the color', () => {
+    expect(COST_GRADIENT_SPAN).toBe(40);
+    expect(getCostColor(40)).toBe(getCostColor(100));
+    expect(getCostColor(39)).not.toBe(getCostColor(40));
   });
 });
 
@@ -93,13 +96,13 @@ describe('getCostScale', () => {
     expect(getCostScale(-1)).toBe(1);
   });
 
-  it('linearly interpolates between 1 and 1.35 across [0, 80]', () => {
-    expect(getCostScale(40)).toBeCloseTo(1.175, 6);
-    expect(getCostScale(80)).toBeCloseTo(1.35, 6);
+  it('linearly interpolates between 1 and 1.35 across [0, 40] budget points', () => {
+    expect(getCostScale(20)).toBeCloseTo(1.175, 6);
+    expect(getCostScale(40)).toBeCloseTo(1.35, 6);
   });
 
-  it('clamps at the max scale beyond cost = 80', () => {
-    expect(getCostScale(200)).toBeCloseTo(1.35, 6);
+  it('clamps at the max scale beyond 40 budget points', () => {
+    expect(getCostScale(100)).toBeCloseTo(1.35, 6);
   });
 });
 

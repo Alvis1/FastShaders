@@ -1,11 +1,112 @@
-import { memo, useEffect, type MouseEvent, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, type MouseEvent, type ReactNode } from 'react';
 import { NodeResizeControl, Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
-import type { GroupFlowNode } from '@/types';
+import type { AppEdge, AppNode, GroupFlowNode } from '@/types';
 import { useAppStore, MIN_GROUP_W, MIN_GROUP_H } from '@/store/useAppStore';
 import { getGroupFrameColors } from '@/utils/colorUtils';
+import { nodeCostPoints } from '@/utils/nodeCost';
+import { getUnwrappedEdges } from '@/engine/cpuEvaluator';
+import { useBudgetPoints } from '@/hooks/useDeviceBudget';
+import { Points } from '@/components/Points/Points';
 import { assetText, t, type Language } from '@/i18n';
 import { TypedHandle } from '../handles/TypedHandle';
 import './GroupNode.css';
+
+/**
+ * What a collapsed pill's badge sums, in TABLE points: the LIVE price
+ * (`nodeCostPoints`, under the selected device's table) of every node the
+ * group holds directly — `parentId === groupId`, the member set
+ * `toggleGroupCollapsed` collapses. A nested group is one member and prices 0
+ * (it has no registry type), exactly as in the store's collapse-time sum.
+ * Informational, never the budget: `computeReachableCost` walks the members
+ * themselves, reached or not.
+ *
+ * `edges` must be the UNWRAPPED view (`getUnwrappedEdges`): collapsing
+ * rewrote every wire crossing the frame onto the pill's own sockets, so a
+ * variadic member read through the raw array would lose the operands fed from
+ * outside and price below what the collapse charged it.
+ */
+export function groupMemberCost(nodes: readonly AppNode[], edges: AppEdge[], groupId: string): number {
+  let total = 0;
+  for (const n of nodes) if (n.parentId === groupId) total += nodeCostPoints(n, edges);
+  return total;
+}
+
+/** The store fields a member sum reads. */
+interface GroupCostInputs {
+  nodes: AppNode[];
+  edges: AppEdge[];
+  costVersion: number;
+}
+
+/** What one sum was taken over: the members in node order (`id` and `data`
+ *  ref), the edges array and the table's version. */
+interface MemberCostMemo {
+  nodes: readonly AppNode[];
+  edges: readonly AppEdge[];
+  version: number;
+  ids: string[];
+  data: unknown[];
+  cost: number;
+}
+
+/** Same members, holding the same `data` objects, in the same order. */
+function sameMembers(nodes: readonly AppNode[], groupId: string, m: MemberCostMemo): boolean {
+  let k = 0;
+  for (const n of nodes) {
+    if (n.parentId !== groupId) continue;
+    if (k >= m.ids.length || m.ids[k] !== n.id || m.data[k] !== n.data) return false;
+    k++;
+  }
+  return k === m.ids.length;
+}
+
+/**
+ * A store selector for one group's badge figure (`groupMemberCost` over the
+ * live store, in table points), with its own one-slot cache.
+ *
+ * The selector runs on every store notify, and a drag notifies at pointer
+ * rate — moving the pill itself or any node beside it — while changing
+ * nothing this sum reads: `setNodes` re-mints the nodes array but keeps every
+ * node's `data` and the whole edges array by reference (useLiveNodeCost's
+ * contract). So the cache is keyed on the members' ids and `data` refs, the
+ * edges array and the table's `costVersion`: a position-only notify costs one
+ * scan of reference compares and prices nothing, and anything that can move
+ * the sum — a member edit, a rewire, a member joining or leaving, a device
+ * change — re-sums. Safe inside a selector for useLiveNodeCost's reason: the
+ * result is a pure function of that key.
+ */
+export function makeGroupMemberCostSelector(groupId: string): (s: GroupCostInputs) => number {
+  let memo: MemberCostMemo | null = null;
+  return (s) => {
+    if (memo && memo.edges === s.edges && memo.version === s.costVersion
+      && (memo.nodes === s.nodes || sameMembers(s.nodes, groupId, memo))) {
+      memo.nodes = s.nodes;
+      return memo.cost;
+    }
+    const ids: string[] = [];
+    const data: unknown[] = [];
+    for (const n of s.nodes) {
+      if (n.parentId !== groupId) continue;
+      ids.push(n.id);
+      data.push(n.data);
+    }
+    const cost = groupMemberCost(s.nodes, getUnwrappedEdges(s.nodes, s.edges), groupId);
+    memo = { nodes: s.nodes, edges: s.edges, version: s.costVersion, ids, data, cost };
+    return cost;
+  };
+}
+
+/**
+ * The collapsed pill's badge figure, LIVE: a device change, a member edit or
+ * a rewire reprices it. Until 2026-10-23 the badge printed a `data.cost` sum
+ * the collapse took under whichever device was then selected, and it never
+ * moved again while the pill stayed collapsed. An expanded frame shows no
+ * badge and prices nothing.
+ */
+function useGroupMemberCost(groupId: string, collapsed: boolean): number {
+  const select = useMemo(() => makeGroupMemberCostSelector(groupId), [groupId]);
+  return useAppStore((s) => (collapsed ? select(s) : 0));
+}
 
 /**
  * A frame's coloured header strip and its name — the canvas group's, and the
@@ -59,6 +160,10 @@ export const GroupNode = memo(function GroupNode({
   // store field keeps its historical name.)
   const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
   const language = useAppStore((s) => s.language);
+  // The members' summed price (table points), and the share of the selected
+  // device's 100 the badge prints.
+  const memberCost = useGroupMemberCost(id, collapsed);
+  const memberPoints = useBudgetPoints(memberCost);
   // A dropped preset/texture keeps its ENGLISH name as data (a saved file must
   // not carry the UI language); the header shows it in Latvian while it is
   // still that built-in name. A renamed group shows exactly what was typed.
@@ -140,9 +245,10 @@ export const GroupNode = memo(function GroupNode({
       </GroupHeader>
 
       {/* Cost badge above the collapsed pill — same styling as regular nodes,
-          driven by the sum of member costs cached on the group at collapse time. */}
-      {collapsed && (data.cost ?? 0) > 0 && (
-        <span className="node-base__cost-badge group-node__cost-badge">{data.cost}</span>
+          the members' LIVE summed price (useGroupMemberCost), never the
+          `data.cost` the collapse snapshots onto the group. */}
+      {collapsed && memberCost > 0 && (
+        <span className="node-base__cost-badge group-node__cost-badge"><Points value={memberPoints} /></span>
       )}
 
       {/* Boundary sockets — only rendered while collapsed. Each handle is

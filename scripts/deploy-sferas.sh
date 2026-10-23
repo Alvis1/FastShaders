@@ -125,9 +125,13 @@ expect {
 EOF
 
 # Hard gate, exactly as the alvismisjuns script documents: a clean psftp exit
-# proves nothing about what the site actually serves. The last line is the
+# proves nothing about what the site actually serves. The CSP line is the
 # study upload's other half: the served page's CSP must let it reach the
-# endpoint (whose preflight was checked before the upload).
+# endpoint (whose preflight was checked before the upload). The last check is
+# the device-comparison page, a DIRECTORY url like /evalp/ but its own Vite
+# entry (dist/compare/index.html): it must answer 200 with ITS page at the
+# version just built — the title names it, because a host that fell back to
+# index.html would answer 200 with the right version too.
 echo "==> verifying"
 EXPECTED="$(node -p "require('$ROOT/package.json').version")"
 PAGE="$(curl -sS -H 'Cache-Control: no-cache' "$ORIGIN/index.html?cb=$(date +%s)")"
@@ -135,9 +139,15 @@ SERVED="$(printf '%s' "$PAGE" | sed -n 's/.*<meta name="version" content="\([^"]
 EVALP="$(curl -sS -o /dev/null -w '%{http_code}' "$ORIGIN/evalp/")"
 UPLOAD_ORIGIN="$(node -p "new URL('$UPLOAD_URL').origin")"
 CSP_OK="$(printf '%s' "$PAGE" | grep -o "connect-src [^;\"]*" | grep -cF "$UPLOAD_ORIGIN" || true)"
+COMPARE="$(curl -sS -H 'Cache-Control: no-cache' -w '\n%{http_code}' "$ORIGIN/compare/?cb=$(date +%s)" || true)"
+COMPARE_CODE="$(printf '%s' "$COMPARE" | tail -n 1)"
+COMPARE_VER="$(printf '%s' "$COMPARE" | sed -n 's/.*<meta name="version" content="\([^"]*\)".*/\1/p')"
+COMPARE_OK="$(printf '%s' "$COMPARE" | grep -c 'Device comparison' || true)"
 echo "  version served: ${SERVED:-none} (expected $EXPECTED)"
 echo "  /evalp/       : $EVALP"
 echo "  CSP names the upload origin: $([ "$CSP_OK" -ge 1 ] && echo yes || echo NO)"
+echo "  /compare/     : ${COMPARE_CODE:-none}, version ${COMPARE_VER:-none}$([ "$COMPARE_OK" -ge 1 ] || echo ', NOT the comparison page')"
 [ "$SERVED" = "$EXPECTED" ] && [ "$EVALP" = "200" ] && [ "$CSP_OK" -ge 1 ] \
+  && [ "$COMPARE_CODE" = "200" ] && [ "$COMPARE_VER" = "$EXPECTED" ] && [ "$COMPARE_OK" -ge 1 ] \
   && echo "fs.sferas.lv live ✓" \
   || { echo "MISMATCH — check the output above" >&2; exit 1; }

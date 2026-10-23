@@ -16,8 +16,10 @@ import { makeNode } from '@/test-utils';
  * price of a node that bakes — the surfaces read the raw table and said 28
  * while the dropped node said 1.
  *
- * Reads the SHIPPED table on purpose; the ACTIVE one is a worker-wide singleton
- * (isolate:false), so every test starts and ends with no override.
+ * Reads the SELECTED device's table (since 2026-10-23 — a device change
+ * reprices the tiles as it reprices the dropped node). That table is a
+ * worker-wide singleton (isolate:false), so every test starts and ends with no
+ * override, i.e. on the shipped table.
  */
 
 beforeEach(() => setCostOverrides(null));
@@ -43,10 +45,15 @@ describe('freshNodeCost — the price of a node type', () => {
     expect(freshNodeCost('constructor')).toBeUndefined(); // the table is null-prototype
   });
 
-  it('follows no profile — a type surface prints the shipped table, and a fresh RGB Curves node is 1 under any', () => {
+  it('follows the selected device — a type surface prints what the dropped node is charged, and a fresh RGB Curves node is 1 under any', () => {
     setCostOverrides({ rgbCurves: 90, colormap: 12, sin: 9 });
-    expect([freshNodeCost('rgbCurves'), freshNodeCost('colorRamp'), freshNodeCost('sin')]).toEqual([1, 4, 4]);
+    // Color Ramp follows colormap (its own entry untouched); RGB Curves fresh is the identity form.
+    expect([freshNodeCost('rgbCurves'), freshNodeCost('colorRamp'), freshNodeCost('sin')]).toEqual([1, 12, 9]);
     expect(nodeCostPoints(makeNode('k', 'rgbCurves'), [])).toBe(1);
+    for (const def of getAllDefinitions()) {
+      const fresh = makeNode('n', def.type, { ...def.defaultValues });
+      expect(nodeCostPoints(fresh, []), def.type).toBe(freshNodeCost(def.type) ?? 0);
+    }
   });
 
   it('the Designer import surface carries the same table, for every type it can price', () => {

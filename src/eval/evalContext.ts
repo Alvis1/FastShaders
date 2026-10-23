@@ -19,29 +19,33 @@
  * visits.
  */
 
-import { useAppStore, resolveDeviceBudget } from '@/store/useAppStore';
+import { useAppStore, resolveDeviceBudget, VR_HEADSETS } from '@/store/useAppStore';
+import { POINT_BUDGET } from '@/utils/budgetPoints';
 
 export interface CostTableProvenance {
   /** e.g. `complexity.json@0.3.27` or a cost-profile id. */
   source: string;
   /** 'builtin' | 'measured' | 'manual' — how the numbers were arrived at. */
   kind: 'builtin' | 'measured' | 'manual';
-  /** The device row the budget came from, and that budget. */
+  /** The device row the budget came from, and that budget in TABLE points —
+   *  the unit of every point figure the package records. */
   device: string;
   budget: number;
+  /** What the participant's screen printed that budget as: every point figure
+   *  on screen was `table points × shownBudget / budget` (utils/budgetPoints.ts).
+   *  100 since 2026-10-23; a package without the field printed table points
+   *  against `budget` itself. */
+  shownBudget: number;
 }
 
 export function costTableProvenance(): CostTableProvenance {
   const s = useAppStore.getState();
   const profile = s.costProfiles.find((p) => p.id === s.selectedHeadsetId);
-  // Budget comes from the store's own resolver rather than from
-  // `profile.maxPoints` / `headset.maxPoints`: those are the device's RAW
-  // numbers, and a `costBudgetOverrides` entry means the app — and the
-  // participant's cost bar — were using a different one. This field exists so a
-  // point total is interpretable later, which it is not if it states a budget
-  // nobody was working to. Calling the shared resolver also stops this being a
-  // second copy of the profile-lookup + VR_HEADSETS fallback rule.
-  const resolved = resolveDeviceBudget(s.selectedHeadsetId, s.costProfiles, s.costBudgetOverrides);
+  // Budget comes from the store's own resolver — the one the cost bar divides
+  // by — so this is not a second copy of the profile-lookup + VR_HEADSETS
+  // fallback rule. This field exists so a point total is interpretable later,
+  // which it is not if it states a budget nobody was working to.
+  const resolved = resolveDeviceBudget(s.selectedHeadsetId, s.costProfiles);
   if (profile) {
     return {
       source: profile.id,
@@ -50,6 +54,19 @@ export function costTableProvenance(): CostTableProvenance {
       kind: profile.meta?.manual ? 'manual' : 'measured',
       device: resolved.label,
       budget: resolved.maxPoints,
+      shownBudget: POINT_BUDGET,
+    };
+  }
+  // A built-in headset carrying its own measured prices (the Steam Frame) is
+  // NOT the plain table: name the run it was priced from beside the version.
+  const headset = VR_HEADSETS.find((h) => h.id === s.selectedHeadsetId);
+  if (headset?.costs) {
+    return {
+      source: `complexity.json@${__APP_VERSION__}+${headset.costsBasis ?? headset.id}`,
+      kind: 'measured',
+      device: resolved.label,
+      budget: resolved.maxPoints,
+      shownBudget: POINT_BUDGET,
     };
   }
   return {
@@ -57,6 +74,7 @@ export function costTableProvenance(): CostTableProvenance {
     kind: 'builtin',
     device: resolved.label,
     budget: resolved.maxPoints,
+    shownBudget: POINT_BUDGET,
   };
 }
 

@@ -1,7 +1,8 @@
 import dagre from '@dagrejs/dagre';
 import type { AppNode, AppEdge } from '@/types';
 import { getCostScale } from '@/utils/colorUtils';
-import { nodeCostPoints } from '@/utils/nodeCost';
+import { nodeCostPoints, budgetPointsOf } from '@/utils/nodeCost';
+import { storedCost } from '@/utils/costTable';
 import { OUTPUT_DEFAULT_EXPOSED, SPLAT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import { SPLAT_LIGHT_PORTS } from '@/utils/splatLight';
 import { NODE_REGISTRY, growsOperands, getFlowNodeType } from '@/registry/nodeRegistry';
@@ -40,10 +41,44 @@ const W_PAD = 42; // sockets + labels on both sides of an auto-width node
 // body height NaN. Color Ramp: .shader-node__ramp-strip 12 + 4/2 margins;
 // RGB Curves: .shader-node__curves-art 56 + 4/2 margins.
 const ART_H: ReadonlyMap<string, number> = new Map([['colorRamp', 18], ['rgbCurves', 62]]);
+// …and the WIDTH that art forces, which the title-length estimate cannot see:
+// the strip is a fixed 96px (+ 6/6 margins + its 1px border each side), the
+// curves art 72px. Without it a Color Ramp was reserved at the 72px floor and
+// rendered 110px wide, so every recipe ending in one hung ~24px out of its
+// frame (measured in Chrome, 2026-10-20). A floor: a longer title still wins.
+const ART_W: ReadonlyMap<string, number> = new Map([['colorRamp', 110], ['rgbCurves', 86]]);
 
-// Flow component types whose root element applies `transform: scale(costScale)`
-// (top-left origin) — the same set NodeEditor's drag-connect hit boxes scale.
-const COST_SCALED_TYPES = new Set(['shader', 'clock', 'preview', 'mathPreview']);
+/**
+ * Flow component types whose root element applies `transform: scale(costScale)`
+ * (top-left origin): ShaderNode, ClockNode, PreviewNode, MathPreviewNode and
+ * SoundNode, every card that prices itself live (`useLiveNodeCost`). The ONE
+ * set — NodeEditor's drag-connect hit boxes (`nodeVisualSize`) read it too, so
+ * what is reserved and what is aimed at cannot drift apart. (Sound joined
+ * 2026-10-23: its card always scaled, and only its 0-point shipped price hid
+ * that both copies of this set left it out.)
+ */
+export const COST_SCALED_TYPES: ReadonlySet<string> = new Set(['shader', 'clock', 'preview', 'mathPreview', 'sound']);
+
+/**
+ * The scale a cost-scaled card is DRAWN at — the number `useCostChrome` hands
+ * the card itself, asked without React: its LIVE price (`nodeCostPoints`, the
+ * selected device's override-aware table, which every cost-scaled card reads
+ * through `useLiveNodeCost`) as the share of the device's 100 that
+ * `getCostScale` grows a card by (`budgetPointsOf`). Under the 200-point
+ * devices that is the old table-point rule, 1 + min(price / 80, 1) × 0.35, so
+ * no default-device size moved when the display went to 100.
+ *
+ * Never the `data.cost` snapshot: nothing restamps it on an edit, so a bent
+ * RGB Curves node (1 fresh, 40 once it bakes) was reserved ~20 px short until
+ * 2026-10-10, and a noise card under the Steam Frame row would sit at its
+ * shipped price. `edges` are the wires the price counts: NodeEditor passes the
+ * canvas's own (a grown variadic fold costs base × (N−1)); the layout passes
+ * `[]`, which lays a variadic node out at its two-operand price — its
+ * list-mode HEIGHT already follows `inDegree`.
+ */
+export function drawnCostScale(node: AppNode, edges: AppEdge[]): number {
+  return getCostScale(budgetPointsOf(nodeCostPoints(node, edges)));
+}
 
 export interface NodeSize {
   width: number;
@@ -69,9 +104,10 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
   const type = (node.data as { registryType?: string }).registryType ?? '';
   const def = NODE_REGISTRY.get(type);
   // The renderer is picked by the registry def (node.type mirrors it in real
-  // graphs but test stubs default to 'shader'); group/note have no def.
+  // graphs but test stubs default to 'shader'); group/note have no def. The
+  // scale applies only in the cost-scaled branches below.
   const flowType = def ? getFlowNodeType(def) : ((node.type as string) ?? 'shader');
-  const scale = getCostScale(cardCost(node, flowType === 'shader' && def != null));
+  const scale = drawnCostScale(node, []);
 
   // Fixed-footprint component types (dimensions from their CSS/canvas consts;
   // the colour swatch imports its real constant so auto-layout can't drift
@@ -139,7 +175,7 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
   let width = box.width;
   if (width == null) {
     const label = String((node.data as { label?: string }).label ?? type);
-    width = Math.max(MIN_W, Math.round(label.length * CHAR_W) + W_PAD);
+    width = Math.max(MIN_W, Math.round(label.length * CHAR_W) + W_PAD, ART_W.get(type) ?? 0);
   }
 
   // Body height: designer override wins; otherwise derive from the layout.
@@ -186,30 +222,15 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
 /**
  * Real rendered footprint when React Flow has measured the node (live editor —
  * the Organize action, or resync-surviving nodes). `measured` is the raw DOM
- * box, so cost-scaled component types multiply by getCostScale exactly like
- * NodeEditor's drag-connect hit boxes do. Returns null when unmeasured.
+ * box, so cost-scaled component types multiply by the scale they are drawn at
+ * (`drawnCostScale`) exactly like NodeEditor's drag-connect hit boxes do.
+ * Returns null when unmeasured.
  */
 export function measuredSize(node: AppNode): NodeSize | null {
   const m = (node as SizedNode).measured;
   if (!m?.width || !m?.height) return null;
-  const s = COST_SCALED_TYPES.has(node.type ?? '') ? getCostScale(cardCost(node, node.type === 'shader')) : 1;
+  const s = COST_SCALED_TYPES.has(node.type ?? '') ? drawnCostScale(node, []) : 1;
   return { width: m.width * s, height: m.height * s };
-}
-
-/**
- * The price a card is DRAWN at, which is what its cost scale follows — asked
- * the way the card's own component asks (NodeEditor's `nodeVisualSize` does
- * the same). A ShaderNode prices itself LIVE through `nodeCostPoints`, so a
- * node bent after creation (an RGB Curves node: 1 fresh, 40 once it bakes), an
- * Image at a new resolution and any node under a cost profile are reserved at
- * the size they are drawn; the other cost-scaled cards (Preview, Clock,
- * MathPreview, Sound) draw their creation-time `data.cost` snapshot, so they
- * keep it. `[]` edges: a variadic node is laid
- * out at its two-operand price (its list-mode HEIGHT already follows
- * `inDegree`), which is the snapshot it was created with.
- */
-function cardCost(node: AppNode, livePriced: boolean): number {
-  return livePriced ? nodeCostPoints(node, []) : ((node.data as { cost?: number }).cost ?? 0);
 }
 
 function median(values: number[]): number {
@@ -217,6 +238,82 @@ function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = sorted.length >> 1;
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/** A node's input SOCKET row: its index in what the node renders. */
+export type SocketRank = (target: string, handle: string | null | undefined) => number;
+
+/**
+ * A `rankOrder` for `autoLayout` that reads every node's inputs in SOCKET
+ * order: walking back from the sink's wires (`rootEdges`, top socket first),
+ * each node is keyed when it is first reached and then visits its own inputs
+ * top socket first. Within a column the keys therefore stack a node's feeders
+ * the way its sockets read, which dagre — it knows nothing about handles —
+ * cannot: the Mix Two Colors recipe put the Fresnel feeding Mix's bottom
+ * socket (Factor) above the two Colors feeding A and B, and every wire into
+ * the Mix crossed (owner, 2026-10-20). A node no root reaches gets no key and
+ * keeps dagre's order, after the keyed ones.
+ */
+export function socketOrder(
+  edges: readonly AppEdge[],
+  rootEdges: readonly AppEdge[],
+  socketRank: SocketRank,
+): Map<string, number> {
+  const bySocket = (a: AppEdge, b: AppEdge) =>
+    socketRank(a.target, a.targetHandle) - socketRank(b.target, b.targetHandle);
+  const into = new Map<string, AppEdge[]>();
+  for (const e of edges) {
+    const list = into.get(e.target);
+    if (list) list.push(e);
+    else into.set(e.target, [e]);
+  }
+  for (const list of into.values()) list.sort(bySocket);
+  // Pre-order depth-first, iteratively: pushed in reverse, so the top socket's
+  // source pops first, and a node reached twice keeps its FIRST key.
+  const order = new Map<string, number>();
+  const stack = [...rootEdges].sort(bySocket).reverse().map((e) => e.source);
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (order.has(id)) continue;
+    order.set(id, order.size);
+    const ins = into.get(id) ?? [];
+    for (let i = ins.length - 1; i >= 0; i--) stack.push(ins[i].source);
+  }
+  return order;
+}
+
+/**
+ * How many pairs of wires into the SAME node arrive in the opposite order to
+ * its sockets — the crossings a reader sees. A source's top edge stands in for
+ * its wire's height (only the ORDER matters), wires from one node never count,
+ * and a wire whose source is not in `laid` is skipped. `edges` may include
+ * wires into a node that is not laid out (a dropped Output): only the sources
+ * need positions.
+ */
+export function wireInversions(
+  laid: readonly AppNode[],
+  edges: readonly AppEdge[],
+  socketRank: SocketRank,
+): number {
+  const top = new Map(laid.map((n) => [n.id, n.position.y]));
+  const into = new Map<string, { y: number; row: number }[]>();
+  for (const e of edges) {
+    const y = top.get(e.source);
+    if (y === undefined) continue;
+    const wire = { y, row: socketRank(e.target, e.targetHandle) };
+    const list = into.get(e.target);
+    if (list) list.push(wire);
+    else into.set(e.target, [wire]);
+  }
+  let inversions = 0;
+  for (const wires of into.values()) {
+    for (let i = 0; i < wires.length; i++) {
+      for (let j = i + 1; j < wires.length; j++) {
+        if (Math.sign(wires[i].y - wires[j].y) * Math.sign(wires[i].row - wires[j].row) < 0) inversions++;
+      }
+    }
+  }
+  return inversions;
 }
 
 /**
@@ -327,7 +424,8 @@ export function autoLayout(
   //    accumulated cost then id). DP in ascending rank order — every predecessor
   //    is a strictly lower rank, so it's already resolved.
   const costMap = new Map<string, number>();
-  for (const n of nodes) costMap.set(n.id, (n.data as { cost?: number }).cost ?? 0);
+  // A snapshot out of a file can be anything; storedCost keeps the sum a number.
+  for (const n of nodes) costMap.set(n.id, storedCost((n.data as { cost?: unknown }).cost));
   const costOf = (id: string) => costMap.get(id) ?? 0;
   const bestLen = new Map<string, number>();
   const bestCost = new Map<string, number>();

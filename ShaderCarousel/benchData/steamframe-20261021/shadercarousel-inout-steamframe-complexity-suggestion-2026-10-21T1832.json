@@ -1,0 +1,188 @@
+{
+  "metadata": {
+    "schemaVersion": 2,
+    "bench": "inout",
+    "source": "shadercarousel-inout-steamframe-2026-10-21T1832.json",
+    "generatedAt": "2026-10-21T18:32:41.655Z",
+    "device": "qualcomm / adreno-7xx",
+    "adapterInfo": null,
+    "browser": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36",
+    "timingMethod": "raf-delta",
+    "quantized": null,
+    "clockPinned": null,
+    "stereo": true,
+    "resolution": null,
+    "refPixels": 4557312,
+    "resolutionScale": null,
+    "budgetMs": 8.33,
+    "valid": false,
+    "reasons": [
+      "vsync-clamped: frametimes pinned to 72 Hz refresh (13.889 ms) — values reflect display cadence, not shader cost",
+      "resolution-unknown: marginal ms could not be normalized to the reference pixel count (2064×2208) — points are NOT in the shared currency",
+      "raf-delta timing: refresh-quantized frame deltas resolve budget fit, not per-node cost — use for flat↔immersive ratios only"
+    ],
+    "note": "Suggested complexity points derived from measured marginal per-pass cost (slope-based msPerPass − baseline, scaled to the 2064×2208 reference resolution). suggestedPoints = round(marginalMsAtRef / budgetMs × 100). Do not merge runs with different timingMethod/device/stereo without ratio bridging."
+  },
+  "suggestions": [
+    {
+      "id": "preset_polkaDots",
+      "label": "Polka Dots",
+      "category": "preset",
+      "medianMs": 13.9,
+      "msPerPass": 13.9,
+      "marginalMs": 0,
+      "marginalMsAtRef": null,
+      "suggestedPoints": 0
+    },
+    {
+      "id": "preset_grid",
+      "label": "Grid",
+      "category": "preset",
+      "medianMs": 13.9,
+      "msPerPass": 13.9,
+      "marginalMs": 0,
+      "marginalMsAtRef": null,
+      "suggestedPoints": 0
+    },
+    {
+      "id": "preset_tigerFur",
+      "label": "Tiger Fur",
+      "category": "preset",
+      "medianMs": 13.9,
+      "msPerPass": 13.9,
+      "marginalMs": 0,
+      "marginalMsAtRef": null,
+      "suggestedPoints": 0
+    },
+    {
+      "id": "preset_staticNoise",
+      "label": "Static Noise",
+      "category": "preset",
+      "medianMs": 13.9,
+      "msPerPass": 13.9,
+      "marginalMs": 0,
+      "marginalMsAtRef": null,
+      "suggestedPoints": 0
+    },
+    {
+      "id": "preset_crumpledFabric",
+      "label": "Crumpled Fabric",
+      "category": "preset",
+      "medianMs": 14,
+      "msPerPass": 14,
+      "marginalMs": 0.1,
+      "marginalMsAtRef": null,
+      "suggestedPoints": 1
+    },
+    {
+      "id": "preset_gasGiant",
+      "label": "Gas Giant",
+      "category": "preset",
+      "medianMs": 13.9,
+      "msPerPass": 13.9,
+      "marginalMs": 0,
+      "marginalMsAtRef": null,
+      "suggestedPoints": 0
+    },
+    {
+      "id": "preset_marble",
+      "label": "Marble",
+      "category": "preset",
+      "medianMs": 13.9,
+      "msPerPass": 13.9,
+      "marginalMs": 0,
+      "marginalMsAtRef": null,
+      "suggestedPoints": 0
+    },
+    {
+      "id": "preset_wood",
+      "label": "Wood",
+      "category": "preset",
+      "medianMs": 13.9,
+      "msPerPass": 13.9,
+      "marginalMs": 0,
+      "marginalMsAtRef": null,
+      "suggestedPoints": 0
+    },
+    {
+      "id": "noise_perlin",
+      "label": "Perlin",
+      "category": "noise",
+      "medianMs": 13.9,
+      "msPerPass": 13.9,
+      "marginalMs": 0,
+      "marginalMsAtRef": null,
+      "suggestedPoints": 0
+    },
+    {
+      "id": "noise_perlinVec3",
+      "label": "Perlin (vec3)",
+      "category": "noise",
+      "medianMs": 13.9,
+      "msPerPass": 13.9,
+      "marginalMs": 0,
+      "marginalMsAtRef": null,
+      "suggestedPoints": 0
+    },
+    {
+      "id": "noise_fbm",
+      "label": "fBm",
+      "category": "noise",
+      "medianMs": 13.9,
+      "msPerPass": 13.9,
+      "marginalMs": 0,
+      "marginalMsAtRef": null,
+      "suggestedPoints": 0
+    },
+    {
+      "id": "noise_fbmVec3",
+      "label": "fBm (vec3)",
+      "category": "noise",
+      "medianMs": 13.9,
+      "msPerPass": 13.9,
+      "marginalMs": 0,
+      "marginalMsAtRef": null,
+      "suggestedPoints": 0
+    },
+    {
+      "id": "noise_cellNoise",
+      "label": "Cell Noise",
+      "category": "noise",
+      "medianMs": 13.9,
+      "msPerPass": 13.9,
+      "marginalMs": 0,
+      "marginalMsAtRef": null,
+      "suggestedPoints": 0
+    },
+    {
+      "id": "noise_voronoi",
+      "label": "Voronoi F1",
+      "category": "noise",
+      "medianMs": 13.9,
+      "msPerPass": 13.9,
+      "marginalMs": 0,
+      "marginalMsAtRef": null,
+      "suggestedPoints": 0
+    },
+    {
+      "id": "noise_voronoiVec2",
+      "label": "Voronoi F1/F2",
+      "category": "noise",
+      "medianMs": 13.9,
+      "msPerPass": 13.9,
+      "marginalMs": 0,
+      "marginalMsAtRef": null,
+      "suggestedPoints": 0
+    },
+    {
+      "id": "noise_voronoiVec3",
+      "label": "Voronoi F1/F2/F3",
+      "category": "noise",
+      "medianMs": 13.9,
+      "msPerPass": 13.9,
+      "marginalMs": 0,
+      "marginalMsAtRef": null,
+      "suggestedPoints": 0
+    }
+  ]
+}

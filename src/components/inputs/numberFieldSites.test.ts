@@ -82,7 +82,6 @@ describe('every number field is the shared one', () => {
   it.each([
     ['components/NodeEditor/inputs/DragNumberInput.tsx', 'the edit box of every drag number (nodes and settings menus)'],
     ['components/NodeEditor/menus/menuShared.tsx', 'NumberRow (Stripes, Data Viz, Colormap, Data Range, the sink menus)'],
-    ['components/Layout/CostBar.tsx', 'the point cap'],
     ['components/Preview/ShaderPreview.tsx', 'a uniform slider\'s min and max'],
   ])('%s renders it (%s)', (rel) => {
     expect(code(read(rel))).toContain('<NumberField');
@@ -111,14 +110,6 @@ describe('every number field is the shared one', () => {
     // At a bound the step rule really does hand back the same text, which is what the field compares against.
     expect(stepFieldText('0.99', 0.99, 1, false, { step: 0.02, min: 0.01, max: 0.99 })).toBe('0.99');
     expect(fieldWheelText({ deltaX: 0, deltaY: -100, shiftKey: false, ctrlKey: false, metaKey: false, defaultPrevented: false }, '1', 1, { step: 10, max: 1 })).toBe('1');
-  });
-
-  it('the point cap takes focus once its popover is SHOWN — a `visibility: hidden` input refuses focus', () => {
-    // It focused in the frame before measurement: the text looked selected while every key went to the page.
-    const bar = code(read('components/Layout/CostBar.tsx'));
-    expect(bar).toContain("visibility: capPos ? 'visible' : 'hidden'");
-    expect(bar).toMatch(/if \(!capMenuAt \|\| !capPos\) return;\s*const input = capInputRef\.current;\s*if \(input\) \{ input\.focus\(\); input\.select\(\); \}\s*\}, \[capMenuAt, capPos\]\);/);
-    expect(bar.match(/input\.focus\(\)/g)).toHaveLength(1);
   });
 
   it('DragNumberInput opens at 4 places and commits through the shared parse (ParamRow\'s rounding guard assumes both)', () => {

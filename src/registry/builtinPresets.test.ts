@@ -1,24 +1,39 @@
 import { describe, it, expect } from 'vitest';
-import { getBuiltinPresets } from './builtinPresets';
+import { getBuiltinPresets, isRecipe } from './builtinPresets';
 import { getBuiltinTextures } from './builtinTextures';
+import { getEditorDefinitions } from './nodeRegistry';
+import { DEFAULT_OPTIONAL_CATEGORIES, hiddenOptionalCategories } from './optionalCategories';
 import { codeToGraph } from '@/engine/codeToGraph';
 import { graphToCode } from '@/engine/graphToCode';
-import { getNodeValues } from '@/types';
+import { getNodeValues, type AppNode } from '@/types';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+
+/** The original library — the "Presets 2" tab (tiers 1–3). */
+const original = () => getBuiltinPresets().filter((p) => !isRecipe(p));
+/** The beginner recipes — the Presets tab (tier 0). */
+const recipes = () => getBuiltinPresets().filter(isRecipe);
+/** Shader members: everything in the frame but the frame and its note. */
+const shaderMembers = (p: { nodes: AppNode[] }) =>
+  p.nodes.filter((n) => n.type !== 'group' && n.type !== 'note');
 
 describe('builtinPresets', () => {
   const presets = getBuiltinPresets();
 
-  it('ships the full three-tier library with unique ids', () => {
-    expect(presets.length).toBe(24);
-    expect(new Set(presets.map((p) => p.id)).size).toBe(24);
-    // Ordered easy→advanced: tiers never decrease along the strip.
+  it('ships the 13 recipes and the full three-tier library, with unique ids', () => {
+    expect(presets.length).toBe(37);
+    expect(new Set(presets.map((p) => p.id)).size).toBe(37);
+    expect(recipes()).toHaveLength(13);
+    expect(original()).toHaveLength(24);
+    // Ordered easy→advanced: tiers never decrease along the list, so the
+    // recipes (tier 0) come first.
     const tiers = presets.map((p) => p.tier);
     expect([...tiers].sort((a, b) => a - b)).toEqual(tiers);
-    expect(tiers).toContain(1);
-    expect(tiers).toContain(2);
-    expect(tiers).toContain(3);
+    for (const tier of [0, 1, 2, 3]) expect(tiers).toContain(tier);
+    // Recipe ids are namespaced, so one can never take an original's id (the
+    // asset id is what the study's asset-drop events record).
+    for (const r of recipes()) expect(r.id).toMatch(/^recipe-/);
+    for (const p of original()) expect(p.id).not.toMatch(/^recipe-/);
   });
 
   it.each(getBuiltinPresets().map((p) => [p.id, p] as const))(
@@ -38,7 +53,14 @@ describe('builtinPresets', () => {
       const [group, ...members] = preset.nodes;
       expect(group.id).toBe(`builtin-preset-${preset.id}`);
       expect(group.type).toBe('group');
-      expect(members.length).toBeGreaterThanOrEqual(5);
+      // A recipe is one idea in one to five nodes (plus its note); the original
+      // library spells its effect out in at least four.
+      if (isRecipe(preset)) {
+        expect(shaderMembers(preset).length).toBeGreaterThanOrEqual(1);
+        expect(shaderMembers(preset).length).toBeLessThanOrEqual(5);
+      } else {
+        expect(members.length).toBeGreaterThanOrEqual(5);
+      }
       for (const m of members) {
         expect(m.parentId).toBe(group.id);
         expect(m.data.registryType).not.toBe('output');
@@ -53,7 +75,29 @@ describe('builtinPresets', () => {
     },
   );
 
-  it.each(getBuiltinPresets().map((p) => [p.id, p] as const))(
+  it.each(recipes().map((p) => [p.id, p] as const))(
+    'recipe %s keeps its values on its nodes and uses only nodes the palette offers',
+    (_id, recipe) => {
+      // No Property nodes: a beginner scrubs the value where they are already
+      // looking, and the graph stays one idea wide.
+      const props = recipe.nodes.filter((n) =>
+        n.data.registryType === 'property_float' || n.data.registryType === 'property_color',
+      );
+      expect(props).toEqual([]);
+      // Rebuildable from the DEFAULT palette — no hidden node, and none from a
+      // switched-off optional category (SDF, Textures).
+      const offered = new Set(
+        getEditorDefinitions(hiddenOptionalCategories(DEFAULT_OPTIONAL_CATEGORIES)).map((d) => d.type),
+      );
+      for (const m of shaderMembers(recipe)) {
+        expect(offered.has(String(m.data.registryType)), `${recipe.id}: ${m.data.registryType}`).toBe(true);
+      }
+      // Pressing it wires it into the Output: it must name at least one socket.
+      expect(recipe.outputEdges.length).toBeGreaterThan(0);
+    },
+  );
+
+  it.each(original().map((p) => [p.id, p] as const))(
     '%s exposes tunable named uniforms',
     (_id, preset) => {
       const propNames = preset.nodes
@@ -152,12 +196,21 @@ describe('builtinPresets', () => {
   });
 
   it('prices every preset AND every texture, so the cost sort is total and every tile shows a badge', () => {
-    // Both ready-made strips are ordered by `totalCost` (ContentBrowser's
-    // `byCost`), and AssetCostBadge renders nothing at cost <= 0 — so a
+    // Both ready-made strips are ordered by price (ContentBrowser's `byCost`:
+    // `assetCostPoints`, which is `totalCost` on the shipped table —
+    // assetCostPoints.test.ts), and AssetCostBadge renders nothing at cost <= 0 — so a
     // zero-cost asset would both clump at the head of its strip and show no
     // badge to explain why it is there.
-    for (const p of presets) {
+    for (const p of original()) {
       expect(p.totalCost, `${p.id} has no cost`).toBeGreaterThan(0);
+    }
+    // The ONE exception is deliberate: Solid Color is a single Color node,
+    // which genuinely costs nothing — exactly as a Color node's own tile shows
+    // no badge — and the head of the Presets strip is where the first recipe
+    // belongs. Every other recipe pays for something.
+    for (const r of recipes()) {
+      if (r.id === 'recipe-solid') expect(r.totalCost).toBe(0);
+      else expect(r.totalCost, `${r.id} has no cost`).toBeGreaterThan(0);
     }
     for (const t of getBuiltinTextures()) {
       expect(t.totalCost, `${t.id} has no cost`).toBeGreaterThan(0);
@@ -174,11 +227,23 @@ describe('builtinPresets', () => {
       resolve(__dirname, '../components/NodeEditor/ContentBrowser.tsx'),
       'utf8',
     );
-    expect(src).toMatch(/getBuiltinPresets\(\)\]\.sort\(byCost\)/);
+    // Both preset strips: the recipes (Presets) and the original library
+    // (Presets 2) — each a slice of the ONE list, each by price.
+    expect(src).toMatch(/getBuiltinPresets\(\)\.filter\(isRecipe\)\.sort\(byCost\)/);
+    expect(src).toMatch(/getBuiltinPresets\(\)\.filter\(\(p\) => !isRecipe\(p\)\)\.sort\(byCost\)/);
     expect(src).toMatch(/getBuiltinTextures\(\)[\s\S]{0,120}\.sort\(byCost\)/);
-    // byCost must sort on the SAME field AssetCostBadge draws, or a strip
-    // contradicts the numbers on it.
-    expect(src).toMatch(/a\.totalCost - b\.totalCost/);
+    // byCost must sort on the SAME price AssetCostBadge draws, or a strip
+    // contradicts the numbers on it: the group repriced under the selected
+    // device's table (`assetCostPoints`), never the build-time `totalCost`
+    // snapshot, which a device change leaves behind.
+    expect(src).toMatch(/priceOf\(a\.nodes\) - priceOf\(b\.nodes\)/);
+    expect(src).toMatch(/prices\.set\(nodes, \(price = assetCostPoints\(nodes\)\)\)/);
+    expect(src).not.toMatch(/a\.totalCost - b\.totalCost/);
+    const badge = readFileSync(
+      resolve(__dirname, '../components/NodeEditor/AssetCostBadge.tsx'),
+      'utf8',
+    );
+    expect(badge).toContain('const cost = assetCostPoints(nodes);');
     // The retired member-count comparator must not linger unused — and if it
     // ever comes back it must not be what a ready-made strip sorts by.
     expect(src).not.toMatch(/\bbySize\b/);

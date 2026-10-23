@@ -10,13 +10,15 @@
  * real built-in texture, loaded when this slide first shows (building it needs
  * the Babel chunk, which must never ride the boot — the intro opens AT boot).
  * The cost bar is the bar's own readout (`CostMeter`) over the user's own
- * device and budget, and its two totals are the app's (budgetTour.ts). Its
- * frame draws through GroupNode's own header; the dragged line wears React
- * Flow's connection-line classes, so it looks like the canvas's.
+ * device, its two totals are the app's (budgetTour.ts), and they print as the
+ * bar prints them: a share of that device's budget, which reads 100 on every
+ * device. Its frame draws through GroupNode's own header; the dragged line
+ * wears React Flow's connection-line classes, so it looks like the canvas's.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Position } from '@xyflow/react';
-import { useAppStore, VR_HEADSETS, resolveDeviceBudget } from '@/store/useAppStore';
+import { useAppStore, VR_HEADSETS } from '@/store/useAppStore';
+import { useBudgetPoints } from '@/hooks/useDeviceBudget';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import { getNodeValues, type AppNode } from '@/types';
 import { getGroupFrameColors } from '@/utils/colorUtils';
@@ -94,7 +96,6 @@ export function BudgetScene() {
   const costHigh = useAppStore((s) => s.costColorHigh);
   const headsetId = useAppStore((s) => s.selectedHeadsetId);
   const costProfiles = useAppStore((s) => s.costProfiles);
-  const budgetOverrides = useAppStore((s) => s.costBudgetOverrides);
   // Bumped when a device change swaps the price table the totals are read with.
   const costVersion = useAppStore((s) => s.costVersion);
   const ink = useWireInk();
@@ -241,10 +242,12 @@ export function BudgetScene() {
   }, [tour, stage.sceneRef, stage.cursorRef]);
 
   const total = graph ? (state.connected ? graph.after : graph.before) : 0;
+  // What the bar prints for that total: its share of the device's budget, 100
+  // on every device — divided by the same selected-device budget the bar uses.
+  const points = useBudgetPoints(total);
   const outputChrome = useCardChrome(outputDef);
   const outputCost = state.connected && graph ? graph.after : 0;
   const outputCostChrome = useCostChrome(outputCost);
-  const budget = resolveDeviceBudget(headsetId, costProfiles, budgetOverrides);
   const device =
     costProfiles.find((p) => p.id === headsetId) ?? VR_HEADSETS.find((h) => h.id === headsetId) ?? VR_HEADSETS[0];
 
@@ -312,16 +315,14 @@ export function BudgetScene() {
         <div className="cost-bar">
           <div className="cost-bar__device-row">
             <select className="cost-bar__headset-select" tabIndex={-1} value={device.id} onChange={noop}>
-              <option value={device.id}>{deviceOptionText(device, language)}</option>
+              <option value={device.id}>{deviceOptionText(device)}</option>
             </select>
           </div>
           <CostMeter
-            total={total}
-            max={budget.maxPoints}
+            points={points}
             language={language}
             colorLow={costLow}
             colorHigh={costHigh}
-            capOverridden={budget.overridden}
             lowPole={<span className="palette-swatch cost-bar__pole-picker" style={{ background: costLow }} />}
             highPole={<span className="palette-swatch cost-bar__pole-picker" style={{ background: costHigh }} />}
           />

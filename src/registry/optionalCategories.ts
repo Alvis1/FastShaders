@@ -1,14 +1,19 @@
 import type { NodeCategory } from '@/types';
 
 /**
- * The palette's OPTIONAL categories (Textures, Distance fields): OFF by
- * default, switched on per browser from the toolbar's right-click list. An
- * ADD-SURFACE filter layered over `editorVisibility`, never a registry filter:
- * a graph holding these nodes loads, compiles and exports identically either
- * way, and nothing under engine/, utils/ or hooks/ may import this module
- * (optionalCategories.test.ts). See docs/dev/discovery-and-i18n.md.
+ * The palette's OPTIONAL categories (Textures, Distance fields, Presets 2):
+ * OFF by default, switched on per browser from the toolbar's right-click list.
+ * An ADD-SURFACE filter layered over `editorVisibility`, never a registry
+ * filter: a graph holding these nodes loads, compiles and exports identically
+ * either way, and nothing under engine/, utils/ or hooks/ may import this
+ * module (optionalCategories.test.ts). See docs/dev/discovery-and-i18n.md.
+ *
+ * `presets2` holds no registry node at all — it is the original 24-preset
+ * library (tiers 1–3 of registry/builtinPresets.ts), moved off the Presets tab
+ * so a beginner meets the small recipes first. Its switch hides the tab and
+ * its tiles in search; the presets themselves stay loadable by id.
  */
-export const OPTIONAL_CATEGORIES = ['texture', 'sdf'] as const satisfies readonly NodeCategory[];
+export const OPTIONAL_CATEGORIES = ['texture', 'sdf', 'presets2'] as const satisfies readonly NodeCategory[];
 
 export type OptionalCategory = (typeof OPTIONAL_CATEGORIES)[number];
 
@@ -19,10 +24,11 @@ export type OptionalCategoryFlags = Readonly<Record<OptionalCategory, boolean>>;
 export const OPTIONAL_CATEGORY_KEYS: Readonly<Record<OptionalCategory, string>> = {
   texture: 'fs:showTextures',
   sdf: 'fs:showDistanceFields',
+  presets2: 'fs:showPresets2',
 };
 
 /** Everything off — the shipped default, and the study's clean slate. */
-export const DEFAULT_OPTIONAL_CATEGORIES: OptionalCategoryFlags = { texture: false, sdf: false };
+export const DEFAULT_OPTIONAL_CATEGORIES: OptionalCategoryFlags = { texture: false, sdf: false, presets2: false };
 
 export function isOptionalCategory(id: string): id is OptionalCategory {
   return (OPTIONAL_CATEGORIES as readonly string[]).includes(id);
@@ -66,6 +72,7 @@ export function hiddenOptionalCategories(flags: OptionalCategoryFlags): Readonly
 export const OPTIONAL_CATEGORY_COMPANIONS: Readonly<Record<OptionalCategory, readonly string[]>> = {
   texture: [],
   sdf: ['raymarchOutput', 'rayDirection'],
+  presets2: [],
 };
 
 /**

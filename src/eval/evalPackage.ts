@@ -74,6 +74,10 @@ export function buildSummaryCsv(
     costBarVisible?: boolean;
     pointsVisible?: boolean;
     costTable?: string;
+    /** session.json costTable.budget / .shownBudget: the device budget in
+     *  TABLE points, and what the screen printed it as (100 since 2026-10-23). */
+    deviceBudget?: number | null;
+    shownBudget?: number | null;
     /** The sus.json block, for the experience levels. */
     susBlock?: Record<string, unknown>;
   } = {},
@@ -122,11 +126,16 @@ export function buildSummaryCsv(
     ['code_applies', summary.codeApplyCount],
     ['preview_rebuilds', summary.previewRebuildCount],
     ['exports', summary.exportCount],
-    // The last snapshot's two prices: what the shader RENDERS (the CostBar's
-    // number) and every node on the canvas priced once (`costPointsAll`,
-    // absent before 2026-10-20). Apart they show work parked off the Output.
+    // The last snapshot's two prices, in TABLE points: what the shader RENDERS
+    // (only what feeds the counted Outputs) and every node on the canvas priced
+    // once (`costPointsAll`, absent before 2026-10-20). Apart they show work
+    // parked off the Output. The cost bar PRINTED final_points × shown_budget /
+    // device_budget — the two columns after them, so the row is readable
+    // against a brief_budget stated out of 100 (no shown_budget: printed as is).
     ['final_points', summary.finalSnapshot?.costPoints ?? ''],
     ['final_points_all', summary.finalSnapshot?.costPointsAll ?? ''],
+    ['device_budget', extra.deviceBudget ?? ''],
+    ['shown_budget', extra.shownBudget ?? ''],
     ['budget_crossings', summary.budgetCrossings],
     ['over_budget_min', (summary.overBudgetMs / 60_000).toFixed(2)],
     ['time_to_first_connect_s', summary.timeToFirstConnectMs == null ? '' : (summary.timeToFirstConnectMs / 1000).toFixed(1)],
@@ -183,10 +192,13 @@ export function buildEvalReadme(input: EvalPackageInput): string {
     'and name WHICH settings changed, never their values; gestures are continuous',
     'ones (a drag-scrub or a colour-picker session), one per gesture.',
     '',
-    'Points: final_points is what the shader renders (the cost bar\'s number — only',
-    'nodes feeding the counted Outputs); final_points_all prices every node on the',
-    'canvas once, wired or not (snapshot `costPointsAll`). A gap between them is',
-    'work parked off the Output.',
+    'Points: final_points is what the shader renders (only nodes feeding the counted',
+    'Outputs); final_points_all prices every node on the canvas once, wired or not',
+    '(snapshot `costPointsAll`). A gap between them is work parked off the Output.',
+    'Both are TABLE points, the unit of every point figure in this package; the cost',
+    'bar PRINTED final_points x shown_budget / device_budget (summary.csv; session.json',
+    'costTable.shownBudget / costTable.budget), i.e. every device\'s budget read as',
+    '100. A package without shown_budget printed table points as they are.',
     '',
     'device.memoryGb is null where the browser does not report memory (Safari and',
     'Firefox never do).',
@@ -234,6 +246,8 @@ export function buildEvalPackageEntries(input: EvalPackageInput): ZipEntry[] {
           costBarVisible: readPath(input.session, ['task', 'costBarVisible']),
           pointsVisible: readPath(input.session, ['task', 'pointsVisible']),
           costTable: readPath(input.session, ['costTable', 'source']),
+          deviceBudget: readPath(input.session, ['costTable', 'budget']),
+          shownBudget: readPath(input.session, ['costTable', 'shownBudget']),
           susBlock: input.sus,
         }),
       ),

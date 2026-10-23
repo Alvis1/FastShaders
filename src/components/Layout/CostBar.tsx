@@ -1,9 +1,12 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
+import { memo, useCallback, useEffect, useRef, useState, type ChangeEvent, type DragEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { useAppStore, VR_HEADSETS, resolveDeviceBudget } from '@/store/useAppStore';
 import { t, type Language } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { downloadBlob } from '@/utils/downloadBlob';
+import { POINT_BUDGET, formatPoints } from '@/utils/budgetPoints';
+import { useBudgetPoints } from '@/hooks/useDeviceBudget';
+import { Points } from '@/components/Points/Points';
+import { isEvalMode } from '@/eval/evalMode';
 import {
   parseCostFile, parseCostProfileBundle, buildMergedComplexity, mergedComplexityFileName,
   buildProfileFile, buildProfileBundle, profileFileName, profileBundleFileName, editedCostCount,
@@ -17,9 +20,6 @@ import {
 // the pole-picker rule below is written with two classes anyway, so this is
 // belt-and-braces rather than the mechanism.
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
-import { fullscreenElement, placePopover, pickPortalHost } from '@/components/inputs/colorPickerModel';
-import { NumberField } from '@/components/inputs/NumberField';
-import { formatFieldNumber, parseFieldNumber } from '@/utils/numberField';
 import { formatSplatCount } from '@/utils/previewMesh';
 import './CostBar.css';
 
@@ -37,7 +37,21 @@ const IMPORT_OPTION = '__import-bench';
 const NEW_OPTION = '__new-profile';
 const EDIT_OPTION = '__edit-profile';
 const EXPORT_OPTION = '__export-profiles';
-const ACTION_OPTIONS = new Set([IMPORT_OPTION, NEW_OPTION, EDIT_OPTION, EXPORT_OPTION]);
+const COMPARE_OPTION = '__compare-devices';
+const ACTION_OPTIONS = new Set([IMPORT_OPTION, NEW_OPTION, EDIT_OPTION, EXPORT_OPTION, COMPARE_OPTION]);
+
+/**
+ * The device comparison page — every device's price for every node, side by
+ * side (compare/index.html, its own Vite entry). A NEW TAB, so the shader on
+ * the canvas stays where it is. Not offered in a study session (what the
+ * editor offers is part of the condition every participant must meet alike,
+ * the DesktopAppNote rule) nor in the desktop build, whose webview has no
+ * browser tab to open it in (Toolbar.tsx's Podest note: `_blank` is inert
+ * there). Both are fixed for the page's lifetime: `isEvalMode()` is sampled
+ * once at module init, `__FS_DESKTOP__` at build time.
+ */
+const COMPARE_URL = `${import.meta.env.BASE_URL}compare/`;
+const OFFERS_COMPARE = !__FS_DESKTOP__ && !isEvalMode();
 
 /** How long a one-line notice stays up — the image-convert notice's 12 s. */
 const NOTICE_TIMEOUT_MS = 12000;
@@ -47,45 +61,47 @@ function downloadJson(data: unknown, fileName: string): void {
   downloadBlob(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), fileName);
 }
 
-/** A device as its dropdown row reads — `Meta Quest 3 (200 pts)`, a measured
- *  profile marked ◆ (⚠ when its run was invalid), a hand-authored one ✎.
- *  Shared with the intro window's stage (intro/BudgetScene.tsx). */
-export function deviceOptionText(
-  device: { label: string; maxPoints: number; meta?: CostProfile['meta'] },
-  language: Language,
-): string {
+/** A device as its dropdown row reads — `Meta Quest 3`, a measured profile
+ *  marked ◆ (⚠ when its run was invalid), a hand-authored one ✎. No budget
+ *  beside the name: every device's is 100 (utils/budgetPoints.ts), so the
+ *  figure would be the same on every row — devices differ in their node prices
+ *  alone (owner, 2026-10-23). Shared with the intro window's stage
+ *  (intro/BudgetScene.tsx). */
+export function deviceOptionText(device: { label: string; meta?: CostProfile['meta'] }): string {
   const mark = !device.meta ? '' : device.meta.manual ? '✎ ' : device.meta.valid === false ? '⚠ ' : '◆ ';
-  return `${mark}${device.label} (${device.maxPoints} ${t('pts', language)})`;
+  return `${mark}${device.label}`;
 }
 
 /**
- * The bar's readout: `0 · total / max pts · max` over the gradient track and
- * its marker. The bar wraps the total in its own button or span (`value`) and
- * supplies the two pole pickers; the intro window's stage draws the same
- * readout with inert poles (intro/BudgetScene.tsx).
+ * The bar's readout: `0 · total / 100 pts · 100` over the gradient track and
+ * its marker. `points` is the shader's total in BUDGET points — its share of
+ * the selected device's frame, which prints as 100 on every device — so the
+ * caller divides the summed table total ONCE (`useBudgetPoints`) and this only
+ * prints and places it: the marker at its share of 100, red past it (the same
+ * test as "the total passes the device's budget", in the printed currency).
+ * The bar wraps the total in its own button or span (`value`) and supplies the
+ * two pole pickers; the intro window's stage draws the same readout with inert
+ * poles (intro/BudgetScene.tsx).
  */
 export function CostMeter({
-  total, max, language, colorLow, colorHigh, capOverridden = false, value, lowPole, highPole,
+  points, language, colorLow, colorHigh, value, lowPole, highPole,
 }: {
-  total: number;
-  max: number;
+  points: number;
   language: Language;
   colorLow: string;
   colorHigh: string;
-  capOverridden?: boolean;
-  /** Wraps the total; it gets the value's class and its text. */
+  /** Wraps the total; it gets the value's class and its text. A wrapper that
+   *  carries a title should state the exact figure in it (the bar's does): the
+   *  figure itself takes no tooltip, since one hover cannot show two. */
   value?: (className: string, label: ReactNode) => ReactNode;
   lowPole: ReactNode;
   highPole: ReactNode;
 }) {
-  const percentage = Math.min(total / max, 1);
-  const over = total > max;
+  const percentage = Math.min(points / POINT_BUDGET, 1);
+  const over = points > POINT_BUDGET;
   const label = (
     <>
-      {/* A typed cap must never pass for the device's measured budget —
-          same rule as the "✎ custom" tag on a hand-authored profile. */}
-      {capOverridden && <span className="cost-bar__cap-mark">✎ </span>}
-      {total} / {max} {t('pts', language)}
+      <Points value={points} tip={false} /> / {POINT_BUDGET} {t('pts', language)}
     </>
   );
   const cls = `cost-bar__value ${over ? 'cost-bar__value--over' : ''}`;
@@ -94,7 +110,7 @@ export function CostMeter({
       <div className="cost-bar__labels">
         <span className="cost-bar__label-end">0</span>
         {value ? value(cls, label) : <span className={cls}>{label}</span>}
-        <span className="cost-bar__label-end">{max}</span>
+        <span className="cost-bar__label-end">{POINT_BUDGET}</span>
       </div>
       <div className="cost-bar__track-row">
         {lowPole}
@@ -144,8 +160,6 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
   const setCostColorLow = useAppStore((s) => s.setCostColorLow);
   const setCostColorHigh = useAppStore((s) => s.setCostColorHigh);
   const costProfiles = useAppStore((s) => s.costProfiles);
-  const costBudgetOverrides = useAppStore((s) => s.costBudgetOverrides);
-  const setCostBudgetOverride = useAppStore((s) => s.setCostBudgetOverride);
   const importCostProfile = useAppStore((s) => s.importCostProfile);
   const importCostProfiles = useAppStore((s) => s.importCostProfiles);
   const createCostProfile = useAppStore((s) => s.createCostProfile);
@@ -183,130 +197,26 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
   }, []);
 
   const activeProfile = costProfiles.find((p) => p.id === selectedHeadsetId) ?? null;
+  // A built-in row that carries its own measured prices (the Steam Frame) gets
+  // the same "measured" tag a dropped profile does: the bar is not using the
+  // shipped table, and nothing else on the panel would say so.
+  const pricedHeadset = activeProfile ? null : VR_HEADSETS.find((h) => h.id === selectedHeadsetId && h.costs) ?? null;
   const measuredProfiles = costProfiles.filter((p) => !p.meta.manual);
   const manualProfiles = costProfiles.filter((p) => p.meta.manual);
-  const { label: deviceLabel, maxPoints: maxBudget, deviceMaxPoints, overridden: capOverridden } =
-    resolveDeviceBudget(selectedHeadsetId, costProfiles, costBudgetOverrides);
+  const { label: deviceLabel } = resolveDeviceBudget(selectedHeadsetId, costProfiles);
   // A dangling id (e.g. a profile id from an imported project the user doesn't
-  // have) resolves to base budget but isn't a real option — show the fallback.
+  // have) resolves to the first headset but isn't a real option — show that one.
   const knownId = activeProfile != null || VR_HEADSETS.some((h) => h.id === selectedHeadsetId);
   const selectValue = knownId ? selectedHeadsetId : VR_HEADSETS[0].id;
-  /* ── The point cap's right-click editor ────────────────────────────────
-   * The cap is the one number on this panel that is a JUDGEMENT rather than a
-   * measurement: 200 is what a Quest 3 was benchmarked at, but an exhibit
-   * targeting 90 Hz, or a piece that shares the frame with other content,
-   * wants its own line. It is a context menu rather than an always-visible
-   * field because this panel already carries a device picker, a gradient and
-   * a provenance tag, and a fourth editable control would bury them.
-   *
-   * Anchored to the POINTER, not to the bar: a right-click's menu appearing
-   * anywhere but under the cursor reads as a different control opening.
-   */
-  const [capMenuAt, setCapMenuAt] = useState<{ x: number; y: number } | null>(null);
-  const [capDraft, setCapDraft] = useState('');
-  const [capPos, setCapPos] = useState<{ left: number; top: number } | null>(null);
-  const [capHost, setCapHost] = useState<HTMLElement | null>(null);
-  const capBoxRef = useRef<HTMLDivElement | null>(null);
-  const capInputRef = useRef<HTMLInputElement | null>(null);
-  const barRef = useRef<HTMLDivElement | null>(null);
-
-  const openCapMenu = useCallback((e: ReactMouseEvent) => {
-    // The native menu would cover our own, and the canvas behind this overlay
-    // has its own contextmenu handling — neither may see this press.
-    e.preventDefault();
-    e.stopPropagation();
-    setCapDraft(formatFieldNumber(maxBudget));
-    setCapPos(null);                         // re-measured below; never a stale frame
-    setCapMenuAt({ x: e.clientX, y: e.clientY });
-  }, [maxBudget]);
-
-  const closeCapMenu = useCallback(() => setCapMenuAt(null), []);
-
-  const commitCap = useCallback(() => {
-    // `.` or `,` typed (utils/numberField.ts) — a bare Number() refused the
-    // comma and took "0x10".
-    const n = Math.round(parseFieldNumber(capDraft) ?? NaN);
-    if (Number.isFinite(n) && n >= 1) {
-      // Typing the device's OWN number clears the override instead of storing
-      // a redundant one — otherwise the ✎ mark would claim a custom cap that
-      // is identical to the measured one (the uniform-overlay rule: an
-      // override is a DIFFERENCE, never a stored copy of the default).
-      setCostBudgetOverride(selectedHeadsetId, n === deviceMaxPoints ? null : n);
-    }
-    closeCapMenu();
-  }, [capDraft, deviceMaxPoints, selectedHeadsetId, setCostBudgetOverride, closeCapMenu]);
-
-  const resetCap = useCallback(() => {
-    setCostBudgetOverride(selectedHeadsetId, null);
-    closeCapMenu();
-  }, [selectedHeadsetId, setCostBudgetOverride, closeCapMenu]);
-
-  // Measured placement (placePopover's rule: never a hardcoded height), then
-  // focus. Both are keyed on `capMenuAt`, so they run for the popover that is
-  // actually mounted — an effect without that key attaches to nothing.
-  useLayoutEffect(() => {
-    if (!capMenuAt) return;
-    setCapHost(pickPortalHost(fullscreenElement(), barRef.current, document.body));
-  }, [capMenuAt]);
-  useLayoutEffect(() => {
-    if (!capMenuAt || !capBoxRef.current) return;
-    const box = capBoxRef.current.getBoundingClientRect();
-    setCapPos(placePopover(
-      { left: capMenuAt.x, top: capMenuAt.y, bottom: capMenuAt.y },
-      { width: box.width, height: box.height },
-      { width: window.innerWidth, height: window.innerHeight },
-    ));
-  }, [capMenuAt, capHost]);
-  // Focus once the popover is SHOWN, so typing goes straight into the field: it
-  // stays `visibility: hidden` until measured (`capPos`), and a hidden input
-  // refuses focus — focusing in that frame left the text looking selected
-  // while every key went to the page (measured 2026-10-10). `capPos` is set
-  // once per open, after the host resolved and the box mounted.
-  useEffect(() => {
-    if (!capMenuAt || !capPos) return;
-    const input = capInputRef.current;
-    if (input) { input.focus(); input.select(); }
-  }, [capMenuAt, capPos]);
-  useEffect(() => {
-    // `capHost` is a dependency because the popover does not exist until the
-    // host resolves: on the FIRST open this effect would otherwise run against
-    // an unmounted box.
-    if (!capMenuAt || !capHost) return;
-    const onDown = (e: PointerEvent) => {
-      if (!capBoxRef.current?.contains(e.target as Node)) closeCapMenu();
-    };
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); closeCapMenu(); }
-    };
-    // A click into the 3D preview IFRAME never reaches this document, so the
-    // outside-pointerdown listener alone leaves the menu open over the largest
-    // target on screen. Focus is the only signal that crosses; read on a
-    // macrotask because at blur time activeElement is still the old node.
-    // The handle is TRACKED and cleared with the listeners (PaletteColorPicker
-    // holds the other copy of this probe and does the same): removing the
-    // listener does not cancel a probe it has already scheduled, so a blur in
-    // the same tick the menu closes would still run its callback afterwards.
-    // Harmless today — closeCapMenu is one setState — but the two copies of
-    // one idiom must not diverge, or only one of them is safe to extend.
-    let focusProbe = 0;
-    const onBlur = () => {
-      window.clearTimeout(focusProbe);
-      focusProbe = window.setTimeout(() => {
-        if (document.activeElement instanceof HTMLIFrameElement) closeCapMenu();
-      }, 0);
-    };
-    document.addEventListener('pointerdown', onDown, true);
-    document.addEventListener('keydown', onKey, true);
-    window.addEventListener('blur', onBlur);
-    return () => {
-      window.clearTimeout(focusProbe);
-      document.removeEventListener('pointerdown', onDown, true);
-      document.removeEventListener('keydown', onKey, true);
-      window.removeEventListener('blur', onBlur);
-    };
-  }, [capMenuAt, capHost, closeCapMenu]);
-
-  const over = totalCost > maxBudget;
+  // The total as printed: its share of the selected device's budget, which is
+  // 100 on every device (utils/budgetPoints.ts). The store sums in table
+  // points; this divides ONCE, after the sum, so rounding never compounds.
+  // There is no cap to type any more (2026-10-23): with every budget printed
+  // as 100, a device differs only in its node prices, and the right-click
+  // editor that layered a user's own cap over a device's measured one went
+  // with `fs:costBudgets`.
+  const points = useBudgetPoints(totalCost);
+  const over = points > POINT_BUDGET;
   const invalid = activeProfile?.meta.valid === false;
 
   // ONE commit gate for every entrance (drop, picker, same-browser chip):
@@ -516,7 +426,7 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
       // action row after having arrowed the list at any point silently did
       // nothing. Harmless while the only action was Import (retry with the
       // mouse and it works, because the retry's own change cleared it); with
-      // four action rows it is the difference between a working menu and a
+      // five action rows it is the difference between a working menu and a
       // dead one. Each Windows arrow step re-sets it on its own keydown, so
       // consuming here cannot re-open the closed-select trap it guards.
       const viaArrowNav = arrowNavRef.current;
@@ -530,6 +440,9 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
         else if (value === NEW_OPTION) setModal('new');
         else if (value === EXPORT_OPTION) setModal('export');
         else if (value === EDIT_OPTION && activeProfile) downloadProfile(activeProfile);
+        // Inside the change, like the Import row's picker: a new tab needs the
+        // user's press, and the guard above has already refused arrowing.
+        else if (value === COMPARE_OPTION && OFFERS_COMPARE) window.open(COMPARE_URL, '_blank', 'noopener');
         return;
       }
       setSelectedHeadsetId(value);
@@ -589,13 +502,11 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
 
   return (
     <div
-      ref={barRef}
       className={`cost-bar${dragOver ? ' cost-bar--drop' : ''}`}
       onDrop={onDrop}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
-      onContextMenu={openCapMenu}
-      title={`${t('Drop a benchmark result or an exported profile (.json) here to add it as a device profile.', language)}\n${t('Right-click to set the point cap.', language)}`}
+      title={t('Drop a benchmark result or an exported profile (.json) here to add it as a device profile.', language)}
     >
       <div className="cost-bar__device-row">
         <select
@@ -604,13 +515,16 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
           onChange={handleDeviceChange}
           onKeyDown={handleDeviceKeyDown}
           onPointerDown={handleDevicePointerDown}
-          title={t('Performance device — sets the points budget and, for a measured profile, the per-node prices this bar uses', language)}
+          // A device sets the node PRICES, never the printed budget: every
+          // device's reads 100 (utils/budgetPoints.ts) — its measured one is
+          // only the divisor — which is why no row prints one.
+          title={fillTemplate(t('Performance device — sets the per-node prices this bar adds up. Every device’s budget is {max} points.', language), { max: POINT_BUDGET })}
           aria-label={t('Performance device', language)}
         >
           <optgroup label={t('Headsets', language)}>
             {VR_HEADSETS.map((h) => (
               <option key={h.id} value={h.id}>
-                {deviceOptionText(h, language)}
+                {deviceOptionText(h)}
               </option>
             ))}
           </optgroup>
@@ -618,7 +532,7 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
             <optgroup label={t('Measured (dropped benchmark)', language)}>
               {measuredProfiles.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {deviceOptionText(p, language)}
+                  {deviceOptionText(p)}
                 </option>
               ))}
             </optgroup>
@@ -630,7 +544,7 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
             <optgroup label={t('Custom (hand-authored)', language)}>
               {manualProfiles.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {deviceOptionText(p, language)}
+                  {deviceOptionText(p)}
                 </option>
               ))}
             </optgroup>
@@ -644,6 +558,9 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
             {costProfiles.length > 0 && (
               <option value={EXPORT_OPTION}>{t('Export profiles…', language)}</option>
             )}
+            {/* Last, below the rows that manage profiles: it opens a page
+                rather than acting on this list. */}
+            {OFFERS_COMPARE && <option value={COMPARE_OPTION}>{t('Compare devices…', language)}</option>}
           </optgroup>
         </select>
         <input
@@ -718,16 +635,16 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
           every cost badge), not a property of the graph. Bracketing would push
           an undo entry that restores nothing and clear the redo stack. */}
       <CostMeter
-        total={totalCost}
-        max={maxBudget}
+        points={points}
         language={language}
         colorLow={costColorLow}
         colorHigh={costColorHigh}
-        capOverridden={capOverridden}
         value={(cls, label) => {
           // deviceLabel can be an imported profile's label, so every sentence
-          // it goes into is filled in ONE pass (utils/fillTemplate.ts).
-          const explain = `${fillTemplate(t('Estimated GPU cost: {total} of {max} points for {headset}. A point is a rough measure of per-pixel shader work — staying under the budget keeps the frame rate smooth in VR.', language), { total: totalCost, max: maxBudget, headset: deviceLabel })}${over ? t(' You are over budget.', language) : ''}${capOverridden ? `\n${fillTemplate(t('Custom cap — {device} measures {n}. Right-click to change or reset it.', language), { device: deviceLabel, n: deviceMaxPoints })}` : `\n${t('Right-click to set the point cap.', language)}`}`;
+          // it goes into is filled in ONE pass (utils/fillTemplate.ts). The
+          // total is the EXACT figure (`formatPoints().exact`), so hovering the
+          // number shows what its rounded print and dot stand for.
+          const explain = `${fillTemplate(t('Estimated GPU cost: {total} of {max} points for {headset}. Every device’s budget is {max} points — the per-pixel shader work it can do each frame while keeping the frame rate smooth in VR.', language), { total: formatPoints(points).exact, max: POINT_BUDGET, headset: deviceLabel })}${over ? t(' You are over budget.', language) : ''}`;
           return onFocusOutput ? (
             <button
               type="button"
@@ -801,60 +718,19 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
           </button>
         </div>
       )}
-      {capMenuAt && capHost && createPortal(
-        <div
-          ref={capBoxRef}
-          className="cost-cap-menu"
-          role="dialog"
-          aria-label={t('Point cap', language)}
-          style={{
-            left: capPos ? `${capPos.left}px` : `${capMenuAt.x}px`,
-            top: capPos ? `${capPos.top}px` : `${capMenuAt.y}px`,
-            // Hidden for the one frame between mount and measurement, or the
-            // menu visibly jumps from the cursor to its placed position.
-            visibility: capPos ? 'visible' : 'hidden',
-          }}
-          // stopPropagation only, NOT preventDefault: a React portal bubbles
-          // through the REACT tree, so a right-click in here would reach the
-          // bar's own handler and re-open the menu — but suppressing the
-          // native menu as well would take the input's paste entry with it.
-          onContextMenu={(e) => e.stopPropagation()}
-        >
-          <div className="cost-cap-menu__title">{t('Point cap', language)}</div>
-          <div className="cost-cap-menu__row">
-            {/* The app's number field: whole points, so a digits-only keypad
-                (the cap is never below 1); arrows and the wheel step by 10,
-                ×10 with Shift. Enter or Set commits; Escape and a press
-                outside close without one. */}
-            <NumberField
-              ref={capInputRef}
-              className="cost-cap-menu__input"
-              integer
-              min={1}
-              step={10}
-              value={maxBudget}
-              text={capDraft}
-              onText={setCapDraft}
-              onEnter={(e) => { e.preventDefault(); commitCap(); }}
-              aria-label={t('Point cap', language)}
-            />
-            <span className="cost-cap-menu__unit">{t('pts', language)}</span>
-            <button className="cost-cap-menu__apply" onClick={commitCap}>
-              {t('Set', language)}
-            </button>
-          </div>
-          {/* Always shown, not only when overridden: the device's own number is
-              the context that makes a typed one meaningful, and it is what the
-              reset restores. */}
-          <button
-            className="cost-cap-menu__reset"
-            onClick={resetCap}
-            disabled={!capOverridden}
+      {pricedHeadset?.costs && (
+        <div className="cost-bar__override">
+          <span
+            className="cost-bar__override-tag"
+            title={[
+              t('Measured prices active — {n} node types repriced from a benchmark run.', language)
+                .replace('{n}', String(Object.keys(pricedHeadset.costs).length)),
+              `run: ShaderCarousel/benchData/${pricedHeadset.costsBasis ?? pricedHeadset.id}`,
+            ].join('\n')}
           >
-            {fillTemplate(t('Use {device} budget ({n})', language), { device: deviceLabel, n: deviceMaxPoints })}
-          </button>
-        </div>,
-        capHost,
+            {'● '}{t('measured', language)}{` · ${Object.keys(pricedHeadset.costs).length} ${t('nodes', language)}`}
+          </span>
+        </div>
       )}
       {modal && (
         <CostProfileModal

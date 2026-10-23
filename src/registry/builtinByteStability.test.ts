@@ -7,7 +7,8 @@ import type { AppNode, AppEdge } from '@/types';
 /**
  * Every shipped texture and preset, re-emitted — pinned byte for byte.
  *
- * The built-in assets (9 textures + 24 presets) are parsed from TSL into
+ * The built-in assets (9 textures + 37 presets — 13 recipes and the 24 of
+ * Presets 2) are parsed from TSL into
  * graphs at startup (`codeToGraph` → `buildCodeGroup`), so a change to a
  * registry `defaultValues` entry can silently alter what a shipped preset
  * RENDERS: any argument the source omitted now resolves through the new
@@ -45,6 +46,6 @@ describe('built-in textures and presets emit byte-identical code', () => {
     // asset already means writing a snapshot entry; bumping this number is the
     // same deliberate edit. (The per-library counts are pinned separately in
     // builtinPresets.test.ts; this is the TOTAL the two snapshots cover.)
-    expect(getBuiltinTextures().length + getBuiltinPresets().length).toBe(33);
+    expect(getBuiltinTextures().length + getBuiltinPresets().length).toBe(46);
   });
 });

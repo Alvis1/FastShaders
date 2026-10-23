@@ -12,7 +12,8 @@
  * Pure data (no React, no CSS imports) so it stays node-env testable.
  */
 import { getAllDefinitions, getFlowNodeType, growsOperands, NODE_REGISTRY } from '@/registry/nodeRegistry';
-import { freshNodeCost, getBaseCosts } from '@/utils/nodeCost';
+import { budgetPointsOf, freshNodeCost, getBaseCosts } from '@/utils/nodeCost';
+import { formatPoints, type PointsLabel } from '@/utils/budgetPoints';
 import { CAT_HEX, getTypeColor, getCostColor, getCostScale, getContrastColor, COUNT_EDGE_COLORS } from '@/utils/colorUtils';
 import { useAppStore } from '@/store/useAppStore';
 import type { NodeCategory, NodeDefinition, TSLDataType } from '@/types';
@@ -60,7 +61,10 @@ export function definitionOf(type: string): NodeDefinition | undefined {
  * which the stage card in bridge.tsx reads too) — the number the palette tile
  * and the Add-node menu show for the same node, so a fresh RGB Curves node is
  * its identity form (1) here as well, never its table entry (40, the price of
- * a node that bakes). Null prototype: indexed by type.
+ * a node that bakes). In TABLE points, under the device selected when the page
+ * loaded (this page has no device picker): the helpers below print it, colour
+ * it and scale by it as budget points, as every card does. Null prototype:
+ * indexed by type.
  */
 export const NODE_COSTS: Readonly<Record<string, number>> = Object.freeze(
   Object.assign(
@@ -79,13 +83,26 @@ export function typeColor(dataType: string): string {
 
 /** Cost colours honour the USER'S preference: the designer page mounts the
  *  same store, which reads fs:costColorLow/High from the shared localStorage —
- *  so the header gradient here is the one their editor actually shows. */
+ *  so the header gradient here is the one their editor actually shows. `cost`
+ *  is in table points (NODE_COSTS), judged as the selected device's budget
+ *  points like every card's (utils/budgetPoints.ts). */
 export function costColorOf(cost: number): string {
   const s = useAppStore.getState();
-  return getCostColor(cost, s.costColorLow, s.costColorHigh);
+  return getCostColor(budgetPointsOf(cost), s.costColorLow, s.costColorHigh);
 }
 
-export const costScaleOf = getCostScale;
+/** The cost scale the stage card is drawn at (bridge.tsx), from a price in
+ *  table points — the overlays' px-per-unit has to multiply by the same one. */
+export function costScaleOf(cost: number): number {
+  return getCostScale(budgetPointsOf(cost));
+}
+
+/** The cost row's figure, from a price in table points: the selected device's
+ *  budget points at two decimals, flagged when that rounding dropped digits —
+ *  what <Points> prints on every card. */
+export function costLabelOf(cost: number): PointsLabel {
+  return formatPoints(budgetPointsOf(cost));
+}
 export const contrastColor = getContrastColor;
 
 /** Nodes whose visualization is a real ART element (NodeVisual renders it;

@@ -910,6 +910,44 @@ const publicEntryDevIndexPlugin = (): Plugin => ({
   },
 });
 
+/**
+ * Root-level DIRECTORY entries — Vite inputs living at `<dir>/index.html`, each
+ * ALSO named in rollupOptions.input below (a drift pair, pinned by
+ * src/compare/compareEntry.test.ts). Today the device-comparison page alone.
+ */
+const ENTRY_DIRS = ['compare'];
+
+/**
+ * Serve-only: answer `<base>compare` (no slash) with a redirect to
+ * `<base>compare/`, as every static host does for a directory (GitHub Pages,
+ * nginx on fs.sferas.lv, Apache on alvismisjuns.lv). Vite's own html fallback
+ * already serves the slashed URL from compare/index.html, but the bare one
+ * matches no file, so its SPA fallback answered with the EDITOR — a 200 with a
+ * working app, the same silent dev-only miss publicEntryDevIndexPlugin
+ * documents for the public/ redirectors. A redirect rather than a rewrite: a
+ * page answered at the slash-less URL would resolve its relative links one
+ * directory too high.
+ */
+const entryDirDevRedirectPlugin = (): Plugin => ({
+  name: 'fs-entry-dir-dev-redirect',
+  apply: 'serve',
+  configureServer(server) {
+    server.middlewares.use((req, res, next) => {
+      const url = req.url ?? '';
+      const pathOnly = url.split('?')[0];
+      for (const dir of ENTRY_DIRS) {
+        if (pathOnly === `${FS_BASE}${dir}`) {
+          res.statusCode = 301;
+          res.setHeader('Location', `${FS_BASE}${dir}/${url.slice(pathOnly.length)}`);
+          res.end();
+          return;
+        }
+      }
+      next();
+    });
+  },
+});
+
 export default defineConfig({
   base: FS_BASE,
   plugins: [
@@ -922,6 +960,7 @@ export default defineConfig({
     shaderCarouselDevResolvePlugin(),
     nodeDesignerEndpointPlugin(),
     publicEntryDevIndexPlugin(),
+    entryDirDevRedirectPlugin(),
   ],
   resolve: {
     alias: {
@@ -958,10 +997,15 @@ export default defineConfig({
       // stays a deliberate NON-entry: it is a localhost tool whose saves need
       // the dev-only /__nd endpoints. The Node Designer, by contrast, ships:
       // its deployed copy is read-only-with-download, same as before, but now
-      // renders the REAL NodeVisual replica.
+      // renders the REAL NodeVisual replica. The device-comparison page ships
+      // too, as dist/compare/index.html — a DIRECTORY entry, so every host
+      // serves it at <base>compare/ (fs.sferas.lv/compare/); it gets the same
+      // version meta and CSP as index.html, since both HTML plugins transform
+      // every entry, and both host deploy scripts curl it after the upload.
       input: {
         main: path.resolve(__dirname, 'index.html'),
         designer: path.resolve(__dirname, 'node-designer.html'),
+        compare: path.resolve(__dirname, 'compare/index.html'),
       },
       output: {
         // Monaco is rarely-changing vendor code — its own chunk keeps the app

@@ -13,8 +13,26 @@
 
 import type { AppNode, AppEdge, GroupNodeData } from '@/types';
 import { codeToGraph } from '@/engine/codeToGraph';
-import { autoLayout, estimateNodeSize } from '@/engine/layoutEngine';
+import { autoLayout, estimateNodeSize, socketOrder, wireInversions, type SocketRank } from '@/engine/layoutEngine';
+import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
+import { costOverridesKey } from '@/utils/costTable';
+import { getDeviceBudget } from '@/utils/budgetPoints';
+
+/**
+ * What a built group's LAYOUT was measured under. autoLayout sizes every
+ * cost-scaled card at its LIVE price as a share of the selected device's
+ * budget (layoutEngine `drawnCostScale`), so a library laid out under one
+ * device's prices or budget and placed under another lands with its painted
+ * cards off the boxes it reserved: under a 100-point profile picked after the
+ * library was built, each stacked Perlin's badge painted ~13 px over the card
+ * above it (review, 2026-10-23). The built-in libraries key their cache on
+ * this and rebuild when it moves — a device change, once, on the next use (a
+ * cold build of both is ~0.2 s).
+ */
+export function layoutPricingKey(): string {
+  return `${getDeviceBudget()}|${costOverridesKey()}`;
+}
 
 export interface CodeGroupEntry {
   id: string;
@@ -33,6 +51,13 @@ export interface CodeGroupEntry {
 }
 
 export interface CodeGroupAsset extends CodeGroupEntry {
+  /**
+   * The members' `data.cost` stamps summed, in table points, under whatever
+   * table was ACTIVE when the library was built — once a session. A tile
+   * neither prints nor sorts by it: `assetCostPoints(nodes)` (utils/nodeCost.ts)
+   * re-reads the same sum under the selected device's table, and equals this
+   * on the shipped one.
+   */
   totalCost: number;
   nodes: AppNode[];
   edges: AppEdge[];
@@ -52,7 +77,37 @@ export interface CodeGroupAsset extends CodeGroupEntry {
  * apply auto-layout. `groupIdPrefix` keeps the container ids of the two
  * libraries distinct (`builtin-texture-` / `builtin-preset-`).
  */
-export function buildCodeGroup(entry: CodeGroupEntry, groupIdPrefix: string): CodeGroupAsset {
+/**
+ * The socket ROW of each wire's target — its index among the inputs the node
+ * renders (the registry def's `inputs`; the Output's channel rows for the
+ * dropped Output). A handle the def does not list (a noise node's exposed
+ * `pos`) ties at the bottom.
+ */
+function socketRanks(nodes: readonly AppNode[], outputIds: ReadonlySet<string>): SocketRank {
+  const rowsOf = (type: string) =>
+    new Map((NODE_REGISTRY.get(type)?.inputs ?? []).map((p, i) => [p.id, i] as const));
+  const rows = new Map<string, Map<string, number>>();
+  for (const n of nodes) rows.set(n.id, rowsOf(String(n.data.registryType)));
+  for (const id of outputIds) rows.set(id, rowsOf('output'));
+  return (target, handle) => rows.get(target)?.get(handle ?? '') ?? 99;
+}
+
+export interface CodeGroupOptions {
+  /**
+   * Also try the SOCKET-ordered layout and keep it when fewer wires cross —
+   * see the layout step below. Opt-in, for the beginner recipes only: it
+   * trades the flat top spine (the wired node on the top row, where a press's
+   * top-right reveal and the intro's budget slide find it) for wires that
+   * never cross, which only a small frame can afford.
+   */
+  socketOrdered?: boolean;
+}
+
+export function buildCodeGroup(
+  entry: CodeGroupEntry,
+  groupIdPrefix: string,
+  options: CodeGroupOptions = {},
+): CodeGroupAsset {
   const { nodes: rawNodes, edges: rawEdges } = codeToGraph(entry.code);
 
   // Filter out the output node — these are sub-graphs, not full shaders
@@ -73,8 +128,28 @@ export function buildCodeGroup(entry: CodeGroupEntry, groupIdPrefix: string): Co
     return sum + ((n.data as { cost?: number }).cost ?? 0);
   }, 0);
 
-  // Auto-layout with tight spacing for compact groups
-  const laid = autoLayout(nodes, edges, { nodesep: 10, ranksep: 30 });
+  // Auto-layout with tight spacing for compact groups. dagre knows nothing
+  // about SOCKETS, so it can stack two feeders of one node upside down: the
+  // Ghost recipe put its Opacity feeder above its Color one, and Mix Two
+  // Colors put the Fresnel feeding Mix's Factor (the bottom socket) above the
+  // two Colors feeding A and B — the wires crossed (owner, 2026-10-20). With
+  // `socketOrdered`, the socket-ordered layout (`socketOrder`, walking back
+  // from the dropped Output's wires) is tried too and kept only when FEWER
+  // wires cross (`wireInversions`, the Output's included); a tie keeps the
+  // plain layout. It is opt-in because ordering switches off the spine float:
+  // the wired node leaves the top row (measured across the library: ~130px
+  // down in a typical preset, 315px in Gas Giant, 695px in Crumpled Fabric),
+  // which a press's top-right reveal and the intro's budget slide rely on —
+  // a recipe's frame is small enough to be on screen whole.
+  const spacing = { nodesep: 10, ranksep: 30 };
+  const plain = autoLayout(nodes, edges, spacing);
+  let laid = plain;
+  if (options.socketOrdered) {
+    const rank = socketRanks(nodes, outputIds);
+    const wires = [...edges, ...outputEdges];
+    const ordered = autoLayout(nodes, edges, spacing, socketOrder(wires, outputEdges, rank));
+    if (wireInversions(ordered, wires, rank) < wireInversions(plain, wires, rank)) laid = ordered;
+  }
 
   // A wired param socket must be a visible one — the same hook every ingestion path runs.
   autoExposeConnectedParamPorts(laid, edges);

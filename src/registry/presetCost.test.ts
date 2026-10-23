@@ -1,16 +1,20 @@
 /**
  * Cost budget guard for the preset library.
  *
- * Every preset is dropped onto a Quest-3-class budget of 350 points
- * (`complexity.json` meta.maxBudget), and the CostBar the user reads is
- * literally `sum(nodeCostPoints)` over the graph (useSyncEngine). Pinning the
- * numbers here means a preset edit that quietly doubles its price fails in CI
- * rather than on a headset.
+ * Every preset is held under a loose ceiling of 350 table points
+ * (`complexity.json` meta.maxBudget; a Quest 3's measured frame is 200), and
+ * the CostBar the user reads is literally `sum(nodeCostPoints)` over the graph
+ * (useSyncEngine). Pinning the numbers here means a preset edit that quietly
+ * doubles its price fails in CI rather than on a headset.
  *
  * The exact totals are asserted rather than a loose ceiling: these presets are
  * teaching material whose prices are quoted in their card badges, and a silent
  * drift is exactly what this catches. Update a number here only together with a
  * deliberate change to the preset's TSL.
+ *
+ * Every figure here is in TABLE points on the shipped table. The app prints
+ * them as the selected device's share of 100 (utils/budgetPoints.ts) — half of
+ * each on both measured headsets, whose frames are 200 table points.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -28,6 +32,29 @@ function costOf(code: string): number {
 }
 
 const EXPECTED: Record<string, number> = {
+  // ── Recipes (the Presets tab). The cheapest strip in the app: a Color Ramp
+  // is 4, so most of a recipe's price is the ONE idea it teaches.
+  // 0 — a single Color node is free; the only zero-cost built-in, on purpose.
+  'recipe-solid': 0,
+  'recipe-gradient': 6,
+  'recipe-stripes': 7,
+  // 11 — normalWorld (7) + the ramp (4).
+  'recipe-snow': 11,
+  // 11 — Cell Noise (7) + the ramp (4).
+  'recipe-tiles': 11,
+  'recipe-pulse': 13,
+  // 32 — the Fresnel node is 28; four nodes cheaper than Edge Glow's 36.
+  'recipe-edge': 32,
+  'recipe-ghost': 28,
+  // 38 — the Perlin (35) is the price; Round (1) and Mix (2) are nearly free,
+  // and so are the two Color nodes.
+  'recipe-mix': 38,
+  // 35 of each Perlin recipe is the noise call.
+  'recipe-holes': 36,
+  'recipe-noise': 39,
+  'recipe-bumps': 36,
+  'recipe-wobble': 37,
+  // ── The original library (Presets 2).
   gradient: 4,
   stripes: 30,
   checker: 11,
@@ -65,7 +92,7 @@ const EXPECTED: Record<string, number> = {
   'force-field': 64,
   'stylized-water': 49,
   // 78 — the library's priciest preset (two cross products at 12 each, three
-  // dot products, a pow). Still 39% of the 200-point Quest 3 CostBar budget.
+  // dot products, a pow). Still only 39 of the cost bar's 100 on a Quest 3.
   'studio-shine': 78,
 };
 
