@@ -1,5 +1,5 @@
 /**
- * The intro's slides 4–6 as data, and the rules every slide keeps: it writes
+ * The intro's slides as data, and the rules every slide keeps: it writes
  * nothing, and the heavy chunks (the Babel parser, the image encoder) arrive
  * only when their slide shows — the intro itself opens at boot.
  */
@@ -35,6 +35,11 @@ import { buildPreviewShaderModule } from '@/engine/tslToPreviewHTML';
 import { getBuiltinPresets } from '@/registry/builtinPresets';
 import { previewGraph } from '@/utils/nodePreview';
 import { sceneNodes, toAppEdges } from './sceneGraph';
+import { VALUES_CLICKS, VALUES_FLOAT, buildValuesTour, valuesFrame, valuesGraph } from './valuesTour';
+import { LABELS_PAIR_MS, buildLabelsTour, labelsFrame } from './labelsTour';
+import { DOUBLE_ACTIVATE_MS } from '@/components/NodeEditor/labelPeek';
+import { evaluateEdgeRange, getEdgeOutputShape } from '@/engine/cpuEvaluator';
+import { edgeChipChannels } from '@/components/NodeEditor/edges/EdgeInfoCard';
 import { readGltfModel } from '@/utils/gltfReader';
 import { glbImportFactsOf, planGlbImportDialog } from '@/utils/glbImportGate';
 
@@ -396,15 +401,62 @@ describe('models slide', () => {
   });
 });
 
+describe('wire values slide', () => {
+  const graph = valuesGraph();
+  const chip = (source: string, t = 0) => {
+    const e = graph.edges.find((x) => x.source === source && x.target === 'output')!;
+    return edgeChipChannels(evaluateEdgeRange(e, graph.nodes, graph.edges, t), getEdgeOutputShape(e, graph.nodes, graph.edges));
+  };
+
+  it('shows a number, a range on two channels, three channels, and a live value — as the canvas chip words them', () => {
+    expect(chip('float')).toEqual({ count: 1, values: [VALUES_FLOAT.toFixed(2)] });
+    expect(chip('uv')).toEqual({ count: 2, values: ['0.00…1.00', '0.00…1.00'] });
+    expect(chip('position').count).toBe(3);
+    expect(chip('position').values.every((v) => v.includes('…'))).toBe(true);
+    expect(chip('sine', 1)).toEqual({ count: 1, values: [Math.sin(1).toFixed(2)] });
+    expect(chip('sine', 2).values).not.toEqual(chip('sine', 1).values);
+  });
+
+  it('shows one wire at a time, in that order, and clicks each before fading it out', () => {
+    const p = { x: 0, y: 0 };
+    const tour = buildValuesTour({ clicks: { float: p, uv: p, position: p, sine: p }, rest: { x: 10, y: 10 } });
+    const seen = tags(tour.tl.total, (t) => valuesFrame(tour, t).state, (s) => `${s.phase}${s.selected ? ':chip' : ''}`);
+    expect(seen).toEqual(VALUES_CLICKS.flatMap((w) => [w, `${w}:chip`]));
+    for (const w of VALUES_CLICKS) {
+      const f = valuesFrame(tour, tour.stills[w]);
+      expect(f.state).toMatchObject({ phase: w, selected: true });
+      expect(f.fade).toBe(1);
+    }
+  });
+});
+
+describe('socket labels slide', () => {
+  const tour = buildLabelsTour({ image: { x: 100, y: 100 }, mix: { x: 400, y: 60 }, rest: { x: 250, y: 250 } });
+
+  it('double-clicks the Image, puts its labels away, then double-taps Mix', () => {
+    const seen = tags(tour.tl.total, (t) => labelsFrame(tour, t).state, (s) => `${s.peek ?? '-'}${s.touch ? ':touch' : ''}`);
+    expect(seen).toEqual(['-', 'image', '-', '-:touch', 'mix:touch', '-:touch']);
+    expect(labelsFrame(tour, tour.image).state.peek).toBe('image');
+    expect(labelsFrame(tour, tour.mix).state).toMatchObject({ peek: 'mix', touch: true });
+  });
+
+  it('presses twice inside the canvas’s double-click window', () => {
+    expect(LABELS_PAIR_MS).toBeLessThan(DOUBLE_ACTIVATE_MS);
+    const presses = tags(tour.tl.total, (t) => labelsFrame(tour, t).state, (s) => (s.pressed ? 'down' : 'up')).filter((x) => x === 'down');
+    // Two pairs, and the click / tap on empty canvas after each.
+    expect(presses.length).toBe(6);
+  });
+});
+
 describe('every slide', () => {
   const dir = __dirname;
   const scenes = readdirSync(dir).filter((f) => /Scene\.tsx$/.test(f));
 
-  it('there are twelve, and the window lists them all', () => {
+  it('there are fourteen, and the window lists them all', () => {
     const win = readFileSync(path.join(dir, 'IntroWindow.tsx'), 'utf8');
     expect(scenes.sort()).toEqual([
       'BudgetScene.tsx', 'CodeScene.tsx', 'ConnectScene.tsx', 'DrawScene.tsx', 'ExposeScene.tsx', 'FolderScene.tsx', 'ImageScene.tsx', 'InsertScene.tsx',
-      'ModelScene.tsx', 'OrganizeScene.tsx', 'PreviewScene.tsx', 'UniformScene.tsx',
+      'LabelsScene.tsx', 'ModelScene.tsx', 'OrganizeScene.tsx', 'PreviewScene.tsx', 'UniformScene.tsx', 'ValuesScene.tsx',
     ]);
     for (const f of scenes) expect(win, f).toContain(`Scene: ${f.replace('.tsx', '')},`);
   });

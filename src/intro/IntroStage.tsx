@@ -70,16 +70,18 @@ export function placeMenu(at: Point, size: Box): Point {
   };
 }
 
-/** Move the pointer; the arrow's tip is at (x, y). */
+/** Move the pointer; the arrow's tip is at (x, y). `touch` swaps the arrow
+ *  for a fingertip centred there. */
 export function paintCursor(
   cursor: SVGSVGElement,
   p: Point,
-  state: { pressed?: boolean; rightClick?: boolean },
+  state: { pressed?: boolean; rightClick?: boolean; touch?: boolean },
 ): void {
   // The viewBox starts at -1, so the tip sits 1px into the svg.
   cursor.style.transform = `translate(${p.x - 1}px, ${p.y - 1}px)`;
   cursor.classList.toggle('fs-intro__cursor--pressed', !!state.pressed);
   cursor.classList.toggle('fs-intro__cursor--right', !!state.rightClick);
+  cursor.classList.toggle('fs-intro__cursor--touch', !!state.touch);
 }
 
 export function IntroStage({
@@ -119,7 +121,8 @@ export function IntroStage({
           {children}
           <svg ref={stage.cursorRef} className="fs-intro__cursor" width={22} height={26} viewBox="-1 -1 22 26">
             <circle className="fs-intro__cursor-ring" cx={0} cy={0} r={8} />
-            <path d="M0 0 L0 17 L4.5 12.5 L7.5 19.5 L10 18.5 L7 11.5 L13 11.5 Z" fill="#111" stroke="#fff" strokeWidth={1.2} strokeLinejoin="round" />
+            <circle className="fs-intro__finger" cx={0} cy={0} r={11} />
+            <path className="fs-intro__cursor-arrow" d="M0 0 L0 17 L4.5 12.5 L7.5 19.5 L10 18.5 L7 11.5 L13 11.5 Z" fill="#111" stroke="#fff" strokeWidth={1.2} strokeLinejoin="round" />
             {/* A mouse with its RIGHT button lit, beside the arrow, while the
                 scene right-clicks. */}
             <g className="fs-intro__mouse" transform="translate(15 15)">

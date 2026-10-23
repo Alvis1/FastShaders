@@ -1,4 +1,4 @@
-import { createContext, memo, useContext, useEffect, useRef, useCallback, useState, type RefObject } from 'react';
+import { memo, useContext, useEffect, useRef, useCallback, useState, type RefObject } from 'react';
 import type { NodeDefinition, NodeCategory, PortDefinition } from '@/types';
 import { socketTooltip } from './handles/TypedHandle';
 import { startTileDrag, tileGhostZoom, tileActivationProps } from './tileDrag';
@@ -9,6 +9,7 @@ import { useAssetTooltip } from './AssetTooltip';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { useAppStore } from '@/store/useAppStore';
 import { NodeVisual, type NodeVisualProps } from './nodes/NodeVisual';
+import { CardSocketLabels } from './cardSocketLabels';
 import { NodeTitle } from './nodes/NodeTitle';
 import { useSinkBadgeClass } from './nodes/useCostChrome';
 import { DragNumberInput } from './inputs/DragNumberInput';
@@ -252,6 +253,8 @@ function CardSocket({ side, dataType, style, port }: {
   );
 }
 
+export { CardSocketLabels };
+
 /**
  * Sockets that carry what a canvas handle carries: React Flow's `data-handleid`
  * and the name label (`data-tooltip`, TypedHandle's text). OFF for the asset
@@ -261,7 +264,6 @@ function CardSocket({ side, dataType, style, port }: {
  * being made (the intro, `src/intro/`), which rings a socket and shows its
  * label with the canvas's own `.fs-connect-socket` rule.
  */
-export const CardSocketLabels = createContext(false);
 
 /**
  * `nodeClassName` carries the LIVE node's own class (`clock-node`,

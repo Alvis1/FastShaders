@@ -50,6 +50,59 @@ export function sameRange(a: RangeResult | null, b: RangeResult | null): boolean
   return true;
 }
 
+/**
+ * What the chip prints, one string per channel. The channel count prefers the
+ * range result's length (it knows about texture-derived shapes) and falls back
+ * to `shapeLen`, static shape inference, for nodes the range evaluator
+ * couldn't handle (e.g. positionGeometry, length, distance — chains where
+ * neither eval nor range propagation works). Exported for the intro's wire
+ * slide, which draws this chip off its own graph.
+ *
+ *  - degenerate range (min === max) → single number "0.42"
+ *  - bounded range → "min…max" (e.g. "0.00…1.00")
+ *  - unbounded (Infinity) or no range data → "…" (honest unknown, no guess)
+ */
+export function edgeChipChannels(range: RangeResult | null, shapeLen: number): { count: number; values: string[] } {
+  const rangeLen = range?.min.length ?? 0;
+  const count = Math.min(Math.max(rangeLen, shapeLen, 1), 4);
+  const PLACEHOLDER = '…';
+  const RANGE_EPSILON = 0.005; // values closer than this collapse to a single display
+  const formatChannel = (lo: number, hi: number): string => {
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return PLACEHOLDER;
+    if (Math.abs(hi - lo) < RANGE_EPSILON) return lo.toFixed(2);
+    return `${lo.toFixed(2)}…${hi.toFixed(2)}`;
+  };
+  const values: string[] = [];
+  for (let i = 0; i < count; i++) {
+    values.push(range && i < range.min.length ? formatChannel(range.min[i], range.max[i]) : PLACEHOLDER);
+  }
+  return { count, values };
+}
+
+/** The chip's channel lines: a coloured x/y/z (or r/g/b) label on each line
+ *  of a multi-channel wire, the bare value on a one-channel one. */
+export function EdgeChipValues({ count, values }: { count: number; values: readonly string[] }) {
+  const labels = COUNT_LABELS[count] ?? [''];
+  const colors = COUNT_CARD_COLORS[count] ?? [];
+  return (
+    <span className="edge-info-card__values">
+      {values.map((v, i) => (
+        <span key={i} className="edge-info-card__channel">
+          {count > 1 && (
+            <span
+              className="edge-info-card__label"
+              style={colors[i] ? { color: colors[i] } : undefined}
+            >
+              {labels[i]}
+            </span>
+          )}
+          <span className="edge-info-card__num">{v}</span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
 interface EdgeInfoCardProps {
   sourceId: string;
   /** Socket the edge leaves — a multi-output source (HSL h/s/l) must report
@@ -132,36 +185,7 @@ export function EdgeInfoCard({
   if (!sourceNode || !targetNode || !anchor) return null;
   const [labelX, labelY] = anchor.split(',');
 
-  // Channel count: prefer the range result's length (it knows about texture-derived
-  // shapes), and fall back to static shape inference for nodes the range evaluator
-  // couldn't handle (e.g. positionGeometry, length, distance — chains where neither
-  // eval nor range propagation works).
-  const rangeLen = range?.min.length ?? 0;
-  const shapeLen = getEdgeOutputShape({ source: sourceId, sourceHandle }, nodes, edges);
-  const count = Math.min(Math.max(rangeLen, shapeLen, 1), 4);
-  const labels = COUNT_LABELS[count] ?? [''];
-  const colors = COUNT_CARD_COLORS[count] ?? [];
-  const isMultiChannel = count > 1;
-
-  // Build display strings per channel:
-  //  - degenerate range (min === max) → single number "0.42"
-  //  - bounded range → "min…max" (e.g. "0.00…1.00")
-  //  - unbounded (Infinity) or no range data → "…" (honest unknown, no guess)
-  const PLACEHOLDER = '…';
-  const RANGE_EPSILON = 0.005; // values closer than this collapse to a single display
-  const formatChannel = (lo: number, hi: number): string => {
-    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return PLACEHOLDER;
-    if (Math.abs(hi - lo) < RANGE_EPSILON) return lo.toFixed(2);
-    return `${lo.toFixed(2)}…${hi.toFixed(2)}`;
-  };
-  const displayValues: string[] = [];
-  for (let i = 0; i < count; i++) {
-    if (range && i < range.min.length) {
-      displayValues.push(formatChannel(range.min[i], range.max[i]));
-    } else {
-      displayValues.push(PLACEHOLDER);
-    }
-  }
+  const { count, values } = edgeChipChannels(range, getEdgeOutputShape({ source: sourceId, sourceHandle }, nodes, edges));
 
   return (
     <div
@@ -172,21 +196,7 @@ export function EdgeInfoCard({
       }}
       onClick={(e) => e.stopPropagation()}
     >
-      <span className="edge-info-card__values">
-        {displayValues.map((v, i) => (
-          <span key={i} className="edge-info-card__channel">
-            {isMultiChannel && (
-              <span
-                className="edge-info-card__label"
-                style={colors[i] ? { color: colors[i] } : undefined}
-              >
-                {labels[i]}
-              </span>
-            )}
-            <span className="edge-info-card__num">{v}</span>
-          </span>
-        ))}
-      </span>
+      <EdgeChipValues count={count} values={values} />
     </div>
   );
 }

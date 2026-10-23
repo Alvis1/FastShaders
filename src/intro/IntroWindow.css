@@ -166,6 +166,26 @@
   opacity: 1;
 }
 
+/* A touch device: a fingertip in place of the arrow, darker while it presses. */
+.fs-intro__finger {
+  fill: rgba(128, 128, 128, 0.35);
+  stroke: #fff;
+  stroke-width: 1.5;
+  opacity: 0;
+}
+
+.fs-intro__cursor--touch .fs-intro__finger {
+  opacity: 1;
+}
+
+.fs-intro__cursor--touch.fs-intro__cursor--pressed .fs-intro__finger {
+  fill: rgba(80, 80, 80, 0.6);
+}
+
+.fs-intro__cursor--touch .fs-intro__cursor-arrow {
+  opacity: 0;
+}
+
 /* The right-click: a mouse with its right button lit, beside the arrow. */
 .fs-intro__mouse {
   opacity: 0;

@@ -1,10 +1,12 @@
-import type { CSSProperties } from 'react';
+import { useContext, type CSSProperties } from 'react';
 import type { NodeDefinition } from '@/types';
 import { getTypeColor } from '@/utils/colorUtils';
 import { getColormap, colormapGradientCss } from '@/utils/colormaps';
 import { ColorRampStrip } from './ColorRampArt';
 import { CurvesArt } from './CurvesArt';
 import { formatNodeLabel } from '@/i18n';
+import { socketTooltip } from '../handles/TypedHandle';
+import { CardSocketLabels } from '../cardSocketLabels';
 import { useAppStore } from '@/store/useAppStore';
 import { buildRows, visiblePortRows, outputRowLabel, ImageCardPicture, IMAGE_EMPTY_HINT_EVAL, PortValueCell } from './ShaderNode';
 import { DragNumberInput } from '../inputs/DragNumberInput';
@@ -101,22 +103,29 @@ const STACK_STEP_Y = 3;
 
 /** Static socket dot with the live handle's exact classes/geometry.
  *  data-port/data-io let the designer's delegated drag/click gestures
- *  identify sockets without owning the DOM. */
+ *  identify sockets without owning the DOM. Under `CardSocketLabels` it also
+ *  carries the canvas handle's name label (`data-tooltip`, TypedHandle's
+ *  text), which the canvas's hover and label-peek rules show. */
 const StaticHandle = ({ side, dataType, port, label, style }: {
   side: 'left' | 'right';
   dataType: Parameters<typeof getTypeColor>[0];
   port: string;
   label?: string;
   style?: CSSProperties;
-}) => (
-  <span
-    className={`react-flow__handle react-flow__handle-${side} typed-handle`}
-    title={label}
-    data-port={port}
-    data-io={side === 'left' ? 'in' : 'out'}
-    style={{ background: getTypeColor(dataType), ...style }}
-  />
-);
+}) => {
+  const labelled = useContext(CardSocketLabels);
+  const language = useAppStore((s) => s.language);
+  return (
+    <span
+      className={`react-flow__handle react-flow__handle-${side} typed-handle`}
+      title={label}
+      data-port={port}
+      data-io={side === 'left' ? 'in' : 'out'}
+      data-tooltip={labelled ? socketTooltip(label ?? port, dataType, null, language) : undefined}
+      style={{ background: getTypeColor(dataType), ...style }}
+    />
+  );
+};
 
 /** Connected-input value label — the SAME element ShaderNode renders. */
 const EdgeVal = ({ state }: { state: PortPreviewState }) => (

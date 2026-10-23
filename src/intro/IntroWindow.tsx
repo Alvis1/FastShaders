@@ -5,6 +5,8 @@ import { t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { useModalKeys } from '@/components/Modals/useModalKeys';
 import { ConnectScene } from './ConnectScene';
+import { ValuesScene } from './ValuesScene';
+import { LabelsScene } from './LabelsScene';
 import { InsertScene } from './InsertScene';
 import { BudgetScene } from './BudgetScene';
 import { ImageScene } from './ImageScene';
@@ -32,9 +34,24 @@ const SLIDES: ReadonlyArray<{ id: string; Scene: ComponentType; caption: string 
     caption: 'Drag a node onto another node to connect them. Move it up or down to pick the socket.',
   },
   {
+    id: 'values',
+    Scene: ValuesScene,
+    caption: 'Click a wire to see what it carries: a number, or a range from lowest to highest, one line per channel. When Time drives the wire, the numbers keep changing.',
+  },
+  {
+    id: 'labels',
+    Scene: LabelsScene,
+    caption: 'Double-click a node, or double-tap it on a touch screen, to see the names of all its sockets. Click empty canvas to hide them.',
+  },
+  {
     id: 'insert',
     Scene: InsertScene,
     caption: 'Right-click a wire to insert a node into it. Delete the node and the wire joins up again.',
+  },
+  {
+    id: 'preview',
+    Scene: PreviewScene,
+    caption: 'Alt/⌥-click a node to see it in the 3D view in place of Color; click anywhere else to stop. Ctrl/⌘-click it to attach it to the Output for good.',
   },
   {
     id: 'budget',
@@ -47,24 +64,9 @@ const SLIDES: ReadonlyArray<{ id: string; Scene: ComponentType; caption: string 
     caption: 'Drop an image on the canvas. Say Yes and FastShaders stores it as WebP, scaled to the size your target device needs.',
   },
   {
-    id: 'folder',
-    Scene: FolderScene,
-    caption: 'In the desktop app, pick a Work folder once. Its shaders are listed under the arrow: open one, change it, and Save writes it back to its file.',
-  },
-  {
-    id: 'code',
-    Scene: CodeScene,
-    caption: 'Type TSL in the code panel and press Apply: the graph is built from it.',
-  },
-  {
     id: 'expose',
     Scene: ExposeScene,
     caption: 'Right-click a node and tick a setting to make it an input socket. The Output’s menu adds channels such as Emissive the same way.',
-  },
-  {
-    id: 'draw',
-    Scene: DrawScene,
-    caption: 'Turn on Draw to mark up the canvas, and right-click to add a note.',
   },
   {
     id: 'organize',
@@ -72,9 +74,9 @@ const SLIDES: ReadonlyArray<{ id: string; Scene: ComponentType; caption: string 
     caption: 'Drag a box around nodes to select them, then right-click and pick Organize: they are laid out in the order the wires run.',
   },
   {
-    id: 'preview',
-    Scene: PreviewScene,
-    caption: 'Alt/⌥-click a node to see it in the 3D view in place of Color; click anywhere else to stop. Ctrl/⌘-click it to attach it to the Output for good.',
+    id: 'code',
+    Scene: CodeScene,
+    caption: 'Type TSL in the code panel and press Apply: the graph is built from it.',
   },
   {
     id: 'uniform',
@@ -85,6 +87,16 @@ const SLIDES: ReadonlyArray<{ id: string; Scene: ComponentType; caption: string 
     id: 'model',
     Scene: ModelScene,
     caption: 'Drop your own model on the 3D view, animated ones too. The same graph shades each one: here Vertex Wave moves the surface and Checker colours it.',
+  },
+  {
+    id: 'folder',
+    Scene: FolderScene,
+    caption: 'In the desktop app, pick a Work folder once. Its shaders are listed under the arrow: open one, change it, and Save writes it back to its file.',
+  },
+  {
+    id: 'draw',
+    Scene: DrawScene,
+    caption: 'Turn on Draw to mark up the canvas, and right-click to add a note.',
   },
 ];
 

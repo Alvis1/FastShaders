@@ -114,3 +114,18 @@ export async function makeIntroPhoto(): Promise<File | null> {
   canvas.width = canvas.height = 0;
   return blob ? new File([blob], INTRO_PHOTO.name, { type: 'image/jpeg' }) : null;
 }
+
+/** The same photo as a small JPEG data URL — a thumbnail for a slide that
+ *  shows an Image node without running the drop (painted once, cached). Null
+ *  where this browser cannot paint one. */
+let thumbnail: string | null | undefined;
+export function introPhotoThumbnail(): string | null {
+  if (thumbnail !== undefined) return thumbnail;
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 192;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return (thumbnail = null);
+  paint(ctx, canvas.width, canvas.height);
+  return (thumbnail = canvas.toDataURL('image/jpeg', 0.85));
+}

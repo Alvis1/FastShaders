@@ -148,7 +148,7 @@ export const HOVER_EDGE_BOOST = 1.35;
  *  and fuse a 4-channel ribbon into one solid band: the selection highlight
  *  would destroy the channel count it is highlighting. Scaling both keeps the
  *  ribbon geometrically similar, just bigger. */
-const SELECTED_EDGE_BOOST = 1.8;
+export const SELECTED_EDGE_BOOST = 1.8;
 
 /**
  * Added to the channel count (1–4) when the wire is LIVE: its source changes
