@@ -909,7 +909,7 @@ const PRESET_ENTRIES: PresetEntry[] = [
       text: 'Perlin Noise is remapped to 0-1, then Subtract and Add place the Smoothstep edges around threshold: one value slides the cut, softness sets its blur, and the result is the Mix factor.',
     } },
   { id: 'mosaic', tier: 2, name: 'Mosaic (Cell Noise ID)', color: '#1A4E7A', code: MOSAIC_CODE,
-    description: 'Flat facets of navy and amber tiling the surface, each cell painted from a single random number. Cell Noise gives one value per whole-number cell and nothing inside it, which is why it costs 7 points where the Voronoi distance functions cost over 200 - the cheapest way to say \'random, but in patches\'. Wire it to the Output node\'s Color channel and scrub mosaicScale first to resize the facets.',
+    description: 'Flat facets of navy and amber tiling the surface, each cell painted from a single random number. Cell Noise gives one value per whole-number cell and nothing inside it, which is why it costs a small fraction of what the Voronoi distance functions cost - the cheapest way to say \'random, but in patches\'. Wire it to the Output node\'s Color channel and scrub mosaicScale first to resize the facets.',
     note: {
       heading: 'One Random Value per Cell',
       text: 'Multiply drops Position into cell space, where Cell Noise returns one flat random number per whole-number cell and nothing inside it. Power biases the split; Mix picks between the two colors.',
