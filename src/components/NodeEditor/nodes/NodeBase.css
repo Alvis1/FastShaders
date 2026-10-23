@@ -69,6 +69,16 @@
   --fs-node-border-scale: 1.5;
 }
 
+/* A running LESSON's target node (src/tutorials/tutorialHighlights.ts): the
+   node a value must be set on, or an end of the wire to draw. An attribute, for
+   the same reason as `data-fs-preview` below; the thickened border plus a
+   focus-coloured outline standing off the card, cleared when the step moves. */
+.react-flow__node[data-fs-tutorial="node"] {
+  --fs-node-border-scale: 1.5;
+  outline: 2px solid var(--border-focus);
+  outline-offset: 4px;
+}
+
 /* PREVIEW MODE (utils/nodePreview.ts). NodeEditor puts `fs-previewing` on the
    canvas and `data-fs-preview="src"` / `"dst"` on the two node wrappers the
    route joins — ATTRIBUTES rather than classes, because React rewrites the

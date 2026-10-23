@@ -52,6 +52,7 @@ import {
 } from '@/utils/drawings';
 import { ContextMenu } from './menus/ContextMenu';
 import { ContentBrowser } from './ContentBrowser';
+import { TutorialPanel } from '@/tutorials/TutorialPanel';
 import { useKeyboardNav } from './useKeyboardNav';
 import { ColorPickerPopover } from '@/components/inputs/PaletteColorPicker';
 import { NewShaderModal } from '@/components/Modals/NewShaderModal';
@@ -3791,6 +3792,10 @@ export function NodeEditor() {
             onChange={onImportFileChange}
           />
         </div>
+        {/* The running lesson's panel (src/tutorials), bottom-right; renders
+            nothing while no lesson runs. Inside the canvas div for fitView and
+            canvas-relative placement, like the file buttons above. */}
+        <TutorialPanel />
         <ReactFlow
           nodes={nodes}
           edges={edges}

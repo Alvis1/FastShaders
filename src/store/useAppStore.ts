@@ -16,6 +16,9 @@ import type {
 } from '@/types';
 import { getNodeValues } from '@/types';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
+import { graphIsBlank } from '@/tutorials/tutorialTypes';
+import type { TutorialRun } from '@/tutorials/tutorialTypes';
+import { TUTORIALS } from '@/tutorials/tutorialDefs';
 import type { ImportNote, ImportNoteLine } from '@/utils/importNote';
 import type { ZipLimitKind } from '@/utils/zipReader';
 import { t } from '@/i18n';
@@ -754,6 +757,24 @@ function loadFlag(key: string): boolean {
   return loadString(key, '0') === '1';
 }
 
+/**
+ * `fs:tutorialsDone`: the lessons finished on this browser (the tick on their
+ * tiles). A JSON array of KNOWN lesson ids — validated, never coerced: an
+ * unknown or repeated id, or anything that is not a string array, is dropped.
+ * Written only by `endTutorial` when the finish screen was reached.
+ */
+const TUTORIALS_DONE_KEY = 'fs:tutorialsDone';
+function loadTutorialsDone(): string[] {
+  const known = new Set(TUTORIALS.map((d) => d.id));
+  try {
+    const parsed: unknown = JSON.parse(loadString(TUTORIALS_DONE_KEY, '[]'), safeJsonReviver);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((id, i): id is string => typeof id === 'string' && known.has(id) && parsed.indexOf(id) === i);
+  } catch {
+    return [];
+  }
+}
+
 /** The preference writer: a full quota or a private window must not throw. */
 function saveString(key: string, value: string): void {
   try { localStorage.setItem(key, value); } catch { /* quota or private mode */ }
@@ -947,6 +968,46 @@ function snapshotOf(state: {
  *  `pushHistory` is the guarded one (`isUndoRedo`, an open gesture bracket). */
 function recordHistory(state: AppState): Pick<AppState, 'past' | 'future'> {
   return { past: [...state.past, snapshotOf(state)].slice(-MAX_HISTORY), future: [] };
+}
+
+/**
+ * A lesson TAKES OVER the canvas (src/tutorials): the graph becomes one fresh
+ * Output, the lesson's `out` role, in ONE `set` with an UNGUARDED history
+ * record — `pushHistory` is a no-op while `isUndoRedo` is set, and a tile
+ * click landing between Cmd+Z and the sync engine's clearing pass would
+ * otherwise wipe the canvas with no way back (the guarantee `newGraph` gives,
+ * pinned by newGraph.test.ts). The DOCUMENT stays — name, palettes, tuned
+ * uniforms, the preview model — exactly `startSplatGraph`'s contract, which is
+ * why the caller announces `fs:graph-merged`, never `fs:graph-new`.
+ */
+function tutorialTakeover(state: AppState, id: string): Partial<AppState> {
+  const outputId = generateId();
+  return {
+    ...recordHistory(state),
+    tutorial: { id, phase: 'run', step: 0, reached: 0, bindings: { out: outputId } },
+    nodes: [
+      {
+        id: outputId,
+        type: 'output',
+        position: { x: 0, y: 0 },
+        data: { registryType: 'output', label: 'Output', cost: 0 },
+      } as AppNode,
+    ],
+    edges: [],
+    drawings: [],
+    nodePreview: null,
+    syncSource: 'graph',
+    isUndoRedo: false,
+  };
+}
+
+/** `fs:graph-merged`, the literal: importing GRAPH_MERGED_EVENT from
+ *  engine/projectImport.ts would close a store → projectImport → store cycle.
+ *  The name is classified in Preview/settledPreview.ts (GRAPH_REPLACED_EVENTS),
+ *  which settledPreview.test.ts holds every dispatch site to. NodeEditor arms
+ *  its fit on it and ends Preview mode. */
+function announceTutorialTakeover(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('fs:graph-merged'));
 }
 
 /**
@@ -1453,6 +1514,15 @@ interface AppState {
    * history, never in a shared file — looking at a node is not an edit.
    */
   nodePreview: NodePreviewTarget | null;
+  /**
+   * The running hands-on LESSON (src/tutorials) — session-only like
+   * `nodePreview`: never in history, the autosave or a file. `phase: 'ask'`
+   * is the confirm screen over a canvas that holds work; `'run'` means the
+   * canvas is the lesson's.
+   */
+  tutorial: TutorialRun | null;
+  /** Lessons finished on this browser (`fs:tutorialsDone`), for the tiles' ticks. */
+  tutorialsDone: string[];
   /** Queue of over-wide CSV drops awaiting a user decision (shown one at a time). */
   pendingCsvImports: PendingCsvImport[];
   /** Queue of dropped shader files awaiting Open-or-Add (shown one at a time). */
@@ -1725,6 +1795,16 @@ interface AppState {
   openContextMenu: (x: number, y: number, type: ContextMenuType, nodeId?: string, edgeId?: string, pin?: ContextMenuPin) => void;
   closeContextMenu: () => void;
   setNodePreview: (target: NodePreviewTarget | null) => void;
+  /** Press a Tutorials tile: take over a blank canvas at once, else ask first (`phase: 'ask'`). */
+  startTutorial: (id: string) => void;
+  /** The confirm screen's Start: the takeover. No-op unless asking. */
+  confirmTutorial: () => void;
+  /** Show step `step` (clamped by the caller). Navigation only — never undoes. */
+  tutorialGo: (step: number) => void;
+  /** Bind a role to a node the user added, or drop it (`null`) when its node went. */
+  tutorialBind: (role: string, nodeId: string | null) => void;
+  /** Close the lesson: `keep` leaves the graph, `new` is NEW; `completed` records the tick. */
+  endTutorial: (outcome: 'keep' | 'new', completed?: boolean) => void;
   /** Add a CSV import awaiting a decision to the queue. */
   enqueueCsvImport: (item: PendingCsvImport) => void;
   /** Resolve the head of the CSV-import queue and advance to the next. */
@@ -1889,6 +1969,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   isUndoRedo: false,
   contextMenu: { open: false, x: 0, y: 0, type: 'canvas' },
   nodePreview: null,
+  tutorial: null,
+  tutorialsDone: loadTutorialsDone(),
   pendingCsvImports: [],
   pendingShaderImports: [],
   pendingLimitNotices: [],
@@ -2573,6 +2655,47 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (cur === target) return;
     if (cur && target && cur.nodeId === target.nodeId && cur.handleId === target.handleId) return;
     set({ nodePreview: target });
+  },
+
+  startTutorial: (id) => {
+    const { nodes, edges, drawings } = get();
+    if (graphIsBlank(nodes, edges, drawings)) {
+      set((state) => tutorialTakeover(state, id));
+      announceTutorialTakeover();
+      return;
+    }
+    set({ tutorial: { id, phase: 'ask', step: 0, reached: 0, bindings: {} } });
+  },
+  confirmTutorial: () => {
+    const t = get().tutorial;
+    if (!t || t.phase !== 'ask') return;
+    set((state) => tutorialTakeover(state, t.id));
+    announceTutorialTakeover();
+  },
+  tutorialGo: (step) => {
+    const t = get().tutorial;
+    if (!t || t.phase !== 'run' || t.step === step) return;
+    set({ tutorial: { ...t, step, reached: Math.max(t.reached, step) } });
+  },
+  tutorialBind: (role, nodeId) => {
+    const t = get().tutorial;
+    if (!t) return;
+    if (nodeId === null ? !(role in t.bindings) : t.bindings[role] === nodeId) return;
+    const bindings = { ...t.bindings };
+    if (nodeId === null) delete bindings[role];
+    else bindings[role] = nodeId;
+    set({ tutorial: { ...t, bindings } });
+  },
+  endTutorial: (outcome, completed = false) => {
+    const t = get().tutorial;
+    if (!t) return;
+    const done = get().tutorialsDone;
+    const next = completed && !done.includes(t.id) ? [...done, t.id] : done;
+    if (next !== done) saveString(TUTORIALS_DONE_KEY, JSON.stringify(next));
+    set({ tutorial: null, tutorialsDone: next });
+    // NEW's own semantics, deliberately: the name resets, the dropped model
+    // goes, `fs:graph-new` fires — the user asked for a new shader by name.
+    if (outcome === 'new') get().newGraph();
   },
 
   enqueueCsvImport: (item) =>

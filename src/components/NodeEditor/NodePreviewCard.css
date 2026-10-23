@@ -121,3 +121,12 @@
 .node-preview-card__color-scale .color-node {
   cursor: inherit;
 }
+
+/* TUTORIALS (src/tutorials): the tile the running lesson's current step asks
+   the user to add wears a focus-coloured outline. An outline is neither a size
+   nor a position property, so the card-layer rule (assetCardGeometry.test.ts)
+   is untouched; it is on the CARD, never on the node inside it. */
+.node-preview-card[data-fs-tutorial-want] {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+}

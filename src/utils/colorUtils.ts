@@ -290,7 +290,7 @@ export function getGroupFrameColors(
  *
  * `saved` is a pseudo-category for the Saved Groups library (no registry entry).
  */
-export const CAT_HEX: Record<NodeCategory | 'saved', string> = {
+export const CAT_HEX: Record<NodeCategory | 'saved' | 'tutorials', string> = {
   input: '#4CAF50',
   type: '#2196F3',
   arithmetic: '#FF9800',
@@ -307,12 +307,15 @@ export const CAT_HEX: Record<NodeCategory | 'saved', string> = {
   unknown: '#9E9E9E',
   output: '#f44336',
   saved: '#6366f1',
+  // The Tutorials tab — a pseudo-category like `saved` (src/tutorials). Blue-grey:
+  // the one hue no node category wears.
+  tutorials: '#607D8B',
 };
 
 /** `var(--cat-<category>)` per CAT_HEX key. */
 export const CATEGORY_COLORS = Object.fromEntries(
   Object.keys(CAT_HEX).map((cat) => [cat, `var(--cat-${cat})`]),
-) as Record<NodeCategory | 'saved', string>;
+) as Record<NodeCategory | 'saved' | 'tutorials', string>;
 
 // Publish CAT_HEX as CSS variables on :root so CSS files and CATEGORY_COLORS
 // (var() lookups) resolve to the same hex values. Runs once at module load,

@@ -1,18 +1,24 @@
 import { memo, useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { CATEGORIES } from '@/registry/nodeCategories';
 import {
+  NODE_REGISTRY,
   getEditorDefinitions,
   categoryEmptiedByHiding,
   nodeMatchRank,
   NO_MATCH,
 } from '@/registry/nodeRegistry';
 import { isTextureHiddenFromEditor } from '@/registry/editorVisibility';
-import { hiddenOptionalCategories, visibleTabs, effectiveTab } from '@/registry/optionalCategories';
+import { hiddenOptionalCategories, visibleTabs, effectiveTab, isOptionalCategory } from '@/registry/optionalCategories';
 import { getBuiltinTextureIds } from '@/registry/builtinTextureIds';
 import { NodePreviewCard } from './NodePreviewCard';
 import { NoteTileCard } from './NoteTileCard';
 import { noteMatchesQuery } from './noteSearch';
 import { SavedGroupCard } from './SavedGroupCard';
+import { TutorialCard } from '@/tutorials/TutorialCard';
+import { TUTORIALS } from '@/tutorials/tutorialDefs';
+import { wantedNodeType } from '@/tutorials/tutorialRun';
+import { TUTORIALS_TAB, tutorialsOffered, effectiveBrowserTab } from '@/tutorials/tutorialsTab';
+import { isEvalMode } from '@/eval/evalArm';
 import { TextureCard } from './TextureCard';
 import { PresetCard } from './PresetCard';
 import { setHtml5TileDrag, endHtml5TileDrag } from './tileDrag';
@@ -68,8 +74,9 @@ const displayCategories = [
   c.id === 'texture' ? !allTexturesHidden : !categoryEmptiedByHiding(c.id),
 );
 
-/** Pseudo-category id for the user's saved-group library. */
-type BrowserCategory = NodeCategory | 'all' | 'saved';
+/** Pseudo-category ids: the user's saved-group library, and the Tutorials tab
+ *  (src/tutorials — always on outside a study, absent in one; tutorialsTab.ts). */
+type BrowserCategory = NodeCategory | 'all' | 'saved' | typeof TUTORIALS_TAB;
 
 /**
  * The two built-in libraries, once their chunk has landed. NEVER a static
@@ -200,10 +207,16 @@ const validateZoom = (raw: string | null): number => {
  *  `displayCategories` and not the raw CATEGORIES table: the two lists
  *  disagreeing is exactly how a returning user boots into a blank strip. */
 const BROWSER_TABS = new Set<string>([
-  'all', 'saved', ...displayCategories.map((c) => c.id),
+  // 'tutorials' stays a VALID stored value through a study session (the tab is
+  // absent there) — derived to 'all' at render by effectiveBrowserTab, like a
+  // switched-off optional category, so it comes back afterwards.
+  'all', 'saved', TUTORIALS_TAB, ...displayCategories.map((c) => c.id),
 ]);
 const validateBrowserTab = (raw: string | null): BrowserCategory =>
   raw && BROWSER_TABS.has(raw) ? (raw as BrowserCategory) : 'all';
+/** The Tutorials tab exists outside a study only. `isEvalMode` is sampled once
+ *  per page, so a module constant is the honest shape (tutorialsTab.ts). */
+const OFFER_TUTORIALS = tutorialsOffered(isEvalMode());
 
 const validateBarHeight = (raw: string | null): number | null => {
   const v = parseFloat(raw ?? '');
@@ -229,7 +242,23 @@ export const ContentBrowser = memo(function ContentBrowser() {
   // DERIVED, never written back (see effectiveTab): a stored tab whose category
   // is currently switched off shows the All strip, and the stored value
   // survives so the tab comes back the moment the switch does.
-  const activeCategory: BrowserCategory = effectiveTab(storedCategory, optional);
+  // A running lesson's `add` step steers the strip to the wanted node's
+  // category — as LOCAL state, never written to `fs:assetTab`: a lesson must
+  // not leave the user parked on Noise a week later. Any tab click clears it.
+  const tutorialWant = useAppStore((s) => wantedNodeType(s.tutorial));
+  const [tutorialTab, setTutorialTab] = useState<BrowserCategory | null>(null);
+  useEffect(() => {
+    if (!tutorialWant) { setTutorialTab(null); return; }
+    const cat = NODE_REGISTRY.get(tutorialWant)?.category;
+    if (!cat || (isOptionalCategory(cat) && !optional[cat])) return;
+    setTutorialTab(cat);
+  }, [tutorialWant, optional]);
+  const activeCategory: BrowserCategory =
+    tutorialTab ?? effectiveBrowserTab(effectiveTab(storedCategory, optional), OFFER_TUTORIALS);
+  const pickTab = useCallback((tab: BrowserCategory) => {
+    setTutorialTab(null);
+    setActiveCategory(tab);
+  }, [setActiveCategory]);
   // What the box SHOWS (updated on every keystroke, so typing never lags) and
   // what the strip is FILTERED by (`settledSearch`, adopted after
   // SEARCH_DEBOUNCE_MS of quiet). They are separate because everything derived
@@ -324,6 +353,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
   // what the tiles now print, so the sorting memos key on it.
   const costVersion = useAppStore((s) => s.costVersion);
   const savedTabLabel = `${t('Saved Groups', language)}${savedGroups.length > 0 ? ` (${savedGroups.length})` : ''}`;
+  const tutorialsTabLabel = t('Tutorials', language);
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
@@ -682,8 +712,9 @@ export const ContentBrowser = memo(function ContentBrowser() {
     // saved/texture/presets/presets2 render their own tiles; defs unused there.
     let defs: NodeDefinition[];
     if (
-      activeCategory === 'all' || activeCategory === 'saved' ||
-      activeCategory === 'texture' || activeCategory === 'presets'
+      activeCategory === 'all' || activeCategory === 'saved' || activeCategory === TUTORIALS_TAB ||
+      activeCategory === 'texture' || activeCategory === 'presets' ||
+      activeCategory === 'presets2'
     ) {
       defs = allDefs;
     } else {
@@ -712,6 +743,17 @@ export const ContentBrowser = memo(function ContentBrowser() {
     if (!q) return savedGroups;
     return savedGroups.filter((g) => g.name.toLowerCase().includes(q));
   }, [savedGroups, q]);
+
+  // The lessons, by title or summary in either language. Only on their own
+  // tab: a lesson is not an asset you drop, so a search elsewhere never
+  // surfaces one (the presets and textures DO fan out — they land on the canvas).
+  const filteredTutorials = useMemo(() => {
+    if (!OFFER_TUTORIALS) return [];
+    if (!q) return TUTORIALS;
+    return TUTORIALS.filter((d) =>
+      [d.title, d.summary, t(d.title, 'lv'), t(d.summary, 'lv')].some((x) => x.toLowerCase().includes(q)),
+    );
+  }, [q]);
 
   /**
    * BOTH ready-made strips read cheapest-first, on the SAME number their tile
@@ -866,7 +908,11 @@ export const ContentBrowser = memo(function ContentBrowser() {
   const noMatch = (key: string) => empty(fillTemplate(t(key, language), { query: settledSearch.trim() }));
 
   let items: React.ReactNode;
-  if (activeCategory === 'saved') {
+  if (activeCategory === TUTORIALS_TAB) {
+    items = filteredTutorials.length === 0
+      ? noMatch('No tutorials match “{query}”.')
+      : filteredTutorials.map((d) => <TutorialCard key={d.id} def={d} index={TUTORIALS.indexOf(d) + 1} />);
+  } else if (activeCategory === 'saved') {
     items = savedGroups.length === 0
       ? empty(t('Right-click a group on the canvas → Save to Library to store it here.', language))
       : filteredSavedGroups.length === 0
@@ -974,17 +1020,29 @@ export const ContentBrowser = memo(function ContentBrowser() {
                   }
                 : {}
             }
-            onClick={() => setActiveCategory('all')}
+            onClick={() => pickTab('all')}
             data-label={t('All', language)}
           >
             {t('All', language)}
           </button>
+          {/* Tutorials leads the asset tabs (after All, the fallback): the
+              lessons are where a newcomer starts. Absent in a study. */}
+          {OFFER_TUTORIALS && (
+            <button
+              className={`content-browser__cat-btn ${activeCategory === TUTORIALS_TAB ? 'content-browser__cat-btn--active' : ''}`}
+              style={tabStyle(CAT_HEX.tutorials, activeCategory === TUTORIALS_TAB)}
+              onClick={() => pickTab(TUTORIALS_TAB)}
+              data-label={tutorialsTabLabel}
+            >
+              {tutorialsTabLabel}
+            </button>
+          )}
           {visibleCategories.map((cat) => (
             <button
               key={cat.id}
               className={`content-browser__cat-btn ${activeCategory === cat.id ? 'content-browser__cat-btn--active' : ''}`}
               style={tabStyle(CAT_HEX[cat.id], activeCategory === cat.id)}
-              onClick={() => setActiveCategory(cat.id)}
+              onClick={() => pickTab(cat.id)}
               data-label={formatCategoryLabel(cat.label, cat.id, language)}
             >
               {formatCategoryLabel(cat.label, cat.id, language)}
@@ -993,7 +1051,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
           <button
             className={`content-browser__cat-btn ${activeCategory === 'saved' ? 'content-browser__cat-btn--active' : ''}`}
             style={tabStyle(CAT_HEX.saved, activeCategory === 'saved')}
-            onClick={() => setActiveCategory('saved')}
+            onClick={() => pickTab('saved')}
             data-label={savedTabLabel}
           >
             {savedTabLabel}

@@ -1,0 +1,1249 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`every lesson, built by "Do it for me" > tut-bumps builds a shader that parses back, within budget 1`] = `
+"import { Fn, mul, mx_noise_float, positionGeometry } from 'three/tsl';
+
+const shader = Fn(() => {
+  const noise1 = mx_noise_float(positionGeometry.mul(2)).mul(0.5).add(0.5);
+  const mul1 = mul(noise1, 0.2);
+
+  return { position: mul1 };
+});
+
+export default shader;
+"
+`;
+
+exports[`every lesson, built by "Do it for me" > tut-cells builds a shader that parses back, within budget 1`] = `
+"import { Fn, float, mx_cell_noise_float, positionGeometry, texture, vec2 } from 'three/tsl';
+
+const fsLut = (() => {
+  const made = new Map();
+  const f32 = new Float32Array(1);
+  const i32 = new Int32Array(f32.buffer);
+  const half = (v) => {
+    f32[0] = v;
+    const w = i32[0];
+    let bits = (w >> 16) & 0x8000;
+    let man = (w >> 12) & 0x07ff;
+    const ex = (w >> 23) & 0xff;
+    if (ex < 103) return bits;
+    if (ex > 142) return bits | 0x7c00 | (ex === 255 && (w & 0x007fffff) !== 0 ? 0x0200 : 0);
+    if (ex < 113) {
+      man |= 0x0800;
+      return bits | ((man >> (114 - ex)) + ((man >> (113 - ex)) & 1));
+    }
+    bits |= ((ex - 112) << 10) | (man >> 1);
+    return bits + (man & 1);
+  };
+  const unit = (s) => {
+    let dots = 0;
+    let digits = 0;
+    for (let i = 0; i < s.length; i++) {
+      const k = s.charCodeAt(i);
+      if (k === 46) dots++;
+      else if (k >= 48 && k <= 57) digits++;
+      else return null;
+    }
+    if (dots > 1 || digits === 0 || s.length > 12) return null;
+    const num = Number(s);
+    return num > 1 ? 1 : num;
+  };
+  const hex = (s) => {
+    if (s.length !== 7 || s.charCodeAt(0) !== 35) return null;
+    for (let i = 1; i < 7; i++) {
+      const k = s.charCodeAt(i);
+      if (!((k >= 48 && k <= 57) || (k >= 65 && k <= 70) || (k >= 97 && k <= 102))) return null;
+    }
+    return [1, 3, 5].map((o) => {
+      const cv = parseInt(s.slice(o, o + 2), 16) / 255;
+      return cv <= 0.04045 ? cv / 12.92 : Math.pow((cv + 0.055) / 1.055, 2.4);
+    });
+  };
+  const word = (s) => {
+    if (s.length < 1 || s.length > 12) return false;
+    for (let i = 0; i < s.length; i++) {
+      const k = s.charCodeAt(i);
+      if (k < 97 || k > 122) return false;
+    }
+    return true;
+  };
+  const rows = (str, lo, hi) => {
+    if (!str || str.split === undefined || str.length === 0 || str.length > 1024) return null;
+    const recs = str.split(',');
+    if (recs.length < lo || recs.length > hi) return null;
+    return recs.map((rec) => rec.trim().split(' ').filter((tok) => tok !== ''));
+  };
+  const make = (key, nearest, bake) => {
+    let hit = made.get(key);
+    if (hit) return hit;
+    const baked = bake();
+    const data = new Uint16Array(baked.vals.length);
+    for (let i = 0; i < baked.vals.length; i++) data[i] = half(baked.vals[i]);
+    const tex = new globalThis.THREE.DataTexture(data, baked.vals.length / 4, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.HalfFloatType);
+    tex.minFilter = nearest ? globalThis.THREE.NearestFilter : globalThis.THREE.LinearFilter;
+    tex.magFilter = tex.minFilter;
+    tex.wrapS = globalThis.THREE.ClampToEdgeWrapping;
+    tex.wrapT = globalThis.THREE.ClampToEdgeWrapping;
+    tex.needsUpdate = true;
+    hit = { tex: tex, slopes: baked.slopes };
+    made.set(key, hit);
+    return hit;
+  };
+  const at = (tex, u) => texture(tex, vec2(float(u).mul(256 / 257).add(0.5 / 257), 0.5)).level(0);
+  return { half: half, unit: unit, hex: hex, word: word, rows: rows, make: make, at: at };
+})();
+
+const fsColorRamp = (fac, stops, interp) => {
+  const mode = ['constant', 'ease', 'bspline', 'cardinal'].includes(interp) ? interp : 'linear';
+  const bake = () => {
+    let list = [{ p: 0, c: [0, 0, 0, 1] }, { p: 1, c: [1, 1, 1, 1] }];
+    const recs = fsLut.rows(stops, 1, 32);
+    const read = recs && recs.map((rec) => {
+      if (rec.length !== 3) return null;
+      const p = fsLut.unit(rec[0]);
+      const rgb = fsLut.hex(rec[1]);
+      const al = fsLut.unit(rec[2]);
+      return p === null || rgb === null || al === null ? null : { p: p, c: [rgb[0], rgb[1], rgb[2], al] };
+    });
+    if (read && read.every((s) => s !== null)) list = read.sort((s1, s2) => s1.p - s2.p);
+    const cnt = list.length;
+    const spline = mode === 'bspline' || mode === 'cardinal';
+    const ev = (x) => {
+      if (cnt === 1) return list[0].c;
+      if (x <= list[0].p && !spline) return list[0].c;
+      let at1 = 0;
+      while (at1 < cnt && !(list[at1].p > x)) at1++;
+      let rt;
+      let lf;
+      if (at1 === cnt) { lf = list[cnt - 1]; rt = { p: 1, c: lf.c }; }
+      else if (at1 === 0) { rt = list[0]; lf = { p: 0, c: rt.c }; }
+      else { rt = list[at1]; lf = list[at1 - 1]; }
+      if (at1 === cnt && !spline) return lf.c;
+      if (mode === 'constant') return lf.c;
+      let f = lf.p !== rt.p ? (x - rt.p) / (lf.p - rt.p) : (at1 !== cnt ? 0 : 1);
+      if (spline) {
+        const r0 = at1 >= cnt - 1 ? rt : list[at1 + 1];
+        const l3 = at1 < 2 ? lf : list[at1 - 2];
+        f = f < 0 ? 0 : f > 1 ? 1 : f;
+        const t2 = f * f;
+        const t3 = t2 * f;
+        let w0;
+        let w1;
+        let w2;
+        let w3;
+        if (mode === 'cardinal') {
+          const fc = 0.71;
+          w0 = -fc * t3 + 2 * fc * t2 - fc * f;
+          w1 = (2 - fc) * t3 + (fc - 3) * t2 + 1;
+          w2 = (fc - 2) * t3 + (3 - 2 * fc) * t2 + fc * f;
+          w3 = fc * t3 - fc * t2;
+        } else {
+          w0 = -0.16666666 * t3 + 0.5 * t2 - 0.5 * f + 0.16666666;
+          w1 = 0.5 * t3 - t2 + 0.66666666;
+          w2 = -0.5 * t3 + 0.5 * t2 + 0.5 * f + 0.16666666;
+          w3 = 0.16666666 * t3;
+        }
+        return [0, 1, 2, 3].map((k) => {
+          const o = w3 * l3.c[k] + w2 * lf.c[k] + w1 * rt.c[k] + w0 * r0.c[k];
+          return o < 0 ? 0 : o > 1 ? 1 : o;
+        });
+      }
+      if (mode === 'ease') { const f2 = f * f; f = 3 * f2 - 2 * f2 * f; }
+      const mf = 1 - f;
+      return [0, 1, 2, 3].map((k) => mf * rt.c[k] + f * lf.c[k]);
+    };
+    const vals = new Float32Array(257 * 4);
+    for (let i = 0; i <= 256; i++) vals.set(ev(i / 256), i * 4);
+    return { vals: vals, slopes: null };
+  };
+  return fsLut.at(fsLut.make('ramp ' + mode + ' ' + stops, mode === 'constant', bake).tex, fac);
+};
+
+const shader = Fn(() => {
+  const cell_noise1 = mx_cell_noise_float(positionGeometry.mul(4));
+  const colorRamp1 = fsColorRamp(cell_noise1, "0 #0b3c5d 1,0.25 #328cc1 1,0.5 #f2c14e 1,0.75 #d9483b 1", "constant");
+
+  return colorRamp1.rgb;
+});
+
+export default shader;
+"
+`;
+
+exports[`every lesson, built by "Do it for me" > tut-circle builds a shader that parses back, within budget 1`] = `
+"import { Fn, length, smoothstep, sub, uv, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const uv1 = uv();
+  const sub1 = sub(uv1, 0.5);
+  const length1 = length(sub1);
+  const smoothstep1 = smoothstep(0.3, 0.32, length1);
+
+  return vec3(smoothstep1);
+});
+
+export default shader;
+"
+`;
+
+exports[`every lesson, built by "Do it for me" > tut-ghost builds a shader that parses back, within budget 1`] = `
+"import { Fn, abs, add, cameraPosition, clamp, color, div, dot, float, frontFacing, greaterThan, max, mul, normalWorld, normalize, positionWorld, select, sqrt, sub, vec2, vec3 } from 'three/tsl';
+
+const fsFresnel = Fn(([eta, n, pw]) => {
+  const v = normalize(sub(cameraPosition, pw));
+  const c = abs(dot(vec3(n), v));
+  const e = clamp(float(eta), float(1e-5), float(1e4));
+  const r = select(frontFacing, e, div(float(1), e));
+  const g2 = add(sub(mul(r, r), float(1)), mul(c, c));
+  const g = sqrt(max(g2, float(0)));
+  const a = div(sub(g, c), max(add(g, c), float(1e-6)));
+  const b = div(sub(mul(c, add(g, c)), float(1)), add(mul(c, sub(g, c)), float(1)));
+  const fr = select(greaterThan(g2, float(0)), mul(mul(float(0.5), mul(a, a)), add(float(1), mul(b, b))), float(1));
+  return vec2(fr, sub(float(1), c));
+});
+
+const shader = Fn(() => {
+  const color1 = color(0x80deea);
+  const fresnel1 = fsFresnel(1.5, normalWorld, positionWorld);
+
+  return { color: color1, opacity: fresnel1.y };
+});
+
+export default shader;
+"
+`;
+
+exports[`every lesson, built by "Do it for me" > tut-gradient builds a shader that parses back, within budget 1`] = `
+"import { Fn, float, texture, uv, vec2 } from 'three/tsl';
+
+const fsLut = (() => {
+  const made = new Map();
+  const f32 = new Float32Array(1);
+  const i32 = new Int32Array(f32.buffer);
+  const half = (v) => {
+    f32[0] = v;
+    const w = i32[0];
+    let bits = (w >> 16) & 0x8000;
+    let man = (w >> 12) & 0x07ff;
+    const ex = (w >> 23) & 0xff;
+    if (ex < 103) return bits;
+    if (ex > 142) return bits | 0x7c00 | (ex === 255 && (w & 0x007fffff) !== 0 ? 0x0200 : 0);
+    if (ex < 113) {
+      man |= 0x0800;
+      return bits | ((man >> (114 - ex)) + ((man >> (113 - ex)) & 1));
+    }
+    bits |= ((ex - 112) << 10) | (man >> 1);
+    return bits + (man & 1);
+  };
+  const unit = (s) => {
+    let dots = 0;
+    let digits = 0;
+    for (let i = 0; i < s.length; i++) {
+      const k = s.charCodeAt(i);
+      if (k === 46) dots++;
+      else if (k >= 48 && k <= 57) digits++;
+      else return null;
+    }
+    if (dots > 1 || digits === 0 || s.length > 12) return null;
+    const num = Number(s);
+    return num > 1 ? 1 : num;
+  };
+  const hex = (s) => {
+    if (s.length !== 7 || s.charCodeAt(0) !== 35) return null;
+    for (let i = 1; i < 7; i++) {
+      const k = s.charCodeAt(i);
+      if (!((k >= 48 && k <= 57) || (k >= 65 && k <= 70) || (k >= 97 && k <= 102))) return null;
+    }
+    return [1, 3, 5].map((o) => {
+      const cv = parseInt(s.slice(o, o + 2), 16) / 255;
+      return cv <= 0.04045 ? cv / 12.92 : Math.pow((cv + 0.055) / 1.055, 2.4);
+    });
+  };
+  const word = (s) => {
+    if (s.length < 1 || s.length > 12) return false;
+    for (let i = 0; i < s.length; i++) {
+      const k = s.charCodeAt(i);
+      if (k < 97 || k > 122) return false;
+    }
+    return true;
+  };
+  const rows = (str, lo, hi) => {
+    if (!str || str.split === undefined || str.length === 0 || str.length > 1024) return null;
+    const recs = str.split(',');
+    if (recs.length < lo || recs.length > hi) return null;
+    return recs.map((rec) => rec.trim().split(' ').filter((tok) => tok !== ''));
+  };
+  const make = (key, nearest, bake) => {
+    let hit = made.get(key);
+    if (hit) return hit;
+    const baked = bake();
+    const data = new Uint16Array(baked.vals.length);
+    for (let i = 0; i < baked.vals.length; i++) data[i] = half(baked.vals[i]);
+    const tex = new globalThis.THREE.DataTexture(data, baked.vals.length / 4, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.HalfFloatType);
+    tex.minFilter = nearest ? globalThis.THREE.NearestFilter : globalThis.THREE.LinearFilter;
+    tex.magFilter = tex.minFilter;
+    tex.wrapS = globalThis.THREE.ClampToEdgeWrapping;
+    tex.wrapT = globalThis.THREE.ClampToEdgeWrapping;
+    tex.needsUpdate = true;
+    hit = { tex: tex, slopes: baked.slopes };
+    made.set(key, hit);
+    return hit;
+  };
+  const at = (tex, u) => texture(tex, vec2(float(u).mul(256 / 257).add(0.5 / 257), 0.5)).level(0);
+  return { half: half, unit: unit, hex: hex, word: word, rows: rows, make: make, at: at };
+})();
+
+const fsColorRamp = (fac, stops, interp) => {
+  const mode = ['constant', 'ease', 'bspline', 'cardinal'].includes(interp) ? interp : 'linear';
+  const bake = () => {
+    let list = [{ p: 0, c: [0, 0, 0, 1] }, { p: 1, c: [1, 1, 1, 1] }];
+    const recs = fsLut.rows(stops, 1, 32);
+    const read = recs && recs.map((rec) => {
+      if (rec.length !== 3) return null;
+      const p = fsLut.unit(rec[0]);
+      const rgb = fsLut.hex(rec[1]);
+      const al = fsLut.unit(rec[2]);
+      return p === null || rgb === null || al === null ? null : { p: p, c: [rgb[0], rgb[1], rgb[2], al] };
+    });
+    if (read && read.every((s) => s !== null)) list = read.sort((s1, s2) => s1.p - s2.p);
+    const cnt = list.length;
+    const spline = mode === 'bspline' || mode === 'cardinal';
+    const ev = (x) => {
+      if (cnt === 1) return list[0].c;
+      if (x <= list[0].p && !spline) return list[0].c;
+      let at1 = 0;
+      while (at1 < cnt && !(list[at1].p > x)) at1++;
+      let rt;
+      let lf;
+      if (at1 === cnt) { lf = list[cnt - 1]; rt = { p: 1, c: lf.c }; }
+      else if (at1 === 0) { rt = list[0]; lf = { p: 0, c: rt.c }; }
+      else { rt = list[at1]; lf = list[at1 - 1]; }
+      if (at1 === cnt && !spline) return lf.c;
+      if (mode === 'constant') return lf.c;
+      let f = lf.p !== rt.p ? (x - rt.p) / (lf.p - rt.p) : (at1 !== cnt ? 0 : 1);
+      if (spline) {
+        const r0 = at1 >= cnt - 1 ? rt : list[at1 + 1];
+        const l3 = at1 < 2 ? lf : list[at1 - 2];
+        f = f < 0 ? 0 : f > 1 ? 1 : f;
+        const t2 = f * f;
+        const t3 = t2 * f;
+        let w0;
+        let w1;
+        let w2;
+        let w3;
+        if (mode === 'cardinal') {
+          const fc = 0.71;
+          w0 = -fc * t3 + 2 * fc * t2 - fc * f;
+          w1 = (2 - fc) * t3 + (fc - 3) * t2 + 1;
+          w2 = (fc - 2) * t3 + (3 - 2 * fc) * t2 + fc * f;
+          w3 = fc * t3 - fc * t2;
+        } else {
+          w0 = -0.16666666 * t3 + 0.5 * t2 - 0.5 * f + 0.16666666;
+          w1 = 0.5 * t3 - t2 + 0.66666666;
+          w2 = -0.5 * t3 + 0.5 * t2 + 0.5 * f + 0.16666666;
+          w3 = 0.16666666 * t3;
+        }
+        return [0, 1, 2, 3].map((k) => {
+          const o = w3 * l3.c[k] + w2 * lf.c[k] + w1 * rt.c[k] + w0 * r0.c[k];
+          return o < 0 ? 0 : o > 1 ? 1 : o;
+        });
+      }
+      if (mode === 'ease') { const f2 = f * f; f = 3 * f2 - 2 * f2 * f; }
+      const mf = 1 - f;
+      return [0, 1, 2, 3].map((k) => mf * rt.c[k] + f * lf.c[k]);
+    };
+    const vals = new Float32Array(257 * 4);
+    for (let i = 0; i <= 256; i++) vals.set(ev(i / 256), i * 4);
+    return { vals: vals, slopes: null };
+  };
+  return fsLut.at(fsLut.make('ramp ' + mode + ' ' + stops, mode === 'constant', bake).tex, fac);
+};
+
+const shader = Fn(() => {
+  const uv1 = uv();
+  const colorRamp1 = fsColorRamp(uv1.y, "0 #1565c0 1,1 #ff8a65 1", "linear");
+
+  return colorRamp1.rgb;
+});
+
+export default shader;
+"
+`;
+
+exports[`every lesson, built by "Do it for me" > tut-holes builds a shader that parses back, within budget 1`] = `
+"import { Discard, Fn, color, greaterThan, mx_noise_float, positionGeometry } from 'three/tsl';
+
+const shader = Fn(() => {
+  const noise1 = mx_noise_float(positionGeometry.mul(4)).mul(0.5).add(0.5);
+  const color1 = color(0xffb74d);
+  const greaterThan1 = greaterThan(noise1, 0.6);
+  Discard(greaterThan1);
+
+  return color1;
+});
+
+export default shader;
+"
+`;
+
+exports[`every lesson, built by "Do it for me" > tut-material builds a shader that parses back, within budget 1`] = `
+"import { Fn, color, float } from 'three/tsl';
+
+const shader = Fn(() => {
+  const color1 = color(0xb0bec5);
+
+  return { color: color1, roughness: float(0.1), metalness: float(1) };
+});
+
+export default shader;
+"
+`;
+
+exports[`every lesson, built by "Do it for me" > tut-mix builds a shader that parses back, within budget 1`] = `
+"import { Fn, color, mix, mx_noise_float, positionGeometry, round } from 'three/tsl';
+
+const shader = Fn(() => {
+  const noise1 = mx_noise_float(positionGeometry.mul(3)).mul(0.5).add(0.5);
+  const color1 = color(0x4a148c);
+  const color2 = color(0xffc107);
+  const round1 = round(noise1);
+  const mix1 = mix(color1, color2, round1);
+
+  return mix1;
+});
+
+export default shader;
+"
+`;
+
+exports[`every lesson, built by "Do it for me" > tut-noise builds a shader that parses back, within budget 1`] = `
+"import { Fn, float, mx_noise_float, positionGeometry, texture, vec2 } from 'three/tsl';
+
+const fsLut = (() => {
+  const made = new Map();
+  const f32 = new Float32Array(1);
+  const i32 = new Int32Array(f32.buffer);
+  const half = (v) => {
+    f32[0] = v;
+    const w = i32[0];
+    let bits = (w >> 16) & 0x8000;
+    let man = (w >> 12) & 0x07ff;
+    const ex = (w >> 23) & 0xff;
+    if (ex < 103) return bits;
+    if (ex > 142) return bits | 0x7c00 | (ex === 255 && (w & 0x007fffff) !== 0 ? 0x0200 : 0);
+    if (ex < 113) {
+      man |= 0x0800;
+      return bits | ((man >> (114 - ex)) + ((man >> (113 - ex)) & 1));
+    }
+    bits |= ((ex - 112) << 10) | (man >> 1);
+    return bits + (man & 1);
+  };
+  const unit = (s) => {
+    let dots = 0;
+    let digits = 0;
+    for (let i = 0; i < s.length; i++) {
+      const k = s.charCodeAt(i);
+      if (k === 46) dots++;
+      else if (k >= 48 && k <= 57) digits++;
+      else return null;
+    }
+    if (dots > 1 || digits === 0 || s.length > 12) return null;
+    const num = Number(s);
+    return num > 1 ? 1 : num;
+  };
+  const hex = (s) => {
+    if (s.length !== 7 || s.charCodeAt(0) !== 35) return null;
+    for (let i = 1; i < 7; i++) {
+      const k = s.charCodeAt(i);
+      if (!((k >= 48 && k <= 57) || (k >= 65 && k <= 70) || (k >= 97 && k <= 102))) return null;
+    }
+    return [1, 3, 5].map((o) => {
+      const cv = parseInt(s.slice(o, o + 2), 16) / 255;
+      return cv <= 0.04045 ? cv / 12.92 : Math.pow((cv + 0.055) / 1.055, 2.4);
+    });
+  };
+  const word = (s) => {
+    if (s.length < 1 || s.length > 12) return false;
+    for (let i = 0; i < s.length; i++) {
+      const k = s.charCodeAt(i);
+      if (k < 97 || k > 122) return false;
+    }
+    return true;
+  };
+  const rows = (str, lo, hi) => {
+    if (!str || str.split === undefined || str.length === 0 || str.length > 1024) return null;
+    const recs = str.split(',');
+    if (recs.length < lo || recs.length > hi) return null;
+    return recs.map((rec) => rec.trim().split(' ').filter((tok) => tok !== ''));
+  };
+  const make = (key, nearest, bake) => {
+    let hit = made.get(key);
+    if (hit) return hit;
+    const baked = bake();
+    const data = new Uint16Array(baked.vals.length);
+    for (let i = 0; i < baked.vals.length; i++) data[i] = half(baked.vals[i]);
+    const tex = new globalThis.THREE.DataTexture(data, baked.vals.length / 4, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.HalfFloatType);
+    tex.minFilter = nearest ? globalThis.THREE.NearestFilter : globalThis.THREE.LinearFilter;
+    tex.magFilter = tex.minFilter;
+    tex.wrapS = globalThis.THREE.ClampToEdgeWrapping;
+    tex.wrapT = globalThis.THREE.ClampToEdgeWrapping;
+    tex.needsUpdate = true;
+    hit = { tex: tex, slopes: baked.slopes };
+    made.set(key, hit);
+    return hit;
+  };
+  const at = (tex, u) => texture(tex, vec2(float(u).mul(256 / 257).add(0.5 / 257), 0.5)).level(0);
+  return { half: half, unit: unit, hex: hex, word: word, rows: rows, make: make, at: at };
+})();
+
+const fsColorRamp = (fac, stops, interp) => {
+  const mode = ['constant', 'ease', 'bspline', 'cardinal'].includes(interp) ? interp : 'linear';
+  const bake = () => {
+    let list = [{ p: 0, c: [0, 0, 0, 1] }, { p: 1, c: [1, 1, 1, 1] }];
+    const recs = fsLut.rows(stops, 1, 32);
+    const read = recs && recs.map((rec) => {
+      if (rec.length !== 3) return null;
+      const p = fsLut.unit(rec[0]);
+      const rgb = fsLut.hex(rec[1]);
+      const al = fsLut.unit(rec[2]);
+      return p === null || rgb === null || al === null ? null : { p: p, c: [rgb[0], rgb[1], rgb[2], al] };
+    });
+    if (read && read.every((s) => s !== null)) list = read.sort((s1, s2) => s1.p - s2.p);
+    const cnt = list.length;
+    const spline = mode === 'bspline' || mode === 'cardinal';
+    const ev = (x) => {
+      if (cnt === 1) return list[0].c;
+      if (x <= list[0].p && !spline) return list[0].c;
+      let at1 = 0;
+      while (at1 < cnt && !(list[at1].p > x)) at1++;
+      let rt;
+      let lf;
+      if (at1 === cnt) { lf = list[cnt - 1]; rt = { p: 1, c: lf.c }; }
+      else if (at1 === 0) { rt = list[0]; lf = { p: 0, c: rt.c }; }
+      else { rt = list[at1]; lf = list[at1 - 1]; }
+      if (at1 === cnt && !spline) return lf.c;
+      if (mode === 'constant') return lf.c;
+      let f = lf.p !== rt.p ? (x - rt.p) / (lf.p - rt.p) : (at1 !== cnt ? 0 : 1);
+      if (spline) {
+        const r0 = at1 >= cnt - 1 ? rt : list[at1 + 1];
+        const l3 = at1 < 2 ? lf : list[at1 - 2];
+        f = f < 0 ? 0 : f > 1 ? 1 : f;
+        const t2 = f * f;
+        const t3 = t2 * f;
+        let w0;
+        let w1;
+        let w2;
+        let w3;
+        if (mode === 'cardinal') {
+          const fc = 0.71;
+          w0 = -fc * t3 + 2 * fc * t2 - fc * f;
+          w1 = (2 - fc) * t3 + (fc - 3) * t2 + 1;
+          w2 = (fc - 2) * t3 + (3 - 2 * fc) * t2 + fc * f;
+          w3 = fc * t3 - fc * t2;
+        } else {
+          w0 = -0.16666666 * t3 + 0.5 * t2 - 0.5 * f + 0.16666666;
+          w1 = 0.5 * t3 - t2 + 0.66666666;
+          w2 = -0.5 * t3 + 0.5 * t2 + 0.5 * f + 0.16666666;
+          w3 = 0.16666666 * t3;
+        }
+        return [0, 1, 2, 3].map((k) => {
+          const o = w3 * l3.c[k] + w2 * lf.c[k] + w1 * rt.c[k] + w0 * r0.c[k];
+          return o < 0 ? 0 : o > 1 ? 1 : o;
+        });
+      }
+      if (mode === 'ease') { const f2 = f * f; f = 3 * f2 - 2 * f2 * f; }
+      const mf = 1 - f;
+      return [0, 1, 2, 3].map((k) => mf * rt.c[k] + f * lf.c[k]);
+    };
+    const vals = new Float32Array(257 * 4);
+    for (let i = 0; i <= 256; i++) vals.set(ev(i / 256), i * 4);
+    return { vals: vals, slopes: null };
+  };
+  return fsLut.at(fsLut.make('ramp ' + mode + ' ' + stops, mode === 'constant', bake).tex, fac);
+};
+
+const shader = Fn(() => {
+  const noise1 = mx_noise_float(positionGeometry.mul(3)).mul(0.5).add(0.5);
+  const colorRamp1 = fsColorRamp(noise1, "0.4 #1b5e20 1,0.6 #fff9c4 1", "linear");
+
+  return colorRamp1.rgb;
+});
+
+export default shader;
+"
+`;
+
+exports[`every lesson, built by "Do it for me" > tut-pulse builds a shader that parses back, within budget 1`] = `
+"import { Fn, float, remap, sin, texture, time, vec2 } from 'three/tsl';
+
+const fsLut = (() => {
+  const made = new Map();
+  const f32 = new Float32Array(1);
+  const i32 = new Int32Array(f32.buffer);
+  const half = (v) => {
+    f32[0] = v;
+    const w = i32[0];
+    let bits = (w >> 16) & 0x8000;
+    let man = (w >> 12) & 0x07ff;
+    const ex = (w >> 23) & 0xff;
+    if (ex < 103) return bits;
+    if (ex > 142) return bits | 0x7c00 | (ex === 255 && (w & 0x007fffff) !== 0 ? 0x0200 : 0);
+    if (ex < 113) {
+      man |= 0x0800;
+      return bits | ((man >> (114 - ex)) + ((man >> (113 - ex)) & 1));
+    }
+    bits |= ((ex - 112) << 10) | (man >> 1);
+    return bits + (man & 1);
+  };
+  const unit = (s) => {
+    let dots = 0;
+    let digits = 0;
+    for (let i = 0; i < s.length; i++) {
+      const k = s.charCodeAt(i);
+      if (k === 46) dots++;
+      else if (k >= 48 && k <= 57) digits++;
+      else return null;
+    }
+    if (dots > 1 || digits === 0 || s.length > 12) return null;
+    const num = Number(s);
+    return num > 1 ? 1 : num;
+  };
+  const hex = (s) => {
+    if (s.length !== 7 || s.charCodeAt(0) !== 35) return null;
+    for (let i = 1; i < 7; i++) {
+      const k = s.charCodeAt(i);
+      if (!((k >= 48 && k <= 57) || (k >= 65 && k <= 70) || (k >= 97 && k <= 102))) return null;
+    }
+    return [1, 3, 5].map((o) => {
+      const cv = parseInt(s.slice(o, o + 2), 16) / 255;
+      return cv <= 0.04045 ? cv / 12.92 : Math.pow((cv + 0.055) / 1.055, 2.4);
+    });
+  };
+  const word = (s) => {
+    if (s.length < 1 || s.length > 12) return false;
+    for (let i = 0; i < s.length; i++) {
+      const k = s.charCodeAt(i);
+      if (k < 97 || k > 122) return false;
+    }
+    return true;
+  };
+  const rows = (str, lo, hi) => {
+    if (!str || str.split === undefined || str.length === 0 || str.length > 1024) return null;
+    const recs = str.split(',');
+    if (recs.length < lo || recs.length > hi) return null;
+    return recs.map((rec) => rec.trim().split(' ').filter((tok) => tok !== ''));
+  };
+  const make = (key, nearest, bake) => {
+    let hit = made.get(key);
+    if (hit) return hit;
+    const baked = bake();
+    const data = new Uint16Array(baked.vals.length);
+    for (let i = 0; i < baked.vals.length; i++) data[i] = half(baked.vals[i]);
+    const tex = new globalThis.THREE.DataTexture(data, baked.vals.length / 4, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.HalfFloatType);
+    tex.minFilter = nearest ? globalThis.THREE.NearestFilter : globalThis.THREE.LinearFilter;
+    tex.magFilter = tex.minFilter;
+    tex.wrapS = globalThis.THREE.ClampToEdgeWrapping;
+    tex.wrapT = globalThis.THREE.ClampToEdgeWrapping;
+    tex.needsUpdate = true;
+    hit = { tex: tex, slopes: baked.slopes };
+    made.set(key, hit);
+    return hit;
+  };
+  const at = (tex, u) => texture(tex, vec2(float(u).mul(256 / 257).add(0.5 / 257), 0.5)).level(0);
+  return { half: half, unit: unit, hex: hex, word: word, rows: rows, make: make, at: at };
+})();
+
+const fsColorRamp = (fac, stops, interp) => {
+  const mode = ['constant', 'ease', 'bspline', 'cardinal'].includes(interp) ? interp : 'linear';
+  const bake = () => {
+    let list = [{ p: 0, c: [0, 0, 0, 1] }, { p: 1, c: [1, 1, 1, 1] }];
+    const recs = fsLut.rows(stops, 1, 32);
+    const read = recs && recs.map((rec) => {
+      if (rec.length !== 3) return null;
+      const p = fsLut.unit(rec[0]);
+      const rgb = fsLut.hex(rec[1]);
+      const al = fsLut.unit(rec[2]);
+      return p === null || rgb === null || al === null ? null : { p: p, c: [rgb[0], rgb[1], rgb[2], al] };
+    });
+    if (read && read.every((s) => s !== null)) list = read.sort((s1, s2) => s1.p - s2.p);
+    const cnt = list.length;
+    const spline = mode === 'bspline' || mode === 'cardinal';
+    const ev = (x) => {
+      if (cnt === 1) return list[0].c;
+      if (x <= list[0].p && !spline) return list[0].c;
+      let at1 = 0;
+      while (at1 < cnt && !(list[at1].p > x)) at1++;
+      let rt;
+      let lf;
+      if (at1 === cnt) { lf = list[cnt - 1]; rt = { p: 1, c: lf.c }; }
+      else if (at1 === 0) { rt = list[0]; lf = { p: 0, c: rt.c }; }
+      else { rt = list[at1]; lf = list[at1 - 1]; }
+      if (at1 === cnt && !spline) return lf.c;
+      if (mode === 'constant') return lf.c;
+      let f = lf.p !== rt.p ? (x - rt.p) / (lf.p - rt.p) : (at1 !== cnt ? 0 : 1);
+      if (spline) {
+        const r0 = at1 >= cnt - 1 ? rt : list[at1 + 1];
+        const l3 = at1 < 2 ? lf : list[at1 - 2];
+        f = f < 0 ? 0 : f > 1 ? 1 : f;
+        const t2 = f * f;
+        const t3 = t2 * f;
+        let w0;
+        let w1;
+        let w2;
+        let w3;
+        if (mode === 'cardinal') {
+          const fc = 0.71;
+          w0 = -fc * t3 + 2 * fc * t2 - fc * f;
+          w1 = (2 - fc) * t3 + (fc - 3) * t2 + 1;
+          w2 = (fc - 2) * t3 + (3 - 2 * fc) * t2 + fc * f;
+          w3 = fc * t3 - fc * t2;
+        } else {
+          w0 = -0.16666666 * t3 + 0.5 * t2 - 0.5 * f + 0.16666666;
+          w1 = 0.5 * t3 - t2 + 0.66666666;
+          w2 = -0.5 * t3 + 0.5 * t2 + 0.5 * f + 0.16666666;
+          w3 = 0.16666666 * t3;
+        }
+        return [0, 1, 2, 3].map((k) => {
+          const o = w3 * l3.c[k] + w2 * lf.c[k] + w1 * rt.c[k] + w0 * r0.c[k];
+          return o < 0 ? 0 : o > 1 ? 1 : o;
+        });
+      }
+      if (mode === 'ease') { const f2 = f * f; f = 3 * f2 - 2 * f2 * f; }
+      const mf = 1 - f;
+      return [0, 1, 2, 3].map((k) => mf * rt.c[k] + f * lf.c[k]);
+    };
+    const vals = new Float32Array(257 * 4);
+    for (let i = 0; i <= 256; i++) vals.set(ev(i / 256), i * 4);
+    return { vals: vals, slopes: null };
+  };
+  return fsLut.at(fsLut.make('ramp ' + mode + ' ' + stops, mode === 'constant', bake).tex, fac);
+};
+
+const shader = Fn(() => {
+  const time1 = time.mul(2);
+  const sin1 = sin(time1);
+  const remap1 = remap(sin1, -1, 1, 0, 1);
+  const colorRamp1 = fsColorRamp(remap1, "0 #311b92 1,1 #ffea00 1", "linear");
+
+  return colorRamp1.rgb;
+});
+
+export default shader;
+"
+`;
+
+exports[`every lesson, built by "Do it for me" > tut-rim builds a shader that parses back, within budget 1`] = `
+"import { Fn, abs, add, cameraPosition, clamp, div, dot, float, frontFacing, greaterThan, max, mul, normalWorld, normalize, positionWorld, select, sqrt, sub, texture, vec2, vec3 } from 'three/tsl';
+
+const fsFresnel = Fn(([eta, n, pw]) => {
+  const v = normalize(sub(cameraPosition, pw));
+  const c = abs(dot(vec3(n), v));
+  const e = clamp(float(eta), float(1e-5), float(1e4));
+  const r = select(frontFacing, e, div(float(1), e));
+  const g2 = add(sub(mul(r, r), float(1)), mul(c, c));
+  const g = sqrt(max(g2, float(0)));
+  const a = div(sub(g, c), max(add(g, c), float(1e-6)));
+  const b = div(sub(mul(c, add(g, c)), float(1)), add(mul(c, sub(g, c)), float(1)));
+  const fr = select(greaterThan(g2, float(0)), mul(mul(float(0.5), mul(a, a)), add(float(1), mul(b, b))), float(1));
+  return vec2(fr, sub(float(1), c));
+});
+
+const fsLut = (() => {
+  const made = new Map();
+  const f32 = new Float32Array(1);
+  const i32 = new Int32Array(f32.buffer);
+  const half = (v) => {
+    f32[0] = v;
+    const w = i32[0];
+    let bits = (w >> 16) & 0x8000;
+    let man = (w >> 12) & 0x07ff;
+    const ex = (w >> 23) & 0xff;
+    if (ex < 103) return bits;
+    if (ex > 142) return bits | 0x7c00 | (ex === 255 && (w & 0x007fffff) !== 0 ? 0x0200 : 0);
+    if (ex < 113) {
+      man |= 0x0800;
+      return bits | ((man >> (114 - ex)) + ((man >> (113 - ex)) & 1));
+    }
+    bits |= ((ex - 112) << 10) | (man >> 1);
+    return bits + (man & 1);
+  };
+  const unit = (s) => {
+    let dots = 0;
+    let digits = 0;
+    for (let i = 0; i < s.length; i++) {
+      const k = s.charCodeAt(i);
+      if (k === 46) dots++;
+      else if (k >= 48 && k <= 57) digits++;
+      else return null;
+    }
+    if (dots > 1 || digits === 0 || s.length > 12) return null;
+    const num = Number(s);
+    return num > 1 ? 1 : num;
+  };
+  const hex = (s) => {
+    if (s.length !== 7 || s.charCodeAt(0) !== 35) return null;
+    for (let i = 1; i < 7; i++) {
+      const k = s.charCodeAt(i);
+      if (!((k >= 48 && k <= 57) || (k >= 65 && k <= 70) || (k >= 97 && k <= 102))) return null;
+    }
+    return [1, 3, 5].map((o) => {
+      const cv = parseInt(s.slice(o, o + 2), 16) / 255;
+      return cv <= 0.04045 ? cv / 12.92 : Math.pow((cv + 0.055) / 1.055, 2.4);
+    });
+  };
+  const word = (s) => {
+    if (s.length < 1 || s.length > 12) return false;
+    for (let i = 0; i < s.length; i++) {
+      const k = s.charCodeAt(i);
+      if (k < 97 || k > 122) return false;
+    }
+    return true;
+  };
+  const rows = (str, lo, hi) => {
+    if (!str || str.split === undefined || str.length === 0 || str.length > 1024) return null;
+    const recs = str.split(',');
+    if (recs.length < lo || recs.length > hi) return null;
+    return recs.map((rec) => rec.trim().split(' ').filter((tok) => tok !== ''));
+  };
+  const make = (key, nearest, bake) => {
+    let hit = made.get(key);
+    if (hit) return hit;
+    const baked = bake();
+    const data = new Uint16Array(baked.vals.length);
+    for (let i = 0; i < baked.vals.length; i++) data[i] = half(baked.vals[i]);
+    const tex = new globalThis.THREE.DataTexture(data, baked.vals.length / 4, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.HalfFloatType);
+    tex.minFilter = nearest ? globalThis.THREE.NearestFilter : globalThis.THREE.LinearFilter;
+    tex.magFilter = tex.minFilter;
+    tex.wrapS = globalThis.THREE.ClampToEdgeWrapping;
+    tex.wrapT = globalThis.THREE.ClampToEdgeWrapping;
+    tex.needsUpdate = true;
+    hit = { tex: tex, slopes: baked.slopes };
+    made.set(key, hit);
+    return hit;
+  };
+  const at = (tex, u) => texture(tex, vec2(float(u).mul(256 / 257).add(0.5 / 257), 0.5)).level(0);
+  return { half: half, unit: unit, hex: hex, word: word, rows: rows, make: make, at: at };
+})();
+
+const fsColorRamp = (fac, stops, interp) => {
+  const mode = ['constant', 'ease', 'bspline', 'cardinal'].includes(interp) ? interp : 'linear';
+  const bake = () => {
+    let list = [{ p: 0, c: [0, 0, 0, 1] }, { p: 1, c: [1, 1, 1, 1] }];
+    const recs = fsLut.rows(stops, 1, 32);
+    const read = recs && recs.map((rec) => {
+      if (rec.length !== 3) return null;
+      const p = fsLut.unit(rec[0]);
+      const rgb = fsLut.hex(rec[1]);
+      const al = fsLut.unit(rec[2]);
+      return p === null || rgb === null || al === null ? null : { p: p, c: [rgb[0], rgb[1], rgb[2], al] };
+    });
+    if (read && read.every((s) => s !== null)) list = read.sort((s1, s2) => s1.p - s2.p);
+    const cnt = list.length;
+    const spline = mode === 'bspline' || mode === 'cardinal';
+    const ev = (x) => {
+      if (cnt === 1) return list[0].c;
+      if (x <= list[0].p && !spline) return list[0].c;
+      let at1 = 0;
+      while (at1 < cnt && !(list[at1].p > x)) at1++;
+      let rt;
+      let lf;
+      if (at1 === cnt) { lf = list[cnt - 1]; rt = { p: 1, c: lf.c }; }
+      else if (at1 === 0) { rt = list[0]; lf = { p: 0, c: rt.c }; }
+      else { rt = list[at1]; lf = list[at1 - 1]; }
+      if (at1 === cnt && !spline) return lf.c;
+      if (mode === 'constant') return lf.c;
+      let f = lf.p !== rt.p ? (x - rt.p) / (lf.p - rt.p) : (at1 !== cnt ? 0 : 1);
+      if (spline) {
+        const r0 = at1 >= cnt - 1 ? rt : list[at1 + 1];
+        const l3 = at1 < 2 ? lf : list[at1 - 2];
+        f = f < 0 ? 0 : f > 1 ? 1 : f;
+        const t2 = f * f;
+        const t3 = t2 * f;
+        let w0;
+        let w1;
+        let w2;
+        let w3;
+        if (mode === 'cardinal') {
+          const fc = 0.71;
+          w0 = -fc * t3 + 2 * fc * t2 - fc * f;
+          w1 = (2 - fc) * t3 + (fc - 3) * t2 + 1;
+          w2 = (fc - 2) * t3 + (3 - 2 * fc) * t2 + fc * f;
+          w3 = fc * t3 - fc * t2;
+        } else {
+          w0 = -0.16666666 * t3 + 0.5 * t2 - 0.5 * f + 0.16666666;
+          w1 = 0.5 * t3 - t2 + 0.66666666;
+          w2 = -0.5 * t3 + 0.5 * t2 + 0.5 * f + 0.16666666;
+          w3 = 0.16666666 * t3;
+        }
+        return [0, 1, 2, 3].map((k) => {
+          const o = w3 * l3.c[k] + w2 * lf.c[k] + w1 * rt.c[k] + w0 * r0.c[k];
+          return o < 0 ? 0 : o > 1 ? 1 : o;
+        });
+      }
+      if (mode === 'ease') { const f2 = f * f; f = 3 * f2 - 2 * f2 * f; }
+      const mf = 1 - f;
+      return [0, 1, 2, 3].map((k) => mf * rt.c[k] + f * lf.c[k]);
+    };
+    const vals = new Float32Array(257 * 4);
+    for (let i = 0; i <= 256; i++) vals.set(ev(i / 256), i * 4);
+    return { vals: vals, slopes: null };
+  };
+  return fsLut.at(fsLut.make('ramp ' + mode + ' ' + stops, mode === 'constant', bake).tex, fac);
+};
+
+const shader = Fn(() => {
+  const fresnel1 = fsFresnel(1.5, normalWorld, positionWorld);
+  const colorRamp1 = fsColorRamp(fresnel1.y, "0.4 #000000 1,1 #00e5ff 1", "linear");
+
+  return { color: colorRamp1.rgb, emissive: colorRamp1.rgb };
+});
+
+export default shader;
+"
+`;
+
+exports[`every lesson, built by "Do it for me" > tut-snow builds a shader that parses back, within budget 1`] = `
+"import { Fn, float, normalWorld, texture, vec2 } from 'three/tsl';
+
+const fsLut = (() => {
+  const made = new Map();
+  const f32 = new Float32Array(1);
+  const i32 = new Int32Array(f32.buffer);
+  const half = (v) => {
+    f32[0] = v;
+    const w = i32[0];
+    let bits = (w >> 16) & 0x8000;
+    let man = (w >> 12) & 0x07ff;
+    const ex = (w >> 23) & 0xff;
+    if (ex < 103) return bits;
+    if (ex > 142) return bits | 0x7c00 | (ex === 255 && (w & 0x007fffff) !== 0 ? 0x0200 : 0);
+    if (ex < 113) {
+      man |= 0x0800;
+      return bits | ((man >> (114 - ex)) + ((man >> (113 - ex)) & 1));
+    }
+    bits |= ((ex - 112) << 10) | (man >> 1);
+    return bits + (man & 1);
+  };
+  const unit = (s) => {
+    let dots = 0;
+    let digits = 0;
+    for (let i = 0; i < s.length; i++) {
+      const k = s.charCodeAt(i);
+      if (k === 46) dots++;
+      else if (k >= 48 && k <= 57) digits++;
+      else return null;
+    }
+    if (dots > 1 || digits === 0 || s.length > 12) return null;
+    const num = Number(s);
+    return num > 1 ? 1 : num;
+  };
+  const hex = (s) => {
+    if (s.length !== 7 || s.charCodeAt(0) !== 35) return null;
+    for (let i = 1; i < 7; i++) {
+      const k = s.charCodeAt(i);
+      if (!((k >= 48 && k <= 57) || (k >= 65 && k <= 70) || (k >= 97 && k <= 102))) return null;
+    }
+    return [1, 3, 5].map((o) => {
+      const cv = parseInt(s.slice(o, o + 2), 16) / 255;
+      return cv <= 0.04045 ? cv / 12.92 : Math.pow((cv + 0.055) / 1.055, 2.4);
+    });
+  };
+  const word = (s) => {
+    if (s.length < 1 || s.length > 12) return false;
+    for (let i = 0; i < s.length; i++) {
+      const k = s.charCodeAt(i);
+      if (k < 97 || k > 122) return false;
+    }
+    return true;
+  };
+  const rows = (str, lo, hi) => {
+    if (!str || str.split === undefined || str.length === 0 || str.length > 1024) return null;
+    const recs = str.split(',');
+    if (recs.length < lo || recs.length > hi) return null;
+    return recs.map((rec) => rec.trim().split(' ').filter((tok) => tok !== ''));
+  };
+  const make = (key, nearest, bake) => {
+    let hit = made.get(key);
+    if (hit) return hit;
+    const baked = bake();
+    const data = new Uint16Array(baked.vals.length);
+    for (let i = 0; i < baked.vals.length; i++) data[i] = half(baked.vals[i]);
+    const tex = new globalThis.THREE.DataTexture(data, baked.vals.length / 4, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.HalfFloatType);
+    tex.minFilter = nearest ? globalThis.THREE.NearestFilter : globalThis.THREE.LinearFilter;
+    tex.magFilter = tex.minFilter;
+    tex.wrapS = globalThis.THREE.ClampToEdgeWrapping;
+    tex.wrapT = globalThis.THREE.ClampToEdgeWrapping;
+    tex.needsUpdate = true;
+    hit = { tex: tex, slopes: baked.slopes };
+    made.set(key, hit);
+    return hit;
+  };
+  const at = (tex, u) => texture(tex, vec2(float(u).mul(256 / 257).add(0.5 / 257), 0.5)).level(0);
+  return { half: half, unit: unit, hex: hex, word: word, rows: rows, make: make, at: at };
+})();
+
+const fsColorRamp = (fac, stops, interp) => {
+  const mode = ['constant', 'ease', 'bspline', 'cardinal'].includes(interp) ? interp : 'linear';
+  const bake = () => {
+    let list = [{ p: 0, c: [0, 0, 0, 1] }, { p: 1, c: [1, 1, 1, 1] }];
+    const recs = fsLut.rows(stops, 1, 32);
+    const read = recs && recs.map((rec) => {
+      if (rec.length !== 3) return null;
+      const p = fsLut.unit(rec[0]);
+      const rgb = fsLut.hex(rec[1]);
+      const al = fsLut.unit(rec[2]);
+      return p === null || rgb === null || al === null ? null : { p: p, c: [rgb[0], rgb[1], rgb[2], al] };
+    });
+    if (read && read.every((s) => s !== null)) list = read.sort((s1, s2) => s1.p - s2.p);
+    const cnt = list.length;
+    const spline = mode === 'bspline' || mode === 'cardinal';
+    const ev = (x) => {
+      if (cnt === 1) return list[0].c;
+      if (x <= list[0].p && !spline) return list[0].c;
+      let at1 = 0;
+      while (at1 < cnt && !(list[at1].p > x)) at1++;
+      let rt;
+      let lf;
+      if (at1 === cnt) { lf = list[cnt - 1]; rt = { p: 1, c: lf.c }; }
+      else if (at1 === 0) { rt = list[0]; lf = { p: 0, c: rt.c }; }
+      else { rt = list[at1]; lf = list[at1 - 1]; }
+      if (at1 === cnt && !spline) return lf.c;
+      if (mode === 'constant') return lf.c;
+      let f = lf.p !== rt.p ? (x - rt.p) / (lf.p - rt.p) : (at1 !== cnt ? 0 : 1);
+      if (spline) {
+        const r0 = at1 >= cnt - 1 ? rt : list[at1 + 1];
+        const l3 = at1 < 2 ? lf : list[at1 - 2];
+        f = f < 0 ? 0 : f > 1 ? 1 : f;
+        const t2 = f * f;
+        const t3 = t2 * f;
+        let w0;
+        let w1;
+        let w2;
+        let w3;
+        if (mode === 'cardinal') {
+          const fc = 0.71;
+          w0 = -fc * t3 + 2 * fc * t2 - fc * f;
+          w1 = (2 - fc) * t3 + (fc - 3) * t2 + 1;
+          w2 = (fc - 2) * t3 + (3 - 2 * fc) * t2 + fc * f;
+          w3 = fc * t3 - fc * t2;
+        } else {
+          w0 = -0.16666666 * t3 + 0.5 * t2 - 0.5 * f + 0.16666666;
+          w1 = 0.5 * t3 - t2 + 0.66666666;
+          w2 = -0.5 * t3 + 0.5 * t2 + 0.5 * f + 0.16666666;
+          w3 = 0.16666666 * t3;
+        }
+        return [0, 1, 2, 3].map((k) => {
+          const o = w3 * l3.c[k] + w2 * lf.c[k] + w1 * rt.c[k] + w0 * r0.c[k];
+          return o < 0 ? 0 : o > 1 ? 1 : o;
+        });
+      }
+      if (mode === 'ease') { const f2 = f * f; f = 3 * f2 - 2 * f2 * f; }
+      const mf = 1 - f;
+      return [0, 1, 2, 3].map((k) => mf * rt.c[k] + f * lf.c[k]);
+    };
+    const vals = new Float32Array(257 * 4);
+    for (let i = 0; i <= 256; i++) vals.set(ev(i / 256), i * 4);
+    return { vals: vals, slopes: null };
+  };
+  return fsLut.at(fsLut.make('ramp ' + mode + ' ' + stops, mode === 'constant', bake).tex, fac);
+};
+
+const shader = Fn(() => {
+  const normalWorld1 = normalWorld;
+  const colorRamp1 = fsColorRamp(normalWorld1.y, "0.35 #5d4037 1,0.55 #fafafa 1", "linear");
+
+  return colorRamp1.rgb;
+});
+
+export default shader;
+"
+`;
+
+exports[`every lesson, built by "Do it for me" > tut-solid builds a shader that parses back, within budget 1`] = `
+"import { Fn, color } from 'three/tsl';
+
+const shader = Fn(() => {
+  const color1 = color(0x4fc3f7);
+
+  return color1;
+});
+
+export default shader;
+"
+`;
+
+exports[`every lesson, built by "Do it for me" > tut-stripes builds a shader that parses back, within budget 1`] = `
+"import { Fn, float, fract, mul, texture, uv, vec2 } from 'three/tsl';
+
+const fsLut = (() => {
+  const made = new Map();
+  const f32 = new Float32Array(1);
+  const i32 = new Int32Array(f32.buffer);
+  const half = (v) => {
+    f32[0] = v;
+    const w = i32[0];
+    let bits = (w >> 16) & 0x8000;
+    let man = (w >> 12) & 0x07ff;
+    const ex = (w >> 23) & 0xff;
+    if (ex < 103) return bits;
+    if (ex > 142) return bits | 0x7c00 | (ex === 255 && (w & 0x007fffff) !== 0 ? 0x0200 : 0);
+    if (ex < 113) {
+      man |= 0x0800;
+      return bits | ((man >> (114 - ex)) + ((man >> (113 - ex)) & 1));
+    }
+    bits |= ((ex - 112) << 10) | (man >> 1);
+    return bits + (man & 1);
+  };
+  const unit = (s) => {
+    let dots = 0;
+    let digits = 0;
+    for (let i = 0; i < s.length; i++) {
+      const k = s.charCodeAt(i);
+      if (k === 46) dots++;
+      else if (k >= 48 && k <= 57) digits++;
+      else return null;
+    }
+    if (dots > 1 || digits === 0 || s.length > 12) return null;
+    const num = Number(s);
+    return num > 1 ? 1 : num;
+  };
+  const hex = (s) => {
+    if (s.length !== 7 || s.charCodeAt(0) !== 35) return null;
+    for (let i = 1; i < 7; i++) {
+      const k = s.charCodeAt(i);
+      if (!((k >= 48 && k <= 57) || (k >= 65 && k <= 70) || (k >= 97 && k <= 102))) return null;
+    }
+    return [1, 3, 5].map((o) => {
+      const cv = parseInt(s.slice(o, o + 2), 16) / 255;
+      return cv <= 0.04045 ? cv / 12.92 : Math.pow((cv + 0.055) / 1.055, 2.4);
+    });
+  };
+  const word = (s) => {
+    if (s.length < 1 || s.length > 12) return false;
+    for (let i = 0; i < s.length; i++) {
+      const k = s.charCodeAt(i);
+      if (k < 97 || k > 122) return false;
+    }
+    return true;
+  };
+  const rows = (str, lo, hi) => {
+    if (!str || str.split === undefined || str.length === 0 || str.length > 1024) return null;
+    const recs = str.split(',');
+    if (recs.length < lo || recs.length > hi) return null;
+    return recs.map((rec) => rec.trim().split(' ').filter((tok) => tok !== ''));
+  };
+  const make = (key, nearest, bake) => {
+    let hit = made.get(key);
+    if (hit) return hit;
+    const baked = bake();
+    const data = new Uint16Array(baked.vals.length);
+    for (let i = 0; i < baked.vals.length; i++) data[i] = half(baked.vals[i]);
+    const tex = new globalThis.THREE.DataTexture(data, baked.vals.length / 4, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.HalfFloatType);
+    tex.minFilter = nearest ? globalThis.THREE.NearestFilter : globalThis.THREE.LinearFilter;
+    tex.magFilter = tex.minFilter;
+    tex.wrapS = globalThis.THREE.ClampToEdgeWrapping;
+    tex.wrapT = globalThis.THREE.ClampToEdgeWrapping;
+    tex.needsUpdate = true;
+    hit = { tex: tex, slopes: baked.slopes };
+    made.set(key, hit);
+    return hit;
+  };
+  const at = (tex, u) => texture(tex, vec2(float(u).mul(256 / 257).add(0.5 / 257), 0.5)).level(0);
+  return { half: half, unit: unit, hex: hex, word: word, rows: rows, make: make, at: at };
+})();
+
+const fsColorRamp = (fac, stops, interp) => {
+  const mode = ['constant', 'ease', 'bspline', 'cardinal'].includes(interp) ? interp : 'linear';
+  const bake = () => {
+    let list = [{ p: 0, c: [0, 0, 0, 1] }, { p: 1, c: [1, 1, 1, 1] }];
+    const recs = fsLut.rows(stops, 1, 32);
+    const read = recs && recs.map((rec) => {
+      if (rec.length !== 3) return null;
+      const p = fsLut.unit(rec[0]);
+      const rgb = fsLut.hex(rec[1]);
+      const al = fsLut.unit(rec[2]);
+      return p === null || rgb === null || al === null ? null : { p: p, c: [rgb[0], rgb[1], rgb[2], al] };
+    });
+    if (read && read.every((s) => s !== null)) list = read.sort((s1, s2) => s1.p - s2.p);
+    const cnt = list.length;
+    const spline = mode === 'bspline' || mode === 'cardinal';
+    const ev = (x) => {
+      if (cnt === 1) return list[0].c;
+      if (x <= list[0].p && !spline) return list[0].c;
+      let at1 = 0;
+      while (at1 < cnt && !(list[at1].p > x)) at1++;
+      let rt;
+      let lf;
+      if (at1 === cnt) { lf = list[cnt - 1]; rt = { p: 1, c: lf.c }; }
+      else if (at1 === 0) { rt = list[0]; lf = { p: 0, c: rt.c }; }
+      else { rt = list[at1]; lf = list[at1 - 1]; }
+      if (at1 === cnt && !spline) return lf.c;
+      if (mode === 'constant') return lf.c;
+      let f = lf.p !== rt.p ? (x - rt.p) / (lf.p - rt.p) : (at1 !== cnt ? 0 : 1);
+      if (spline) {
+        const r0 = at1 >= cnt - 1 ? rt : list[at1 + 1];
+        const l3 = at1 < 2 ? lf : list[at1 - 2];
+        f = f < 0 ? 0 : f > 1 ? 1 : f;
+        const t2 = f * f;
+        const t3 = t2 * f;
+        let w0;
+        let w1;
+        let w2;
+        let w3;
+        if (mode === 'cardinal') {
+          const fc = 0.71;
+          w0 = -fc * t3 + 2 * fc * t2 - fc * f;
+          w1 = (2 - fc) * t3 + (fc - 3) * t2 + 1;
+          w2 = (fc - 2) * t3 + (3 - 2 * fc) * t2 + fc * f;
+          w3 = fc * t3 - fc * t2;
+        } else {
+          w0 = -0.16666666 * t3 + 0.5 * t2 - 0.5 * f + 0.16666666;
+          w1 = 0.5 * t3 - t2 + 0.66666666;
+          w2 = -0.5 * t3 + 0.5 * t2 + 0.5 * f + 0.16666666;
+          w3 = 0.16666666 * t3;
+        }
+        return [0, 1, 2, 3].map((k) => {
+          const o = w3 * l3.c[k] + w2 * lf.c[k] + w1 * rt.c[k] + w0 * r0.c[k];
+          return o < 0 ? 0 : o > 1 ? 1 : o;
+        });
+      }
+      if (mode === 'ease') { const f2 = f * f; f = 3 * f2 - 2 * f2 * f; }
+      const mf = 1 - f;
+      return [0, 1, 2, 3].map((k) => mf * rt.c[k] + f * lf.c[k]);
+    };
+    const vals = new Float32Array(257 * 4);
+    for (let i = 0; i <= 256; i++) vals.set(ev(i / 256), i * 4);
+    return { vals: vals, slopes: null };
+  };
+  return fsLut.at(fsLut.make('ramp ' + mode + ' ' + stops, mode === 'constant', bake).tex, fac);
+};
+
+const shader = Fn(() => {
+  const uv1 = mul(uv(), vec2(8, 1));
+  const fract1 = fract(uv1.x);
+  const colorRamp1 = fsColorRamp(fract1, "0 #263238 1,0.5 #eceff1 1", "constant");
+
+  return colorRamp1.rgb;
+});
+
+export default shader;
+"
+`;
+
+exports[`every lesson, built by "Do it for me" > tut-wobble builds a shader that parses back, within budget 1`] = `
+"import { Fn, add, mul, mx_noise_float, positionGeometry, time } from 'three/tsl';
+
+const shader = Fn(() => {
+  const positionGeometry1 = positionGeometry;
+  const time1 = time;
+  const add1 = add(positionGeometry1, time1);
+  const noise1 = mx_noise_float(add1.mul(2)).mul(0.5).add(0.5);
+  const mul1 = mul(noise1, 0.2);
+
+  return { position: mul1 };
+});
+
+export default shader;
+"
+`;

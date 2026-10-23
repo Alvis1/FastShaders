@@ -108,6 +108,16 @@
    ring and the node outline, so ring, arrow and outline read as one system.
    The gap clears the 3px ring the .fs-connect-socket box-shadow draws
    (NodeEditor.css). */
+/* A running LESSON's target socket (src/tutorials/tutorialHighlights.ts): the
+   same focus ring the drag-connect preview draws (`.fs-connect-socket`,
+   NodeEditor.css), as an attribute the panel re-applies on every graph change
+   because the handle remounts when its node's exposure changes. */
+.react-flow__handle[data-fs-tutorial="socket"] {
+  box-shadow:
+    0 0 0 3px var(--border-focus),
+    0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+
 .typed-handle.fs-connect-socket {
   --fs-connect-arrow-w: 14px;
   --fs-connect-arrow-h: 10px;

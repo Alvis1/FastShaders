@@ -8,6 +8,7 @@ import { formatNodeLabel, nodeDescription, portLabel, t } from '@/i18n';
 import { useAssetTooltip } from './AssetTooltip';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { useAppStore } from '@/store/useAppStore';
+import { wantedNodeType } from '@/tutorials/tutorialRun';
 import { NodeVisual, type NodeVisualProps } from './nodes/NodeVisual';
 import { CardSocketLabels } from './cardSocketLabels';
 import { NodeTitle } from './nodes/NodeTitle';
@@ -798,6 +799,9 @@ export function useCardChrome(def: NodeDefinition): ContentProps {
 
 export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart }: NodePreviewCardProps) {
   const language = useAppStore((s) => s.language);
+  // The tile a running lesson's current step asks for (src/tutorials). A
+  // boolean selector: only the two tiles whose answer flips re-render.
+  const wanted = useAppStore((s) => wantedNodeType(s.tutorial) === def.type);
   const flowType = getFlowNodeType(def);
   const shared = useCardChrome(def);
   const { tooltip, tooltipHandlers } = useAssetTooltip(
@@ -820,6 +824,7 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
   return (
     <div
       className="node-preview-card"
+      data-fs-tutorial-want={wanted ? '' : undefined}
       draggable
       onDragStart={(e) => onDragStart(e, def)}
       onPointerDown={onPointerDown}

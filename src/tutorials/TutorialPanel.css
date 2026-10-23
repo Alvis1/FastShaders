@@ -1,0 +1,167 @@
+/* The lesson panel (TutorialPanel.tsx) — floating canvas chrome, so the flat
+   TECHNICAL style every panel over the canvas wears: opaque `--bg-raised`
+   (never a backdrop blur), a hard 1px border, `--shadow-float` (the ONE shadow
+   for everything floating over the canvas), square corners, `--ctl-size`
+   buttons. Nothing here scrolls: captions are capped at three lines of text
+   and the hint at one, so the panel needs no `.nowheel`. Bottom-RIGHT of the canvas; the extra right inset clears the
+   preview rail's track on the pane's edge. */
+.tutorial-panel {
+  position: absolute;
+  right: calc(var(--space-3) + 12px);
+  bottom: var(--space-3);
+  z-index: var(--z-controls);
+  width: min(340px, calc(100% - 2 * var(--space-3) - 12px));
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-float);
+}
+
+.tutorial-panel__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--ctl-size);
+}
+
+.tutorial-panel__title {
+  flex: 1;
+  font-weight: 700;
+  font-size: var(--font-size-md);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tutorial-panel__count {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* LangSwitch renders the study dialogs' button class; it is sized here so the
+   panel does not depend on that stylesheet being loaded. */
+.tutorial-panel__head .eval-consent__lang,
+.tutorial-panel__close {
+  height: var(--ctl-size);
+  min-width: var(--ctl-size);
+  padding: 0 8px;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  background: var(--bg-raised-sub);
+  border: 1px solid var(--border-subtle);
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.tutorial-panel__close {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.tutorial-panel__head .eval-consent__lang:hover,
+.tutorial-panel__close:hover,
+.tutorial-panel__btn:hover:not(:disabled) {
+  border-color: var(--border-default);
+}
+
+/* Step dots: one per step, the current one filled in the tab colour, the
+   passed ones a muted fill. `aria-current="step"` carries the same fact. */
+.tutorial-panel__dots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tutorial-panel__dot {
+  width: 10px;
+  height: 6px;
+  background: var(--border-subtle);
+}
+
+.tutorial-panel__dot--done {
+  background: var(--text-muted);
+}
+
+.tutorial-panel__dot--on {
+  background: var(--cat-tutorials);
+}
+
+.tutorial-panel__caption {
+  margin: 0;
+  font-size: var(--font-size-md);
+  line-height: 1.4;
+}
+
+.tutorial-panel__hint {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.tutorial-panel__link {
+  align-self: flex-start;
+  padding: 0;
+  font: inherit;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.tutorial-panel__status {
+  margin: 0;
+  line-height: 1.4;
+}
+
+.tutorial-panel__status--ok {
+  color: var(--border-focus);
+  font-weight: 600;
+}
+
+.tutorial-panel__status--warn {
+  color: var(--text-secondary);
+}
+
+.tutorial-panel__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.tutorial-panel__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--ctl-size);
+  padding: 0 12px;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  background: var(--bg-raised-sub);
+  border: 1px solid var(--border-subtle);
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.tutorial-panel__btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.tutorial-panel__btn--primary:not(:disabled) {
+  color: var(--border-focus);
+  border-color: var(--border-focus);
+  font-weight: 600;
+}
