@@ -8,19 +8,19 @@ import {
   backgroundMissing,
   buildBackgroundRecord,
 } from './background';
-import { gridKey, type ChoiceItem, type GridItem } from './questionItems';
+import { gridKey, otherKey, type ChoiceItem, type GridItem } from './questionItems';
 
 const tools = BACKGROUND_ITEMS[0] as GridItem;
 const full = () => ({
   ...Object.fromEntries(tools.rows.map((r) => [gridKey(tools, r), 'no'])),
   nodeEditorUse: 'never',
-  shaderCodeUse: 'no',
+  shaderCodeDepth: 'never',
 });
 
 describe('the pre-SUS experience questions (bg-2)', () => {
   it('asks what people have done, under new ids, never a retired one', () => {
     expect(BACKGROUND_ITEMS_VERSION).toBe('bg-2');
-    expect(BACKGROUND_ITEMS.map((i) => i.id)).toEqual(['toolsUsed', 'nodeEditorUse', 'shaderCodeUse']);
+    expect(BACKGROUND_ITEMS.map((i) => i.id)).toEqual(['toolsUsed', 'nodeEditorUse', 'shaderCodeDepth']);
     // blender/unreal/shaderCode were the first wave's 0-4 levels and
     // otherNodeEditors the pilot's free-text item: a package of that version
     // must never read as an answer to a new question.
@@ -33,7 +33,9 @@ describe('the pre-SUS experience questions (bg-2)', () => {
     expect(tools.rows.map((r) => r.id)).toEqual(['blender', 'unreal', 'unity', 'touchdesigner', 'other']);
     const use = BACKGROUND_ITEMS[1] as ChoiceItem;
     expect(use.options[0].id).toBe('never');
-    expect((BACKGROUND_ITEMS[2] as ChoiceItem).options[0].id).toBe('no');
+    expect((BACKGROUND_ITEMS[2] as ChoiceItem).options.map((o) => o.id)).toEqual(['never', 'read', 'changed', 'simple', 'complex']);
+    // "Another node editor" takes the tool's name (owner, 2026-10-24).
+    expect(tools.otherRowId).toBe('other');
   });
 
   it('carries its own Latvian for every question, option and row', () => {
@@ -52,7 +54,7 @@ describe('the pre-SUS experience questions (bg-2)', () => {
     expect(backgroundMissing({})).toEqual([
       ...tools.rows.map((r) => gridKey(tools, r)),
       'nodeEditorUse',
-      'shaderCodeUse',
+      'shaderCodeDepth',
     ]);
     expect(backgroundMissing({ ...full(), 'toolsUsed.unity': undefined })).toEqual(['toolsUsed.unity']);
   });
@@ -60,14 +62,18 @@ describe('the pre-SUS experience questions (bg-2)', () => {
   it('rejects an answer the item does not offer', () => {
     expect(backgroundComplete({ ...full(), nodeEditorUse: 'expert' })).toBe(false);
     expect(backgroundComplete({ ...full(), 'toolsUsed.blender': 'maybe' })).toBe(false);
-    expect(backgroundComplete({ ...full(), shaderCodeUse: 3 })).toBe(false);
+    expect(backgroundComplete({ ...full(), shaderCodeDepth: 3 })).toBe(false);
   });
 
-  it('records the wording asked, the answer and its language, and no free text', () => {
+  it('records the wording asked, the answer and its language, and the other tool only when named', () => {
     const rec = buildBackgroundRecord(
-      { ...full(), 'toolsUsed.unity': 'yes', nodeEditorUse: 'regular' },
+      { ...full(), 'toolsUsed.unity': 'yes', 'toolsUsed.other': 'yes', [otherKey(tools)]: '  Godot  ', nodeEditorUse: 'regular' },
       { 'toolsUsed.unity': 'lv', nodeEditorUse: 'en' },
     ) as { itemsVersion: string; items: Record<string, unknown>[] };
+    expect(rec.items[0].otherText).toBe('Godot');
+    // A name typed and then the row answered No is not kept.
+    const noOther = buildBackgroundRecord({ ...full(), [otherKey(tools)]: 'Godot' }) as { items: Record<string, unknown>[] };
+    expect(noOther.items[0].otherText).toBe('');
     expect(rec.itemsVersion).toBe('bg-2');
     expect(Object.keys(rec).sort()).toEqual(['items', 'itemsVersion']);
     const rows = rec.items[0].rows as { id: string; answer: string; language: string | null }[];
@@ -90,8 +96,10 @@ describe('the pre-SUS experience questions (bg-2)', () => {
       bg_toolsUsed_blender: 'yes',
       bg_toolsUsed_other: 'no',
       bg_nodeEditorUse: 'never',
-      bg_shaderCodeUse: 'no',
+      bg_shaderCodeDepth: 'never',
     });
+    // The write-in never reaches the CSV.
+    expect(JSON.stringify(backgroundCsvColumns(buildBackgroundRecord({ ...full(), 'toolsUsed.other': 'yes', [otherKey(tools)]: 'Godot' })))).not.toContain('Godot');
     // A first-wave block (levels 0-4 under the old ids) fills nothing.
     const old = backgroundCsvColumns({ scale: [], items: [{ id: 'blender', level: 3 }] });
     expect(old.every(([, v]) => v === '')).toBe(true);

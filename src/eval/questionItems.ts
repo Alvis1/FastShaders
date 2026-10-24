@@ -9,7 +9,8 @@
  *   choice  — one option; an option whose id is `otherId` reveals a text box
  *   grid    — rows answered on the same columns (Yes / No …): forced choice
  *             per row, which gets more honest endorsements than a tick-all
- *             list (Smyth et al. 2006)
+ *             list (Smyth et al. 2006); a row named `otherRowId` reveals a
+ *             text box when answered Yes
  *   text    — optional free text, never required, never copied into summary.csv
  *
  * Every item carries its own Latvian beside its English, as the SUS does
@@ -55,6 +56,8 @@ export interface GridItem extends QBase {
   kind: 'grid';
   rows: readonly QOption[];
   columns: readonly QOption[];
+  otherRowId?: string;
+  otherHint?: QText;
 }
 
 export interface TextItem extends QBase {
@@ -65,13 +68,14 @@ export type QItem = AgreeItem | ChoiceItem | GridItem | TextItem;
 
 /**
  * Answers are keyed by `item.id`, a grid row by `item.id.row`, and a choice's
- * "Other" text by `item.id.other`. Values: an agree item 1–5 or 'na', a choice
+ * or grid's "Other" text by `item.id.otherText` (never `item.id.other`, which
+ * is the key of a grid ROW named `other`). Values: an agree item 1–5 or 'na', a choice
  * or grid row the option id, a text item its string.
  */
 export type QAnswers = Record<string, number | string | null | undefined>;
 
 export const gridKey = (item: GridItem, row: QOption) => `${item.id}.${row.id}`;
-export const otherKey = (item: ChoiceItem) => `${item.id}.other`;
+export const otherKey = (item: ChoiceItem | GridItem) => `${item.id}.otherText`;
 
 export const qText = (t: QText, lang: QLang): string => t[lang];
 
@@ -144,9 +148,11 @@ export function buildRecord(
       };
     }
     if (q.kind === 'grid') {
+      const otherOn = q.otherRowId != null && answers[`${q.id}.${q.otherRowId}`] === 'yes';
       return {
         ...base,
         columns: q.columns.map((c) => c.id),
+        ...(q.otherRowId ? { otherText: otherOn ? cleanText(answers[otherKey(q)], OTHER_CAP) : '' } : {}),
         rows: q.rows.map((r) => {
           const v = answers[gridKey(q, r)];
           return {

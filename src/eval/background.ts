@@ -8,9 +8,11 @@
  *
  * Version bg-2 (consent-12, 2026-10-24) asks what people have DONE, never
  * what they ARE: which tools they have made materials or shaders with (one
- * Yes/No row each), how much they have worked with node editors, and whether
- * they have written shader code — behavioural anchors with an honest answer
- * for a student and a professional alike. The first version asked for a
+ * Yes/No row each; "another node editor" takes the tool's name, which the
+ * owner wants to know), how much they have worked with node editors, and how
+ * far they have gone with shader code (read it → changed existing shaders →
+ * written simple ones → written complex ones) — behavioural anchors with an
+ * honest answer for a student and a professional alike. The first version asked for a
  * None→Expert self-rating of Blender, Unreal and shader programming (ids
  * blender/unreal/shaderCode, the 2026 pilot's items; `otherNodeEditors` was
  * removed on 2026-10-02): a level is read against one's own peers, and anyone
@@ -63,6 +65,8 @@ export const BACKGROUND_ITEMS: readonly QItem[] = [
       { id: 'other', en: 'Another node editor', lv: 'Cits mezglu redaktors' },
     ],
     columns: [YES, NO],
+    otherRowId: 'other',
+    otherHint: { en: 'Which one? (optional)', lv: 'Kurš? (pēc izvēles)' },
   },
   {
     kind: 'choice', id: 'nodeEditorUse', group: 'experience',
@@ -79,16 +83,17 @@ export const BACKGROUND_ITEMS: readonly QItem[] = [
     ],
   },
   {
-    kind: 'choice', id: 'shaderCodeUse', group: 'experience',
+    kind: 'choice', id: 'shaderCodeDepth', group: 'experience',
     question: {
-      en: 'Have you written shader code (GLSL, HLSL, WGSL…)?',
-      lv: 'Vai esat rakstījis/-usi ēnotāju kodu (GLSL, HLSL, WGSL…)?',
+      en: 'How far have you gone with shader code (GLSL, HLSL, WGSL…)? Mark the furthest step.',
+      lv: 'Cik tālu esat ticis/-usi ar ēnotāju kodu (GLSL, HLSL, WGSL…)? Atzīmējiet tālāko soli.',
     },
     options: [
-      { id: 'no', en: 'No', lv: 'Nē' },
-      { id: 'read', en: 'I have read or copied some', lv: 'Lasīju vai kopēju kādu kodu' },
-      { id: 'small', en: 'I have written small shaders', lv: 'Rakstīju nelielus ēnotājus' },
-      { id: 'regular', en: 'I write it regularly', lv: 'Rakstu regulāri' },
+      { id: 'never', en: 'Not at all', lv: 'Nemaz' },
+      { id: 'read', en: 'Read it, but never changed it', lv: 'Lasīju, bet nemainīju' },
+      { id: 'changed', en: 'Changed existing shaders (values, small edits)', lv: 'Mainīju gatavus ēnotājus (vērtības, nelieli labojumi)' },
+      { id: 'simple', en: 'Written simple shaders from scratch', lv: 'Rakstīju vienkāršus ēnotājus no nulles' },
+      { id: 'complex', en: 'Written complex shaders (lighting, raymarching, post-processing…)', lv: 'Rakstīju sarežģītus ēnotājus (apgaismojums, staru soļi, pēcapstrāde…)' },
     ],
   },
 ];

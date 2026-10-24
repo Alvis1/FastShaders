@@ -333,7 +333,7 @@ for (const r of rows) {
   // First wave: Blender/Unreal/code levels 0-4. bg-2: the tools answered
   // Yes (B U Un T O), then node-editor use and shader-code use.
   const exp = r.bgItemsVersion
-    ? `${['blender', 'unreal', 'unity', 'touchdesigner', 'other'].filter((t) => r[`bg_toolsUsed_${t}`] === 'yes').map((t) => ({ blender: 'B', unreal: 'U', unity: 'Un', touchdesigner: 'T', other: 'O' })[t]).join(' ') || '–'} · ${r.bg_nodeEditorUse || '–'} · ${r.bg_shaderCodeUse || '–'}`
+    ? `${['blender', 'unreal', 'unity', 'touchdesigner', 'other'].filter((t) => r[`bg_toolsUsed_${t}`] === 'yes').map((t) => ({ blender: 'B', unreal: 'U', unity: 'Un', touchdesigner: 'T', other: 'O' })[t]).join(' ') || '–'} · ${r.bg_nodeEditorUse || '–'} · ${r.bg_shaderCodeDepth || '–'}`
     : EXP.map((k) => (r.exp?.[k] === '' || r.exp?.[k] == null ? '–' : r.exp[k])).join('/');
   console.log(`| ${r.participant} | ${r.arm || '—'} | ${r.task || '—'} | ${r.costBarVisible === '' ? '—' : (r.costBarVisible === 'true' ? 'on' : 'OFF')} | ${r.language} | ${fmt(r.sus)} | ${fmt(r.activeMin, 2)} | ${fmt(r.introS)} | ${r.nodeAdds} | ${r.assetNodes} | ${r.nodeEdits + r.gestures} | ${r.connects} | ${r.undos} | ${exp} | ${r.sessionId} |`);
 }

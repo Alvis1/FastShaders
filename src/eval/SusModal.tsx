@@ -620,10 +620,23 @@ export function SusModal({ open, onClose }: Props) {
             {q.rows.map((r) => {
               const key = gridKey(q, r);
               const rowId = `${b.prefix}-item-${q.id}-${r.id}`;
+              const writeIn = q.otherRowId === r.id && b.answers[key] === 'yes';
               return (
                 <div className="sus-modal__pro-row" key={r.id} {...rowMarks(`${b.prefix}-${key}`)}>
                   <span className="sus-modal__pro-row-label" id={rowId}>{qStr(r)}</span>
                   {optionStrip(b, key, rowId, q.columns)}
+                  {writeIn && (
+                    <input
+                      type="text"
+                      className="sus-modal__followup-input"
+                      aria-label={q.otherHint ? qStr(q.otherHint) : undefined}
+                      placeholder={q.otherHint ? qStr(q.otherHint) : undefined}
+                      value={typeof b.answers[otherKey(q)] === 'string' ? (b.answers[otherKey(q)] as string) : ''}
+                      maxLength={120}
+                      disabled={busy}
+                      onChange={(e) => b.set(otherKey(q), e.target.value)}
+                    />
+                  )}
                 </div>
               );
             })}

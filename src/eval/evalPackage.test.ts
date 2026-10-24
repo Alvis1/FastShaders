@@ -132,7 +132,7 @@ describe('summary.csv + README', () => {
     const cells = Object.fromEntries(header.split(',').map((h, i) => [h, row.split(',')[i]]));
     expect(header.split(',').filter((h) => h.startsWith('exp_'))).toEqual([]);
     expect(header.split(',').filter((h) => h.startsWith('bg_'))).toEqual(backgroundCsvColumns(undefined).map(([k]) => k));
-    expect(cells).toMatchObject({ bg_items_version: 'bg-2', bg_toolsUsed_blender: 'yes', bg_toolsUsed_unity: 'no', bg_nodeEditorUse: 'few', bg_shaderCodeUse: '' });
+    expect(cells).toMatchObject({ bg_items_version: 'bg-2', bg_toolsUsed_blender: 'yes', bg_toolsUsed_unity: 'no', bg_nodeEditorUse: 'few', bg_shaderCodeDepth: '' });
   });
 
   it('carries the pro_* columns: empty for a student, the choices for a professional', () => {
