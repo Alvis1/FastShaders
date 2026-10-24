@@ -19,7 +19,7 @@
 import type { ZipEntry } from '@/utils/zipWriter';
 import { toKebabCase } from '@/utils/nameUtils';
 import type { EvalEvent, EvalSummary, QualityCheck } from './telemetryModel';
-import { BACKGROUND_ITEMS } from './background';
+import { backgroundCsvColumns } from './background';
 import { proCsvColumns } from './proQuestions';
 
 export interface EvalPackageInput {
@@ -93,18 +93,11 @@ export function buildSummaryCsv(
     ['points_visible', extra.pointsVisible == null ? '' : String(extra.pointsVisible)],
     ['cost_table', extra.costTable ?? ''],
     ['sus_score', susScore],
-    // Experience levels 0-4 (none..expert) — the covariate a usability score
-    // is read against; `readPath` pulls them out of the sus block the caller
-    // assembled. The column list is the questionnaire's own id list, so a
-    // question added or retired there cannot leave a stale or missing column.
-    ...BACKGROUND_ITEMS.map(
-      ({ id }): [string, unknown] => [
-        `exp_${id}`,
-        (readPath<{ id: string; level: number | null }[]>(
-          extra.susBlock ?? {}, ['background', 'items'],
-        ) ?? []).find((it) => it.id === id)?.level ?? '',
-      ],
-    ),
+    // The experience block — the covariate a usability score is read against
+    // — one column per answer, generated from BACKGROUND_ITEMS so a question
+    // added or retired there cannot leave a stale or missing column. (The
+    // first wave's packages carried exp_<id> levels 0-4 instead.)
+    ...backgroundCsvColumns(readPath<unknown>(extra.susBlock ?? {}, ['background'])),
     // The professional block (/evalpro only; empty elsewhere): one column per
     // answer, generated from PRO_ITEMS like the exp_* columns. Typed text
     // never reaches the CSV — it stays in sus.json.
@@ -190,13 +183,17 @@ export function buildEvalReadme(input: EvalPackageInput): string {
     'time_to_first_* in summary.csv INCLUDE intro_s (intro-open/-slide/-close in the',
     'event log give the exact intervals).',
     '',
-    'Questionnaire (sus.json): `background` holds the three experience self-ratings,',
-    'asked before the SUS and shown as radios 1-5 labelled only at the ends (None,',
-    'Expert) but STORED 0-4. On evalpro, `professional` (itemsVersion) follows SUS',
+    'Questionnaire (sus.json): `background` (itemsVersion bg-2) holds the experience',
+    'block asked before the SUS — which tools the participant has made materials or',
+    'shaders with (Yes/No rows), how much they have worked with node editors, and',
+    'whether they have written shader code; the first wave\'s packages carried three',
+    'None-Expert self-ratings stored 0-4 instead, which must never be pooled with',
+    'these. On evalpro, `professional` (itemsVersion) follows SUS',
     'item 10: the pilot\'s Q5-Q9 (1-5 agreement), credibility of the cost points',
-    '(1-5, or na = "can\'t judge"), what the tool suits, and the work profile; every',
+    '(1-5, or na = "can\'t judge"), what the tool suits, and the work profile. Every',
     'answer records the English wording it was asked with and the language it was',
-    'given in. The pro_* columns of summary.csv repeat the choices (never typed text).',
+    'given in; the bg_* and pro_* columns of summary.csv repeat the choices (never',
+    'typed text).',
     'session.json consent.participantAtConsent is the code given at Agree;',
     'participantEdited marks a package whose code was changed on the form.',
     '',

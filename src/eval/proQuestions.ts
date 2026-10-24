@@ -15,15 +15,13 @@
  *   1. the 2026 pilot's Q5–Q9, word for word (hypothesis H2, pilot continuity);
  *   2. credibility of the cost points (E1–E7) — the expert half of SQ3;
  *   3. what the tool suits (form item H2: teaching / prototyping / production);
- *   4. the work profile: main work, years, platforms, shader code.
+ *   4. the work profile: main work, years, platforms (tools and shader code
+ *      are the shared experience block's, background.ts — nothing is asked twice).
  * Every required question has an honest answer for everyone ("Studying",
  * "No paid experience", "No", "Can't judge"), and every frequency or count has
  * a reference period and options that neither overlap nor leave gaps.
  *
- * The Latvian lives BESIDE the English here, as the SUS does (SUS_ITEMS_LV),
- * never as lv.json keys: those are keyed by English text and shared with
- * unrelated screens ("Never"/"Always" belonged to the image dropdown), so an
- * edit made elsewhere would silently reword the instrument.
+ * The item model and the Latvian-beside-English rule are questionItems.ts's.
  *
  * Rewording a question changes what it measures: give it a NEW id, bump
  * PRO_ITEMS_VERSION, and never reuse an id in RETIRED_PRO_IDS.
@@ -31,54 +29,34 @@
  * PURE (node-tested).
  */
 
-export type ProLang = 'en' | 'lv';
+import {
+  CANT,
+  NO,
+  YES,
+  buildRecord,
+  csvColumns,
+  missingKeys,
+  requiredKeys,
+  type AgreeItem,
+  type ChoiceItem,
+  type GridItem,
+  type QAnswers,
+  type QItem,
+  type QLang,
+  type QText,
+  type TextItem,
+} from './questionItems';
 
-export interface ProText {
-  en: string;
-  lv: string;
-}
-
-export interface ProOption extends ProText {
-  id: string;
-}
-
+export { CANT_JUDGE, gridKey, otherKey } from './questionItems';
+export type ProLang = QLang;
+export type ProText = QText;
+export type ProAnswers = QAnswers;
+export type ProQuestion = QItem;
+export type ProAgreeItem = AgreeItem;
+export type ProChoiceItem = ChoiceItem;
+export type ProGridItem = GridItem;
+export type ProTextItem = TextItem;
 export type ProGroup = 'pilot' | 'points' | 'fit' | 'work';
-
-interface ProBase {
-  id: string;
-  group: ProGroup;
-  question: ProText;
-}
-
-/** A 1–5 agreement strip (the SUS anchors); `cantJudge` adds a separate
- *  "Can't judge" answer, stored as 'na', never as a sixth level. */
-export interface ProAgreeItem extends ProBase {
-  kind: 'agree';
-  cantJudge?: boolean;
-}
-
-/** One choice. An option whose id is `otherId` reveals an optional text box. */
-export interface ProChoiceItem extends ProBase {
-  kind: 'choice';
-  options: readonly ProOption[];
-  otherId?: string;
-  otherHint?: ProText;
-}
-
-/** Rows answered on the same columns (Yes / No …): forced choice per row,
- *  which gets more honest endorsements than a tick-all list (Smyth et al. 2006). */
-export interface ProGridItem extends ProBase {
-  kind: 'grid';
-  rows: readonly ProOption[];
-  columns: readonly ProOption[];
-}
-
-/** Optional free text — never required, never copied into summary.csv. */
-export interface ProTextItem extends ProBase {
-  kind: 'text';
-}
-
-export type ProQuestion = ProAgreeItem | ProChoiceItem | ProGridItem | ProTextItem;
 
 export const PRO_ITEMS_VERSION = 'pro-2';
 
@@ -87,27 +65,21 @@ export const RETIRED_PRO_IDS: readonly string[] = [
   'role', 'years', 'shaderFrequency', 'performanceBudget', 'platforms', 'wouldUse',
 ];
 
-export const PRO_GROUP_HEADINGS: Record<ProGroup, ProText> = {
+export const PRO_GROUP_HEADINGS: Record<ProGroup, QText> = {
   pilot: { en: 'More statements about FastShaders', lv: 'Vēl apgalvojumi par FastShaders' },
   points: { en: 'The cost points', lv: 'Izmaksu punkti' },
   fit: { en: 'FastShaders and your work', lv: 'FastShaders un jūsu darbs' },
   work: { en: 'Your professional work', lv: 'Jūsu profesionālais darbs' },
 };
 
-export const PRO_GROUP_NOTES: Partial<Record<ProGroup, ProText>> = {
+export const PRO_GROUP_NOTES: Partial<Record<ProGroup, QText>> = {
   points: {
     en: 'About the point numbers you saw on the nodes and in the cost bar.',
     lv: 'Par punktu skaitļiem, ko redzējāt pie mezgliem un izmaksu joslā.',
   },
 };
 
-export const CANT_JUDGE: ProText = { en: "Can't judge", lv: 'Nevaru novērtēt' };
-
-const YES: ProOption = { id: 'yes', en: 'Yes', lv: 'Jā' };
-const NO: ProOption = { id: 'no', en: 'No', lv: 'Nē' };
-const CANT: ProOption = { id: 'cantJudge', ...CANT_JUDGE };
-
-export const PRO_ITEMS: readonly ProQuestion[] = [
+export const PRO_ITEMS: readonly QItem[] = [
   // 1. The pilot's Q5–Q9, word for word: English as published (main.tex),
   // Latvian from the pilot form (Q7's "mērki" corrected to "mērķi").
   {
@@ -271,150 +243,26 @@ export const PRO_ITEMS: readonly ProQuestion[] = [
     ],
     columns: [YES, NO],
   },
-  {
-    kind: 'choice', id: 'shaderCode12m', group: 'work',
-    question: {
-      en: 'Shader code (GLSL, HLSL, WGSL or TSL) in your work in the past 12 months:',
-      lv: 'Ēnotāju kods (GLSL, HLSL, WGSL vai TSL) jūsu darbā pēdējos 12 mēnešos:',
-    },
-    options: [
-      { id: 'regular', en: 'I write it regularly', lv: 'Rakstu regulāri' },
-      { id: 'adapt', en: 'I read and adapt it', lv: 'Lasu un pielāgoju' },
-      { id: 'little', en: 'Very little', lv: 'Ļoti maz' },
-      { id: 'none', en: 'Not at all', lv: 'Nemaz' },
-    ],
-  },
 ];
 
-export const proText = (t: ProText, lang: ProLang): string => t[lang];
-
-/**
- * Answers are keyed by `item.id`, a grid row by `item.id.row`, and a choice's
- * "Other" text by `item.id.other`. Values: an agree item 1–5 or 'na', a choice
- * or grid row the option id, a text item its string.
- */
-export type ProAnswers = Record<string, number | string | null | undefined>;
-
-export const gridKey = (item: ProGridItem, row: ProOption) => `${item.id}.${row.id}`;
-export const otherKey = (item: ProChoiceItem) => `${item.id}.other`;
+export const proText = (t: QText, lang: QLang): string => t[lang];
 
 /** Every answer key a Submit needs, in the order the form shows them. */
-export function proRequiredKeys(): string[] {
-  const keys: string[] = [];
-  for (const q of PRO_ITEMS) {
-    if (q.kind === 'agree' || q.kind === 'choice') keys.push(q.id);
-    else if (q.kind === 'grid') for (const r of q.rows) keys.push(gridKey(q, r));
-  }
-  return keys;
-}
-
-function validAnswer(q: ProQuestion, v: unknown): boolean {
-  if (q.kind === 'agree') return (Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 5) || (!!q.cantJudge && v === 'na');
-  if (q.kind === 'choice') return q.options.some((o) => o.id === v);
-  if (q.kind === 'grid') return q.columns.some((c) => c.id === v);
-  return true;
-}
+export const proRequiredKeys = (): string[] => requiredKeys(PRO_ITEMS);
 
 /** The required answer keys still missing (or holding a value the item does not offer). */
-export function proMissing(answers: ProAnswers): string[] {
-  const missing: string[] = [];
-  for (const q of PRO_ITEMS) {
-    if (q.kind === 'agree' || q.kind === 'choice') {
-      if (!validAnswer(q, answers[q.id])) missing.push(q.id);
-    } else if (q.kind === 'grid') {
-      for (const r of q.rows) if (!validAnswer(q, answers[gridKey(q, r)])) missing.push(gridKey(q, r));
-    }
-  }
-  return missing;
-}
+export const proMissing = (answers: QAnswers): string[] => missingKeys(PRO_ITEMS, answers);
 
 /** Every required answer given? Free text never blocks Submit. */
-export function proComplete(answers: ProAnswers): boolean {
-  return proMissing(answers).length === 0;
-}
+export const proComplete = (answers: QAnswers): boolean => proMissing(answers).length === 0;
 
-const TEXT_CAP = 300;
-const OTHER_CAP = 120;
-const cleanText = (raw: unknown, cap: number) => (typeof raw === 'string' ? raw.trim().slice(0, cap) : '');
-
-/**
- * The package's `professional` block (sus.json). Each answer carries the
- * English wording it was asked with and the language it was GIVEN in, so a
- * later rewording or a Latvian answer can always be told apart.
- */
+/** The package's `professional` block (sus.json). */
 export function buildProRecord(
-  answers: ProAnswers,
-  langs: Record<string, ProLang | undefined> = {},
+  answers: QAnswers,
+  langs: Record<string, QLang | undefined> = {},
 ): Record<string, unknown> {
-  return {
-    itemsVersion: PRO_ITEMS_VERSION,
-    placement: 'after-sus',
-    items: PRO_ITEMS.map((q) => {
-      const base = { id: q.id, kind: q.kind, question: q.question.en };
-      if (q.kind === 'agree') {
-        const v = answers[q.id];
-        const ok = validAnswer(q, v);
-        return {
-          ...base,
-          response: ok && typeof v === 'number' ? v : null,
-          na: ok && v === 'na',
-          language: langs[q.id] ?? null,
-        };
-      }
-      if (q.kind === 'choice') {
-        const v = answers[q.id];
-        const opt = q.options.find((o) => o.id === v) ?? null;
-        return {
-          ...base,
-          options: q.options.map((o) => o.id),
-          choice: opt?.id ?? null,
-          label: opt?.en ?? null,
-          ...(q.otherId ? { otherText: opt?.id === q.otherId ? cleanText(answers[otherKey(q)], OTHER_CAP) : '' } : {}),
-          language: langs[q.id] ?? null,
-        };
-      }
-      if (q.kind === 'grid') {
-        return {
-          ...base,
-          columns: q.columns.map((c) => c.id),
-          rows: q.rows.map((r) => {
-            const v = answers[gridKey(q, r)];
-            return {
-              id: r.id,
-              question: r.en,
-              answer: q.columns.some((c) => c.id === v) ? v : null,
-              language: langs[gridKey(q, r)] ?? null,
-            };
-          }),
-        };
-      }
-      return { ...base, text: cleanText(answers[q.id], TEXT_CAP), language: langs[q.id] ?? null };
-    }),
-  };
+  return { itemsVersion: PRO_ITEMS_VERSION, placement: 'after-sus', items: buildRecord(PRO_ITEMS, answers, langs) };
 }
 
-/**
- * summary.csv's professional columns, generated from PRO_ITEMS so a new or
- * retired item cannot leave a stale or missing column. Empty for every other
- * arm. Typed text never reaches the CSV — it stays in sus.json.
- */
-export function proCsvColumns(block: unknown): [string, unknown][] {
-  const items = (block && typeof block === 'object' && Array.isArray((block as { items?: unknown }).items))
-    ? (block as { items: Record<string, unknown>[] }).items
-    : [];
-  const byId = new Map(items.filter((i) => i && typeof i.id === 'string').map((i) => [i.id as string, i]));
-  const version = block && typeof block === 'object' ? (block as { itemsVersion?: unknown }).itemsVersion : undefined;
-  const cols: [string, unknown][] = [['pro_items_version', typeof version === 'string' ? version : '']];
-  for (const q of PRO_ITEMS) {
-    const rec = byId.get(q.id);
-    if (q.kind === 'agree') {
-      cols.push([`pro_${q.id}`, rec ? (rec.na === true ? 'na' : rec.response ?? '') : '']);
-    } else if (q.kind === 'choice') {
-      cols.push([`pro_${q.id}`, rec?.choice ?? '']);
-    } else if (q.kind === 'grid') {
-      const rows = Array.isArray(rec?.rows) ? (rec!.rows as Record<string, unknown>[]) : [];
-      for (const r of q.rows) cols.push([`pro_${q.id}_${r.id}`, rows.find((x) => x?.id === r.id)?.answer ?? '']);
-    }
-  }
-  return cols;
-}
+/** summary.csv's pro_* columns; empty for every other arm. */
+export const proCsvColumns = (block: unknown): [string, unknown][] => csvColumns('pro', PRO_ITEMS, block);

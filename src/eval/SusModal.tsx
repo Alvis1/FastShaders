@@ -24,25 +24,14 @@ import {
 import { deriveSummary, runQualityChecks, type QualityCheck } from './telemetryModel';
 import { evalTask } from './evalTask';
 import {
+  BACKGROUND_HEADING,
   BACKGROUND_ITEMS,
-  EXPERIENCE_LEVELS,
-  backgroundComplete,
+  backgroundMissing,
   buildBackgroundRecord,
   type BackgroundAnswers,
 } from './background';
-import {
-  CANT_JUDGE,
-  PRO_GROUP_HEADINGS,
-  PRO_GROUP_NOTES,
-  PRO_ITEMS,
-  buildProRecord,
-  gridKey,
-  otherKey,
-  proMissing,
-  type ProAnswers,
-  type ProGroup,
-  type ProLang,
-} from './proQuestions';
+import { PRO_GROUP_HEADINGS, PRO_GROUP_NOTES, PRO_ITEMS, buildProRecord, proMissing } from './proQuestions';
+import { CANT_JUDGE, gridKey, otherKey, type QAnswers, type QItem, type QLang, type QText } from './questionItems';
 import { LangSwitch } from './LangSwitch';
 import { summarizeAnswerLanguages } from './answerLanguage';
 import { useStudyDialog } from './studyDialog';
@@ -142,9 +131,11 @@ export function SusModal({ open, onClose }: Props) {
   const [background, setBackground] = useState<BackgroundAnswers>({});
   // The professional block — only in the /evalpro arm, AFTER SUS item 10, so
   // every arm reaches the SUS the same way (proQuestions.ts).
-  const [pro, setPro] = useState<ProAnswers>({});
-  // The UI language each professional answer was given in, keyed like `pro`.
-  const proAnswerLangRef = useRef<Record<string, ProLang>>({});
+  const [pro, setPro] = useState<QAnswers>({});
+  // The UI language each experience / professional answer was given in,
+  // keyed like the answers (answerLanguage.ts says why Submit's is not enough).
+  const backgroundLangRef = useRef<Record<string, QLang>>({});
+  const proAnswerLangRef = useRef<Record<string, QLang>>({});
   // Set by a Submit press on an incomplete form: every unanswered question is
   // then marked, and the first one is scrolled into view.
   const [showMissing, setShowMissing] = useState(false);
@@ -184,16 +175,31 @@ export function SusModal({ open, onClose }: Props) {
   // Every required answer still missing, as the `data-q` keys the form's rows
   // carry, in screen order: experience, SUS, then the professional block.
   const missing = useMemo(() => [
-    ...BACKGROUND_ITEMS.filter((it) => !backgroundComplete({ [it.id]: background[it.id] }, [it])).map((it) => `bg-${it.id}`),
+    ...backgroundMissing(background).map((k) => `bg-${k}`),
     ...responses.flatMap((r, i) => (r == null ? [`sus-${i}`] : [])),
     ...(proAsked ? proMissing(pro).map((k) => `pro-${k}`) : []),
   ], [background, responses, pro, proAsked]);
   const complete = missing.length === 0;
   const missingSet = useMemo(() => new Set(missing), [missing]);
   const isMissing = (key: string) => showMissing && missingSet.has(key);
-  const setProAnswer = (key: string, value: ProAnswers[string]) => {
-    proAnswerLangRef.current[key] = language;
-    setPro((prev) => ({ ...prev, [key]: value }));
+  // One block = its answers, their languages and the name prefix its radios
+  // share; the renderer below draws either block from it.
+  interface Block { prefix: string; answers: QAnswers; set: (key: string, value: QAnswers[string]) => void }
+  const bgBlock: Block = {
+    prefix: 'bg',
+    answers: background,
+    set: (key, value) => {
+      backgroundLangRef.current[key] = language;
+      setBackground((prev) => ({ ...prev, [key]: value }));
+    },
+  };
+  const proBlock: Block = {
+    prefix: 'pro',
+    answers: pro,
+    set: (key, value) => {
+      proAnswerLangRef.current[key] = language;
+      setPro((prev) => ({ ...prev, [key]: value }));
+    },
   };
 
   // A press on Submit while answers are missing: mark them all and take the
@@ -246,6 +252,7 @@ export function SusModal({ open, onClose }: Props) {
     // same moment, the click.
     const answerLangs = susAnswerLangRef.current.slice();
     const proLangs = { ...proAnswerLangRef.current };
+    const bgLangs = { ...backgroundLangRef.current };
     const score = computeSusScore(filled);
     const submittedIso = new Date().toISOString();
     const session = readEvalSession();
@@ -284,7 +291,7 @@ export function SusModal({ open, onClose }: Props) {
       participant: trimmedParticipant,
       language: answeredIn.language,
       languageAtSubmit: language,
-      background: buildBackgroundRecord(background),
+      background: buildBackgroundRecord(background, bgLangs),
       ...(proAsked ? { professional: buildProRecord(pro, proLangs) } : {}),
       itemsVersion: 'brooke-1996-item8-awkward',
       items: filled.map((response, i) => {
@@ -496,22 +503,22 @@ export function SusModal({ open, onClose }: Props) {
     );
   }
 
-  const lang: ProLang = language === 'lv' ? 'lv' : 'en';
-  const proStr = (text: { en: string; lv: string }) => text[lang];
+  const lang: QLang = language === 'lv' ? 'lv' : 'en';
+  const qStr = (text: QText) => text[lang];
   // The data-q / aria-invalid pair every required row wears.
   const rowMarks = (key: string) => ({ 'data-q': key, 'aria-invalid': isMissing(key) || undefined });
 
-  const agreeStrip = (key: string, labelId: string, cantJudge?: boolean) => (
+  const agreeStrip = (b: Block, key: string, labelId: string, cantJudge?: boolean) => (
     <span className="sus-modal__scale" role="radiogroup" aria-labelledby={labelId}>
       {[1, 2, 3, 4, 5].map((v) => (
         <label key={v} title={v === 1 ? anchorLow : v === 5 ? anchorHigh : undefined}>
           <input
             type="radio"
-            name={`pro-${key}`}
+            name={`${b.prefix}-${key}`}
             value={v}
-            checked={pro[key] === v}
+            checked={b.answers[key] === v}
             disabled={busy}
-            onChange={() => setProAnswer(key, v)}
+            onChange={() => b.set(key, v)}
           />
           {v}
         </label>
@@ -520,48 +527,54 @@ export function SusModal({ open, onClose }: Props) {
         <label className="sus-modal__na">
           <input
             type="radio"
-            name={`pro-${key}`}
+            name={`${b.prefix}-${key}`}
             value="na"
-            checked={pro[key] === 'na'}
+            checked={b.answers[key] === 'na'}
             disabled={busy}
-            onChange={() => setProAnswer(key, 'na')}
+            onChange={() => b.set(key, 'na')}
           />
-          {proStr(CANT_JUDGE)}
+          {qStr(CANT_JUDGE)}
         </label>
       )}
     </span>
   );
 
-  const optionStrip = (key: string, labelId: string, options: readonly { id: string; en: string; lv: string }[]) => (
+  const optionStrip = (b: Block, key: string, labelId: string, options: readonly { id: string; en: string; lv: string }[]) => (
     <span className="sus-modal__scale sus-modal__scale--wide" role="radiogroup" aria-labelledby={labelId}>
       {options.map((o) => (
         <label key={o.id}>
           <input
             type="radio"
-            name={`pro-${key}`}
+            name={`${b.prefix}-${key}`}
             value={o.id}
-            checked={pro[key] === o.id}
+            checked={b.answers[key] === o.id}
             disabled={busy}
-            onChange={() => setProAnswer(key, o.id)}
+            onChange={() => b.set(key, o.id)}
           />
-          <span className="sus-modal__level-label">{proStr(o)}</span>
+          <span className="sus-modal__level-label">{qStr(o)}</span>
         </label>
       ))}
     </span>
   );
 
-  // The professional block, after SUS item 10 (proQuestions.ts says why).
-  const proBlock = () => {
-    let group: ProGroup | null = null;
-    return PRO_ITEMS.map((q) => {
+  // One renderer for both blocks (questionItems.ts): the experience block
+  // before the SUS and the professional block after item 10.
+  const renderBlock = (
+    items: readonly QItem[],
+    b: Block,
+    headings: Record<string, QText>,
+    notes: Partial<Record<string, QText>> = {},
+  ) => {
+    let group: string | null = null;
+    return items.map((q) => {
       const head: ReactNode[] = [];
       if (q.group !== group) {
         group = q.group;
-        const note = PRO_GROUP_NOTES[q.group];
+        const note = notes[q.group];
         head.push(
-          <div className="sus-modal__section-head" key={`h-${q.group}`}>{proStr(PRO_GROUP_HEADINGS[q.group])}</div>,
+          <div className="sus-modal__section-head" key={`h-${q.group}`}>{qStr(headings[q.group])}</div>,
         );
-        if (note) head.push(<div className="csv-import-modal__message" key={`n-${q.group}`}>{proStr(note)}</div>);
+        if (note) head.push(<div className="csv-import-modal__message" key={`n-${q.group}`}>{qStr(note)}</div>);
         if (q.kind === 'agree') {
           head.push(
             <div className="sus-modal__anchors" aria-hidden="true" key={`a-${q.group}`}>
@@ -571,31 +584,31 @@ export function SusModal({ open, onClose }: Props) {
           );
         }
       }
-      const labelId = `pro-item-${q.id}`;
+      const labelId = `${b.prefix}-item-${q.id}`;
       let body: ReactNode;
       if (q.kind === 'agree') {
         body = (
-          <div className="sus-modal__item" {...rowMarks(`pro-${q.id}`)}>
-            <span className="sus-modal__statement" id={labelId}>{proStr(q.question)}</span>
-            {agreeStrip(q.id, labelId, q.cantJudge)}
+          <div className="sus-modal__item" {...rowMarks(`${b.prefix}-${q.id}`)}>
+            <span className="sus-modal__statement" id={labelId}>{qStr(q.question)}</span>
+            {agreeStrip(b, q.id, labelId, q.cantJudge)}
           </div>
         );
       } else if (q.kind === 'choice') {
-        const otherOn = q.otherId != null && pro[q.id] === q.otherId;
+        const otherOn = q.otherId != null && b.answers[q.id] === q.otherId;
         body = (
-          <div className="sus-modal__pro-scale" {...rowMarks(`pro-${q.id}`)}>
-            <span className="sus-modal__statement" id={labelId}>{proStr(q.question)}</span>
-            {optionStrip(q.id, labelId, q.options)}
+          <div className="sus-modal__pro-scale" {...rowMarks(`${b.prefix}-${q.id}`)}>
+            <span className="sus-modal__statement" id={labelId}>{qStr(q.question)}</span>
+            {optionStrip(b, q.id, labelId, q.options)}
             {otherOn && (
               <input
                 type="text"
                 className="sus-modal__followup-input"
-                aria-label={q.otherHint ? proStr(q.otherHint) : undefined}
-                placeholder={q.otherHint ? proStr(q.otherHint) : undefined}
-                value={typeof pro[otherKey(q)] === 'string' ? (pro[otherKey(q)] as string) : ''}
+                aria-label={q.otherHint ? qStr(q.otherHint) : undefined}
+                placeholder={q.otherHint ? qStr(q.otherHint) : undefined}
+                value={typeof b.answers[otherKey(q)] === 'string' ? (b.answers[otherKey(q)] as string) : ''}
                 maxLength={120}
                 disabled={busy}
-                onChange={(e) => setProAnswer(otherKey(q), e.target.value)}
+                onChange={(e) => b.set(otherKey(q), e.target.value)}
               />
             )}
           </div>
@@ -603,14 +616,14 @@ export function SusModal({ open, onClose }: Props) {
       } else if (q.kind === 'grid') {
         body = (
           <div className="sus-modal__pro-scale">
-            <span className="sus-modal__statement">{proStr(q.question)}</span>
+            <span className="sus-modal__statement">{qStr(q.question)}</span>
             {q.rows.map((r) => {
               const key = gridKey(q, r);
-              const rowId = `pro-item-${q.id}-${r.id}`;
+              const rowId = `${b.prefix}-item-${q.id}-${r.id}`;
               return (
-                <div className="sus-modal__pro-row" key={r.id} {...rowMarks(`pro-${key}`)}>
-                  <span className="sus-modal__pro-row-label" id={rowId}>{proStr(r)}</span>
-                  {optionStrip(key, rowId, q.columns)}
+                <div className="sus-modal__pro-row" key={r.id} {...rowMarks(`${b.prefix}-${key}`)}>
+                  <span className="sus-modal__pro-row-label" id={rowId}>{qStr(r)}</span>
+                  {optionStrip(b, key, rowId, q.columns)}
                 </div>
               );
             })}
@@ -619,15 +632,15 @@ export function SusModal({ open, onClose }: Props) {
       } else {
         body = (
           <div className="sus-modal__pro-scale">
-            <label className="sus-modal__statement" htmlFor={`pro-${q.id}`}>{proStr(q.question)}</label>
+            <label className="sus-modal__statement" htmlFor={`${b.prefix}-${q.id}`}>{qStr(q.question)}</label>
             <input
-              id={`pro-${q.id}`}
+              id={`${b.prefix}-${q.id}`}
               type="text"
               className="sus-modal__followup-input"
-              value={typeof pro[q.id] === 'string' ? (pro[q.id] as string) : ''}
+              value={typeof b.answers[q.id] === 'string' ? (b.answers[q.id] as string) : ''}
               maxLength={300}
               disabled={busy}
-              onChange={(e) => setProAnswer(q.id, e.target.value)}
+              onChange={(e) => b.set(q.id, e.target.value)}
             />
           </div>
         );
@@ -678,38 +691,10 @@ export function SusModal({ open, onClose }: Props) {
           {t('Type the code the researcher gave you, not your name.', language)}
         </div>
 
-        {/* Experience questions — BEFORE the SUS. Same radio-strip shape as
-            the SUS items so the questionnaire reads as one instrument, but on
-            its own none→expert scale, with its own anchors. */}
-        <div className="sus-modal__section-head">{t('Your experience', language)}</div>
-        <div className="sus-modal__anchors" aria-hidden="true">
-          <span>{t(EXPERIENCE_LEVELS[0], language)}</span>
-          <span>{t(EXPERIENCE_LEVELS[EXPERIENCE_LEVELS.length - 1], language)}</span>
-        </div>
-        <div className="sus-modal__items">
-          {BACKGROUND_ITEMS.map((it) => (
-            <div className="sus-modal__item" key={it.id} {...rowMarks(`bg-${it.id}`)}>
-              <span className="sus-modal__statement" id={`bg-item-${it.id}`}>
-                {t(it.question, language)}
-              </span>
-              <span className="sus-modal__scale" role="radiogroup" aria-labelledby={`bg-item-${it.id}`}>
-                {EXPERIENCE_LEVELS.map((label, level) => (
-                  <label key={label} title={t(label, language)}>
-                    <input
-                      type="radio"
-                      name={`bg-${it.id}`}
-                      value={level}
-                      checked={background[it.id] === level}
-                      disabled={busy}
-                      onChange={() => setBackground((prev) => ({ ...prev, [it.id]: level }))}
-                    />
-                    {level + 1}
-                  </label>
-                ))}
-              </span>
-            </div>
-          ))}
-        </div>
+        {/* The experience block — BEFORE the SUS in every arm, as it has been
+            since the first packages (background.ts says what that order does
+            and does not protect). */}
+        {renderBlock(BACKGROUND_ITEMS, bgBlock, { experience: BACKGROUND_HEADING })}
 
         <div className="sus-modal__section-head">{t('Statements about FastShaders', language)}</div>
         {/* Brooke's own instruction, placed on the SUS block it applies to: the
@@ -759,7 +744,7 @@ export function SusModal({ open, onClose }: Props) {
           ))}
         </div>
 
-        {proAsked && proBlock()}
+        {proAsked && renderBlock(PRO_ITEMS, proBlock, PRO_GROUP_HEADINGS, PRO_GROUP_NOTES)}
 
         <label className="csv-import-modal__message" htmlFor="sus-comment">
           {t('Comments (optional)', language)}

@@ -1,84 +1,114 @@
 /**
- * The three experience questions asked BEFORE the SUS (EVAL_MODE_PLAN.md §8).
+ * The experience block, asked BEFORE the SUS in every arm.
  *
- * They exist because a usability score is not interpretable without knowing
+ * It exists because a usability score is not interpretable without knowing
  * who gave it: "this editor is easy to learn" means something different from
- * someone who has used Blender's shader graph for years than from someone who
- * has never seen a node editor. They are asked before the SUS in every arm,
- * as they have been since the first study packages and as the 2026 pilot
- * asked them, and that order is kept for comparability. It does NOT keep
- * self-assessment from colouring the SUS — it makes the self-ratings the
- * SUS's immediate context, so a context effect cannot be ruled out (the
- * paper says so); what it protects is the self-ratings from the SUS answers.
- * They are self-ratings against one's own peers, so students' and
- * professionals' levels are never compared directly.
+ * someone who builds materials in Blender every week than from someone who
+ * has never seen a node editor.
  *
- * Before consent-9 a third item asked about "other node-based editors" with a
- * free-text "Which software?" box (`otherNodeEditors`, `otherNodeEditorsText`
- * in the package). The owner REMOVED it on 2026-10-02 — the shader-knowledge
- * question, asked since the block was created, moved up to third — so
- * packages from before then carry four items and later ones three;
- * `scripts/eval-analysis.mjs` reads both.
+ * Version bg-2 (consent-12, 2026-10-24) asks what people have DONE, never
+ * what they ARE: which tools they have made materials or shaders with (one
+ * Yes/No row each), how much they have worked with node editors, and whether
+ * they have written shader code — behavioural anchors with an honest answer
+ * for a student and a professional alike. The first version asked for a
+ * None→Expert self-rating of Blender, Unreal and shader programming (ids
+ * blender/unreal/shaderCode, the 2026 pilot's items; `otherNodeEditors` was
+ * removed on 2026-10-02): a level is read against one's own peers, and anyone
+ * fluent in Unity or TouchDesigner read as a novice. The 20 packages of the
+ * first student wave carry that version (`background.items[].level`, 0–4);
+ * `scripts/eval-analysis.mjs` reads both, never pooled. The ids below are
+ * new, and RETIRED_BACKGROUND_IDS are never reused.
  *
- * One shared 5-point scale, none → expert, the same width as the SUS strip so
- * the whole questionnaire reads as one instrument rather than two.
+ * The block stays before the SUS, as it has been since the first packages and
+ * as the pilot asked it. That order does NOT keep self-assessment from
+ * colouring the SUS — it makes these answers the SUS's immediate context, so
+ * a context effect cannot be ruled out and the paper says so; what the order
+ * protects is these answers from the SUS ones. Latvian lives beside the
+ * English (questionItems.ts says why).
  *
- * PURE (node-tested). Labels are English keys the i18n overlay translates;
- * Latvian is the study language and carries the researcher's own wording.
+ * PURE (node-tested).
  */
 
-export const BACKGROUND_SCALE_MIN = 0;
-export const BACKGROUND_SCALE_MAX = 4;
+import {
+  NO,
+  YES,
+  buildRecord,
+  csvColumns,
+  missingKeys,
+  type QAnswers,
+  type QItem,
+  type QLang,
+  type QText,
+} from './questionItems';
 
-/** none → expert. Index IS the stored value, so the order is the contract. */
-export const EXPERIENCE_LEVELS: readonly string[] = [
-  'None',
-  'Beginner',
-  'Intermediate',
-  'Advanced',
-  'Expert',
+export const BACKGROUND_ITEMS_VERSION = 'bg-2';
+
+/** The first version's ids (0–4 levels) and the pilot's free-text item. Never reuse one. */
+export const RETIRED_BACKGROUND_IDS: readonly string[] = ['blender', 'unreal', 'otherNodeEditors', 'shaderCode'];
+
+export const BACKGROUND_HEADING: QText = { en: 'Your experience', lv: 'Jūsu pieredze' };
+
+export const BACKGROUND_ITEMS: readonly QItem[] = [
+  {
+    kind: 'grid', id: 'toolsUsed', group: 'experience',
+    question: {
+      en: 'Have you made materials or shaders with these tools?',
+      lv: 'Vai esat veidojis/-usi materiālus vai ēnotājus ar šiem rīkiem?',
+    },
+    rows: [
+      { id: 'blender', en: 'Blender', lv: 'Blender' },
+      { id: 'unreal', en: 'Unreal Engine', lv: 'Unreal Engine' },
+      { id: 'unity', en: 'Unity', lv: 'Unity' },
+      { id: 'touchdesigner', en: 'TouchDesigner', lv: 'TouchDesigner' },
+      { id: 'other', en: 'Another node editor', lv: 'Cits mezglu redaktors' },
+    ],
+    columns: [YES, NO],
+  },
+  {
+    kind: 'choice', id: 'nodeEditorUse', group: 'experience',
+    question: {
+      en: 'How much have you worked with node-based shader or material editors?',
+      lv: 'Cik daudz pieredzes jums ir ar ēnotāju vai materiālu mezglu redaktoriem?',
+    },
+    options: [
+      { id: 'never', en: 'Never', lv: 'Nekad' },
+      { id: 'tried', en: 'Tried once or twice', lv: 'Izmēģināju pāris reizes' },
+      { id: 'few', en: 'Made a few things', lv: 'Izveidoju dažas lietas' },
+      { id: 'regular', en: 'Use them regularly', lv: 'Lietoju regulāri' },
+      { id: 'paid', en: 'Use them in paid work', lv: 'Lietoju algotā darbā' },
+    ],
+  },
+  {
+    kind: 'choice', id: 'shaderCodeUse', group: 'experience',
+    question: {
+      en: 'Have you written shader code (GLSL, HLSL, WGSL…)?',
+      lv: 'Vai esat rakstījis/-usi ēnotāju kodu (GLSL, HLSL, WGSL…)?',
+    },
+    options: [
+      { id: 'no', en: 'No', lv: 'Nē' },
+      { id: 'read', en: 'I have read or copied some', lv: 'Lasīju vai kopēju kādu kodu' },
+      { id: 'small', en: 'I have written small shaders', lv: 'Rakstīju nelielus ēnotājus' },
+      { id: 'regular', en: 'I write it regularly', lv: 'Rakstu regulāri' },
+    ],
+  },
 ];
 
-export interface BackgroundItem {
-  /** Stable key — what the package records; never renamed. */
-  id: 'blender' | 'unreal' | 'shaderCode';
-  question: string;
-}
+export type BackgroundAnswers = QAnswers;
 
-export const BACKGROUND_ITEMS: readonly BackgroundItem[] = [
-  { id: 'blender', question: 'Experience with Blender Shader Editor' },
-  { id: 'unreal', question: 'Experience with Unreal Engine Material Editor' },
-  { id: 'shaderCode', question: 'Technical knowledge of shader programming (e.g. GLSL, HLSL)' },
-];
+export const backgroundMissing = (answers: BackgroundAnswers): string[] => missingKeys(BACKGROUND_ITEMS, answers);
 
-export type BackgroundAnswers = Record<string, number | null>;
+/** Every row and choice answered? They are the covariate the SUS is read
+ *  against, so all of them gate submit. */
+export const backgroundComplete = (answers: BackgroundAnswers): boolean => backgroundMissing(answers).length === 0;
 
-/** Every scale answered? They are the covariate the SUS is read against, so
- *  all of them gate submit. */
-export function backgroundComplete(
+/** The package's `background` block: the wording asked, the answer and its language. */
+export function buildBackgroundRecord(
   answers: BackgroundAnswers,
-  items: readonly BackgroundItem[] = BACKGROUND_ITEMS,
-): boolean {
-  return items.every((it) => {
-    const v = answers[it.id];
-    return Number.isInteger(v) && (v as number) >= BACKGROUND_SCALE_MIN && (v as number) <= BACKGROUND_SCALE_MAX;
-  });
+  langs: Record<string, QLang | undefined> = {},
+): Record<string, unknown> {
+  return { itemsVersion: BACKGROUND_ITEMS_VERSION, items: buildRecord(BACKGROUND_ITEMS, answers, langs) };
 }
 
-/** The package's `background` block: the raw level plus its label, so a
- *  reader never has to guess what 2 meant. */
-export function buildBackgroundRecord(answers: BackgroundAnswers): Record<string, unknown> {
-  return {
-    scale: EXPERIENCE_LEVELS,
-    items: BACKGROUND_ITEMS.map((it) => {
-      const v = answers[it.id];
-      const level = Number.isInteger(v) ? (v as number) : null;
-      return {
-        id: it.id,
-        question: it.question,
-        level,
-        label: level == null ? null : EXPERIENCE_LEVELS[level],
-      };
-    }),
-  };
-}
+/** summary.csv's bg_* columns (empty for a block of another version). */
+export const backgroundCsvColumns = (block: unknown): [string, unknown][] =>
+  csvColumns('bg', BACKGROUND_ITEMS, block);

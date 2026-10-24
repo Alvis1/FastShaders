@@ -125,7 +125,7 @@ export function DataDisclosureModal({ onClose }: Props) {
             {item(
               'Your questionnaire answers',
               'sus.json',
-              'the three experience answers; the ten statements, the score computed from them, and your free-text comment; in a professional session also five more statements about the editor, your view of the cost points, what the tool suits, your main work, years of experience, platforms and shader-code use, each with the language you answered in. Text you type in a box is stored word for word.',
+              'which tools you have made materials or shaders with, how much you have worked with node editors and whether you have written shader code; the ten statements, the score computed from them, and your free-text comment; in a professional session also five more statements about the editor, your view of the cost points, what the tool suits, your main work, years of experience and platforms — each answer with the language you gave it in. Text you type in a box is stored word for word.',
             )}
             {item(
               'The main numbers as one spreadsheet row',

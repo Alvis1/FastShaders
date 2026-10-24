@@ -135,6 +135,17 @@ if (zipPaths.length === 0) {
  * FAILURE (the exit code stays 0); both are reported so the split can be
  * stated honestly.
  */
+/** A versioned question block (questionItems.ts) as flat CSV cells. */
+function flattenBlock(prefix, block) {
+  const out = {};
+  for (const it of block?.items ?? []) {
+    if (it.kind === 'agree') out[`${prefix}_${it.id}`] = it.na ? 'na' : (it.response ?? '');
+    else if (it.kind === 'choice') out[`${prefix}_${it.id}`] = it.choice ?? '';
+    else if (it.kind === 'grid') for (const r of it.rows ?? []) out[`${prefix}_${it.id}_${r.id}`] = r.answer ?? '';
+  }
+  return out;
+}
+
 function susFormLanguage(sus, events) {
   const language = sus.language ?? '?';
   const perItem = (sus.items ?? []).map((it) => it.language).filter(Boolean);
@@ -201,12 +212,7 @@ for (const zp of zipPaths) {
     // The professional block (sus.json `professional`, /evalpro only since
     // consent-12): flattened to pro_<id> / pro_<id>_<row>, choices only —
     // typed text stays out of the CSV.
-    const pro = {};
-    for (const it of sus.professional?.items ?? []) {
-      if (it.kind === 'agree') pro[`pro_${it.id}`] = it.na ? 'na' : (it.response ?? '');
-      else if (it.kind === 'choice') pro[`pro_${it.id}`] = it.choice ?? '';
-      else if (it.kind === 'grid') for (const r of it.rows ?? []) pro[`pro_${it.id}_${r.id}`] = r.answer ?? '';
-    }
+    const pro = flattenBlock('pro', sus.professional);
     if (sus.professional && task.arm !== 'evalpro') {
       problems.push(`${name}: a professional block under arm "${task.arm ?? '?'}" — only /evalpro asks it; analyse apart`);
     }
@@ -236,10 +242,14 @@ for (const zp of zipPaths) {
       device: session.device ? `${session.device.gpu ?? '?'} · ${session.device.cores ?? '?'} cores` : '',
       hasShot: entries.has('preview.png'),
       participant: sus.participant || '?',
-      // Experience covariate: 0-4 per tool, none..expert.
-      exp: Object.fromEntries(
+      // Experience covariate. First wave (no itemsVersion): 0-4 levels per
+      // tool, none..expert, in `exp`. bg-2 (consent-12): behavioural answers,
+      // flattened to bg_* like the pro block — the two are never pooled.
+      exp: sus.background?.itemsVersion ? {} : Object.fromEntries(
         ((sus.background?.items) ?? []).map((it) => [it.id, it.level ?? '']),
       ),
+      bgItemsVersion: sus.background?.itemsVersion ?? '',
+      ...flattenBlock('bg', sus.background?.itemsVersion ? sus.background : null),
       // Packages from before consent-9 only: the retired "other node-based
       // editors" item's free text (the item was removed on 2026-10-02).
       expOther: sus.background?.otherNodeEditorsText ?? '',
@@ -317,13 +327,17 @@ console.log(`# FastShaders eval analysis — ${rows.length} package(s)\n`);
 // The questions asked since consent-9. The retired 'otherNodeEditors' level
 // (and its free text) still reach the CSV for older packages — never the table.
 const EXP = ['blender', 'unreal', 'shaderCode'];
-console.log('| participant | arm | task | costbar | lang | SUS | active min | intro s | node adds | asset nodes | edits | connects | undos | blend/unreal/code | session |');
+console.log('| participant | arm | task | costbar | lang | SUS | active min | intro s | node adds | asset nodes | edits | connects | undos | experience | session |');
 console.log('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
 for (const r of rows) {
-  const exp = EXP.map((k) => (r.exp?.[k] === '' || r.exp?.[k] == null ? '–' : r.exp[k])).join('/');
+  // First wave: Blender/Unreal/code levels 0-4. bg-2: the tools answered
+  // Yes (B U Un T O), then node-editor use and shader-code use.
+  const exp = r.bgItemsVersion
+    ? `${['blender', 'unreal', 'unity', 'touchdesigner', 'other'].filter((t) => r[`bg_toolsUsed_${t}`] === 'yes').map((t) => ({ blender: 'B', unreal: 'U', unity: 'Un', touchdesigner: 'T', other: 'O' })[t]).join(' ') || '–'} · ${r.bg_nodeEditorUse || '–'} · ${r.bg_shaderCodeUse || '–'}`
+    : EXP.map((k) => (r.exp?.[k] === '' || r.exp?.[k] == null ? '–' : r.exp[k])).join('/');
   console.log(`| ${r.participant} | ${r.arm || '—'} | ${r.task || '—'} | ${r.costBarVisible === '' ? '—' : (r.costBarVisible === 'true' ? 'on' : 'OFF')} | ${r.language} | ${fmt(r.sus)} | ${fmt(r.activeMin, 2)} | ${fmt(r.introS)} | ${r.nodeAdds} | ${r.assetNodes} | ${r.nodeEdits + r.gestures} | ${r.connects} | ${r.undos} | ${exp} | ${r.sessionId} |`);
 }
-console.log('\n(experience 0–4 = none…expert, in the order Blender / Unreal / shader code; a package from before consent-9 also answered "other node editors", which is in the CSV only)');
+console.log('\n(experience: first-wave packages show 0–4 = none…expert in the order Blender / Unreal / shader code; consent-12 packages show the tools used (B Blender, U Unreal, Un Unity, T TouchDesigner, O other) · node-editor use · shader-code use — two instruments, never pooled; a package from before consent-9 also answered "other node editors", which is in the CSV only)');
 
 // Professionals are never pooled with the students: the headline SUS is the
 // student arms', and /evalpro is reported per person and by its median
@@ -392,8 +406,8 @@ if (problems.length) {
 }
 
 // CSV — one row per participant, spreadsheet-ready.
-const proCols = [...new Set(rows.flatMap((r) => Object.keys(r).filter((k) => k.startsWith('pro_'))))];
-const cols = ['file', 'sessionId', 'participant', 'participantAtConsent', 'susOpens', 'expBlender', 'expUnreal', 'expOtherNodeEditors', 'expShaderCode', 'expOther', 'arm', 'task', 'briefBudget', 'costBarVisible', 'pointsVisible', 'costTable', 'device', 'hasShot', 'budgetCrossings', 'finalPoints', 'finalPointsAll', 'deviceBudget', 'shownBudget', 'overBudgetMin', 'language', 'languageAtSubmit', 'sus', 'activeMin', 'wallMin', 'idleThresholdS', 'events', 'nodeAdds', 'distinctTypes', 'presetDrops', 'textureDrops', 'assetNodes', 'nodeEdits', 'gestures', 'connects', 'undos', 'redos', 'applies', 'rebuilds', 'ttfConnectS', 'ttfNodeS', 'introOpens', 'introS', 'introSlides', 'comment', 'proItemsVersion', ...proCols];
+const proCols = [...new Set(rows.flatMap((r) => Object.keys(r).filter((k) => k.startsWith('bg_') || k.startsWith('pro_'))))];
+const cols = ['file', 'sessionId', 'participant', 'participantAtConsent', 'susOpens', 'expBlender', 'expUnreal', 'expOtherNodeEditors', 'expShaderCode', 'expOther', 'arm', 'task', 'briefBudget', 'costBarVisible', 'pointsVisible', 'costTable', 'device', 'hasShot', 'budgetCrossings', 'finalPoints', 'finalPointsAll', 'deviceBudget', 'shownBudget', 'overBudgetMin', 'language', 'languageAtSubmit', 'sus', 'activeMin', 'wallMin', 'idleThresholdS', 'events', 'nodeAdds', 'distinctTypes', 'presetDrops', 'textureDrops', 'assetNodes', 'nodeEdits', 'gestures', 'connects', 'undos', 'redos', 'applies', 'rebuilds', 'ttfConnectS', 'ttfNodeS', 'introOpens', 'introS', 'introSlides', 'comment', 'bgItemsVersion', 'proItemsVersion', ...proCols];
 const esc = (v) => {
   let s = v == null ? '' : String(v);
   if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;

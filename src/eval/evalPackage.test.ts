@@ -8,7 +8,7 @@ import {
   type EvalPackageInput,
 } from './evalPackage';
 import { deriveSummary, runQualityChecks, type EvalEvent } from './telemetryModel';
-import { BACKGROUND_ITEMS } from './background';
+import { backgroundCsvColumns, buildBackgroundRecord } from './background';
 import { PRO_ITEMS_VERSION, buildProRecord } from './proQuestions';
 
 function fixtureInput(withShader: boolean): EvalPackageInput {
@@ -121,27 +121,18 @@ describe('summary.csv + README', () => {
     expect(row).toContain('77.5');
   });
 
-  it('carries one exp_ column per experience question, read from the sus block', () => {
-    // The columns follow BACKGROUND_ITEMS: the retired "other node editors"
-    // item (removed on 2026-10-02) must not linger as an always-empty column.
+  it('carries one bg_ column per experience answer, read from the sus block', () => {
+    // The columns follow BACKGROUND_ITEMS: the first wave's exp_<id> levels
+    // and the retired "other node editors" item must not linger as columns.
     const input = fixtureInput(true);
     const csv = buildSummaryCsv('P01', 77.5, input.summary, {
-      susBlock: {
-        background: {
-          items: [
-            { id: 'blender', level: 3 },
-            { id: 'unreal', level: 0 },
-            { id: 'shaderCode', level: 4 },
-          ],
-        },
-      },
+      susBlock: { background: buildBackgroundRecord({ 'toolsUsed.blender': 'yes', 'toolsUsed.unity': 'no', nodeEditorUse: 'few' }) },
     });
     const [header, row] = csv.split('\n');
     const cells = Object.fromEntries(header.split(',').map((h, i) => [h, row.split(',')[i]]));
-    const expCols = header.split(',').filter((h) => h.startsWith('exp_'));
-    expect(expCols).toEqual(BACKGROUND_ITEMS.map((it) => `exp_${it.id}`));
-    expect(expCols).toEqual(['exp_blender', 'exp_unreal', 'exp_shaderCode']);
-    expect([cells.exp_blender, cells.exp_unreal, cells.exp_shaderCode]).toEqual(['3', '0', '4']);
+    expect(header.split(',').filter((h) => h.startsWith('exp_'))).toEqual([]);
+    expect(header.split(',').filter((h) => h.startsWith('bg_'))).toEqual(backgroundCsvColumns(undefined).map(([k]) => k));
+    expect(cells).toMatchObject({ bg_items_version: 'bg-2', bg_toolsUsed_blender: 'yes', bg_toolsUsed_unity: 'no', bg_nodeEditorUse: 'few', bg_shaderCodeUse: '' });
   });
 
   it('carries the pro_* columns: empty for a student, the choices for a professional', () => {
