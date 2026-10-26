@@ -40,6 +40,11 @@ const HOOKS: { file: string; events: string[] }[] = [
       // The two deferred halves of a canvas file drop (wide CSV, "Add anyway").
       "evalLog('asset-drop'",
       "evalLog('lang-switch'",
+      // The step-by-step lessons (/evalpro only): the takeover, each step
+      // shown and the close.
+      "evalLog('tutorial-start'",
+      "evalLog('tutorial-step'",
+      "evalLog('tutorial-end'",
     ],
   },
   {
@@ -63,6 +68,12 @@ const HOOKS: { file: string; events: string[] }[] = [
     // each slide shown, closed — the training a participant had.
     file: 'intro/IntroWindow.tsx',
     events: ["evalLog('intro-open'", "evalLog('intro-slide'", "evalLog('intro-close'"],
+  },
+  {
+    // "Do it for me" — logged once, its store writes run inside
+    // evalAutomated so their node-add/node-edit carry `auto: true`.
+    file: 'tutorials/tutorialAutoStep.ts',
+    events: ["evalLog('tutorial-auto'", 'evalAutomated(() => performStep('],
   },
   {
     file: 'engine/exportShader.ts',

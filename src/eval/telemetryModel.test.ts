@@ -27,6 +27,7 @@ describe('deriveSummary — active time', () => {
       finalSnapshot: null, budgetCrossings: 0, overBudgetMs: 0,
       assetDropsByKind: {}, assetNodesAdded: 0, nodeEditCount: 0, gestureCount: 0,
       introOpenCount: 0, introMs: 0, introSlidesSeen: 0,
+      tutorialStartCount: 0, tutorialsCompleted: 0, tutorialAutoSteps: 0,
     });
   });
 
@@ -416,6 +417,33 @@ describe('ready-made material, setting edits and the intro', () => {
     expect(s.introOpenCount).toBe(3);
     expect(s.introMs).toBe(20_000 + 10_000 + 5_000);
     expect(s.introSlidesSeen).toBe(3);
+  });
+
+  it('lessons: started, completed (distinct), and what "Do it for me" did is not the participant\'s work', () => {
+    const s = deriveSummary(
+      stream([
+        ['session-start', 0],
+        ['tutorial-start', 1_000, { lesson: 'first-wire' }],
+        ['tutorial-auto', 2_000, { lesson: 'first-wire', step: 0 }],
+        ['node-add', 2_000, { nodeType: 'perlin', auto: true }],
+        ['node-edit', 2_000, { nodeType: 'perlin', fields: ['values.scale'], auto: true }],
+        ['tutorial-step', 3_000, { lesson: 'first-wire', step: 1 }],
+        ['node-add', 4_000, { nodeType: 'color' }],
+        ['tutorial-end', 5_000, { lesson: 'first-wire', step: 1, outcome: 'keep', completed: true }],
+        ['tutorial-start', 6_000, { lesson: 'first-wire' }],
+        ['tutorial-end', 7_000, { lesson: 'first-wire', step: 1, outcome: 'keep', completed: true }],
+        ['tutorial-start', 8_000, { lesson: 'uv-ramp' }],
+        ['tutorial-end', 9_000, { lesson: 'uv-ramp', step: 0, outcome: 'new', completed: false }],
+        ['session-end', 10_000],
+      ]),
+      { idleThresholdMs: T },
+    );
+    expect([s.tutorialStartCount, s.tutorialsCompleted, s.tutorialAutoSteps]).toEqual([3, 1, 1]);
+    expect(s.nodeAddsByType).toEqual({ color: 1 });
+    expect(s.nodeEditCount).toBe(0);
+    expect(s.timeToFirstNodeAddMs).toBe(4_000);
+    // The raw counts still hold every event.
+    expect(s.counts['node-add']).toBe(2);
   });
 
   it('intro events and setting edits keep the participant ACTIVE', () => {

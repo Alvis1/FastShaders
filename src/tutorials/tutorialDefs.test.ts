@@ -17,6 +17,7 @@ import { NODE_REGISTRY, getEditorDefinitions } from '@/registry/nodeRegistry';
 import { DEFAULT_OPTIONAL_CATEGORIES, hiddenOptionalCategories } from '@/registry/optionalCategories';
 import { OUTPUT_DEFAULT_EXPOSED, usesExposedPorts } from '@/utils/exposedPorts';
 import { formatRampStops, isRampInterp, parseRampStops } from '@/utils/colorRamp';
+import { hasTutorialShade } from './tutorialShades';
 
 const SRC = fileURLToPath(new URL('./', import.meta.url));
 const read = (f: string) => readFileSync(SRC + f, 'utf8');
@@ -161,6 +162,10 @@ describe('each lesson', () => {
 
   each('%s: feeds the Output at least once', (_id, def) => {
     expect(def.steps.some((s) => s.kind === 'wire' && s.to[0] === OUT_ROLE)).toBe(true);
+  });
+
+  each('%s: has a picture of its result on the tile (its recipe\'s thumbnail, or its own)', (_id, def) => {
+    expect(hasTutorialShade(def)).toBe(true);
   });
 
   each('%s: every string is trimmed printable ASCII within the panel\'s caps', (_id, def) => {

@@ -5,8 +5,11 @@
  * exposure, the Image UV handoff), `updateNodeData` for a value or an exposed
  * channel. One undo entry per step. A programmatic graph write like
  * `startSplatGraph` / `addDroppedShader` / `placeLibraryGroup`, NOT a tile
- * route (docs/dev/canvas-interaction.md); never `evalLog` — the tab is absent
- * in a study (`evalHooks.test.ts`).
+ * route (docs/dev/canvas-interaction.md). In an `/evalpro` session (the one
+ * study entry with the tab) it logs ONE `tutorial-auto` and performs the step
+ * inside `evalAutomated`, so the `node-add`/`node-edit` its writes log carry
+ * `auto: true` — the study's work counts leave out what the app did
+ * (`evalHooks.test.ts`).
  */
 
 import { useAppStore } from '@/store/useAppStore';
@@ -18,6 +21,7 @@ import { initialNodeValues } from '@/utils/newNodeValues';
 import { effectiveExposedPorts } from '@/utils/exposedPorts';
 import { makeOpacityReadable } from '@/utils/libraryAutoWire';
 import { getNodeValues, outputNodeValues } from '@/types';
+import { evalAutomated, evalLog } from '@/eval/telemetry';
 import type { AppNode, OutputNodeData, ShaderNodeData, MaterialSettings } from '@/types';
 import { findTutorial } from './tutorialDefs';
 import { planAddPosition } from './tutorialRun';
@@ -36,6 +40,13 @@ export interface AutoStepResult {
  * `rand` seeds the fresh-node colour pick (tests pass a constant).
  */
 export function tutorialAutoStep(run: TutorialRun, rand: () => number = Math.random): AutoStepResult {
+  const def = findTutorial(run.id);
+  if (!def?.steps[run.step]) return {};
+  evalLog('tutorial-auto', { lesson: run.id, step: run.step });
+  return evalAutomated(() => performStep(run, rand));
+}
+
+function performStep(run: TutorialRun, rand: () => number): AutoStepResult {
   const def = findTutorial(run.id);
   const step = def?.steps[run.step];
   if (!def || !step) return {};

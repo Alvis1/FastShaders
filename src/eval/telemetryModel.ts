@@ -40,6 +40,12 @@ const EVAL_EVENT_TYPES = [
   // the intro slides (/eval, /evalpro): opened after Agree or from the toolbar
   // "i", each slide shown (`slide` = the scene id), and closed
   'intro-open', 'intro-slide', 'intro-close',
+  // the step-by-step lessons (/evalpro only, src/tutorials): a lesson took
+  // over the canvas (`lesson` = its id), a step was shown (`step`, 0-based),
+  // "Do it for me" performed one, and the lesson closed (`outcome` keep|new,
+  // `completed` when its finish screen was reached). Graph events a "Do it for
+  // me" causes carry `auto: true` (telemetry.ts `evalAutomated`).
+  'tutorial-start', 'tutorial-step', 'tutorial-auto', 'tutorial-end',
   // questionnaire
   'sus-open', 'sus-submit',
 ] as const;
@@ -81,6 +87,10 @@ export const ACTIVITY_EVENT_TYPES: ReadonlySet<EvalEventType> = new Set([
   'intro-open',
   'intro-slide',
   'intro-close',
+  'tutorial-start',
+  'tutorial-step',
+  'tutorial-auto',
+  'tutorial-end',
   'sus-open',
   'sus-submit',
 ]);
@@ -97,6 +107,9 @@ export const STRUCTURAL_EVENT_TYPES: ReadonlySet<EvalEventType> = new Set([
   'output-activate',
   'code-apply',
   'import',
+  // a lesson's takeover replaces the graph; its auto step adds and wires
+  'tutorial-start',
+  'tutorial-auto',
 ]);
 
 export interface EvalSummary {
@@ -131,6 +144,14 @@ export interface EvalSummary {
   introOpenCount: number;
   introMs: number;
   introSlidesSeen: number;
+  /** Step-by-step lessons (/evalpro): how many were started, how many
+   *  DISTINCT ones reached their finish screen, and how many steps "Do it for
+   *  me" performed. A performed step's `node-add`/`node-edit` events carry
+   *  `auto: true` and are left out of `nodeAddsByType`, `nodeEditCount` and
+   *  `timeToFirstNodeAddMs` — the participant did not make them. */
+  tutorialStartCount: number;
+  tutorialsCompleted: number;
+  tutorialAutoSteps: number;
   /** ms from session start, null when the event never happened. */
   timeToFirstNodeAddMs: number | null;
   timeToFirstConnectMs: number | null;
@@ -233,6 +254,9 @@ export function deriveSummary(
   // Null-proto for the same reason as the maps above: slide ids are
   // journal-supplied strings.
   const introSlides: Record<string, true> = Object.create(null);
+  // Lesson ids are journal-supplied strings too.
+  const tutorialsDone: Record<string, true> = Object.create(null);
+  let nodeEditCount = 0;
   let finalSnapshot: Record<string, unknown> | null = null;
   let firstAdd: number | null = null;
   let firstConnect: number | null = null;
@@ -247,12 +271,14 @@ export function deriveSummary(
   let budgetCrossings = 0;
   for (const e of events) {
     counts[e.type] = (counts[e.type] ?? 0) + 1;
-    if (e.type === 'node-add') {
+    if (e.type === 'node-add' && e.auto !== true) {
       const nt = typeof e.nodeType === 'string' ? e.nodeType : 'unknown';
       nodeAddsByType[nt] = (nodeAddsByType[nt] ?? 0) + 1;
       if (firstAdd == null) firstAdd = e.t;
     }
     if (e.type === 'edge-connect' && firstConnect == null) firstConnect = e.t;
+    if (e.type === 'node-edit' && e.auto !== true) nodeEditCount++;
+    if (e.type === 'tutorial-end' && e.completed === true && typeof e.lesson === 'string') tutorialsDone[e.lesson] = true;
     if (e.type === 'asset-drop') {
       const kind = typeof e.kind === 'string' ? e.kind : 'unknown';
       assetDropsByKind[kind] = (assetDropsByKind[kind] ?? 0) + 1;
@@ -315,12 +341,15 @@ export function deriveSummary(
     distinctNodeTypesAdded: Object.keys(nodeAddsByType).length,
     assetDropsByKind,
     assetNodesAdded,
-    nodeEditCount: counts['node-edit'] ?? 0,
+    nodeEditCount,
     gestureCount: counts['gesture'] ?? 0,
     introOpenCount: counts['intro-open'] ?? 0,
     // Still open when the session ended — close it there.
     introMs: introMs + (introOpenAt == null ? 0 : tEnd - introOpenAt),
     introSlidesSeen: Object.keys(introSlides).length,
+    tutorialStartCount: counts['tutorial-start'] ?? 0,
+    tutorialsCompleted: Object.keys(tutorialsDone).length,
+    tutorialAutoSteps: counts['tutorial-auto'] ?? 0,
     timeToFirstNodeAddMs: firstAdd == null ? null : firstAdd - t0,
     timeToFirstConnectMs: firstConnect == null ? null : firstConnect - t0,
     undoCount: counts['undo'] ?? 0,
@@ -385,6 +414,7 @@ export interface QualityCheck {
 const EDIT_EVENT_TYPES: ReadonlySet<EvalEventType> = new Set([
   'node-add', 'node-remove', 'edge-connect', 'edge-disconnect',
   'undo', 'redo', 'gesture', 'node-edit', 'new-graph', 'output-activate', 'code-apply', 'asset-drop', 'import',
+  'tutorial-start', 'tutorial-auto',
 ]);
 
 /**

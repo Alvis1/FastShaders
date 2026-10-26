@@ -19,6 +19,7 @@ import { TUTORIALS } from '@/tutorials/tutorialDefs';
 import { wantedNodeType } from '@/tutorials/tutorialRun';
 import { TUTORIALS_TAB, tutorialsOffered, effectiveBrowserTab } from '@/tutorials/tutorialsTab';
 import { isEvalMode } from '@/eval/evalArm';
+import { evalTask } from '@/eval/evalTask';
 import { TextureCard } from './TextureCard';
 import { PresetCard } from './PresetCard';
 import { setHtml5TileDrag, endHtml5TileDrag } from './tileDrag';
@@ -207,16 +208,17 @@ const validateZoom = (raw: string | null): number => {
  *  `displayCategories` and not the raw CATEGORIES table: the two lists
  *  disagreeing is exactly how a returning user boots into a blank strip. */
 const BROWSER_TABS = new Set<string>([
-  // 'tutorials' stays a VALID stored value through a study session (the tab is
-  // absent there) — derived to 'all' at render by effectiveBrowserTab, like a
+  // 'tutorials' stays a VALID stored value through a student-arm session (the
+  // tab is absent there) — derived to 'all' at render by effectiveBrowserTab, like a
   // switched-off optional category, so it comes back afterwards.
   'all', 'saved', TUTORIALS_TAB, ...displayCategories.map((c) => c.id),
 ]);
 const validateBrowserTab = (raw: string | null): BrowserCategory =>
   raw && BROWSER_TABS.has(raw) ? (raw as BrowserCategory) : 'all';
-/** The Tutorials tab exists outside a study only. `isEvalMode` is sampled once
- *  per page, so a module constant is the honest shape (tutorialsTab.ts). */
-const OFFER_TUTORIALS = tutorialsOffered(isEvalMode());
+/** The Tutorials tab exists outside a study and on the `/evalpro` entry.
+ *  `isEvalMode` and the task are sampled once per page, so a module constant
+ *  is the honest shape (tutorialsTab.ts). */
+const OFFER_TUTORIALS = tutorialsOffered(isEvalMode(), evalTask().arm);
 
 const validateBarHeight = (raw: string | null): number | null => {
   const v = parseFloat(raw ?? '');
@@ -353,7 +355,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
   // what the tiles now print, so the sorting memos key on it.
   const costVersion = useAppStore((s) => s.costVersion);
   const savedTabLabel = `${t('Saved Groups', language)}${savedGroups.length > 0 ? ` (${savedGroups.length})` : ''}`;
-  const tutorialsTabLabel = t('Tutorials', language);
+  const tutorialsTabLabel = t('Step by step', language);
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);

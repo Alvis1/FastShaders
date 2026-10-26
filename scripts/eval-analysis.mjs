@@ -243,8 +243,9 @@ for (const zp of zipPaths) {
       hasShot: entries.has('preview.png'),
       participant: sus.participant || '?',
       // Experience covariate. First wave (no itemsVersion): 0-4 levels per
-      // tool, none..expert, in `exp`. bg-2 (consent-12): behavioural answers,
-      // flattened to bg_* like the pro block — the two are never pooled.
+      // tool, none..expert, in `exp`. bg-3 (consent-13; bg-2 of consent-12
+      // never deployed): behavioural answers, flattened to bg_* like the pro
+      // block — the versions are never pooled.
       exp: sus.background?.itemsVersion ? {} : Object.fromEntries(
         ((sus.background?.items) ?? []).map((it) => [it.id, it.level ?? '']),
       ),
@@ -329,15 +330,27 @@ console.log(`# FastShaders eval analysis — ${rows.length} package(s)\n`);
 const EXP = ['blender', 'unreal', 'shaderCode'];
 console.log('| participant | arm | task | costbar | lang | SUS | active min | intro s | node adds | asset nodes | edits | connects | undos | experience | session |');
 console.log('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
+// A Map, not an object: the version tag comes from a package, and 'constructor'
+// must read as unknown, not as Object.prototype's.
+const BG_VERSIONS = new Map([
+  ['bg-3', { tools: 'toolsMade', letters: { blender: 'B', unreal: 'U', unity: 'Un', web3d: 'W', otherNodeEditor: 'N' }, code: 'bg_shaderCodeWritten' }],
+  ['bg-2', { tools: 'toolsUsed', letters: { blender: 'B', unreal: 'U', unity: 'Un', touchdesigner: 'T', other: 'O' }, code: 'bg_shaderCodeDepth' }],
+]);
 for (const r of rows) {
-  // First wave: Blender/Unreal/code levels 0-4. bg-2: the tools answered
-  // Yes (B U Un T O), then node-editor use and shader-code use.
+  // First wave: Blender/Unreal/code levels 0-4. bg-3 (consent-13): the tools
+  // answered Yes (B U Un W N — N another node-based editor), then node-editor use and shader code written
+  // (no / changed / own). bg-2 (consent-12, never deployed) had a
+  // TouchDesigner row (T) and a five-step code ladder. One reader per
+  // version, never pooled; an unknown version prints its tag.
+  const bg = BG_VERSIONS.get(r.bgItemsVersion);
   const exp = r.bgItemsVersion
-    ? `${['blender', 'unreal', 'unity', 'touchdesigner', 'other'].filter((t) => r[`bg_toolsUsed_${t}`] === 'yes').map((t) => ({ blender: 'B', unreal: 'U', unity: 'Un', touchdesigner: 'T', other: 'O' })[t]).join(' ') || '–'} · ${r.bg_nodeEditorUse || '–'} · ${r.bg_shaderCodeDepth || '–'}`
+    ? (bg
+      ? `${r.bgItemsVersion}: ${Object.keys(bg.letters).filter((t) => r[`bg_${bg.tools}_${t}`] === 'yes').map((t) => bg.letters[t]).join(' ') || '–'} · ${r.bg_nodeEditorUse || '–'} · ${r[bg.code] || '–'}`
+      : `${r.bgItemsVersion}: unknown version`)
     : EXP.map((k) => (r.exp?.[k] === '' || r.exp?.[k] == null ? '–' : r.exp[k])).join('/');
   console.log(`| ${r.participant} | ${r.arm || '—'} | ${r.task || '—'} | ${r.costBarVisible === '' ? '—' : (r.costBarVisible === 'true' ? 'on' : 'OFF')} | ${r.language} | ${fmt(r.sus)} | ${fmt(r.activeMin, 2)} | ${fmt(r.introS)} | ${r.nodeAdds} | ${r.assetNodes} | ${r.nodeEdits + r.gestures} | ${r.connects} | ${r.undos} | ${exp} | ${r.sessionId} |`);
 }
-console.log('\n(experience: first-wave packages show 0–4 = none…expert in the order Blender / Unreal / shader code; consent-12 packages show the tools used (B Blender, U Unreal, Un Unity, T TouchDesigner, O other) · node-editor use · shader-code use — two instruments, never pooled; a package from before consent-9 also answered "other node editors", which is in the CSV only)');
+console.log('\n(experience: first-wave packages show 0–4 = none…expert in the order Blender / Unreal / shader code; bg-3 packages (consent-13) show the tools made with (B Blender, U Unreal, Un Unity, W three.js/A-Frame, N another node-based editor) · node-editor use · shader code written (no / changed / own); bg-2 (consent-12, never deployed) had T TouchDesigner and a five-step code ladder — the versions are never pooled; a package from before consent-9 also answered "other node editors", which is in the CSV only)');
 
 // Professionals are never pooled with the students: the headline SUS is the
 // student arms', and /evalpro is reported per person and by its median

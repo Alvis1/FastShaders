@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { clearImageOrigins } from '@/utils/imageOriginCache';
-import { useAppStore, resolveDeviceBudget } from '@/store/useAppStore';
+import { useAppStore, resolveDeviceBudget, TUTORIALS_DONE_KEY } from '@/store/useAppStore';
 import { countProject } from '@/utils/feedbackReport';
 import { computeGraphCost } from '@/utils/nodeCost';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
@@ -119,6 +119,10 @@ function cleanSlateForStudy(): void {
     // session anyway, but a leaked '1' would reach the next normal-mode
     // session on this machine.
     localStorage.removeItem(ALLOW_MANY_MATERIALS_KEY);
+    // The lessons finished on this browser (the tick on each Step by step
+    // tile, /evalpro only): the previous participant's ticks would tell the
+    // next one which lessons to take — or to skip.
+    localStorage.removeItem(TUTORIALS_DONE_KEY);
   } catch {
     /* storage blocked — nothing persisted to leak either */
   }
@@ -126,6 +130,8 @@ function cleanSlateForStudy(): void {
     past: [], future: [],
     optionalCategories: DEFAULT_OPTIONAL_CATEGORIES,
     allowManyMaterials: false,
+    tutorial: null,
+    tutorialsDone: [],
   });
 }
 

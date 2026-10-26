@@ -126,13 +126,13 @@ describe('summary.csv + README', () => {
     // and the retired "other node editors" item must not linger as columns.
     const input = fixtureInput(true);
     const csv = buildSummaryCsv('P01', 77.5, input.summary, {
-      susBlock: { background: buildBackgroundRecord({ 'toolsUsed.blender': 'yes', 'toolsUsed.unity': 'no', nodeEditorUse: 'few' }) },
+      susBlock: { background: buildBackgroundRecord({ 'toolsMade.blender': 'yes', 'toolsMade.unity': 'no', 'toolsMade.otherNodeEditor': 'yes', nodeEditorUse: 'few' }) },
     });
     const [header, row] = csv.split('\n');
     const cells = Object.fromEntries(header.split(',').map((h, i) => [h, row.split(',')[i]]));
     expect(header.split(',').filter((h) => h.startsWith('exp_'))).toEqual([]);
     expect(header.split(',').filter((h) => h.startsWith('bg_'))).toEqual(backgroundCsvColumns(undefined).map(([k]) => k));
-    expect(cells).toMatchObject({ bg_items_version: 'bg-2', bg_toolsUsed_blender: 'yes', bg_toolsUsed_unity: 'no', bg_nodeEditorUse: 'few', bg_shaderCodeDepth: '' });
+    expect(cells).toMatchObject({ bg_items_version: 'bg-3', bg_toolsMade_blender: 'yes', bg_toolsMade_unity: 'no', bg_toolsMade_otherNodeEditor: 'yes', bg_nodeEditorUse: 'few', bg_shaderCodeWritten: '' });
   });
 
   it('carries the pro_* columns: empty for a student, the choices for a professional', () => {
@@ -143,16 +143,16 @@ describe('summary.csv + README', () => {
     };
     const student = parse(buildSummaryCsv('J01', 50, input.summary, { susBlock: {} }));
     expect(student.pro_items_version).toBe('');
-    expect(student.pro_pilotQ5).toBe('');
+    expect(student.pro_pointsCredible).toBe('');
     const pro = parse(buildSummaryCsv('FS_LD_01', 70, input.summary, {
-      susBlock: { professional: buildProRecord({ pilotQ5: 4, pointsCredible: 'na', mainWork: 'techArt', 'platforms12m.webxr': 'yes' }) },
+      susBlock: { professional: buildProRecord({ pointsCredible: 'na', pointsChangedBuild: 'chose', mainWork: 'techArt', 'fitFor.teaching': 'yes' }) },
     }));
     expect(pro).toMatchObject({
       pro_items_version: PRO_ITEMS_VERSION,
-      pro_pilotQ5: '4',
       pro_pointsCredible: 'na',
+      pro_pointsChangedBuild: 'chose',
       pro_mainWork: 'techArt',
-      pro_platforms12m_webxr: 'yes',
+      pro_fitFor_teaching: 'yes',
     });
   });
 

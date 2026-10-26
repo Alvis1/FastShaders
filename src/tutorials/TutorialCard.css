@@ -1,72 +1,98 @@
-/* The Tutorials tab's lesson tile. Flat TECHNICAL style like every tile: square
-   corners, a hard 1px border, no blur. The `zoom` is the strip's shared tile
-   factor (NodePreviewCard.css explains the mechanism and the Firefox floor) —
-   keep it equal to the node tile's so the lesson tiles scale with their
-   neighbours as the bar is dragged. Designed at 1×: 230 × 132. */
+/* The Tutorials tab's lesson tile. Deliberately unlike the strip's other
+   tiles (owner, 2026-10-23): a node card has a header and a hard shadow, a
+   group or preset tile a coloured header bar — this is a plain WHITE card with
+   a thin border, split in two: the lesson's number, title and length in the
+   top half, the finished result's picture full-bleed in the bottom half. Flat
+   TECHNICAL style still holds: square corners, no blur. The `zoom` is the
+   strip's shared tile factor (NodePreviewCard.css) — keep it equal to its
+   neighbours'. The 1× height (~156 px) stays under the node tiles', so a
+   lesson tile never becomes the tallest tile the strip's zoom is fitted to. */
 .tutorial-card {
-  flex-shrink: 0;
-  zoom: 0.67;
   position: relative;
-  display: grid;
-  grid-template-columns: 56px 1fr;
-  grid-template-rows: 1fr auto;
-  width: 230px;
-  height: 132px;
-  margin: 20px 8px 6px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  width: 108px;
+  height: 156px;
+  margin: var(--space-2) var(--space-1) 0;
   padding: 0;
+  zoom: 0.67;
+  overflow: hidden;
   text-align: left;
   font-family: var(--font-sans);
   color: var(--text-primary);
   background: var(--bg-raised);
-  border: 1px solid var(--border-subtle);
-  border-left: 6px solid var(--cat-tutorials);
+  border: 1px solid var(--border-default);
   border-radius: 0;
   cursor: pointer;
   user-select: none;
-  box-shadow: var(--shadow-node);
-  transition: box-shadow var(--transition-fast);
+  transition: box-shadow var(--transition-fast), border-color var(--transition-fast);
 }
 
-.tutorial-card:hover,
+.tutorial-card:hover {
+  border-color: var(--cat-tutorials);
+  box-shadow: var(--shadow-md);
+}
+
 .tutorial-card:focus-visible {
-  box-shadow: var(--shadow-node-selected);
-  outline: none;
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
 }
 
 .tutorial-card--running {
-  border-color: var(--border-focus);
+  border: 2px solid var(--border-focus);
 }
 
-/* The lesson's number: big, in the tab's colour, spanning both rows. */
+/* Bottom half: the result, cropped to fill (the paint is square). */
+.tutorial-card__picture {
+  display: block;
+  flex: 0 0 50%;
+  width: 100%;
+  height: 50%;
+  object-fit: cover;
+  image-rendering: auto;
+}
+
+/* Top half: the words — the name sits above the picture. */
+.tutorial-card__text {
+  flex: 1 1 50%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  padding: 6px 6px 7px;
+}
+
 .tutorial-card__index {
-  grid-row: 1 / 3;
-  align-self: center;
-  justify-self: center;
-  font-size: 32px;
-  font-weight: 700;
-  color: var(--cat-tutorials);
-  line-height: 1;
-}
-
-.tutorial-card__title {
-  align-self: end;
-  padding: 0 12px 4px 0;
   font-size: 18px;
   font-weight: 700;
+  line-height: 1;
+  color: var(--cat-tutorials);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 12px holds the longest one-word titles ("Checkerboard", "Hologramma") on
+   one line; `anywhere` only ever breaks a word that still cannot fit. */
+.tutorial-card__title {
+  font-size: 12px;
+  font-weight: 700;
   line-height: 1.15;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
 .tutorial-card__count {
-  padding: 0 12px 14px 0;
-  font-size: var(--font-size-sm);
+  margin-top: auto;
+  padding-bottom: 2px;
+  font-size: var(--font-size-xs);
   color: var(--text-muted);
 }
 
 .tutorial-card__done {
   color: var(--cat-tutorials);
   font-weight: 700;
-}
-
-.tutorial-card--done .tutorial-card__title {
-  color: var(--text-secondary);
 }

@@ -24,14 +24,14 @@ import {
 import { deriveSummary, runQualityChecks, type QualityCheck } from './telemetryModel';
 import { evalTask } from './evalTask';
 import {
-  BACKGROUND_HEADING,
+  BACKGROUND_GROUP_HEADINGS,
   BACKGROUND_ITEMS,
   backgroundMissing,
   buildBackgroundRecord,
   type BackgroundAnswers,
 } from './background';
 import { PRO_GROUP_HEADINGS, PRO_GROUP_NOTES, PRO_ITEMS, buildProRecord, proMissing } from './proQuestions';
-import { CANT_JUDGE, gridKey, otherKey, type QAnswers, type QItem, type QLang, type QText } from './questionItems';
+import { CANT_JUDGE, OTHER_CAP, TEXT_CAP, gridKey, otherKey, type QAnswers, type QItem, type QLang, type QText } from './questionItems';
 import { LangSwitch } from './LangSwitch';
 import { summarizeAnswerLanguages } from './answerLanguage';
 import { useStudyDialog } from './studyDialog';
@@ -566,24 +566,30 @@ export function SusModal({ open, onClose }: Props) {
     notes: Partial<Record<string, QText>> = {},
   ) => {
     let group: string | null = null;
+    let prevKind: QItem['kind'] | null = null;
     return items.map((q) => {
       const head: ReactNode[] = [];
       if (q.group !== group) {
         group = q.group;
+        prevKind = null;
         const note = notes[q.group];
         head.push(
           <div className="sus-modal__section-head" key={`h-${q.group}`}>{qStr(headings[q.group])}</div>,
         );
         if (note) head.push(<div className="csv-import-modal__message" key={`n-${q.group}`}>{qStr(note)}</div>);
-        if (q.kind === 'agree') {
-          head.push(
-            <div className="sus-modal__anchors" aria-hidden="true" key={`a-${q.group}`}>
-              <span>1 — {anchorLow}</span>
-              <span>5 — {anchorHigh}</span>
-            </div>,
-          );
-        }
       }
+      // The 1–5 legend sits above the FIRST agree item of a run, wherever the
+      // run starts: a group may open with a grid or a choice, and a legend
+      // keyed on the group's first item left a later strip as bare radios.
+      if (q.kind === 'agree' && prevKind !== 'agree') {
+        head.push(
+          <div className="sus-modal__anchors" aria-hidden="true" key={`a-${q.id}`}>
+            <span>1 — {anchorLow}</span>
+            <span>5 — {anchorHigh}</span>
+          </div>,
+        );
+      }
+      prevKind = q.kind;
       const labelId = `${b.prefix}-item-${q.id}`;
       let body: ReactNode;
       if (q.kind === 'agree') {
@@ -606,7 +612,7 @@ export function SusModal({ open, onClose }: Props) {
                 aria-label={q.otherHint ? qStr(q.otherHint) : undefined}
                 placeholder={q.otherHint ? qStr(q.otherHint) : undefined}
                 value={typeof b.answers[otherKey(q)] === 'string' ? (b.answers[otherKey(q)] as string) : ''}
-                maxLength={120}
+                maxLength={OTHER_CAP}
                 disabled={busy}
                 onChange={(e) => b.set(otherKey(q), e.target.value)}
               />
@@ -632,7 +638,7 @@ export function SusModal({ open, onClose }: Props) {
                       aria-label={q.otherHint ? qStr(q.otherHint) : undefined}
                       placeholder={q.otherHint ? qStr(q.otherHint) : undefined}
                       value={typeof b.answers[otherKey(q)] === 'string' ? (b.answers[otherKey(q)] as string) : ''}
-                      maxLength={120}
+                      maxLength={OTHER_CAP}
                       disabled={busy}
                       onChange={(e) => b.set(otherKey(q), e.target.value)}
                     />
@@ -651,7 +657,7 @@ export function SusModal({ open, onClose }: Props) {
               type="text"
               className="sus-modal__followup-input"
               value={typeof b.answers[q.id] === 'string' ? (b.answers[q.id] as string) : ''}
-              maxLength={300}
+              maxLength={TEXT_CAP}
               disabled={busy}
               onChange={(e) => b.set(q.id, e.target.value)}
             />
@@ -707,12 +713,12 @@ export function SusModal({ open, onClose }: Props) {
         {/* The experience block — BEFORE the SUS in every arm, as it has been
             since the first packages (background.ts says what that order does
             and does not protect). */}
-        {renderBlock(BACKGROUND_ITEMS, bgBlock, { experience: BACKGROUND_HEADING })}
+        {renderBlock(BACKGROUND_ITEMS, bgBlock, BACKGROUND_GROUP_HEADINGS)}
 
         <div className="sus-modal__section-head">{t('Statements about FastShaders', language)}</div>
         {/* Brooke's own instruction, placed on the SUS block it applies to: the
-            experience strip above runs none→expert, where "centre point"
-            would be meaningless. */}
+            experience block above is Yes/No rows and option strips, where
+            "centre point" would be meaningless. */}
         <div className="csv-import-modal__message">
           {t('Mark your immediate response to each statement without thinking long. If you cannot respond to one, mark the centre point (3).', language)}
         </div>

@@ -15,7 +15,7 @@ interface PresetCardProps {
 }
 
 /** Per-pixel CPU approximation of a preset's look; x/y span [-1, 1], y=-1 top. */
-type Shade = (x: number, y: number) => [number, number, number];
+export type Shade = (x: number, y: number) => [number, number, number];
 
 // ─── preview shade functions ────────────────────────────────────────────────
 // Static snapshots of each preset's default parameters (animated presets are
@@ -581,3 +581,11 @@ export const PresetCard = memo(function PresetCard({ preset }: PresetCardProps) 
     />
   );
 });
+
+/** A built-in preset's thumbnail shade, for a tile that shows the SAME picture
+ *  — the Tutorials tab's lesson tiles (src/tutorials/tutorialShades.ts), each
+ *  of which builds one of these recipes by hand. Undefined for an id without a
+ *  hand-written shade (the caller falls back to its own). */
+export function presetShade(id: string): Shade | undefined {
+  return PRESET_SHADES[id];
+}

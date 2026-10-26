@@ -1,17 +1,21 @@
 /**
- * The fifteen lessons of the Tutorials tab — a LEAF: this module imports
+ * The twenty-two lessons of the Tutorials tab — a LEAF: this module imports
  * nothing but types (`bootWave.test.ts` holds it to that), so the asset
  * browser can import it statically. Everything executable lives in
  * `tutorialRun.ts` / `tutorialAutoStep.ts`.
  *
  * Thirteen lessons build the thirteen beginner recipes of the Presets tab by
  * hand (`recipeId`) — Presets shows the finished thing, this tab builds it —
- * plus two concepts the recipes do not cover (Circle: distance fields; Shiny or
- * Dull: the material dials). The order follows the surveyed curricula (Book of
- * Shaders, Catlike Coding, Unity Learn, Unreal's Content Examples, Godot):
- * colour → coordinates → repetition → shapes → time → noise → blending →
- * cells → directions → material dials → view → transparency → clipping →
- * vertices → animated vertices. Three authoring rules from the same research:
+ * plus nine concepts the recipes do not cover: Checkerboard (two axes at
+ * once), Circle (distance fields), Detail Costs (what noise costs), Which
+ * Space? (object vs world), Toon Shading (N·L by hand), Shiny or Dull (the
+ * material dials), Dissolve Edge (a band mask), Hologram (masks combine like
+ * logic) and Exposed Parameter (a uniform as a knob). The order follows the
+ * surveyed curricula (Book of Shaders, Catlike Coding, Unity Learn, Unreal's
+ * Content Examples, Godot): colour → coordinates → repetition → shapes → time
+ * → noise → blending → cells → cost → directions → spaces → lighting →
+ * material dials → view → transparency → clipping → mask logic → vertices →
+ * animated vertices → parameters. Three authoring rules from the same research:
  * show the RAW field (a grey) before mapping it through Color Ramp; interleave
  * adds and wires so the 3D preview changes every step or two; every lesson
  * opens with the idea and closes with one "Try: …" change and a question.
@@ -46,6 +50,11 @@ const HINT_OUTPUT_MENU = 'Right-click the Output node';
 const HINT_FRESNEL = 'Palette > Inputs > Fresnel, or right-click the canvas and type fresnel';
 const HINT_TIME = 'Palette > Inputs > Time, or right-click the canvas and type time';
 
+const HINT_FLOOR = 'Palette > Math > Floor, or right-click the canvas and type floor';
+const HINT_ADD = 'Palette > Arithmetic > Add, or right-click the canvas and type add';
+const HINT_MUL = 'Palette > Arithmetic > Multiply, or right-click the canvas and type mul';
+const HINT_NORMAL_WORLD = 'Palette > Inputs > Normal (world), or right-click the canvas and type normal';
+const HINT_GREATER = 'Palette > Logic > Greater Than, or right-click the canvas and type greater';
 export const TUTORIALS: readonly TutorialDef[] = [
   {
     id: 'tut-solid',
@@ -100,6 +109,29 @@ export const TUTORIALS: readonly TutorialDef[] = [
       wire('w6', ['ramp', 'out'], ['out', 'color'], 'Wire the ramp into the Output Color: eight soft ramps between two colours.'),
       set('hard', 'ramp', 'interp', 'constant', 'Right-click the Color Ramp and set Interpolation to Constant. No blending: a hard threshold at 0.5 turns soft ramps into crisp stripes.', HINT_INTERP),
       look('try', 'Try: set U back to 1 and the stripes vanish - Fract on a 0 to 1 number changes nothing. Scale first, then repeat.'),
+    ],
+  },
+  {
+    id: 'tut-checker',
+    title: 'Checkerboard',
+    summary: 'Two axes at once: Floor numbers the cells, Add joins column and row, Mod 2 tells even from odd. The classic checkerboard.',
+    steps: [
+      look('idea', 'A checkerboard asks one question per cell: is its column plus its row even or odd? Two coordinates, combined.'),
+      add('uv', 'coord', 'uv', 'Add a UV node.', HINT_UV),
+      set('tileU', 'coord', 'tilingU', 8, 'Set U to 8 on the UV node.', 'The U number box on the UV node'),
+      set('tileV', 'coord', 'tilingV', 8, 'Set V to 8 as well. Both coordinates now run 0 to 8: an 8 by 8 grid of cells.', 'The V number box on the UV node'),
+      add('floor', 'cell', 'floor', 'Add a Floor node. It rounds down: 3.7 becomes 3, so every point in a cell gets that cell\'s number.', HINT_FLOOR),
+      wire('w1', ['coord', 'out'], ['cell', 'x'], 'Wire UV into Floor. Floor works on both coordinates at once.'),
+      add('split', 'axes', 'split', 'Add a Split node.', HINT_SPLIT),
+      wire('w2', ['cell', 'out'], ['axes', 'v'], 'Wire Floor into Split. X is now the column number, Y the row number.'),
+      add('sum', 'sum', 'add', 'Add an Add node.', HINT_ADD),
+      wire('w3', ['axes', 'x'], ['sum', 'a'], 'Wire Split\'s X into A.'),
+      wire('w4', ['axes', 'y'], ['sum', 'b'], 'Wire Split\'s Y into B. Column plus row: neighbouring cells always differ by exactly 1.'),
+      add('mod', 'parity', 'mod', 'Add a Mod node. It gives the remainder of a division: X divided by Y, what is left over.', 'Palette > Math > Mod, or right-click the canvas and type mod'),
+      wire('w5', ['sum', 'out'], ['parity', 'x'], 'Wire Add into Mod\'s X.'),
+      wire('w6', ['parity', 'out'], ['out', 'color'], 'Wire Mod into the Output Color. All black: a whole number divided by 1 leaves nothing over.'),
+      set('two', 'parity', 'y', 2, 'Set Mod\'s Y to 2. Even sums leave 0, odd sums leave 1: black and white checks.', 'The Y number box on the Mod node'),
+      look('try', 'Try: set U to 16 and V to 4 for long bricks, or put a Mix with two Colors after Mod. Where else could even/odd help?'),
     ],
   },
   {
@@ -209,6 +241,21 @@ export const TUTORIALS: readonly TutorialDef[] = [
     ],
   },
   {
+    id: 'tut-costs',
+    title: 'Detail Costs',
+    summary: 'Three noises side by side - Perlin, fBm and Voronoi - and what each one costs. Detail is where a shader\'s price hides.',
+    steps: [
+      look('idea', 'Every node runs for every pixel, every frame, and the cost bar at the top right of the canvas adds up what the graph costs. Detail is where it hides.'),
+      add('perlin', 'perlin', 'perlin', 'Add a Perlin Noise node.', HINT_PERLIN),
+      wire('w1', ['perlin', 'out'], ['out', 'color'], 'Wire it into the Output Color and look at the cost bar: one noise is cheap.'),
+      add('fbm', 'fbm', 'fbm', 'Add an fBm node. It adds up several layers of the same noise, called octaves, each finer and fainter than the last.', 'Palette > Noise > fBm, or right-click the canvas and type fbm'),
+      wire('w2', ['fbm', 'out'], ['out', 'color'], 'Wire fBm into the Output Color instead. Finer detail, and the bar jumps: several noises cost several times one.'),
+      add('voronoi', 'voronoi', 'voronoi', 'Add a Voronoi node. It measures the distance to the nearest of many scattered points: cells, cracks and scales.', 'Palette > Noise > Voronoi, or right-click the canvas and type voronoi'),
+      wire('w3', ['voronoi', 'out'], ['out', 'color'], 'Wire Voronoi into the Output Color. One of the priciest nodes there is: the bar may turn red, past what a VR headset can draw each frame.'),
+      look('try', 'Try: raise each noise\'s Scale. The picture changes, the cost does not: the price is per node and per pixel, not per visible detail.'),
+    ],
+  },
+  {
     id: 'tut-snow',
     title: 'Up Is Snow',
     summary: 'Normals: the direction a surface faces, stored as numbers. Its Y says how much a point faces up, and a ramp draws the snow line.',
@@ -226,6 +273,43 @@ export const TUTORIALS: readonly TutorialDef[] = [
       wire('w4', ['axes', 'y'], ['ramp', 'fac'], 'Wire Y into the ramp\'s Factor.'),
       wire('w5', ['ramp', 'out'], ['out', 'color'], 'Wire the ramp into the Output Color: snow on top, earth below.'),
       look('try', 'Try: replace Normal (world) with Normal. Spin the preview: why does the snow now turn with the model?'),
+    ],
+  },
+  {
+    id: 'tut-space',
+    title: 'Which Space?',
+    summary: 'Object space travels with the model, world space belongs to the scene. The same Position, measured two ways.',
+    steps: [
+      look('idea', 'Every coordinate is measured in a space. Object space is the model\'s own and moves with it; world space belongs to the scene and stays put.'),
+      add('local', 'local', 'positionGeometry', 'Add a Position node: each point\'s location in the model\'s own space.', 'Palette > Inputs > Position, or right-click the canvas and type position'),
+      add('split', 'axes', 'split', 'Add a Split node.', HINT_SPLIT),
+      wire('w1', ['local', 'out'], ['axes', 'v'], 'Wire Position into Split.'),
+      wire('w2', ['axes', 'x'], ['out', 'color'], 'Wire Split\'s X into the Output Color: dark on one side, bright on the other. Values below 0 show as black.'),
+      look('spin', 'Press the play button under the 3D view to spin the model. The bright side turns with it: object space is glued to the model.'),
+      add('world', 'world', 'positionWorld', 'Add a Position (world) node: the same points, measured in the scene instead.', 'Palette > Inputs > Position (world), or right-click the canvas and type world'),
+      wire('w3', ['world', 'out'], ['axes', 'v'], 'Wire Position (world) into Split instead. Now the bright side stays put while the model spins.'),
+      look('try', 'Try: which space suits snow on top, rain streaks or a water line? Which suits a logo printed on the model?'),
+    ],
+  },
+  {
+    id: 'tut-toon',
+    title: 'Toon Shading',
+    summary: 'Lighting by hand: the Dot Product of the surface normal and the light direction, cut into flat bands by a Color Ramp.',
+    steps: [
+      look('idea', 'Lighting is one number per pixel: how much the surface faces the light. The Dot Product of two directions measures exactly that.'),
+      add('nrm', 'nrm', 'normalWorld', 'Add a Normal (world) node: the direction each point of the surface faces.', HINT_NORMAL_WORLD),
+      add('light', 'light', 'vec3', 'Add a Vec3 node. It will hold the direction the light comes from.', 'Palette > Types > Vec3, or right-click the canvas and type vec3'),
+      set('ly', 'light', 'y', 0.6, 'Set the Vec3\'s Y to 0.6: the light comes from above.', 'The Y number box on the Vec3 node'),
+      set('lz', 'light', 'z', 0.8, 'Set Z to 0.8: and from the front. 0.6 and 0.8 make a direction of length 1, as a light direction should be.', 'The Z number box on the Vec3 node'),
+      add('dot', 'lit', 'dot', 'Add a Dot Product node. For two directions it gives 1 when they agree, 0 at a right angle and below 0 when opposed.', 'Palette > Vector > Dot Product, or right-click the canvas and type dot'),
+      wire('w1', ['nrm', 'out'], ['lit', 'a'], 'Wire the normal into A.'),
+      wire('w2', ['light', 'out'], ['lit', 'b'], 'Wire the Vec3 into B.'),
+      wire('w3', ['lit', 'out'], ['out', 'color'], 'Wire Dot Product into the Output Color: bright where the surface faces the light, black behind. Lighting, made by hand.'),
+      add('ramp', 'ramp', 'colorRamp', 'Add a Color Ramp. Its three stops are a dark, a mid and a light tone.', HINT_RAMP, { stops: '0 #1a237e 1,0.35 #3949ab 1,0.75 #c5cae9 1' }),
+      wire('w4', ['lit', 'out'], ['ramp', 'fac'], 'Wire Dot Product into the ramp\'s Factor.'),
+      wire('w5', ['ramp', 'out'], ['out', 'color'], 'Wire the ramp into the Output Color: a smooth blue shading.'),
+      set('bands', 'ramp', 'interp', 'constant', 'Set the ramp\'s Interpolation to Constant. The shading snaps into three flat bands: toon, or cel, shading.', HINT_INTERP),
+      look('try', 'Try: set the light\'s Y to -0.6 and the light comes from below. Every cartoon shader in every engine starts from this one Dot Product.'),
     ],
   },
   {
@@ -299,6 +383,51 @@ export const TUTORIALS: readonly TutorialDef[] = [
     ],
   },
   {
+    id: 'tut-dissolve',
+    title: 'Dissolve Edge',
+    summary: 'The Holes lesson plus a glowing rim: a Color Ramp picks the band of noise values just below the cut and lights it through Emissive.',
+    steps: [
+      look('idea', 'A dissolve looks finished when the edge glows where the surface is about to vanish. That rim is just the noise values right below the cut.'),
+      add('paint', 'paint', 'color', 'Add a Color node for the surface.', HINT_COLOR, { hex: '#37474f' }),
+      wire('w1', ['paint', 'out'], ['out', 'color'], 'Wire it into the Output Color.'),
+      add('perlin', 'noise', 'perlin', 'Add a Perlin Noise node.', HINT_PERLIN, { scale: 4 }),
+      add('gt', 'cut', 'greaterThan', 'Add a Greater Than node.', HINT_GREATER),
+      wire('w2', ['noise', 'out'], ['cut', 'a'], 'Wire the noise into A.'),
+      set('cutoff', 'cut', 'b', 0.6, 'Set B to 0.6: noise above 0.6 becomes 1, the rest 0.', 'The B number box on the Greater Than node'),
+      expose('cut', 'discard', 'Right-click the Output and tick Discard.', HINT_OUTPUT_MENU),
+      wire('w3', ['cut', 'out'], ['out', 'discard'], 'Wire Greater Than into Discard: holes, as in the Holes lesson.'),
+      add('ramp', 'rim', 'colorRamp', 'Add a Color Ramp. Its stops paint orange only from 0.5 to 0.6: the band just below the cut.', HINT_RAMP, { stops: '0 #000000 1,0.5 #ff6d00 1,0.6 #000000 1' }),
+      wire('w4', ['noise', 'out'], ['rim', 'fac'], 'Wire the noise into the ramp\'s Factor.'),
+      set('band', 'rim', 'interp', 'constant', 'Set the ramp\'s Interpolation to Constant: black, orange from 0.5, black again from 0.6. A band is just a range of values.', HINT_INTERP),
+      expose('glow', 'emissive', 'Right-click the Output and tick Emissive.', HINT_OUTPUT_MENU),
+      wire('w5', ['rim', 'out'], ['out', 'emissive'], 'Wire the ramp into Emissive. Every hole now has a glowing rim, lit even in shadow.'),
+      look('try', 'Try: lower B to 0.55 and the holes eat into the band, so the rim thins. How would you keep the rim\'s width as B moves?'),
+    ],
+  },
+  {
+    id: 'tut-hologram',
+    title: 'Hologram',
+    summary: 'Masks combine like logic: scan lines multiplied by a Fresnel rim, into Color and Opacity. Multiply means AND.',
+    steps: [
+      look('idea', 'Masks combine like logic: multiplying two masks keeps only the spots where BOTH are bright. A hologram is scan lines AND a rim.'),
+      add('uv', 'coord', 'uv', 'Add a UV node.', HINT_UV),
+      set('lines', 'coord', 'tilingV', 30, 'Set V to 30 on the UV node: the coordinate now runs 0 to 30 from pole to pole.', 'The V number box on the UV node'),
+      add('split', 'axes', 'split', 'Add a Split node.', HINT_SPLIT),
+      wire('w1', ['coord', 'out'], ['axes', 'v'], 'Wire UV into Split.'),
+      add('fract', 'rep', 'fract', 'Add a Fract node.', 'Palette > Math > Fract, or right-click the canvas and type fract'),
+      wire('w2', ['axes', 'y'], ['rep', 'x'], 'Wire Split\'s Y into Fract.'),
+      wire('w3', ['rep', 'out'], ['out', 'color'], 'Wire Fract into the Output Color: thirty grey ramps around the model. That is the scan-line mask.'),
+      add('fres', 'fres', 'fresnel', 'Add a Fresnel node. Its Facing output is the rim mask: 0 in the middle, 1 at the outline.', HINT_FRESNEL),
+      add('mul', 'both', 'mul', 'Add a Multiply node.', HINT_MUL),
+      wire('w4', ['rep', 'out'], ['both', 'a'], 'Wire Fract into A.'),
+      wire('w5', ['fres', 'facing'], ['both', 'b'], 'Wire Facing into B.'),
+      wire('w6', ['both', 'out'], ['out', 'color'], 'Wire Multiply into the Output Color. The lines survive only near the outline, where both masks are bright: Multiply means AND.'),
+      expose('clear', 'opacity', 'Right-click the Output and tick Transparent.', HINT_OUTPUT_MENU),
+      wire('w7', ['both', 'out'], ['out', 'opacity'], 'Wire Multiply into Opacity too. Where the product is 0 the model turns clear: a hologram.'),
+      look('try', 'Try: put an Add of Time between Split and Fract and the lines scroll. Then swap Multiply for Add: what does Add mean for masks?'),
+    ],
+  },
+  {
     id: 'tut-bumps',
     title: 'Bumps',
     summary: 'Displacement: the same number that coloured a pixel can move a point of the mesh. The vertex side of a shader.',
@@ -339,6 +468,21 @@ export const TUTORIALS: readonly TutorialDef[] = [
       set('k', 'amount', 'b', 0.2, 'Set B to 0.2.', 'The B number box on the Multiply node'),
       wire('w6', ['amount', 'out'], ['out', 'position'], 'Wire Multiply into Displacement. The bumps now re-form continuously: a living surface. Unity scrolls UVs the same way; Unreal calls it a Panner.'),
       look('try', 'Try: put a Multiply between Time and Add to change the drift speed, or wire the noise into Color too. What else could you add Time to?'),
+    ],
+  },
+  {
+    id: 'tut-parameter',
+    title: 'Exposed Parameter',
+    summary: 'A Property node turns a number into a knob: tune the shader from the 3D view\'s Uniforms panel without touching the graph.',
+    steps: [
+      look('idea', 'A parameter is a number you tune without editing the graph. Unreal calls it a Material Instance parameter, Unity an exposed property, Blender a group input.'),
+      add('perlin', 'noise', 'perlin', 'Add a Perlin Noise node.', HINT_PERLIN),
+      wire('w1', ['noise', 'out'], ['out', 'color'], 'Wire it into the Output Color: grey clouds.'),
+      add('knob', 'knob', 'property_float', 'Add a Property (float) node. It is a named number, property1, that the shader exposes as a knob.', 'Palette > Inputs > Property (float), or right-click the canvas and type property'),
+      set('value', 'knob', 'value', 4, 'Set the Property\'s value to 4.', 'The number box on the Property node'),
+      wire('w2', ['knob', 'out'], ['noise', 'scale'], 'Wire the Property into the noise\'s Scale: drag the wire onto the noise node and its hidden Scale socket appears.', 'Hidden inputs show while a wire is dragged near a node; or right-click it and tick Scale'),
+      look('slide', 'The 3D view now lists property1 in its Uniforms panel. Drag its slider: the noise rescales live, and the graph does not change.'),
+      look('try', 'Try: press Set as default to write the slider\'s value back into the node. An exported shader keeps property1 as a knob anyone can turn.'),
     ],
   },
 ];

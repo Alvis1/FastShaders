@@ -763,7 +763,7 @@ function loadFlag(key: string): boolean {
  * unknown or repeated id, or anything that is not a string array, is dropped.
  * Written only by `endTutorial` when the finish screen was reached.
  */
-const TUTORIALS_DONE_KEY = 'fs:tutorialsDone';
+export const TUTORIALS_DONE_KEY = 'fs:tutorialsDone';
 function loadTutorialsDone(): string[] {
   const known = new Set(TUTORIALS.map((d) => d.id));
   try {
@@ -2661,6 +2661,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const { nodes, edges, drawings } = get();
     if (graphIsBlank(nodes, edges, drawings)) {
       set((state) => tutorialTakeover(state, id));
+      evalLog('tutorial-start', { lesson: id });
       announceTutorialTakeover();
       return;
     }
@@ -2670,12 +2671,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const t = get().tutorial;
     if (!t || t.phase !== 'ask') return;
     set((state) => tutorialTakeover(state, t.id));
+    evalLog('tutorial-start', { lesson: t.id });
     announceTutorialTakeover();
   },
   tutorialGo: (step) => {
     const t = get().tutorial;
     if (!t || t.phase !== 'run' || t.step === step) return;
     set({ tutorial: { ...t, step, reached: Math.max(t.reached, step) } });
+    evalLog('tutorial-step', { lesson: t.id, step });
   },
   tutorialBind: (role, nodeId) => {
     const t = get().tutorial;
@@ -2693,6 +2696,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const next = completed && !done.includes(t.id) ? [...done, t.id] : done;
     if (next !== done) saveString(TUTORIALS_DONE_KEY, JSON.stringify(next));
     set({ tutorial: null, tutorialsDone: next });
+    // An 'ask' that was declined never took over, so it never started.
+    if (t.phase === 'run') evalLog('tutorial-end', { lesson: t.id, step: t.step, outcome, completed });
     // NEW's own semantics, deliberately: the name resets, the dropped model
     // goes, `fs:graph-new` fires — the user asked for a new shader by name.
     if (outcome === 'new') get().newGraph();

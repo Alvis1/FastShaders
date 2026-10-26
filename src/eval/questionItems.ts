@@ -109,8 +109,12 @@ export function missingKeys(items: readonly QItem[], answers: QAnswers): string[
   return missing;
 }
 
-const TEXT_CAP = 300;
-const OTHER_CAP = 120;
+/** Longest stored free text (a text item) and "Other" write-in. The renderer's
+ *  `maxLength` reads these too, so the box and the record agree. The write-in
+ *  takes a LIST — the experience block asks which other node editors someone has used,
+ *  and "several" is the answer the owner wants to see (2026-10-25). */
+export const TEXT_CAP = 300;
+export const OTHER_CAP = 200;
 const cleanText = (raw: unknown, cap: number) => (typeof raw === 'string' ? raw.trim().slice(0, cap) : '');
 
 /**

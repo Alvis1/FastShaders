@@ -17,7 +17,7 @@ import type { AppNode } from '@/types';
 import { graphToCode } from '@/engine/graphToCode';
 import { codeToGraph } from '@/engine/codeToGraph';
 import { getBuiltinPresets } from '@/registry/builtinPresets';
-import { nodeCostPoints } from '@/utils/nodeCost';
+import { nodeCostPoints, computeReachableCost } from '@/utils/nodeCost';
 import complexity from '@/registry/complexity.json';
 import { TUTORIALS } from './tutorialDefs';
 import { evaluateStep } from './tutorialRun';
@@ -92,12 +92,14 @@ describe('every lesson, built by "Do it for me"', () => {
     const parsed = codeToGraph(code);
     expect(parsed.errors).toEqual([]);
     expect(parsed.nodes.filter((n) => n.data.registryType === 'unknown')).toEqual([]);
-    expect(costOf(nodes, edges)).toBeLessThanOrEqual(complexity.meta.maxBudget);
+    // What the cost bar shows: the nodes that FEED an Output (Detail Costs
+    // leaves two unwired noises on the canvas, which cost nothing).
+    expect(computeReachableCost(nodes, edges)).toBeLessThanOrEqual(complexity.meta.maxBudget);
     expect(code).toMatchSnapshot();
   });
 
   it('is exactly the lesson list the snapshot file knows', () => {
-    expect(TUTORIALS.length).toBe(15);
+    expect(TUTORIALS.length).toBe(22);
   });
 
   it.each(TUTORIALS.filter((d) => d.recipeId).map((d) => [d.id, d.recipeId!] as const))(

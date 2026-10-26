@@ -115,7 +115,7 @@ export function DataDisclosureModal({ onClose }: Props) {
             {item(
               'What you did, step by step',
               'telemetry-events.json',
-              'a timestamped list of your actions: nodes added or removed (by type), node settings changed (which setting, never its value), connections made and broken, undo and redo, code applied, assets dropped, the intro hints you looked at, language switches, the app shown or hidden, and a periodic graph-size count. What you did, never what you typed: no keystrokes, text, file contents, clipboard or addresses.',
+              'a timestamped list of your actions: nodes added or removed (by type), node settings changed (which setting, never its value), connections made and broken, undo and redo, code applied, assets dropped, the intro hints you looked at, the step-by-step lessons you followed and the steps you let the app do for you, language switches, the app shown or hidden, and a periodic graph-size count. What you did, never what you typed: no keystrokes, text, file contents, clipboard or addresses.',
             )}
             {item(
               'Totals derived from those steps',
@@ -125,7 +125,7 @@ export function DataDisclosureModal({ onClose }: Props) {
             {item(
               'Your questionnaire answers',
               'sus.json',
-              'which tools you have made materials or shaders with (and the name of another tool, if you give one), how much you have worked with node editors and how far you have gone with shader code; the ten statements, the score computed from them, and your free-text comment; in a professional session also five more statements about the editor, your view of the cost points, what the tool suits, your main work, years of experience and platforms — each answer with the language you gave it in. Text you type in a box is stored word for word.',
+              'which tools you have made materials or shaders with (and the names of other node-based shader editors, if you give them), how much you have worked with node editors and whether you have written or changed shader code; the ten statements, the score computed from them, and your free-text comment; in a professional session also whether the look of a node told you what it does and costs, whether the code panel and the presets helped, how credible the cost points seemed, whether they changed what you built, whether the meter would still help if each point were about 20% off, and where it might mislead, what the tool suits and what got in your way, whether the constraints of WebXR deter you, how you find out shader cost in your own work, your main work and years of paid experience — each answer with the language you gave it in. Text you type in a box is stored word for word.',
             )}
             {item(
               'The main numbers as one spreadsheet row',

@@ -54,7 +54,7 @@ describe('the lessons speak Latvian', () => {
     const literals = new Set<string>([
       ...tLiterals(read('TutorialPanel.tsx')),
       ...tLiterals(read('TutorialCard.tsx')),
-      'Tutorials',
+      'Step by step',
       'No tutorials match “{query}”.',
     ]);
     expect(literals.size).toBeGreaterThan(10);

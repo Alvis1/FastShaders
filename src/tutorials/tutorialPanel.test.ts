@@ -2,14 +2,15 @@
  * Source pins for the pieces of the Tutorials tab that live in other files or
  * are shaped by a rule a unit test cannot see: the panel is NOT a dialog (the
  * canvas must stay usable), nothing in the folder scrolls (canvasWheel's rule),
- * the browser gates the tab on the study flag through the pure helper, the
- * takeover records history unguarded, and the folder never logs telemetry or
- * reaches the parser.
+ * the browser gates the tab on the study flag and entry through the pure
+ * helper, the takeover records history unguarded, only the auto step logs
+ * telemetry, and the folder never reaches the parser.
  */
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { tutorialsOffered } from './tutorialsTab';
 
 const HERE = fileURLToPath(new URL('./', import.meta.url));
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -40,19 +41,31 @@ describe('nothing in src/tutorials scrolls, logs telemetry or reaches the parser
       expect(read(HERE + f), f).not.toMatch(/overflow(-y)?:\s*(auto|scroll)/);
     }
   });
-  it('no module calls evalLog or imports a Babel-bearing module', () => {
+  it('only the auto step calls evalLog, and no module imports a Babel-bearing one', () => {
     for (const f of files.filter((f) => /\.tsx?$/.test(f))) {
       const src = codeOnly(read(HERE + f));
-      expect(src, f).not.toMatch(/\bevalLog\(/);
+      if (f === 'tutorialAutoStep.ts') expect([...src.matchAll(/\bevalLog\('([\w-]+)'/g)].map((m) => m[1])).toEqual(['tutorial-auto']);
+      else expect(src, f).not.toMatch(/\bevalLog\(/);
       expect(src, f).not.toMatch(/engine\/codeToGraph|engine\/scriptToTSL|registry\/codeGroupBuilder|registry\/builtinPresets|registry\/builtinTextures/);
     }
   });
 });
 
+describe('tutorialsOffered: the study entries', () => {
+  it('outside a study always; in one, on the /evalpro entry only', () => {
+    expect(tutorialsOffered(false, null)).toBe(true);
+    expect(tutorialsOffered(true, 'evalpro')).toBe(true);
+    expect(tutorialsOffered(true, 'eval')).toBe(false);
+    expect(tutorialsOffered(true, 'evalp')).toBe(false);
+    // An older redirector recorded no entry: no tab.
+    expect(tutorialsOffered(true, null)).toBe(false);
+  });
+});
+
 describe('ContentBrowser carries the tab through the pure helpers', () => {
   const src = codeOnly(read(ROOT + 'components/NodeEditor/ContentBrowser.tsx'));
-  it('offers the tab outside a study only, via tutorialsOffered(isEvalMode())', () => {
-    expect(src).toMatch(/const OFFER_TUTORIALS = tutorialsOffered\(isEvalMode\(\)\);/);
+  it('offers the tab outside a study and on /evalpro, via tutorialsOffered(isEvalMode(), evalTask().arm)', () => {
+    expect(src).toMatch(/const OFFER_TUTORIALS = tutorialsOffered\(isEvalMode\(\), evalTask\(\)\.arm\);/);
     expect(src).toMatch(/effectiveBrowserTab\(effectiveTab\(\w+, \w+\), OFFER_TUTORIALS\)/);
   });
   it('keeps a stored tutorials tab valid, and draws its button right after All', () => {

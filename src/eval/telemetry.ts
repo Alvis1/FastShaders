@@ -101,6 +101,8 @@ let bridge: EvalBridge | null = null;
 let teardown: (() => void)[] = [];
 let snapshotTimer: number | null = null;
 let lastActivityLogT = -Infinity;
+/** >0 while `evalAutomated` runs: the events it causes were not the participant's. */
+let automatedDepth = 0;
 
 /** The pure field differ for the store's `node-edit` chokepoint — re-exported
  *  so the store keeps ONE eval import (`evalHooks.test.ts`). */
@@ -147,10 +149,25 @@ export function evalLog(type: EvalEventType, payload?: Record<string, unknown>):
     pushEvent({ seq: ++seq, t: now(), type: 'truncated' });
     return;
   }
-  const e: EvalEvent = { ...payload, seq: ++seq, t: now(), type };
+  const e: EvalEvent = { ...payload, ...(automatedDepth > 0 ? { auto: true } : null), seq: ++seq, t: now(), type };
   pushEvent(e);
   if (STRUCTURAL_EVENT_TYPES.has(type)) scheduleSnapshot();
   if (events.length % FLUSH_EVERY_N_EVENTS === 0) flushJournal();
+}
+
+/**
+ * Run `fn` as the APP acting for the participant — a lesson's "Do it for me"
+ * (src/tutorials/tutorialAutoStep.ts) adds and edits nodes through the same
+ * store chokepoints a hand gesture uses, so every event logged inside carries
+ * `auto: true` and the summary's work measures leave it out. Synchronous only.
+ */
+export function evalAutomated<T>(fn: () => T): T {
+  automatedDepth++;
+  try {
+    return fn();
+  } finally {
+    automatedDepth--;
+  }
 }
 
 function now(): number {
