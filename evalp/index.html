@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" type="image/svg+xml" href="../images/favicon-app.svg" />
+  <title>FastShaders — evaluation session</title>
+</head>
+<body>
+  <p style="font-family: sans-serif; padding: 2rem;">Starting the FastShaders evaluation session…</p>
+  <script>
+    // The "pointless" study arm: eval mode with NO cost feedback anywhere —
+    // no total, no per-node prices, no badges on the asset tiles. Same
+    // redirector as /eval, with `points=off` forced into the stored query, so
+    // every other launch parameter (?task=…&budget=…) still works here.
+    //
+    // A separate ENTRY rather than a flag the researcher must remember: the
+    // condition a participant is in must not depend on typing a query string
+    // correctly, and "/evalp" is one word to hand someone.
+    //
+    // Only the DISPLAY changes. Telemetry still records cost points in every
+    // snapshot and the package still carries the cost table — the researcher
+    // has to be able to price what was built in the arm where the participant
+    // could not see the price.
+    try {
+      sessionStorage.setItem('fs:evalArm', '1');
+      sessionStorage.removeItem('fs:evalSession');
+      // SET, never appended: URLSearchParams.get answers the FIRST
+      // occurrence, so appending `&points=off` to a link that already said
+      // `?points=on` left every price on screen in the arm that removes them.
+      // `arm` names this entry the same way (evalTask.ts).
+      var p = new URLSearchParams(location.search);
+      p.set('points', 'off');
+      p.set('arm', 'evalp');
+      var q = '?' + p.toString();
+      // An over-long link keeps only what this entry forces — never NOTHING,
+      // which would drop the participant out of this entry's condition.
+      if (q.length >= 2048) q = '?points=off&arm=evalp';
+      sessionStorage.setItem('fs:evalTaskQuery', q);
+    } catch (e) { /* storage blocked — the app just boots normally */ }
+    location.replace('../');
+  </script>
+  <noscript>
+    <p style="font-family: sans-serif; padding: 0 2rem;">
+      JavaScript is required. Open the app at <a href="../">the main page</a>.
+    </p>
+  </noscript>
+</body>
+</html>

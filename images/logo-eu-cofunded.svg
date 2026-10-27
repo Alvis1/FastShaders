@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 72" role="img" aria-label="Co-funded by the European Union">
+  <defs>
+    <path id="eu-star" fill="#FFCC00"
+      d="M 0,-3.33 L 0.75,-1.03 L 3.17,-1.03 L 1.21,0.39 L 1.96,2.70 L 0,1.27 L -1.96,2.70 L -1.21,0.39 L -3.17,-1.03 L -0.75,-1.03 Z"/>
+  </defs>
+  <!-- EU flag (official 12-star geometry), 90x60 artwork scaled to 72px tall -->
+  <g transform="scale(1.2)">
+    <rect width="90" height="60" fill="#003399"/>
+    <use href="#eu-star" x="45" y="10"/>
+    <use href="#eu-star" x="55" y="12.68"/>
+    <use href="#eu-star" x="62.32" y="20"/>
+    <use href="#eu-star" x="65" y="30"/>
+    <use href="#eu-star" x="62.32" y="40"/>
+    <use href="#eu-star" x="55" y="47.32"/>
+    <use href="#eu-star" x="45" y="50"/>
+    <use href="#eu-star" x="35" y="47.32"/>
+    <use href="#eu-star" x="27.68" y="40"/>
+    <use href="#eu-star" x="25" y="30"/>
+    <use href="#eu-star" x="27.68" y="20"/>
+    <use href="#eu-star" x="35" y="12.68"/>
+  </g>
+  <text font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#000000">
+    <tspan x="122" y="31">Co-funded by the</tspan>
+    <tspan x="122" y="57">European Union</tspan>
+  </text>
+</svg>
