@@ -52,7 +52,7 @@ import type { GltfModelReport } from '@/utils/gltfReader';
 // The `unknown`-node expression validator parses with @babel/parser, which is
 // loaded ON DEMAND (engine/unknownExpression), and codegen FAILS CLOSED until it
 // lands: the apply∘apply pins below are written against the loaded validator
-// (SCAN's `normalMap(image3)` round-trips verbatim and pairs), so wait for it
+// (SCAN's `normalMap(image3)` round-trips as `normalMap(float(0))` and pairs), so wait for it
 // once. Without this the suite passed only when an earlier test in the worker
 // had finished the load — a shuffled run emitted the `float(0)` fallback, whose
 // node then came back unpaired.
@@ -515,13 +515,12 @@ describe('apply∘apply on a multi-material GLB document adds NO node and moves 
       expect(gltfIndexOf(outputMaterials(match)[0])).toBe(gltfIndexOf(outputMaterials(node)[0]));
     }
     // …and the module is a fixed point from here on, which is what makes the
-    // graph one. BLENDER's flipped normal map is the pre-split exception the
-    // import suite documents: its `unknown` fallback renames `normalMap1` to
-    // `float5` ONCE, on this very pass. Nothing else in the text moves, and the
-    // pass after it is exact.
+    // graph one — BLENDER's flipped normal map too: its dangling image read is
+    // `float(0)` IN the call, where the whole-call fallback renamed
+    // `normalMap1` to `float5` once (until 2026-10-27).
     const second = graphToCode(a.nodes, a.edges).code;
     const third = graphToCode(b.nodes, b.edges).code;
-    expect(third.replace(/\bfloat5\b/g, 'normalMap1')).toBe(second);
+    expect(third).toBe(second);
     const c = codeToGraph(third);
     expect(graphToCode(c.nodes, c.edges).code).toBe(third);
     expect(bindings(c.nodes)).toEqual(bindings(a.nodes));

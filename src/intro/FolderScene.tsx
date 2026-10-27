@@ -149,8 +149,8 @@ export function FolderScene() {
     const float = nodes.find((n) => n.id === 'intro-float')!;
     (float.data as { values: Record<string, number> }).values = { value: state.value };
     return {
-      waves: edgePortState(nodes, toAppEdges([WAVES_EDGE]), WAVES_EDGE).val,
-      metal: edgePortState(nodes, toAppEdges([METAL_EDGE]), METAL_EDGE).val,
+      waves: edgePortState(nodes, toAppEdges([WAVES_EDGE]), WAVES_EDGE, { compact: true }).val,
+      metal: edgePortState(nodes, toAppEdges([METAL_EDGE]), METAL_EDGE, { compact: true }).val,
     };
   }, [state.value]);
 

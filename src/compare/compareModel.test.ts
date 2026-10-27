@@ -338,6 +338,16 @@ describe('the table', () => {
     const lv = filterSections(table, 'reizināt', false, 'lv').flatMap((s) => s.lines.map((l) => l.row.type));
     expect(lv).toContain('mul');
   });
+
+  it('a Latvian name or category typed without its diacritics matches too', () => {
+    const table = compareTable(groups, [quest]);
+    const typesOf = (q: string) => filterSections(table, q, false, 'lv').flatMap((s) => s.lines.map((l) => l.row.type));
+    expect(typesOf('reizinat')).toEqual(typesOf('reizināt'));
+    expect(typesOf('reizinat')).toContain('mul');
+    // "Matemātika" typed plain keeps the whole Math group, as the marked spelling does.
+    expect(typesOf('matematika')).toEqual(typesOf('matemātika'));
+    expect(typesOf('matematika').length).toBeGreaterThan(0);
+  });
 });
 
 describe('the language', () => {

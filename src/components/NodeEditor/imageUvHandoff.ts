@@ -25,7 +25,7 @@
  * history bracket, so one undo reverts the connection and the hand-off together.
  */
 import type { AppNode, AppEdge } from '@/types';
-import { getEdgeOutputShape, getFieldUpstreamSet } from '@/engine/cpuEvaluator';
+import { getEdgeOutputShape, getSurfaceFieldUpstreamSet } from '@/engine/cpuEvaluator';
 import { wouldCreateCycle } from './dragConnect';
 
 /** The sockets a sampler reads its coordinate from. */
@@ -56,7 +56,8 @@ export function inheritedImageUv(
 
   const nodeList = nodes as AppNode[];
   const edgeList = edges as AppEdge[];
-  const field = getFieldUpstreamSet(nodeList, edgeList);
+  // Varies over the SURFACE — never a uniform-built vec2 (Sound, the camera).
+  const field = getSurfaceFieldUpstreamSet(nodeList, edgeList);
   const isCoordinate = (e: AppEdge) =>
     field.has(e.source) && getEdgeOutputShape(e, nodeList, edgeList) === 2;
   const coord = isCoordinate(displaced)

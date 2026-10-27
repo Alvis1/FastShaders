@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   ReactFlow,
   Background,
@@ -1035,9 +1035,10 @@ export function NodeEditor() {
    * `zoomStepTarget`): the next press steps from here rather than from the
    * half-finished zoom, so quick presses accumulate exactly. Dropped the
    * moment the user takes the view themselves — React Flow's own wheel and
-   * drag through onMoveStart, and the three custom paths that drive the view
-   * with `setViewport` (trackpad wheel pan, double-tap drag, two-finger touch)
-   * by hand — so a press after that steps from where the canvas actually is.
+   * drag through onMoveStart, and the four custom paths that drive the view
+   * with `setViewport` (trackpad wheel pan, double-tap drag, two-finger touch,
+   * the bar's pan button) by hand — so a press after that steps from where the
+   * canvas actually is.
    */
   const zoomGlideRef = useRef<ZoomGlide | null>(null);
   const glideZoom = useCallback((direction: 1 | -1) => {
@@ -1048,6 +1049,40 @@ export function NodeEditor() {
     zoomGlideRef.current = { target, until: now + VIEW_GLIDE_MS };
     void zoomTo(target, { duration: VIEW_GLIDE_MS });
   }, [getZoom, zoomTo]);
+  /**
+   * The bar's pan button: press and hold it, then drag — the canvas follows
+   * the pointer, as if grabbed. Pointer CAPTURE keeps the gesture on the
+   * button wherever the pointer goes (the preview iframe included, which
+   * `setCanvasBusy` also takes out of hit-testing); the lost-capture event
+   * ends it on every path, so up, cancel and a capture steal all release.
+   */
+  const panBtnRef = useRef<{
+    id: number; x: number; y: number; vp: { x: number; y: number; zoom: number }; endChrome: () => void;
+  } | null>(null);
+  const onPanBtnDown = useCallback((e: ReactPointerEvent<HTMLButtonElement>) => {
+    if (e.button !== 0 || panBtnRef.current) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setCanvasBusy(true);
+    panBtnRef.current = {
+      id: e.pointerId, x: e.clientX, y: e.clientY, vp: getViewport(), endChrome: beginDragChrome(null),
+    };
+    document.body.style.cursor = 'grabbing';
+  }, [getViewport]);
+  const onPanBtnMove = useCallback((e: ReactPointerEvent<HTMLButtonElement>) => {
+    const g = panBtnRef.current;
+    if (!g || e.pointerId !== g.id) return;
+    zoomGlideRef.current = null; // a user pan — see zoomGlideRef
+    setViewport({ x: g.vp.x + (e.clientX - g.x), y: g.vp.y + (e.clientY - g.y), zoom: g.vp.zoom });
+  }, [setViewport]);
+  const onPanBtnEnd = useCallback((e: ReactPointerEvent<HTMLButtonElement>) => {
+    const g = panBtnRef.current;
+    if (!g || e.pointerId !== g.id) return;
+    panBtnRef.current = null;
+    g.endChrome();
+    setCanvasBusy(false);
+    document.body.style.cursor = '';
+  }, []);
   // `event` is null for a programmatic move (every glide) and the input event
   // for a user one — the only case that should abandon a pending zoom target.
   const onMoveStartBusy = useCallback((event: MouseEvent | TouchEvent | null) => {
@@ -3947,6 +3982,33 @@ export function NodeEditor() {
             </div>
             <div className="fs-canvas-bar__group">
               <DrawToolbar />
+              <button
+                ref={bgBtnRef}
+                type="button"
+                className="fs-canvas-bar__btn node-editor__bg-color-btn"
+                title={t('Canvas background color', language)}
+                aria-label={t('Canvas background color', language)}
+                onClick={() => setBgPickerOpen((o) => !o)}
+              >
+                <span
+                  className="node-editor__bg-color-swatch"
+                  style={{ background: nodeEditorBgColor }}
+                />
+              </button>
+              {/* `history="none"`: the canvas backdrop is a PREFERENCE —
+                  `setNodeEditorBgColor` writes localStorage (per theme) and the
+                  store, never pushHistory — so bracketing would push an undo
+                  entry that restores nothing and clear the redo stack. */}
+              {bgPickerOpen && (
+                <ColorPickerPopover
+                  anchor={bgBtnRef.current}
+                  open={bgPickerOpen}
+                  onClose={closeBgPicker}
+                  value={nodeEditorBgColor}
+                  onPick={setNodeEditorBgColor}
+                  history="none"
+                />
+              )}
             </div>
             <div className="fs-canvas-bar__group">
               <button
@@ -3979,32 +4041,20 @@ export function NodeEditor() {
                 ⤢
               </button>
               <button
-                ref={bgBtnRef}
                 type="button"
-                className="fs-canvas-bar__btn node-editor__bg-color-btn"
-                title={t('Canvas background color', language)}
-                aria-label={t('Canvas background color', language)}
-                onClick={() => setBgPickerOpen((o) => !o)}
+                className="fs-canvas-bar__btn fs-canvas-bar__btn--pan"
+                onPointerDown={onPanBtnDown}
+                onPointerMove={onPanBtnMove}
+                onPointerUp={onPanBtnEnd}
+                onPointerCancel={onPanBtnEnd}
+                onLostPointerCapture={onPanBtnEnd}
+                title={t('Pan canvas — press and drag', language)}
+                aria-label={t('Pan canvas', language)}
               >
-                <span
-                  className="node-editor__bg-color-swatch"
-                  style={{ background: nodeEditorBgColor }}
-                />
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M12 2l3.5 3.5h-2.5v5.5h5.5v-2.5l3.5 3.5-3.5 3.5v-2.5h-5.5v5.5h2.5l-3.5 3.5-3.5-3.5h2.5v-5.5h-5.5v2.5l-3.5-3.5 3.5-3.5v2.5h5.5v-5.5h-2.5z" />
+                </svg>
               </button>
-              {/* `history="none"`: the canvas backdrop is a PREFERENCE —
-                  `setNodeEditorBgColor` writes localStorage (per theme) and the
-                  store, never pushHistory — so bracketing would push an undo
-                  entry that restores nothing and clear the redo stack. */}
-              {bgPickerOpen && (
-                <ColorPickerPopover
-                  anchor={bgBtnRef.current}
-                  open={bgPickerOpen}
-                  onClose={closeBgPicker}
-                  value={nodeEditorBgColor}
-                  onPick={setNodeEditorBgColor}
-                  history="none"
-                />
-              )}
             </div>
           </Panel>
         </ReactFlow>

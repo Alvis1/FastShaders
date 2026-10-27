@@ -51,8 +51,10 @@ const PRESERVED_KEYS: Record<string, readonly string[]> = {
     'imageB64', 'width', 'height', 'fileName', 'originId', 'srcWidth', 'srcHeight',
     'orientation', 'normalGreen', 'uvSet',
   ],
-  // The verbatim TSL this node exists to round-trip.
-  unknown: ['functionName', 'rawExpression'],
+  // The verbatim TSL this node exists to round-trip, and the names it binds to
+  // its sockets — without `refs` the text is emitted verbatim again, and each
+  // stored name reads whichever node the namer has given it since.
+  unknown: ['functionName', 'rawExpression', 'refs'],
   // The noise range mode. Unlike a settings number, dropping this key does not
   // restore a neutral default — it changes what the node OUTPUTS, because an
   // absent key means the legacy signed ~[-1,1] range. Reset restores pos/scale;

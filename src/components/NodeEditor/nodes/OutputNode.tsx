@@ -300,8 +300,10 @@ export const OutputNode = memo(function OutputNode({
   // What is arriving on each wired channel, keyed by the channel HANDLE — all
   // of them BARE now, one node being one material. The two-step cheap-string
   // subscription (and the unwrapped-edge rule that keeps a collapsed feeder
-  // from degrading a row to a grey ellipsis) lives in the hook.
-  const wiredLabels = useWiredLabels(id);
+  // from degrading a row to a grey ellipsis) lives in the hook. `compact`:
+  // the value cell is a FIXED 20px (OutputNode.css `.output-node__val`), ~4
+  // characters, so an interval prints whole numbers rounded outward.
+  const wiredLabels = useWiredLabels(id, { compact: true });
   const anyWired = wiredLabels.size > 0;
 
   /** Does this node's own material set anything at all? */

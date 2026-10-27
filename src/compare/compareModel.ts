@@ -10,6 +10,7 @@ import {
   type CostProfile, type CostOverrideMeta,
 } from '@/utils/costOverride';
 import { formatCategoryLabel, type Language } from '@/i18n';
+import { foldSearchText } from '@/utils/searchFold';
 import type { NodeCategory, NodeDefinition } from '@/types';
 
 /**
@@ -429,12 +430,12 @@ export function filterSections(
   onlyDifferences: boolean,
   lang: Language,
 ): CompareSection[] {
-  const q = query.trim().toLowerCase();
+  const q = foldSearchText(query.trim());
   const out: CompareSection[] = [];
   for (const s of sections) {
     const cat = CATEGORIES.find((c) => c.id === s.category);
     const catHit = !!q && !!cat && (
-      cat.label.toLowerCase().includes(q) || formatCategoryLabel(cat.label, cat.id, lang).toLowerCase().includes(q)
+      foldSearchText(cat.label).includes(q) || foldSearchText(formatCategoryLabel(cat.label, cat.id, lang)).includes(q)
     );
     const lines = s.lines.filter((l) =>
       (!onlyDifferences || l.differs) && (!q || catHit || nodeMatchRank(l.row.def, q) <= 3),

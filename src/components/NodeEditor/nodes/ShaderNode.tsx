@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, type CSSProperties, type ReactNode } from 'react';
 import { Position, useStore, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
-import type { ShaderFlowNode, PortDefinition, NodeCategory } from '@/types';
+import type { AppEdge, ShaderFlowNode, PortDefinition, NodeCategory, NodeDefinition } from '@/types';
 import { NODE_REGISTRY, effectiveInputs, growsOperands } from '@/registry/nodeRegistry';
 import { appendGrowthExhausted } from '@/utils/appendCapacity';
 import { useAppStore } from '@/store/useAppStore';
@@ -23,7 +23,8 @@ import { useHeaderTip } from './headerTip';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { NodeGlyph, hasNodeGlyph, usesOperatorLayout, nodeJustify, nodeScale, nodeBox, nodeSockets, outputSocketKey, nodeTextScale, nodeArtStyle } from './glyphs/NodeGlyph';
 import { evaluateNodeOutput, evaluateEdgeSource, evaluateEdgeRange, getEdgeOutputShape, getTargetEdges, getTimeUpstreamSet, getFieldUpstreamSet } from '@/engine/cpuEvaluator';
-import { edgeRangeText } from '@/utils/edgeValueText';
+import { intLiteral } from '@/engine/intPromotion';
+import { edgeRangeText, rangeSpan } from '@/utils/edgeValueText';
 import { LiveEdgeValue } from './LiveEdgeValue';
 import { makeConnectionRevealSelector, REVEAL_TEMP_OPACITY } from './connectionReveal';
 import { RevealSockets } from './RevealSockets';
@@ -35,6 +36,7 @@ import { ColorRampStrip } from './ColorRampArt';
 import { CurvesArt } from './CurvesArt';
 import { parseFormula, hasCustomFormula } from '@/utils/dataRangeFormula';
 import { modeOf } from '@/engine/moduleHelpers';
+import { unknownRefSlots } from '@/engine/unknownExpression';
 import './ShaderNode.css';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
 import { plainStr, valueNum, valueStr } from '@/utils/valueCoerce';
@@ -61,19 +63,45 @@ export function channelCount(
 /** Node-body stack: px down per extra output channel layer. */
 const STACK_STEP_Y = 3;
 
+/** How a label is formatted. `compact` is for a FIXED-width value cell — the
+ *  Output, Splat Output and SDF Output rows — whose ~4 characters cannot hold
+ *  decimals (utils/edgeValueText `edgeRangeText`). */
+export interface EdgeLabelOptions {
+  compact?: boolean;
+}
+
+/** What a connected input's label shows at rest, and how LiveEdgeValue ticks
+ *  it. Every flag rides the cheap-string change keys (`edgeLabelFlags`). */
+export interface EdgeValueLabel {
+  /** The resting text, evaluated at t = 0. */
+  text: string;
+  /** A POINT value — the blue "live value" colour. Never set on an interval,
+   *  ticking or not. */
+  live: boolean;
+  /** Time is upstream: the label re-evaluates on the shared app clock. */
+  animated: boolean;
+  /** The source is fed by a sampled FIELD: the label — and every tick —
+   *  prints the interval (`liveEdgeRangeText`), never a probe point. */
+  range: boolean;
+  /** Formatted for a fixed-width cell; the ticks keep the same format. */
+  compact: boolean;
+}
+
 /**
  * Label for the value(s) arriving on a connected input edge.
  * - one channel → the number
  * - many channels → `min…max` range
- * - unevaluable upstream (texture etc.) → inferred `min…max` range
+ * - a sampled FIELD upstream, or an unevaluable one (texture etc.) → the
+ *   inferred `min…max` interval
  * - nothing derivable (camera/world-space chains) → `…`
- * Returns the text, whether it's a live value (vs. an inferred range), and
- * whether the label should ANIMATE (render it through LiveEdgeValue, which
- * re-evaluates on the shared app clock): a time-driven chain's probe at t=0
- * is a frozen arbitrary sample — sin(0) = 0 read as a dead wire.
+ * Returns the text plus the flags `EdgeValueLabel` documents: whether it is a
+ * point value (`live`), whether it should ANIMATE (render it through
+ * LiveEdgeValue, which re-evaluates on the shared app clock — a time-driven
+ * chain's probe at t=0 is a frozen arbitrary sample, sin(0) = 0 read as a dead
+ * wire), and whether those ticks are an interval (`range`).
  * (Formatting rules live in utils/edgeValueText — single values keep
- * decimals, true ranges round to whole numbers; precise figures are the
- * EdgeInfoCard's job.)
+ * decimals, true ranges always print two ends rounded outward, whole numbers
+ * only in a `compact` cell; precise figures are the EdgeInfoCard's job.)
  */
 export function edgeValueLabel(
   sourceId: string,
@@ -84,13 +112,17 @@ export function edgeValueLabel(
    *  label prints channel 0 for every socket — a Saturation wire would show
    *  Hue in live blue. */
   sourceHandle?: string | null,
-): { text: string; live: boolean; animated: boolean } {
+  opts: EdgeLabelOptions = {},
+): EdgeValueLabel {
+  const compact = opts.compact === true;
   // A FIELD's "live" value is one arbitrary probe point — cpuEvaluator samples
   // a fixed UV, and an unwired noise node lands on an integer lattice where
   // Perlin is exactly 0, which on a card reads as a dead wire. The interval is
   // both the honest answer for a field and the only on-canvas tell of a noise
-  // node's range mode (`-1…1` vs `0…1`). The same rule keeps fields OUT of the
-  // animated path: a ticking probe point would still be one arbitrary sample.
+  // node's range mode (`-1…1` vs `0…1`). A field fed by Time still TICKS —
+  // UV + Time is [t, t + 1], not "0…1" forever, and UV × sin(Time) breathes —
+  // but what ticks is its INTERVAL (`range` → liveEdgeRangeText), never a
+  // probe point: a ticking probe would still be one arbitrary sample.
   //
   // It asks about the whole upstream CHAIN, not just the source node's own
   // category — the probe point survives every operator below it, so a `mul`
@@ -98,44 +130,79 @@ export function edgeValueLabel(
   // inputs that each read as a range. It is decided BEFORE any per-socket
   // projection: the interval is the honest answer for every one of a field's
   // sockets.
-  const preferRange = getFieldUpstreamSet(nodes, edges).has(sourceId);
+  const range = getFieldUpstreamSet(nodes, edges).has(sourceId);
   // Time-driven (on the UNWRAPPED graph, so a Time feeder inside a collapsed
-  // frame still counts — the MathPreviewNode xKey pairing) → the label ticks.
-  // Via the ctx-memoized SET, never the per-node `hasTimeUpstream`: this runs
-  // inside `edgeKey` below, i.e. once per connected edge per card per store
-  // notify, and the per-node form rebuilt two whole-graph Maps every time.
-  const animated = !preferRange && getTimeUpstreamSet(nodes, edges).has(sourceId);
+  // frame still counts — the MathPreviewNode xKey pairing) → the label ticks,
+  // a field or not. Via the ctx-memoized SET, never the per-node
+  // `hasTimeUpstream`: this runs inside `edgeKey` below, i.e. once per
+  // connected edge per card per store notify, and the per-node form rebuilt
+  // two whole-graph Maps every time.
+  const animated = getTimeUpstreamSet(nodes, edges).has(sourceId);
   const edge = { source: sourceId, sourceHandle };
-  const out = preferRange ? null : evaluateEdgeSource(edge, nodes, edges, 0);
+  const out = range ? null : evaluateEdgeSource(edge, nodes, edges, 0);
   if (out && out.length >= 1 && out.every((v) => Number.isFinite(v))) {
-    return { text: edgeRangeText(Math.min(...out), Math.max(...out)), live: true, animated };
+    return { text: edgeRangeText(Math.min(...out), Math.max(...out), compact), live: true, animated, range, compact };
   }
   // The range is PROJECTED, never re-derived — the signed-noise convention
-  // depends on the interval the evaluator produced.
-  const r = evaluateEdgeRange(edge, nodes, edges, 0);
-  if (r && r.min.length) {
-    const lo = Math.min(...r.min), hi = Math.max(...r.max);
-    if (Number.isFinite(lo) && Number.isFinite(hi)) {
-      return { text: edgeRangeText(lo, hi), live: false, animated };
-    }
+  // depends on the interval the evaluator produced. An inverted or non-finite
+  // channel leaves nothing honest to print (`rangeSpan`).
+  const span = rangeSpan(evaluateEdgeRange(edge, nodes, edges, 0));
+  if (span) {
+    return { text: edgeRangeText(span[0], span[1], compact), live: false, animated, range, compact };
   }
   // Connected, but neither eval nor range inference knows the value — show an
   // ellipsis so the socket still reads as carrying *something*. Still animated
-  // when time-driven: the rAF path evaluates at REAL times, where a chain like
-  // `time` itself (no finite static range) produces a perfectly good number.
-  return { text: '…', live: false, animated };
+  // when time-driven: the tick evaluates at REAL times, where the chain may
+  // produce a perfectly good number — a POINT, so blue, unless the source is a
+  // field (whose ticks are intervals, never blue).
+  return { text: '…', live: animated && !range, animated, range, compact };
+}
+
+/**
+ * A label's flags as a fixed-width digit string — the part of every
+ * cheap-string change key that folds a label (ShaderNode's `edgeKey`,
+ * `wiredLabelsKey`, ClockNode's `speedEdgeKey`). ONE spelling, so a key cannot
+ * half-learn a new flag: an edit can flip a wire between point and interval
+ * mode (`range`) while `text`, `live` and `animated` all stay the same, and a
+ * key without it would leave LiveEdgeValue ticking the wrong path forever.
+ */
+export function edgeLabelFlags(l: EdgeValueLabel): string {
+  return `${l.live ? 1 : 0}${l.animated ? 1 : 0}${l.range ? 1 : 0}${l.compact ? 1 : 0}`;
 }
 
 /** One connected input's label plus the socket the wire LEFT — the pair
  *  LiveEdgeValue needs to keep re-evaluating the same channel its first
  *  render showed. */
-export type WiredLabel = {
-  text: string;
-  live: boolean;
-  animated: boolean;
+export type WiredLabel = EdgeValueLabel & {
   sourceId: string;
   sourceHandle: string | null;
 };
+
+/**
+ * The change key behind `useWiredLabels`: one slice per wired input, from the
+ * target handle, the SOURCE node, the socket the wire left, the label text and
+ * its flags. Pure, so the suite can pin what it folds (the hook itself needs a
+ * React render, which the `node` env has none of).
+ *
+ * The source is folded because re-wiring an input from one node to ANOTHER
+ * whose t = 0 text happens to match (two `0`s, two `0…1` fields) leaves
+ * handle, socket, text and flags identical — Object.is bailed and the label
+ * kept ticking the OLD source forever.
+ */
+export function wiredLabelsKey(
+  targetEdges: readonly Pick<AppEdge, 'source' | 'sourceHandle' | 'targetHandle'>[],
+  nodes: Parameters<typeof evaluateNodeOutput>[1],
+  edges: Parameters<typeof evaluateNodeOutput>[2],
+  opts: EdgeLabelOptions = {},
+): string {
+  let key = '';
+  for (const e of targetEdges) {
+    if (typeof e.targetHandle !== 'string') continue;
+    const l = edgeValueLabel(e.source, nodes, edges, e.sourceHandle, opts);
+    key += `${e.targetHandle}\u0000${e.source}\u0000${e.sourceHandle ?? ''}\u0000${l.text}\u0000${edgeLabelFlags(l)}\u0001`;
+  }
+  return key;
+}
 
 /**
  * "What is arriving on each wired input of node `id`", keyed by targetHandle.
@@ -166,27 +233,28 @@ export type WiredLabel = {
  * silently (sourceControlBytes.test.ts). A plain space would not do either —
  * an edge label can itself be a range like `0 … 1`.
  *
- * ShaderNode's own `edgeKey` stays separate: it additionally folds `e.source`
- * and the channel COUNT (it drives the multi-channel card stack), so it is a
- * different key, not a copy of this one.
+ * The key (`wiredLabelsKey`) folds the SOURCE as well as the socket — a
+ * re-wire to another node with the same t = 0 text must restart the tick on
+ * the new source. ShaderNode's own `edgeKey` stays separate all the same: it
+ * additionally folds the channel COUNT (it drives the multi-channel card
+ * stack), so it is a different key, not a copy of this one.
+ *
+ * `opts.compact` is constant per call site — the Output, Splat Output and SDF
+ * Output pass it for their fixed-width value cells.
  */
-export function useWiredLabels(id: string): Map<string, WiredLabel> {
-  const edgeKey = useAppStore((s) => {
-    let key = '';
-    for (const e of getTargetEdges(s.nodes, s.edges, id)) {
-      if (typeof e.targetHandle !== 'string') continue;
-      const l = edgeValueLabel(e.source, s.nodes, s.edges, e.sourceHandle);
-      key += `${e.targetHandle}\u0000${e.sourceHandle ?? ''}\u0000${l.text}\u0000${l.live ? 1 : 0}${l.animated ? 1 : 0}\u0001`;
-    }
-    return key;
-  });
+export function useWiredLabels(id: string, opts: EdgeLabelOptions = {}): Map<string, WiredLabel> {
+  const compact = opts.compact === true;
+  const edgeKey = useAppStore((s) =>
+    wiredLabelsKey(getTargetEdges(s.nodes, s.edges, id), s.nodes, s.edges, { compact }),
+  );
   return useMemo(() => {
     const { nodes, edges } = useAppStore.getState();
     const m = new Map<string, WiredLabel>();
     for (const e of getTargetEdges(nodes, edges, id)) {
-      if (typeof e.targetHandle !== 'string') continue;
+      // A socket shows its FIRST wire — the one codegen and the evaluator read.
+      if (typeof e.targetHandle !== 'string' || m.has(e.targetHandle)) continue;
       m.set(e.targetHandle, {
-        ...edgeValueLabel(e.source, nodes, edges, e.sourceHandle),
+        ...edgeValueLabel(e.source, nodes, edges, e.sourceHandle, { compact }),
         sourceId: e.source,
         sourceHandle: e.sourceHandle ?? null,
       });
@@ -194,7 +262,7 @@ export function useWiredLabels(id: string): Map<string, WiredLabel> {
     return m;
     // edgeKey is the change signal; nodes/edges are read imperatively above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, edgeKey]);
+  }, [id, edgeKey, compact]);
 }
 
 export interface PortRow {
@@ -435,6 +503,23 @@ export function visiblePortRows(
 }
 
 /**
+ * Does a row's number box hold a WHOLE number — step by 1, commit
+ * `Math.round`? An int-typed input port, or a portless value row (buildRows'
+ * settings branch) on a node whose one output is an int: the Int node's own
+ * value. three rounds an int constant anyway (`int(2.4)` is used as 2 in a
+ * vector context), so a box stepping by 0.1 stored fractions the shader never
+ * ran. Only what a NEW edit stores changes; emission reads the stored value as
+ * it always did. Shared with the NodeVisual replica, like `visiblePortRows`.
+ */
+export function rowHoldsInt(
+  def: { outputs: readonly PortDefinition[] },
+  row: Pick<PortRow, 'input'>,
+): boolean {
+  if (row.input) return row.input.dataType === 'int';
+  return def.outputs.length === 1 && def.outputs[0].dataType === 'int';
+}
+
+/**
  * ONE input port's value cell — the small box that sits beside a socket and
  * shows either what is ARRIVING on the wire or what the port is SET to.
  *
@@ -505,7 +590,7 @@ export function PortValueCell({
           compact
           step={isInt ? 1 : undefined}
           value={value}
-          onChange={(v) => onNumber(isInt ? Math.round(v) : v)}
+          onChange={(v) => onNumber(isInt ? intLiteral(v) : v)}
         />
       );
   if (!content) return null;
@@ -671,12 +756,36 @@ const FormulaChip = memo(function FormulaChip({ formula }: { formula: string }) 
   );
 });
 
+/**
+ * An `unknown` node's input sockets are per INSTANCE: one per bound reference
+ * (`values.refs`, engine/unknownExpression.ts), labelled with the identifier
+ * its stored text reads. Drawn from `refs`, not from the edges, so an unwired
+ * reference keeps a socket a wire can land on again. Only the CARD gets them:
+ * the registry def keeps `inputs: []`, so the engine's shape inference never
+ * moves.
+ */
+export function unknownCardDef(def: NodeDefinition, refs: string): NodeDefinition {
+  const slots = unknownRefSlots({ refs });
+  if (slots.length === 0) return def;
+  return {
+    ...def,
+    inputs: slots.map((s): PortDefinition => ({ id: s.handle, label: s.name, dataType: 'any', hideValue: true })),
+  };
+}
+
 export const ShaderNode = memo(function ShaderNode({
   id,
   data,
   selected,
 }: NodeProps<ShaderFlowNode>) {
-  const def = NODE_REGISTRY.get(data.registryType);
+  const registryDef = NODE_REGISTRY.get(data.registryType);
+  // Keyed on the refs STRING, so the def keeps its identity across renders and
+  // every memo below it holds.
+  const unknownRefs = data.registryType === 'unknown' ? plainStr(data.values?.refs) : '';
+  const def = useMemo(
+    () => (registryDef && unknownRefs ? unknownCardDef(registryDef, unknownRefs) : registryDef),
+    [registryDef, unknownRefs],
+  );
   // Early return above the hooks is safe: React Flow keys node components by id
   // and registryType never changes on a mounted node.
   if (!def) return null;
@@ -743,13 +852,15 @@ export const ShaderNode = memo(function ShaderNode({
       const sh = typeof e.sourceHandle === 'string' ? e.sourceHandle : '';
       const label = th ? edgeValueLabel(e.source, s.nodes, s.edges, e.sourceHandle) : null;
       const ch = channelCount(e.source, e.sourceHandle, s.nodes, s.edges);
-      // `animated` rides the key too: wiring Time into an EXISTING upstream
-      // chain can leave text/live unchanged (sin(0) is 0 either way), and a
-      // stale flag would keep the label frozen after it became time-driven.
+      // Every label FLAG rides the key too (`edgeLabelFlags`): wiring Time into
+      // an EXISTING upstream chain can leave text/live unchanged (sin(0) is 0
+      // either way), and a stale `animated` would keep the label frozen after
+      // it became time-driven; an edit can likewise flip a wire between point
+      // and interval mode (`range`) while every other part stays put.
       // `sh` likewise: re-wiring from one socket of a source to ANOTHER (HSL's
       // h → s) leaves source, target and targetHandle identical, so without it
       // Object.is bails and the card keeps showing the old channel forever.
-      key += `${e.source}\u0000${sh}\u0000${th}\u0000${label ? label.text : ''}\u0000${label?.live ? 1 : 0}${label?.animated ? 1 : 0}\u0000${ch}\u0001`;
+      key += `${e.source}\u0000${sh}\u0000${th}\u0000${label ? label.text : ''}\u0000${label ? edgeLabelFlags(label) : ''}\u0000${ch}\u0001`;
     }
     return key;
   });
@@ -758,7 +869,7 @@ export const ShaderNode = memo(function ShaderNode({
     const targetEdges = getTargetEdges(allNodes, allEdges, id);
     const connectedInputs = new Set<string | null | undefined>();
     const connectedHandleList: string[] = [];
-    const labelByHandle = new Map<string, { text: string; live: boolean; animated: boolean; sourceId: string; sourceHandle: string | null }>();
+    const labelByHandle = new Map<string, WiredLabel>();
     const inputChannels = new Map<string, number>();
     const bySource = new Map<string, number>();
     let widest = 1;
@@ -774,12 +885,15 @@ export const ShaderNode = memo(function ShaderNode({
       }
       if (typeof e.targetHandle === 'string') {
         connectedHandleList.push(e.targetHandle);
-        labelByHandle.set(e.targetHandle, {
-          ...edgeValueLabel(e.source, allNodes, allEdges, e.sourceHandle),
-          sourceId: e.source,
-          sourceHandle: e.sourceHandle ?? null,
-        });
-        inputChannels.set(e.targetHandle, c);
+        // A socket shows its FIRST wire — the one codegen and the evaluator read.
+        if (!labelByHandle.has(e.targetHandle)) {
+          labelByHandle.set(e.targetHandle, {
+            ...edgeValueLabel(e.source, allNodes, allEdges, e.sourceHandle),
+            sourceId: e.source,
+            sourceHandle: e.sourceHandle ?? null,
+          });
+          inputChannels.set(e.targetHandle, c);
+        }
       }
       widest = Math.max(widest, c);
     }
@@ -1393,6 +1507,9 @@ export const ShaderNode = memo(function ShaderNode({
                     label={row.input.label}
                     reveal={near}
                     channels={inputChannels.get(row.input.id)}
+                    // An unknown node's socket names an identifier in its
+                    // code (unknownCardDef): never a port name to translate.
+                    verbatimLabel={data.registryType === 'unknown'}
                   />
                 )}
                 {/* No text beside an INPUT socket: `.shader-node__in-label` is
@@ -1435,13 +1552,14 @@ export const ShaderNode = memo(function ShaderNode({
                     title={String(valueNum(data.values.value ?? 0.5).toFixed(2))}
                   />
                 )}
-                {/* Inline setting from defaultValues */}
+                {/* Inline setting from defaultValues — a whole number on an
+                    int port AND on the Int node's own value row (rowHoldsInt). */}
                 {row.settingKey && row.settingType === 'number' && !inputConnected && !(data.registryType === 'slider' && row.settingKey === 'value') && (
                   <DragNumberInput
                     compact
-                    step={row.input?.dataType === 'int' ? 1 : undefined}
+                    step={rowHoldsInt(def, row) ? 1 : undefined}
                     value={valueNum(data.values[row.settingKey] ?? def.defaultValues?.[row.settingKey] ?? 0)}
-                    onChange={(v) => handleChange(row.settingKey!, row.input?.dataType === 'int' ? Math.round(v) : v)}
+                    onChange={(v) => handleChange(row.settingKey!, rowHoldsInt(def, row) ? intLiteral(v) : v)}
                   />
                 )}
                 {/* The same swatch a colour OPERAND gets — see colorSwatch. */}
@@ -1467,7 +1585,7 @@ export const ShaderNode = memo(function ShaderNode({
                     compact
                     step={row.input?.dataType === 'int' ? 1 : undefined}
                     value={valueNum(data.values[row.input!.id] ?? 0)}
-                    onChange={(v) => handleChange(row.input!.id, row.input?.dataType === 'int' ? Math.round(v) : v)}
+                    onChange={(v) => handleChange(row.input!.id, row.input?.dataType === 'int' ? intLiteral(v) : v)}
                   />
                 )}
               </div>

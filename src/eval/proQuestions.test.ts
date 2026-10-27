@@ -34,7 +34,7 @@ function fullAnswers(): ProAnswers {
 
 const by = (id: string): ProQuestion => PRO_ITEMS.find((x) => x.id === id)!;
 
-describe('the professional question block (pro-3)', () => {
+describe('the professional question block (pro-4)', () => {
   it('has unique ids, never a retired one, a heading for every group, and is versioned', () => {
     const ids = PRO_ITEMS.map((q) => q.id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -45,17 +45,17 @@ describe('the professional question block (pro-3)', () => {
     expect(PRO_ITEMS_VERSION).toMatch(/^pro-\d+$/);
   });
 
-  it('is short: ten questions, two agreement items, fourteen required answers, two optional texts', () => {
+  it('is short: nine questions, two agreement items, thirteen required answers, two optional texts', () => {
     // The owner found pro-2 repetitive — ten agreement items straight after
     // the ten SUS ones (2026-10-25). One item per sentence the thesis writes.
-    expect(PRO_ITEMS).toHaveLength(12);
+    expect(PRO_ITEMS).toHaveLength(11);
     expect(PRO_ITEMS.filter((q) => q.kind === 'agree')).toHaveLength(2);
     expect(PRO_ITEMS.filter((q) => q.kind === 'text')).toHaveLength(2);
-    expect(proRequiredKeys()).toHaveLength(14);
+    expect(proRequiredKeys()).toHaveLength(13);
   });
 
   it('re-asks nothing the SUS measures: no pilot item, no SUS wording', () => {
-    for (const id of ['pilotQ5', 'pilotQ6', 'pilotQ7', 'pilotQ8', 'pilotQ9', 'pointsOff20', 'platforms12m', 'realtimeYears']) {
+    for (const id of ['pilotQ5', 'pilotQ6', 'pilotQ7', 'pilotQ8', 'pilotQ9', 'pointsOff20', 'platforms12m', 'realtimeYears', 'pointsOff20PerNode', 'fitFor', 'proYears']) {
       expect(RETIRED_PRO_IDS).toContain(id);
       expect(PRO_ITEMS.map((q) => q.id)).not.toContain(id);
     }
@@ -89,16 +89,15 @@ describe('the professional question block (pro-3)', () => {
     expect((by('pointsCredible') as ProAgreeItem).cantJudge).toBe(true);
     expect((by('webxrConstraintsDeter') as ProAgreeItem).cantJudge).toBe(true);
     expect((by('pointsChangedBuild') as ProChoiceItem).options.map((o) => o.id)).toEqual(['ignored', 'lookedWithin', 'lookedOver', 'chose', 'replaced']);
-    expect((by('pointsOff20PerNode') as ProChoiceItem).options.map((o) => o.id)).toEqual(['yes', 'partly', 'no', 'cantJudge']);
     expect((by('costToday') as ProChoiceItem).options.map((o) => o.id)).toContain('notNeeded');
     expect((by('costToday') as ProChoiceItem).otherId).toBe('other');
-    expect((by('fitFor') as ProGridItem).columns.map((c) => c.id)).toEqual(['yes', 'no', 'cantJudge']);
+    expect((by('suitedFor') as ProGridItem).columns.map((c) => c.id)).toEqual(['yes', 'no', 'cantJudge']);
     expect((by('featuresHelped') as ProGridItem).columns.map((c) => c.id)).toEqual(['helped', 'neither', 'hindered', 'notUsed']);
     expect((by('nodeLookTold') as ProGridItem).columns.map((c) => c.id)).toEqual(['yes', 'partly', 'no']);
     expect((by('nodeLookTold') as ProGridItem).rows.map((r) => r.id)).toEqual(['does', 'cost']);
     expect((by('mainWork') as ProChoiceItem).options.map((o) => o.id)).toContain('studying');
     expect((by('mainWork') as ProChoiceItem).otherId).toBe('other');
-    const years = by('proYears') as ProChoiceItem;
+    const years = by('paidYears') as ProChoiceItem;
     expect(years.options[0].id).toBe('none');
     expect(years.options.map((o) => o.id)).toEqual(['none', 'under2', 'y2to5', 'y5to10', 'over10']);
   });
@@ -142,7 +141,7 @@ describe('the professional question block (pro-3)', () => {
     expect(proComplete({ ...all, pointsCredible: 6 })).toBe(false);
     expect(proComplete({ ...all, pointsChangedBuild: 'na' })).toBe(false);
     expect(proComplete({ ...all, mainWork: 'astronaut' })).toBe(false);
-    expect(proComplete({ ...all, 'fitFor.teaching': 'partly' })).toBe(false);
+    expect(proComplete({ ...all, 'suitedFor.teaching': 'partly' })).toBe(false);
     expect(proComplete({ ...all, 'nodeLookTold.cost': 'partly' })).toBe(true);
   });
 
@@ -159,7 +158,7 @@ describe('the professional question block (pro-3)', () => {
         [otherKey(cost)]: ' I ask a colleague ',
         pointsMisleading: ' noise ',
       },
-      { pointsCredible: 'lv', 'fitFor.production': 'en' },
+      { pointsCredible: 'lv', 'suitedFor.production': 'en' },
     ) as { itemsVersion: string; placement: string; items: Record<string, unknown>[] };
     expect(rec.itemsVersion).toBe(PRO_ITEMS_VERSION);
     expect(rec.placement).toBe('after-sus');
@@ -170,7 +169,7 @@ describe('the professional question block (pro-3)', () => {
     expect((item('mainWork').otherText as string).length).toBe(OTHER_CAP);
     expect(item('costToday')).toMatchObject({ choice: 'other', otherText: 'I ask a colleague' });
     expect(item('pointsMisleading')).toMatchObject({ kind: 'text', text: 'noise' });
-    const rows = item('fitFor').rows as { id: string; answer: unknown; language: unknown }[];
+    const rows = item('suitedFor').rows as { id: string; answer: unknown; language: unknown }[];
     expect(rows.find((r) => r.id === 'production')).toMatchObject({ answer: 'yes', language: 'en' });
   });
 
@@ -190,14 +189,13 @@ describe('the professional question block (pro-3)', () => {
     const names = cols.map(([k]) => k);
     expect(new Set(names).size).toBe(names.length);
     expect(names).toContain('pro_nodeLookTold_cost');
-    expect(names).toContain('pro_fitFor_teaching');
+    expect(names).toContain('pro_suitedFor_teaching');
     expect(names).not.toContain('pro_pointsMisleading');
     expect(names).not.toContain('pro_missingForWork');
     expect(Object.fromEntries(cols)).toMatchObject({
       pro_items_version: PRO_ITEMS_VERSION,
       pro_pointsCredible: 'na',
       pro_pointsChangedBuild: 'ignored',
-      pro_pointsOff20PerNode: 'yes',
       pro_featuresHelped_codePanel: 'helped',
     });
     expect(JSON.stringify(cols)).not.toContain('secret');

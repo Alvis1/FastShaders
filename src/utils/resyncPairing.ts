@@ -45,8 +45,8 @@ function pairable(old: AppNode, activeOldId: string | null): boolean {
 }
 
 export interface ResyncPairing {
-  /** Paired nodes in the resync's own order: every EXACT (pass-1) match in
-   *  parse order, then every type-only (pass-2) one. */
+  /** Paired nodes in the resync's own order: every NAME (pass-0) match in
+   *  parse order, every EXACT (pass-1) one, then every type-only (pass-2) one. */
   readonly paired: readonly { readonly node: AppNode; readonly match: AppNode }[];
   /** Parsed nodes with no partner at all, in parse order. */
   readonly unpaired: readonly AppNode[];
@@ -56,20 +56,37 @@ export interface ResyncPairing {
  * Two passes: exact key first, then registryType alone. Pass 2 is what lets a
  * RE-BOUND Output (a mesh renamed in the code panel) keep its position and
  * ports; the binding is pass 1 so only the ambiguous ones fall through.
+ *
+ * `carried` (utils/panelCarry.ts) names old nodes the panel's text never held:
+ * they come back whole, so they may not be paired either — pass 2 would hand a
+ * parsed Perlin the id of a HIDDEN Perlin listed first, and the connected one
+ * would be deleted.
+ *
+ * `names` (the store's `codeNames`: each old node's variable name in the text
+ * being applied) adds pass 0, ahead of both: a parsed node declared under the
+ * name an old node of its type had in that text IS that node — so ids follow
+ * the lines, not the array order (two Adds no longer swap). A sink never pairs
+ * by name (an Output pairs on its BINDING). Absent — a study session, no
+ * recorded scope — the two passes run exactly as before.
  */
 export function pairResyncNodes(
   oldNodes: readonly AppNode[],
   newNodes: readonly AppNode[],
   activeOldId: string | null,
+  carried?: ReadonlySet<string>,
+  names?: ReadonlyMap<string, string> | null,
 ): ResyncPairing {
   const byExactKey = new Map<string, AppNode[]>();
   const byType = new Map<string, AppNode[]>();
+  const byName = new Map<string, AppNode>();
   for (const old of oldNodes) {
-    if (!pairable(old, activeOldId)) continue;
+    if (!pairable(old, activeOldId) || carried?.has(old.id)) continue;
     const key = matchKey(old);
     (byExactKey.get(key) ?? byExactKey.set(key, []).get(key)!).push(old);
     const type = old.data.registryType;
     (byType.get(type) ?? byType.set(type, []).get(type)!).push(old);
+    const name = names?.get(old.id);
+    if (name && !isSinkNode(old)) byName.set(name, old);
   }
   const used = new Set<string>();
   const paired: { node: AppNode; match: AppNode }[] = [];
@@ -77,6 +94,16 @@ export function pairResyncNodes(
     candidates?.find((old) => !used.has(old.id));
 
   for (const node of newNodes) {
+    if (isSinkNode(node)) continue;
+    const match = byName.get(String(node.data.label));
+    if (match && !used.has(match.id) && match.data.registryType === node.data.registryType) {
+      used.add(match.id);
+      paired.push({ node, match });
+    }
+  }
+  const named = new Set(paired.map((p) => p.node.id));
+  for (const node of newNodes) {
+    if (named.has(node.id)) continue;
     const match = takeFrom(byExactKey.get(matchKey(node)));
     if (match) {
       used.add(match.id);

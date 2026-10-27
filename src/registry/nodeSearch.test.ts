@@ -7,6 +7,8 @@ import {
   NO_MATCH,
   NODE_REGISTRY,
 } from './nodeRegistry';
+import { nodeDescLV, nodeLabelLV } from '@/i18n';
+import { foldSearchText } from '@/utils/searchFold';
 
 /**
  * Search RANKING, not just matching.
@@ -251,5 +253,45 @@ describe('the audio fold — one node, both vocabularies', () => {
       const hits = getAllDefinitions().filter((d) => nodeMatchRank(d, q) !== NO_MATCH);
       expect(hits.map((d) => d.type), `query "${q}"`).toEqual(['soundNode']);
     }
+  });
+});
+
+/**
+ * A Latvian name typed WITHOUT its long vowels and softened consonants is the
+ * normal case — plenty of keyboards have no Latvian layout on — and "krasa"
+ * used to find nothing, because the ranker compared characters exactly and 61
+ * of the 105 Latvian labels carry a mark. Both sides now go through
+ * `foldSearchText`.
+ */
+describe('search is diacritic-blind', () => {
+  it('"krasa" is an exact-name hit on Color, whose Latvian label is "Krāsa"', () => {
+    expect(nodeLabelLV('color')).toBe('Krāsa');
+    expect(nodeMatchRank(def('color'), 'krasa')).toBe(0);
+    expect(labels('krasa')[0]).toBe(def('color').label);
+  });
+
+  it('every Latvian label is an exact-name hit typed with OR without its marks', () => {
+    for (const d of getAllDefinitions()) {
+      const lv = nodeLabelLV(d.type);
+      if (!lv) continue;
+      expect(nodeMatchRank(d, lv.toLowerCase()), `${d.type} "${lv}"`).toBe(0);
+      expect(nodeMatchRank(d, foldSearchText(lv)), `${d.type} typed "${foldSearchText(lv)}"`).toBe(0);
+    }
+  });
+
+  it('a query that keeps its marks still matches the folded corpus', () => {
+    expect(nodeMatchRank(def('color'), 'krāsa')).toBe(0);
+    expect(searchNodes('  KRĀSA ').map((d) => d.type)).toEqual(searchNodes('krasa').map((d) => d.type));
+  });
+
+  it('the Latvian description tier folds too', () => {
+    let checked = 0;
+    for (const d of getAllDefinitions()) {
+      const word = nodeDescLV(d.type).split(/[^\p{L}]+/u).find((w) => w.length >= 5 && /[^\x00-\x7f]/.test(w));
+      if (!word) continue;
+      expect(nodeMatchRank(d, foldSearchText(word)), `${d.type}: "${word}"`).not.toBe(NO_MATCH);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(20);
   });
 });

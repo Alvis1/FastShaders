@@ -18,7 +18,11 @@ import { getUnwrappedEdges } from '@/engine/cpuEvaluator';
  * as a broken slider either way. Codegen deliberately uses the WEAKER test,
  * because it also runs on graphs with no Output at all (every built-in preset
  * and texture, and every saved group), where the stronger rule would delete
- * every property they have.
+ * every property they have. The CODE PANEL now applies the stronger rule to
+ * its own text (engine/panelCode.ts — only the nodes that feed an Output), so
+ * outside a study session such a property is not in the previewed module
+ * either; this list still decides on its own, since a study session and a
+ * graph with no sink keep the whole text.
  *
  * Pure and node-testable: ShaderPreview has no test coverage (the vitest env is
  * `node`, no jsdom), so the rule that decides WHICH uniforms are live lives

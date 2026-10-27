@@ -13,6 +13,8 @@ import type {
   GroupNodeData,
   NoteNodeData,
   BoundarySocket,
+  CodeSpan,
+  CodeNodeSpans,
 } from '@/types';
 import { getNodeValues } from '@/types';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
@@ -1479,6 +1481,41 @@ export function resolveDeviceTextureDim(
   return profiles.find((x) => x.id === id)?.maxTextureDim ?? deviceMaxTextureDim(id);
 }
 
+/**
+ * What a graph→code pass's text was generated from, written with it in ONE
+ * `set()` (`setCode(…, 'graph', …, meta)`). An object so later facts about
+ * the same text join it without another positional parameter.
+ */
+export interface SetCodeMeta {
+  /** The node ids the text emits (`codeEmitted`); null or absent = the whole graph. */
+  emitted?: ReadonlySet<string> | null;
+  /** Every node's variable name in the pass that wrote the text (`codeNames`,
+   *  graphToCode's `varNames`); kept only with an `emitted` set. */
+  names?: ReadonlyMap<string, string> | null;
+  /** Each node's spans in the text (`codeNodeSpans`, graphToCode's `nodeSpans`). */
+  nodeSpans?: ReadonlyMap<string, readonly CodeSpan[]> | null;
+  /**
+   * A TYPING write only: the text Monaco showed before this edit. The panel
+   * settles a newer pass up to CODE_SETTLE_MS late, so a keystroke in that
+   * window edits an OLDER text than the store's — and the scope an Apply reads
+   * must be that text's (`codeScopes`), or it duplicates the nodes the newer
+   * pass hid and deletes the ones it revealed.
+   */
+  base?: string;
+}
+
+/** One graph→code pass's text with its `codeEmitted` / `codeNames` (a ring of
+ *  these is `codeScopes`). */
+export interface CodeScope {
+  readonly code: string;
+  readonly emitted: ReadonlySet<string>;
+  readonly names: ReadonlyMap<string, string>;
+}
+
+/** How many recent passes' scopes `codeScopes` keeps — the panel shows at most
+ *  one write behind the newest (useNodeCodeHighlight keeps the same ring). */
+const CODE_SCOPE_RING = 4;
+
 interface AppState {
   // Graph
   nodes: AppNode[];
@@ -1487,6 +1524,38 @@ interface AppState {
   // Code
   code: string;
   previewCode: string;
+  /**
+   * The node ids the panel's `code` was generated from — the nodes that feed
+   * an Output (engine/panelCode.ts) — or null when it holds the whole graph
+   * (a study session, no sink) or is not panel-derived text at all (a
+   * bare-script import). Written in the SAME `set()` as `code` by a graph→code
+   * pass, so the pair cannot disagree; an Apply carries every node outside it
+   * (utils/panelCarry.ts). Session-only: never persisted, never in history.
+   */
+  codeEmitted: ReadonlySet<string> | null;
+  /**
+   * Each node's variable name in the text `codeEmitted` describes — hidden
+   * nodes' too, since names are claimed over the whole graph — and, after an
+   * Apply, each parsed node's declared name. Null exactly when `codeEmitted`
+   * is. An Apply pairs and re-wires BY these names (utils/panelCarry.ts): the
+   * text's names are its nodes' identities. Session-only.
+   */
+  codeNames: ReadonlyMap<string, string> | null;
+  /**
+   * The last few graph→code passes' scopes, newest first — what a typing write
+   * whose `base` is an older text swaps `codeEmitted`/`codeNames` back to.
+   * Cleared by an Apply and an import. Session-only.
+   */
+  codeScopes: readonly CodeScope[];
+  /**
+   * The last graph→code pass's text WITH each node's spans in it — one value
+   * carrying its own `code`, written in the same `set()` as `code`. The code
+   * panel's highlight (CodeEditor/useNodeCodeHighlight.ts) draws only while
+   * Monaco's text EQUALS a pair's `code`, so typing (which leaves this alone)
+   * can never pair one text with another's spans. Null until a pass writes
+   * one. Session-only: never persisted, never in history.
+   */
+  codeNodeSpans: CodeNodeSpans | null;
   codeErrors: ParseError[];
 
   // Complexity
@@ -1752,7 +1821,8 @@ interface AppState {
   setShaderPalettes: (palettes: Palette[]) => void;
 
   // Code actions
-  setCode: (code: string, source?: SyncSource, previewCode?: string) => void;
+  /** `meta` rides only a `'graph'` write: what that text was generated from. */
+  setCode: (code: string, source?: SyncSource, previewCode?: string, meta?: SetCodeMeta) => void;
   setCodeErrors: (errors: ParseError[]) => void;
   codeSyncRequested: boolean;
   requestCodeSync: () => void;
@@ -1959,6 +2029,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
   edges: [],
   code: '',
   previewCode: '',
+  codeEmitted: null,
+  codeNames: null,
+  codeScopes: [],
+  codeNodeSpans: null,
   codeErrors: [],
   totalCost: 0,
   syncSource: 'graph',
@@ -2437,20 +2511,43 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setShaderPalettes: (palettes) => set({ shaderPalettes: palettes }),
 
-  setCode: (code, source = 'code', previewCode) => {
+  setCode: (code, source = 'code', previewCode, meta) => {
     // Skip no-op: prevents Monaco onChange from flipping syncSource after programmatic updates
     if (code === get().code && source === 'code') return;
     if (source === 'code') {
-      // User typing — just store the code, don't update preview yet
-      set({ code });
+      // User typing — just store the code, don't update preview yet. The
+      // emitted set stays: it describes the text the user is editing — unless
+      // that is an OLDER pass's text than the store's (`meta.base`, the panel's
+      // settle lag), whose scope is still in the ring. So does the spans pair,
+      // which carries its own text (the highlight follows the typing through
+      // Monaco's tracked ranges, never through this).
+      const base = meta?.base;
+      const scope = base === undefined || base === get().code
+        ? undefined
+        : get().codeScopes.find((sc) => sc.code === base);
+      set(scope ? { code, codeEmitted: scope.emitted, codeNames: scope.names } : { code });
     } else {
       // Graph or initial sync — update preview immediately. `previewCode` is
       // the ONE divergence the two are allowed: while a node is PREVIEWED
       // (utils/nodePreview.ts) the sync engine hands the rerouted module
       // here, so the 3D view renders that node while the code panel keeps
       // the real graph — one write, one notification, no window in which a
-      // subscriber sees the panel's text on the preview.
-      set({ code, previewCode: previewCode ?? code, syncSource: source });
+      // subscriber sees the panel's text on the preview. `codeEmitted` rides
+      // the same write for the same reason: an Apply reads the pair. So does
+      // `codeNodeSpans`, the text and its node spans as one value.
+      const emitted = meta?.emitted ?? null;
+      const names = emitted ? meta?.names ?? null : null;
+      set({
+        code,
+        previewCode: previewCode ?? code,
+        syncSource: source,
+        codeEmitted: emitted,
+        codeNames: names,
+        codeScopes: emitted && names
+          ? [{ code, emitted, names }, ...get().codeScopes].slice(0, CODE_SCOPE_RING)
+          : [],
+        codeNodeSpans: meta?.nodeSpans ? { code, spans: meta.nodeSpans } : null,
+      });
     }
   },
 

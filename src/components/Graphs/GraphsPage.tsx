@@ -17,6 +17,7 @@ import { getBuiltinPresets } from '@/registry/builtinPresets';
 import { isNodeHiddenFromEditor, isTextureHiddenFromEditor } from '@/registry/editorVisibility';
 import { CATEGORIES } from '@/registry/nodeCategories';
 import { CAT_HEX, getContrastColor } from '@/utils/colorUtils';
+import { foldSearchText } from '@/utils/searchFold';
 import { splitAliases, joinAliases } from '@/registry/descriptionSplice';
 import { getCitation, CITATIONS, type Citation } from '@/registry/citations';
 import { freshNodeCost } from '@/utils/nodeCost';
@@ -569,18 +570,13 @@ export function GraphsPage() {
 
   // ── Filter ────────────────────────────────────────────────────────────────
   const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = foldSearchText(query.trim());
     return sorted.filter((r) => {
       if (activeCats.size > 0 && !activeCats.has(r.category)) return false;
       if (hiddenOnly && edits[rowId(r)].enabled) return false;
       if (!q) return true;
       const e = edits[rowId(r)];
-      return (
-        r.name.toLowerCase().includes(q) ||
-        r.key.toLowerCase().includes(q) ||
-        e.description.toLowerCase().includes(q) ||
-        e.aliases.toLowerCase().includes(q)
-      );
+      return [r.name, r.key, e.description, e.aliases].some((x) => foldSearchText(x).includes(q));
     });
   }, [sorted, query, activeCats, hiddenOnly, edits]);
 

@@ -24,7 +24,10 @@ describe('module-scope helper table', () => {
       if (h.alias) {
         const owner = NODE_REGISTRY.get(h.alias.type);
         expect(owner, `${name} → ${h.alias.type}`).toBeTruthy();
-        expect(owner!.tslImportModule, `${h.alias.type}.tslImportModule`).toBe('');
+        // The generic import loop never imports an owner: it has no import
+        // module — or it is UV, whose emission branch imports `uv` itself (the
+        // loop skips the type) and calls fsUvChannel only for a WIRED channel.
+        if (h.alias.type !== 'uv') expect(owner!.tslImportModule, `${h.alias.type}.tslImportModule`).toBe('');
         // A variant's port list names real ports of its owner.
         for (const port of h.alias.ports ?? []) expect(owner!.inputs.some((i) => i.id === port), `${name} port ${port}`).toBe(true);
         // A mode variant's mode is in the owner's closed vocabulary.

@@ -103,7 +103,7 @@
    bought +6–8% fps under software compositing, removing ALL of them +19–42%.
    `--bg-raised` flips with the theme, so no dark override is needed. */
 .node-editor__cost-overlay .cost-bar {
-  padding: var(--space-2);
+  padding: var(--space-1) var(--space-2);
   background: var(--bg-raised);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-md);
@@ -509,6 +509,19 @@
   color: var(--border-focus);
 }
 
+/* Press and drag to pan: the hand cursors say so before the press. */
+.fs-canvas-bar__btn--pan {
+  cursor: grab;
+  touch-action: none;
+}
+.fs-canvas-bar__btn--pan:active { cursor: grabbing; }
+.fs-canvas-bar__btn--pan svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+  fill: currentColor;
+}
+
 .fs-canvas-bar__btn:hover:not(:disabled) {
   border-color: var(--border-focus);
   color: var(--border-focus);
@@ -578,6 +591,15 @@
   color: #fff;
 }
 .fs-draw-btn--sm { padding: 4px 8px; }
+/* The bar's draw toggle: icon only, square, the size of every bar button. */
+.fs-draw-btn--icon {
+  justify-content: center;
+  width: var(--ctl-size);
+  height: var(--ctl-size);
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+}
 .fs-draw-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* The ink swatch is the app-wide picker's trigger `<button>`, filled by an

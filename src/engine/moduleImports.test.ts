@@ -211,8 +211,19 @@ describe('C3 — the completed three/tsl import', () => {
   });
 
   it('never imports a function three/tsl does not export', () => {
-    const m = exportModule(unknownGraph('mysteryFn(1, 2, 3)'));
-    expect(m).toContain('mysteryFn(1, 2, 3)');
+    // Hand-written text: an unknown NODE calls only TSL or a module helper now
+    // (engine/unknownExpression.ts), but a module's own text may call anything.
+    const m = buildShaderModule(`import { Fn, float } from 'three/tsl';
+
+const shader = Fn(() => {
+  const a = mysteryFn(float(1), 2, 3);
+
+  return a;
+});
+
+export default shader;
+`);
+    expect(m).toContain('mysteryFn(float(1), 2, 3)');
     expect(m).not.toMatch(/import \{[^}]*\bmysteryFn\b/);
   });
 

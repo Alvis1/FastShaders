@@ -338,7 +338,7 @@ const BG_VERSIONS = new Map([
 ]);
 for (const r of rows) {
   // First wave: Blender/Unreal/code levels 0-4. bg-3 (consent-13): the tools
-  // answered Yes (B U Un W N — N another node-based editor), then node-editor use and shader code written
+  // answered Yes (B U Un W N — N other node-based editor), then node-editor use and shader code written
   // (no / changed / own). bg-2 (consent-12, never deployed) had a
   // TouchDesigner row (T) and a five-step code ladder. One reader per
   // version, never pooled; an unknown version prints its tag.
@@ -350,7 +350,7 @@ for (const r of rows) {
     : EXP.map((k) => (r.exp?.[k] === '' || r.exp?.[k] == null ? '–' : r.exp[k])).join('/');
   console.log(`| ${r.participant} | ${r.arm || '—'} | ${r.task || '—'} | ${r.costBarVisible === '' ? '—' : (r.costBarVisible === 'true' ? 'on' : 'OFF')} | ${r.language} | ${fmt(r.sus)} | ${fmt(r.activeMin, 2)} | ${fmt(r.introS)} | ${r.nodeAdds} | ${r.assetNodes} | ${r.nodeEdits + r.gestures} | ${r.connects} | ${r.undos} | ${exp} | ${r.sessionId} |`);
 }
-console.log('\n(experience: first-wave packages show 0–4 = none…expert in the order Blender / Unreal / shader code; bg-3 packages (consent-13) show the tools made with (B Blender, U Unreal, Un Unity, W three.js/A-Frame, N another node-based editor) · node-editor use · shader code written (no / changed / own); bg-2 (consent-12, never deployed) had T TouchDesigner and a five-step code ladder — the versions are never pooled; a package from before consent-9 also answered "other node editors", which is in the CSV only)');
+console.log('\n(experience: first-wave packages show 0–4 = none…expert in the order Blender / Unreal / shader code; bg-3 packages (consent-13) show the tools made with (B Blender, U Unreal, Un Unity, W three.js/A-Frame, N other node-based editor) · node-editor use · shader code written (no / changed / own); bg-2 (consent-12, never deployed) had T TouchDesigner and a five-step code ladder — the versions are never pooled; a package from before consent-9 also answered "other node editors", which is in the CSV only)');
 
 // Professionals are never pooled with the students: the headline SUS is the
 // student arms', and /evalpro is reported per person and by its median

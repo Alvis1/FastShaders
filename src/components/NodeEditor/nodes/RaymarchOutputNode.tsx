@@ -131,8 +131,10 @@ export const RaymarchOutputNode = memo(function RaymarchOutputNode({ id, data, s
 
   // What is arriving on each wired socket — the Output node's two-step
   // subscription, now shared (see useWiredLabels for the cheap-string key, the
-  // unwrapped-edge rule and why the separators are JS escapes).
-  const wiredLabels = useWiredLabels(id);
+  // unwrapped-edge rule and why the separators are JS escapes). `compact`:
+  // the value cell is a FIXED 32px (`.output-node--sdf .output-node__val`),
+  // too narrow for a decimal interval like "-0.5…0.5".
+  const wiredLabels = useWiredLabels(id, { compact: true });
 
   const setValue = (key: string, v: string | number) => {
     updateNodeData(id, { values: { ...values, [key]: v } });

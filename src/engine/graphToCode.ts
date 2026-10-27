@@ -16,7 +16,7 @@ import {
 import { moduleStringLiteral } from './partKeyLiteral';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
-import { MODULE_HELPERS, MODULE_HELPER_NAMES, HELPER_OWNER_TYPES, helperNameFor, helperCallPorts } from './moduleHelpers';
+import { MODULE_HELPERS, MODULE_HELPER_NAMES, HELPER_OWNER_TYPES, UV_CHANNEL_HELPER, helperNameFor, helperCallPorts } from './moduleHelpers';
 import {
   marchPartition,
   drivingCustomSink,
@@ -56,10 +56,13 @@ import { materialSettingProps } from './materialSettingsCode';
 // The `unknown`-node expression validator. Its own module because it is the
 // only thing in codegen that needs @babel/parser, which is loaded on demand
 // there rather than pinned into the boot payload — see that file.
-import { isSafeUnknownExpression } from './unknownExpression';
+import { isSafeUnknownExpression, neutralizeUndeclaredReads, rebindUnknownExpression, unknownRefSlots } from './unknownExpression';
 // Shape inference (1-4 channels) — the same authority the edge/preview layer
 // uses, so codegen and the UI agree on what counts as a scalar.
-import { getNodeOutputShape, portShapeForHandle } from './cpuEvaluator';
+// SPLIT_SOCKET_AWARE lives beside the evaluator's twin of resolveEdgeRef's
+// split branch (deadSplitWire), so the two cannot drift.
+import { getNodeOutputShape, intGraphOver, portShapeForHandle, SPLIT_SOCKET_AWARE } from './cpuEvaluator';
+import { intLiteral, promotesIntWire } from './intPromotion';
 import { IMAGE_CHANNEL_COMPONENTS, isImageChannelHandle } from '@/utils/imageChannels';
 import { readImageUvMapping, gltfUvMatrix, turnMatrix, isIdentityTurn } from '@/utils/imageUvMapping';
 import { readImagePlacement, type PlacementSocket } from '@/utils/imagePlacement';
@@ -91,6 +94,7 @@ import {
 import { float32ToBase64, float16ToBase64 } from '@/utils/binaryCodec';
 import { topologicalSort } from './topologicalSort';
 import { maxMaterialSampledTextures, textureBudgetLine } from './textureBudget';
+import { assembleNodeSpans, type PlanMark } from './codeSpans';
 
 /** Format a JS number as a TSL-safe numeric literal (finite or `0`). */
 function num(n: number): string {
@@ -187,15 +191,32 @@ function numericParam(
   fallback: number,
   varNames: Map<string, string>,
   gidx: GraphIndex,
+  resolve: typeof resolveEdgeRef = resolveEdgeRef,
 ): string {
   const edge = inEdge(gidx, node.id, key);
   if (edge) {
-    const ref = resolveEdgeRef(edge, varNames, gidx);
+    const ref = resolve(edge, varNames, gidx);
     if (ref) return ref;
   }
   const raw = Number(getNodeValues(node)[key]);
   return num(Number.isFinite(raw) ? raw : fallback);
 }
+
+/**
+ * The Raymarch Output IIFE's OWN body locals — the scope its numbers are read
+ * in (`const bend = float(<Bend>)`, `Loop(int(<Steps>), …)`). `const` is block
+ * scoped, so a PROPERTY of the same name read anywhere in that body is either a
+ * TDZ ReferenceError (`const bend = float(bend)`) or silently the march's own
+ * local (`const shadow = float(ao)`). Reserved from the namer while a march
+ * drives. The Loop and `nrm` bodies' locals are absent on purpose: the only
+ * outer names read there are the `rm<n>…` Fns, reserved with the base.
+ * raymarchOutput.test.ts pins this list against the emitted AST.
+ */
+export const MARCH_IIFE_LOCALS: readonly string[] = [
+  'stepSize', 'eps', 'bend', 'horizon', 'win', 'fieldR', 'stepScale', 'lightX', 'lightY', 'lightZ', 'ao', 'shadow',
+  'cam', 'rd', 'pos', 'col', 'alpha', 'surfHit', 'hp',
+  'nrm', 'key', 'occ', 'aoF', 'sh', 'st', 'shF', 'lam', 'surf', 'surfCov', 'rdWorld', 'bg',
+];
 
 /**
  * Sampling coordinate in [0, 1]: uv.x, or the normalized radius from a chosen
@@ -254,19 +275,6 @@ export const FRESNEL_HANDLE_TO_MEMBER = new Map<string, string>([['out', 'x'], [
  *  sample); the other half of `OWN_MEMBER_TO_HANDLE.get('colorRamp')`. */
 export const COLOR_RAMP_HANDLE_TO_MEMBER = new Map<string, string>([['out', 'rgb'], ['alpha', 'a']]);
 
-/** Sources whose output sockets are NOT the bare variable, so a Split fed by one
- *  must read per SOURCE SOCKET (resolveEdgeRef's split branch): members of ONE
- *  emitted call (Fresnel, Color Ramp, toHsl, the Texture node's channels in wide
- *  mode) or variables of their own (Sound's `sound1_bass`, Data Viz's `value`
- *  `_dataviz1_t`, the Data node's `data1_col0`). Without the entry the Split read
- *  the bare name: Image Alpha → Split.x was red, Data Viz Value → Split.x the
- *  ramp's red, and Sound/Data → Split named a variable nothing declares. A
- *  source whose socket IS the bare name (every `out`, a narrow image) still
- *  emits `<bare>.<comp>`, byte-identical. */
-const SPLIT_SOCKET_AWARE: ReadonlySet<string> = new Set([
-  'fresnel', 'colorRamp', 'toHsl', 'imageNode', 'soundNode', 'dataviz', 'dataNode',
-]);
-
 /**
  * `#rrggbb` → the `0xrrggbb` literal the colour constructors take.
  *
@@ -284,6 +292,9 @@ interface GraphIndex {
   nodeById: Map<string, AppNode>;
   incoming: Map<string, AppEdge[]>;
   outgoing: Map<string, AppEdge[]>;
+  /** The pass's per-socket shape (`shapeOfEdgeSource`), set once it exists —
+   *  before any wire is resolved. */
+  edgeShape?: (edge: AppEdge) => number;
 }
 
 /**
@@ -296,9 +307,9 @@ interface GraphIndex {
  * `sorted.find` reports it as missing; indexing `nodes` would resurrect it.
  *
  * Unlike cpuEvaluator's EvalCtx this needs no WeakMap keying or
- * sameGraphSemantics revalidation — graphToCode is a single pass, `sorted` is
- * const and `edges` is reassigned only once at the top, before this is built,
- * so there is nothing that can invalidate it.
+ * sameGraphSemantics revalidation — graphToCode is a single pass, and the only
+ * reassignments are the unwrap at the top (before this is built) and the
+ * `emitOnly` scope after the naming passes, which rebuilds it with the arrays.
  */
 function buildGraphIndex(sorted: AppNode[], edges: AppEdge[]): GraphIndex {
   const nodeById = new Map<string, AppNode>();
@@ -369,13 +380,25 @@ function withoutOrientation(values: Record<string, string | number>): Record<str
   return out;
 }
 
+/** Options for one codegen pass. */
+export interface GraphToCodeOptions {
+  /**
+   * Emit only these nodes (the code panel's "feeds an Output" set,
+   * `engine/panelCode.ts`). Every NAME is still claimed over the whole graph,
+   * so a node's variable never depends on what is hidden; absent, or a set
+   * holding every node, is today's pass byte for byte.
+   */
+  emitOnly?: ReadonlySet<string>;
+}
+
 export function graphToCode(
   nodes: AppNode[],
   edges: AppEdge[],
-  registry: Map<string, NodeDefinition> = NODE_REGISTRY
+  registry: Map<string, NodeDefinition> = NODE_REGISTRY,
+  opts: GraphToCodeOptions = {},
 ): GeneratedCode {
   if (nodes.length === 0) {
-    return { code: '// Empty shader — add nodes to begin\n', importStatements: [], varNames: new Map() };
+    return { code: '// Empty shader — add nodes to begin\n', importStatements: [], varNames: new Map(), nodeSpans: new Map() };
   }
 
   // Collapsed groups have rewritten boundary edges to point at synthetic group
@@ -383,9 +406,9 @@ export function graphToCode(
   // function compiles against the logical graph rather than the visual one.
   edges = unwrapCollapsedGroupEdges(nodes, edges);
 
-  const sorted = topologicalSort(nodes, edges);
+  let sorted = topologicalSort(nodes, edges);
 
-  const gidx = buildGraphIndex(sorted, edges);
+  let gidx = buildGraphIndex(sorted, edges);
 
   /**
    * A property feeding NOTHING is not emitted: no uniform line, no import, no
@@ -490,6 +513,15 @@ export function graphToCode(
   // nothing; a property named `p`/`pw`/`n`/`c` is renamed (`n2`) exactly while
   // the splat program is the module.
   if (customNode && isSplatOutput(customNode)) for (const name of SPLAT_FN_PARAMS) usedNames.add(name);
+  // The march has the same trap twice: its step Fns' parameters (`p`, the ray
+  // position; `dir`, the final direction) shadow a property read inside them,
+  // and its IIFE's own locals (MARCH_IIFE_LOCALS) shadow one wired to a number
+  // socket. Reserved under the same rule — exactly while a Raymarch Output
+  // DRIVES — so a property called `bend` becomes `bend2` only then.
+  if (customNode && isMarchOutput(customNode)) {
+    for (const sp of MARCH_SCOPES) for (const prm of sp.params) usedNames.add(prm.name);
+    for (const name of MARCH_IIFE_LOCALS) usedNames.add(name);
+  }
 
   // Property nodes claim their user-defined names FIRST, before any other node
   // gets a variable. A property's name is its public API — the schema key, the
@@ -564,11 +596,13 @@ export function graphToCode(
     if (def.type === MARCH_OUTPUT_TYPE) {
       // The march IIFE plus its per-channel functions and unpacked outputs
       // share one base (`rm1`, `rm1Field`, `rm1Density`, `rm1Color`,
-      // `rm1Emissive`, `rm1Glow`, `rm1Background`, `rm1Col`, …) — reserved
-      // together, so a user property cannot land on one. codeToGraph
-      // recognises them by name AND declarator shape.
+      // `rm1Emissive`, `rm1Glow`, `rm1Background`, `rm1LightColor`,
+      // `rm1Ambient`, `rm1Col`, …) — reserved together, so a user property
+      // cannot land on one (an unreserved `rm1Ambient` was a duplicate
+      // declaration: a SyntaxError). codeToGraph recognises them by name AND
+      // declarator shape.
       varNames.set(node.id, claimName('rm', {
-        aliases: (n) => [`${n}Field`, `${n}Density`, `${n}Color`, `${n}Emissive`, `${n}Glow`, `${n}Background`, `${n}Col`, `${n}N`],
+        aliases: (n) => [`${n}Field`, `${n}Density`, `${n}Color`, `${n}Emissive`, `${n}Glow`, `${n}Background`, `${n}LightColor`, `${n}Ambient`, `${n}Col`, `${n}N`],
       }));
       continue;
     }
@@ -598,6 +632,24 @@ export function graphToCode(
 
     // Always number from 1 to avoid shadowing TSL imports (color1, add1, etc.)
     varNames.set(node.id, claimName(baseName));
+  }
+
+  // EMISSION SCOPE (`opts.emitOnly`, the code panel's connected-only view —
+  // engine/panelCode.ts). Every name above was claimed over the WHOLE graph,
+  // so hiding a chain renames nothing (canvas headers, uniform keys, the
+  // Sound pump's names all stay put); from here on the pass sees only the
+  // kept nodes. Sound because the set is upstream-closed: every feeder of a
+  // kept node is kept, so no in-edge read changes — only out-edge reads do
+  // (imports, an orphaned property, the image sample width and sky test, the
+  // Data columns and Sound channels a consumer reads, the march partition),
+  // and each of those SHOULD forget a hidden consumer. The `some()` makes a
+  // set that hides nothing a no-op, which keeps that case byte-identical.
+  if (opts.emitOnly && sorted.some((n) => !opts.emitOnly!.has(n.id))) {
+    const keep = opts.emitOnly;
+    nodes = nodes.filter((n) => keep.has(n.id));
+    edges = edges.filter((e) => keep.has(e.source) && keep.has(e.target));
+    sorted = sorted.filter((n) => keep.has(n.id));
+    gidx = buildGraphIndex(sorted, edges);
   }
 
   // Collect imports grouped by module
@@ -652,6 +704,7 @@ export function graphToCode(
     if (declared > 0) return declared;
     return getNodeOutputShape(edge.source, nodes, edges);
   };
+  gidx.edgeShape = shapeOfEdgeSource;
 
   /** `ref` narrowed to a scalar for an edge whose source port is not 1-channel. Color Ramp's Color is `.rgb` of
    *  a vec4; its scalar is `.x` of the BARE variable (the same red), never `.rgb.x`, which codeToGraph cannot read. */
@@ -717,9 +770,25 @@ export function graphToCode(
    * everything outside its scope from the flat body by closure (measured to
    * type-check and render on r184). Shared by the march's per-step Fns and the
    * splat's shade/shape/size.
+   *
+   * `scopeAt` records where each scope array's chain landed (`nodeSpans`
+   * bookkeeping, engine/codeSpans.ts): `origin` is the array the plan loop
+   * filled — the chain itself, except for the splat's shade, whose chain is a
+   * COPY with the Splat Output's own light line appended.
    */
-  const pushScopeFn = (out: string[], name: string, params: string, chainLines: readonly string[], ret: string): void => {
+  const scopeAt = new Map<readonly string[], { host: string[]; at: number }[]>();
+  const pushScopeFn = (
+    out: string[],
+    name: string,
+    params: string,
+    chainLines: readonly string[],
+    ret: string,
+    origin: readonly string[] = chainLines,
+  ): void => {
     out.push(`  const ${name} = Fn(([${params}]) => {`);
+    const placed = scopeAt.get(origin);
+    if (placed) placed.push({ host: out, at: out.length });
+    else scopeAt.set(origin, [{ host: out, at: out.length }]);
     for (const l of chainLines) out.push(`  ${l}`);
     out.push(`    return ${ret};`);
     out.push('  });');
@@ -777,7 +846,25 @@ export function graphToCode(
     for (const sp of inScopes) plan.push([node, scopeLines.get(sp.handle)!]);
   }
 
+  // `nodeSpans` bookkeeping (engine/codeSpans.ts): a line belongs to the plan
+  // iteration that PUSHED it. Each iteration opens a mark at the top of the
+  // loop — every `continue` passes through there — and the next one, or the
+  // end of the loop, closes it. Every push below goes to `bodyLines` or
+  // `setupLines` (an Image's shared setup only in its OWNER's iteration).
+  const marks: PlanMark[] = [];
+  let openMark: { nodeId: string; target: string[]; from: number; setupFrom: number } | null = null;
+  const closeMark = (): void => {
+    if (!openMark) return;
+    marks.push({ ...openMark, to: openMark.target.length, setupTo: setupLines.length });
+    openMark = null;
+  };
+
+  /** Built at the first `unknown` node (see that branch). */
+  let declaredNames: Set<string> | undefined;
+
   for (const [node, target] of plan) {
+    closeMark();
+    openMark = { nodeId: node.id, target, from: target.length, setupFrom: setupLines.length };
     bodyLines = target;
     const def = registry.get(node.data.registryType);
     if (!def || node.data.registryType === 'output' || node.data.registryType === 'split') continue;
@@ -840,10 +927,64 @@ export function graphToCode(
     // lands answers `false` (fail closed) and this emits the inert fallback;
     // subscribers of onUnknownExpressionValidated re-run the pass once the real
     // verdict is available (useSyncEngine does).
+    //
+    // A BOUND reference (`values.refs`, socket `ref<i>`) is re-emitted as what
+    // its edge resolves to TODAY — never the stored name, which the namer may
+    // have handed to another node since — and `float(0)` when unwired, the
+    // meaning of any unwired socket. The rewrite is validated again below like
+    // the raw text. No `refs` (every graph saved before binding) is the
+    // verbatim path, byte-identical.
     if (def.type === 'unknown') {
       const nv = getNodeValues(node);
-      const rawExpr = valueStr(nv.rawExpression ?? 'float(0)');
-      const safeExpr = isSafeUnknownExpression(rawExpr) ? rawExpr : 'float(0)';
+      let rawExpr = valueStr(nv.rawExpression ?? 'float(0)');
+      // The names the expression may READ besides TSL's (unknownExpression.ts,
+      // rule 5): the ones this module declares — the nodes this pass emits, so
+      // a hidden node's name is not one — plus the emitter's own references
+      // spliced in below.
+      declaredNames ??= new Set(
+        sorted
+          .filter((n) => n.data.registryType !== 'split' && !isOrphanedProperty(n))
+          .map((n) => varNames.get(n.id))
+          .filter((v): v is string => v !== undefined),
+      );
+      const introduced = new Set<string>();
+      const slots = unknownRefSlots(nv);
+      if (slots.length > 0) {
+        const subst = new Map<string, string>();
+        for (const { name, handle } of slots) {
+          const edge = inEdge(gidx, node.id, handle);
+          // The un-promoted reference: the stored text already spells whatever
+          // conversion its author wrote, and codeToGraph strips only one
+          // `float(…)` per Apply, so promoting here re-wrapped an Int on every
+          // Apply. A self-loop would emit a TDZ read of the node's own const.
+          let ref = edge && edge.source !== node.id ? resolveEdgeRefInner(edge, varNames, gidx) : null;
+          // A bound name is the source's VARIABLE: the parse binds `fresnel1`
+          // in `fresnel1.y` to `out`, whose reference is a member of that
+          // variable (Fresnel `.x`, Color Ramp `.rgb`, a wide Image `.rgb`).
+          // Spliced in, the kept `.y` landed on it — `fresnel1.x.y`, one more
+          // `.x` per Apply. So an `out` wire whose reference is a member of the
+          // bare variable re-emits the bare variable; every other socket (a
+          // Split alias, a Data column, a Sound channel) keeps its reference.
+          const bare = edge ? varNames.get(edge.source) : undefined;
+          if (ref && bare && (edge!.sourceHandle ?? 'out') === 'out' && ref.startsWith(`${bare}.`)) ref = bare;
+          if (!ref) addImport('three/tsl', 'float');
+          else {
+            const head = /^[$_\p{ID_Start}][$\p{ID_Continue}]*/u.exec(ref);
+            if (head) introduced.add(head[0]);
+          }
+          subst.set(name, ref ?? 'float(0)');
+        }
+        rawExpr = rebindUnknownExpression(rawExpr, subst) ?? 'float(0)';
+      }
+      const names = declaredNames;
+      const declared = (n: string): boolean => names.has(n) || introduced.has(n);
+      // A name read that this module does not declare is read as 0, token by
+      // token (an older graph's stale name, a one-way node's dangling one): a
+      // global is never read, and the rest of the text survives the next Apply.
+      const read = neutralizeUndeclaredReads(rawExpr, declared);
+      if (read !== null && read !== rawExpr) addImport('three/tsl', 'float');
+      rawExpr = read ?? 'float(0)';
+      const safeExpr = isSafeUnknownExpression(rawExpr, declared) ? rawExpr : 'float(0)';
       bodyLines.push(`  const ${varName} = ${safeExpr};`);
       continue;
     }
@@ -855,9 +996,14 @@ export function graphToCode(
       const nv = getNodeValues(node);
       addImport('three/tsl', 'uv');
 
-      // Resolve channel (UV map index)
-      const channelExpr = resolveExposedParam(node, 'channel', varNames, nv, gidx);
-      const baseExpr = channelExpr === '0' ? 'uv()' : `uv(${channelExpr})`;
+      // Resolve channel (UV map index). A WIRED channel goes through the helper
+      // that chooses the map in the shader — `uv(<node>)` read channel 0 whatever
+      // the wire carried (engine/moduleHelpers.ts, UV_CHANNEL_HELPER).
+      const channelEdge = inEdge(gidx, node.id, 'channel');
+      const channelRef = channelEdge ? resolveEdgeRef(channelEdge, varNames, gidx) : null;
+      const channelExpr = channelRef ?? resolveExposedParam(node, 'channel', varNames, nv, gidx);
+      if (channelRef) usedHelperNames.add(UV_CHANNEL_HELPER);
+      const baseExpr = channelRef ? `${UV_CHANNEL_HELPER}(${channelRef})` : channelExpr === '0' ? 'uv()' : `uv(${channelExpr})`;
 
       // Resolve tiling and rotation (may be connected via input ports)
       const tilingU = resolveExposedParam(node, 'tilingU', varNames, nv, gidx);
@@ -1559,9 +1705,13 @@ export function graphToCode(
       const dflt = Object.values(def.defaultValues)[0];
       const val = nodeValues?.[defaultKey] ?? dflt;
       const n = Number(val);
+      const constant = Number.isFinite(n) ? n : Number(dflt);
+      // An Int is emitted WHOLE and within ±INT32_MAX (`intLiteral`): three rounds
+      // `int(2.4)` only where it builds an int, and `float(int(2.4))` — the
+      // promotion — reads 2.4; past the range it is no i32 on either backend.
       const formatted = typeof dflt === 'string' && dflt.startsWith('#')
         ? hexLiteral(val)
-        : num(Number.isFinite(n) ? n : Number(dflt));
+        : num(def.type === 'int' ? intLiteral(constant) : constant);
       bodyLines.push(`  const ${varName} = ${def.tslFunction}(${formatted});`);
     } else if (def.type === 'hsl' || def.type === 'toHsl') {
       // HSL↔RGB: neither `hsl` nor `toHsl` exists in three/tsl, so the module
@@ -1637,9 +1787,22 @@ export function graphToCode(
     } else {
       // Regular function call
       if (MODULE_HELPERS.has(def.tslFunction)) usedHelperNames.add(def.tslFunction);
-      bodyLines.push(`  const ${varName} = ${def.tslFunction}(${args.join(', ')});`);
+      // WGSL has no scalar dot or normalize (GLSL has, so only WebGPU refused the
+      // module): when EVERY operand is a scalar, each goes in as a vec3 — what a
+      // scalar in these vec3 sockets means, and what three builds the moment one
+      // operand is a vector. codeToGraph strips the widening back off.
+      let callArgs = args;
+      if (VECTOR_ONLY_FNS.has(def.tslFunction) && def.inputs.every((input) => {
+        const edge = inEdge(gidx, node.id, input.id);
+        return !edge || certainlyScalar(edge, gidx);
+      })) {
+        addImport('three/tsl', 'vec3');
+        callArgs = args.map((arg) => `vec3(${arg})`);
+      }
+      bodyLines.push(`  const ${varName} = ${def.tslFunction}(${callArgs.join(', ')});`);
     }
   }
+  closeMark();
 
   // The helper block, in table order. hsl/toHsl and rayDirection are emitted
   // by dedicated branches that never touch usedHelperNames, so they are
@@ -1670,7 +1833,9 @@ export function graphToCode(
     const fieldRef = fieldEdge ? resolveEdgeRef(fieldEdge, varNames, gidx) : null;
     const densityRef = densityEdge ? resolveEdgeRef(densityEdge, varNames, gidx) : null;
     if (fieldRef || densityRef) {
-      const paramExpr = (key: string, dflt: number): string => numericParam(node, key, dflt, varNames, gidx);
+      // The march converts every number itself (`float(<X>)`, `Loop(int(<Steps>))`),
+      // so it reads the bare reference — the promoted one spelled `float(float(int1))`.
+      const paramExpr = (key: string, dflt: number): string => numericParam(node, key, dflt, varNames, gidx, resolveEdgeRefInner);
       const lines: string[] = [];
       // A per-step chain (Field/Density scalar, or Color/Emissive/Glow colour),
       // a function of the ray POSITION `p`.
@@ -1689,6 +1854,7 @@ export function graphToCode(
       };
       // Field: scalar distance.
       let fieldName: string | null = null;
+      let constantField = false;
       if (fieldRef) {
         const scoped = part.scopes.get('field')!.has(fieldEdge!.source);
         const scalarRef = narrowRef(fieldEdge!, fieldRef);
@@ -1699,6 +1865,7 @@ export function graphToCode(
           // Not p-dependent — a constant field. Wrap so the march can call it.
           lines.push(`  const ${base}Field = Fn(([p]) => ${scalarRef});`);
           fieldName = `${base}Field`;
+          constantField = true;
         }
       }
       let densityName: string | null = null;
@@ -1830,13 +1997,23 @@ export function graphToCode(
       // ---- shade the surface, composite volume over it, fill the sky ----
       if (fieldName) {
         // Gradient normal (four field taps) → a simple key-plus-ambient lambert.
-        lines.push(`    const nrm = Fn(([q]) => {`);
-        lines.push('      const e = float(0.001);');
-        lines.push('      const k1 = vec3(1, -1, -1); const k2 = vec3(-1, -1, 1); const k3 = vec3(-1, 1, -1); const k4 = vec3(1, 1, 1);');
-        lines.push(`      const g = add(add(mul(k1, ${fieldName}(add(q, mul(k1, e)))), mul(k2, ${fieldName}(add(q, mul(k2, e))))), add(mul(k3, ${fieldName}(add(q, mul(k3, e)))), mul(k4, ${fieldName}(add(q, mul(k4, e))))));`);
-        lines.push('      return normalize(g);');
-        lines.push('    })(hp);');
-        lines.push('    const key = normalize(vec3(lightX, lightY, lightZ));');
+        // A CONSTANT field has no gradient: its four taps sum to the zero vector,
+        // which WebGPU refuses to normalize at compile time — so it faces up.
+        if (constantField) {
+          lines.push('    const nrm = vec3(0, 1, 0);');
+        } else {
+          lines.push(`    const nrm = Fn(([q]) => {`);
+          lines.push('      const e = float(0.001);');
+          lines.push('      const k1 = vec3(1, -1, -1); const k2 = vec3(-1, -1, 1); const k3 = vec3(-1, 1, -1); const k4 = vec3(1, 1, 1);');
+          lines.push(`      const g = add(add(mul(k1, ${fieldName}(add(q, mul(k1, e)))), mul(k2, ${fieldName}(add(q, mul(k2, e))))), add(mul(k3, ${fieldName}(add(q, mul(k3, e)))), mul(k4, ${fieldName}(add(q, mul(k4, e))))));`);
+          lines.push('      return normalize(g);');
+          lines.push('    })(hp);');
+        }
+        // A key direction of (0, 0, 0) is no key light — and normalizing that
+        // constant is a WebGPU compile error, so it is the zero vector itself.
+        lines.push(lightX === '0' && lightY === '0' && lightZ === '0'
+          ? '    const key = vec3(0, 0, 0);'
+          : '    const key = normalize(vec3(lightX, lightY, lightZ));');
         let aoTerm = '';
         if (aoOn) {
           // IQ's 5-tap ambient occlusion along the normal, unrolled: how much
@@ -1982,7 +2159,7 @@ export function graphToCode(
         rgb = `mul(c.rgb, ${rgb})`;
       }
       const shaded = lightLine ? `mul(${rgb ?? 'c.rgb'}, ${base}Light)` : rgb ?? 'c.rgb';
-      pushScopeFn(lines, `${base}Shade`, params, lightLine ? [...shadeLines, lightLine] : shadeLines, `vec4(${shaded}, ${opacityRef ?? num(opacity)})`);
+      pushScopeFn(lines, `${base}Shade`, params, lightLine ? [...shadeLines, lightLine] : shadeLines, `vec4(${shaded}, ${opacityRef ?? num(opacity)})`, shadeLines);
       entries.push(`shade: ${base}Shade`);
     }
 
@@ -2166,9 +2343,10 @@ export function graphToCode(
           const sourceNode = gidx.nodeById.get(edge.source);
           const sourceDef = sourceNode ? registry.get(sourceNode.data.registryType) : undefined;
           if (sourceDef?.category === 'logic' && VEC3_CHANNELS.has(ch)) {
+            // A scalar comparison already arrives as `float(<ref>)` (promotesLogicWire).
             addImport('three/tsl', 'vec3');
             addImport('three/tsl', 'float');
-            channels[ch] = `vec3(float(${ref}))`;
+            channels[ch] = promotesLogicWire(edge, gidx) ? `vec3(${ref})` : `vec3(float(${ref}))`;
           } else if (ALPHA_BEARING_CHANNELS.has(ch) && shapeOfEdgeSource(edge) !== 3) {
             // Alpha comes ONLY from the opacity channel: `vec4(float)` splats
             // and `vec4(vec4)` hands `w` to alpha, hence `!== 3`, not `=== 1`.
@@ -2287,6 +2465,8 @@ export function graphToCode(
   // mark shares. See docs/dev/outputs-and-materials.md, per-mesh materials.
   const parts: {
     name: string;
+    /** The Output whose material this is (`nodeSpans` only — never emitted). */
+    nodeId: string;
     channels: Record<string, string>;
     discardRef: string | null;
     /** The material's settings as loader-form entries (`side: 2`) — [] for none. */
@@ -2316,7 +2496,7 @@ export function graphToCode(
         };
         byNode.set(section, resolved);
       }
-      parts.push({ name, ...resolved });
+      parts.push({ name, nodeId, ...resolved });
     }
   }
 
@@ -2328,6 +2508,8 @@ export function graphToCode(
   const signature = moduleSignatureOf(outputs);
   const indexParts: {
     index: number;
+    /** The Output whose material this is (`nodeSpans` only — never emitted). */
+    nodeId: string;
     channels: Record<string, string>;
     discardRef: string | null;
     settings: string[];
@@ -2338,6 +2520,7 @@ export function graphToCode(
       if (!node) continue;
       indexParts.push({
         index: gltfIndex,
+        nodeId,
         ...resolveOutputChannels(node, section),
         settings: materialSettingProps(materialsFor(node)[section].materialSettings),
       });
@@ -2356,6 +2539,9 @@ export function graphToCode(
 
   // Build return line — single value for color-only, object for multiple channels
   let returnLine: string;
+  /** Which Output wrote which columns of a `parts` / `materialParts` return
+   *  line (`nodeSpans` only; 0-based, end exclusive). */
+  const returnCols: { nodeId: string; from: number; to: number }[] = [];
   const channelEntries = Object.entries(channels);
 
   if (parts.length > 0 || indexParts.length > 0) {
@@ -2375,13 +2561,28 @@ export function graphToCode(
     // every name is a string literal the splitters honour.
     const pieces: string[] = [];
     if (parts.length > 0) pieces.push(`parts: { ${partProps.join(', ')} }`);
+    const indexProps = indexParts.map((part) => `${moduleStringLiteral(String(part.index))}: { ${partBody(part)} }`);
     if (indexParts.length > 0 && signature) {
-      pieces.push(`materialParts: { ${indexParts
-        .map((part) => `${moduleStringLiteral(String(part.index))}: { ${partBody(part)} }`)
-        .join(', ')} }`);
+      pieces.push(`materialParts: { ${indexProps.join(', ')} }`);
       pieces.push(`modelSignature: { materials: [${signature.map(moduleStringLiteral).join(', ')}] }`);
     }
     returnLine = `  return { ${lead}${pieces.join(', ')} };`;
+    // Each Output's columns of that ONE line. A forward search from a running
+    // cursor is exact: every entry starts with its key's `"`, and nothing
+    // between two entries (`, `, `parts: { `, `}, materialParts: { `) holds one.
+    let cur = '  return { '.length;
+    if (props && defaultNode) returnCols.push({ nodeId: defaultNode.id, from: cur, to: cur + props.length });
+    cur += lead.length;
+    const locate = (texts: readonly string[], owners: readonly string[]): void => {
+      texts.forEach((text, i) => {
+        const at = returnLine.indexOf(text, cur);
+        if (at < 0) return;
+        returnCols.push({ nodeId: owners[i], from: at, to: at + text.length });
+        cur = at + text.length;
+      });
+    };
+    locate(partProps, parts.map((p) => p.nodeId));
+    if (signature) locate(indexProps, indexParts.map((p) => p.nodeId));
   } else if (channelEntries.length === 0) {
     // No trailing comment: a `//` on a return line used to defeat parseBody's
     // end-anchored regexes in tslCodeProcessor, which then treated this as a
@@ -2405,6 +2606,24 @@ export function graphToCode(
   // active Splat Output never reaches the module, and neither may its import.
   if (effectiveReturnLine.includes('vec3(')) {
     addImport('three/tsl', 'vec3');
+  }
+  // An int promoted where it met a float (resolveEdgeRef) spells `float(…)` —
+  // imported only when a wrapped reference reached the module: a socket read
+  // CPU-side (Sound's smoothing) or ignored by its mode resolves its wire too.
+  const promoted = INT_PROMOTED.get(gidx);
+  if (promoted) {
+    const emitted = [
+      ...mainLines,
+      ...(customEmission ? customEmission.lines : []),
+      (customEmission ? customEmission.discardLine : discardLine) ?? '',
+      effectiveReturnLine,
+    ].join('\n');
+    for (const wrapped of promoted) {
+      if (emitted.includes(wrapped)) {
+        addImport('three/tsl', 'float');
+        break;
+      }
+    }
   }
 
   // Build import lines (after all imports are collected)
@@ -2434,27 +2653,80 @@ export function graphToCode(
     ),
   );
 
-  const code = [
-    ...importLines,
-    '',
-    ...helperLines,
-    // Module-scope DataTexture construction (Data/Stripes nodes) — must precede
-    // the shader Fn so its body can close over the textures.
-    ...(setupLines.length ? [...setupLines, ''] : []),
-    ...(budgetLine ? [budgetLine] : []),
-    'const shader = Fn(() => {',
-    ...mainLines,
-    ...(customEmission ? customEmission.lines : []),
-    ...(customEmission ? (customEmission.discardLine ? [customEmission.discardLine] : []) : discardLine ? [discardLine] : []),
-    '',
-    effectiveReturnLine,
-    '});',
-    '',
-    'export default shader;',
-    '',
-  ].join('\n');
+  // The module, assembled line by line so `nodeSpans` knows where each block
+  // landed (a loop, never `push(...spread)`: no argument-count limit).
+  const moduleLines: string[] = [];
+  const append = (block: readonly string[]): void => {
+    for (const l of block) moduleLines.push(l);
+  };
+  append(importLines);
+  moduleLines.push('');
+  append(helperLines);
+  // Module-scope DataTexture construction (Data/Stripes nodes) — must precede
+  // the shader Fn so its body can close over the textures.
+  const setupBase = moduleLines.length;
+  if (setupLines.length) {
+    append(setupLines);
+    moduleLines.push('');
+  }
+  if (budgetLine) moduleLines.push(budgetLine);
+  moduleLines.push('const shader = Fn(() => {');
+  const bases = new Map<readonly string[], number[]>([[mainLines, [moduleLines.length]]]);
+  append(mainLines);
+  const customBase = moduleLines.length;
+  if (customEmission) append(customEmission.lines);
+  const discardText = customEmission ? customEmission.discardLine : discardLine;
+  const discardIndex = discardText ? moduleLines.push(discardText) - 1 : -1;
+  moduleLines.push('');
+  const returnIndex = moduleLines.push(effectiveReturnLine) - 1;
+  moduleLines.push('});', '', 'export default shader;', '');
+  const code = moduleLines.join('\n');
 
-  return { code, importStatements: importLines, varNames };
+  // ===== nodeSpans (engine/codeSpans.ts) — bookkeeping, never emission =====
+  // A scope array counts only where pushScopeFn copied it into the program
+  // that was EMITTED: a scope whose Fn never was gives its marks no span.
+  const chains: [number, number][] = [];
+  if (customEmission) {
+    for (const [origin, placed] of scopeAt) {
+      for (const p of placed) {
+        if (p.host !== customEmission.lines) continue;
+        const b = customBase + p.at;
+        bases.set(origin, [...(bases.get(origin) ?? []), b]);
+        chains.push([b, b + origin.length]);
+      }
+    }
+  }
+  // A Split emits no line: its swizzle is inlined into each consumer, so its
+  // code is those reads. Split → Split resolves to nothing (no read).
+  const splitReads: { splitId: string; consumerId: string; ref: string }[] = [];
+  for (const n of sorted) {
+    if (n.data.registryType !== 'split') continue;
+    for (const e of outEdges(gidx, n.id)) {
+      const ref = resolveEdgeRef(e, varNames, gidx);
+      if (ref) splitReads.push({ splitId: n.id, consumerId: e.target, ref });
+    }
+  }
+  const sinkId = customEmission && customNode ? customNode.id : null;
+  const nodeSpans = assembleNodeSpans(code, {
+    out: moduleLines,
+    setupBase,
+    bases,
+    marks,
+    sink: sinkId && customEmission
+      ? { id: sinkId, from: customBase, to: customBase + customEmission.lines.length, chains }
+      : null,
+    discard: discardIndex < 0 ? null : { index: discardIndex, owner: sinkId ?? defaultNode?.id ?? '' },
+    ret: {
+      index: returnIndex,
+      // The sink's return, or the default Output's own — with `parts` the line
+      // is shared, and each Output owns its columns instead.
+      whole: sinkId ?? (parts.length > 0 || indexParts.length > 0 ? null : defaultNode?.id ?? null),
+      cols: sinkId ? [] : returnCols,
+    },
+    splitReads,
+  });
+
+  return { code, importStatements: importLines, varNames, nodeSpans };
 }
 
 
@@ -2534,8 +2806,89 @@ function micGainExpr(
   return gain === 1 ? null : num(gain);
 }
 
-/** Resolve a source edge reference, looking through split nodes to inline swizzle. */
+/** One int-promotion memo per codegen pass (the GraphIndex is per pass). */
+const INT_MEMO = new WeakMap<GraphIndex, Map<string, boolean>>();
+
+/** `three/tsl` functions WGSL defines on vectors only (GLSL takes scalars too):
+ *  an all-scalar call is emitted over vec3s, which codeToGraph strips back off. */
+export const VECTOR_ONLY_FNS: ReadonlySet<string> = new Set(['dot', 'normalize']);
+
+/**
+ * Is the value on this wire CERTAINLY one channel — the only kind an all-scalar
+ * dot/normalize may widen? A declared vector port is not. A source or a reducer
+ * declared float is (Float, Time, the noises; Length, Dot, a distance field, a
+ * Split or channel socket). Smoothstep and Remap are declared float but compute
+ * per component, so — like the any-typed operations — they are scalar only over
+ * certain scalars; an unknown expression's width, and an Append's, are not one.
+ * The declared type alone had widened a vec4 Smoothstep and dropped its w.
+ */
+function certainlyScalar(edge: AppEdge, gidx: GraphIndex, seen: Set<string> = new Set()): boolean {
+  const source = gidx.nodeById.get(edge.source);
+  const def = source ? NODE_REGISTRY.get(source.data.registryType) : undefined;
+  if (!source || !def || def.type === 'unknown' || def.type === 'append') return false;
+  const declared = portShapeForHandle(source, edge.sourceHandle ?? 'out');
+  if (declared > 1) return false;
+  if (declared === 1 && (def.inputs.length === 0 || def.inputs.some((i) => i.dataType !== 'float' && i.dataType !== 'int'))) return true;
+  if (seen.has(source.id)) return false; // a cycle
+  seen.add(source.id);
+  return inEdges(gidx, source.id).every((e) => certainlyScalar(e, gidx, seen));
+}
+/** Per pass, the `float(…)` wrappers it handed out — `float` is imported when one is emitted. */
+const INT_PROMOTED = new WeakMap<GraphIndex, Set<string>>();
+
+/**
+ * Is this wire a scalar COMPARISON (Greater Than, Less Than, Equal) — a bool in
+ * TSL — arriving where a number is meant? Then it is a float too: `mul(gt, 2)`
+ * built bool × float, which neither backend compiles (its label read 2). Where
+ * a bool is the point it stays one: a Select's condition, an Output's Discard.
+ * A vector comparison (bvecN) is left alone — `float()` would keep only x.
+ */
+function promotesLogicWire(edge: AppEdge, gidx: GraphIndex): boolean {
+  const source = gidx.nodeById.get(edge.source);
+  if (!source || NODE_REGISTRY.get(source.data.registryType)?.category !== 'logic') return false;
+  if (edge.targetHandle === 'discard') return false;
+  if (edge.targetHandle === 'condition' && gidx.nodeById.get(edge.target)?.data.registryType === 'select') return false;
+  return gidx.edgeShape?.(edge) === 1;
+}
+
+/**
+ * Resolve a source edge reference — and where an INT (or a scalar comparison)
+ * meets a FLOAT, wrap it in `float(…)` (engine/intPromotion.ts): three would
+ * otherwise take the int's type when it comes first and turn the float into an
+ * int (Int 4 × 0.3 was 0). ONE choke point, since every consumer resolves its
+ * wires through here; a graph with no Int and no comparison feeding a number
+ * emits byte-identically. codeToGraph strips the wrapper back off
+ * (stripIntPromotions).
+ */
 function resolveEdgeRef(
+  edge: AppEdge,
+  varNames: Map<string, string>,
+  gidx: GraphIndex
+): string | null {
+  const ref = resolveEdgeRefInner(edge, varNames, gidx);
+  if (ref === null) return null;
+  let memo = INT_MEMO.get(gidx);
+  if (!memo) {
+    memo = new Map();
+    INT_MEMO.set(gidx, memo);
+  }
+  const target = gidx.nodeById.get(edge.target);
+  const portType = target
+    ? NODE_REGISTRY.get(target.data.registryType)?.inputs.find((p) => p.id === edge.targetHandle)?.dataType
+    : undefined;
+  if (!promotesIntWire(intGraphOver(gidx.nodeById, gidx.incoming), edge, portType, memo) && !promotesLogicWire(edge, gidx)) return ref;
+  const wrapped = `float(${ref})`;
+  let promoted = INT_PROMOTED.get(gidx);
+  if (!promoted) {
+    promoted = new Set();
+    INT_PROMOTED.set(gidx, promoted);
+  }
+  promoted.add(wrapped);
+  return wrapped;
+}
+
+/** Resolve a source edge reference, looking through split nodes to inline swizzle. */
+function resolveEdgeRefInner(
   edge: AppEdge,
   varNames: Map<string, string>,
   gidx: GraphIndex

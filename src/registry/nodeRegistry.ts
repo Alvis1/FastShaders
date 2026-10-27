@@ -1,5 +1,6 @@
 import type { NodeDefinition, NodeCategory, PortDefinition } from '@/types';
 import { nodeSearchLV, nodeLabelLV } from '@/i18n';
+import { foldSearchText } from '@/utils/searchFold';
 import { SOUND_DEFAULT_VALUES } from '@/utils/soundSettings';
 import { HIDDEN_NODE_TYPES, STUDY_WITHHELD_NODE_TYPES } from './editorVisibility';
 import { isEvalMode } from '@/eval/evalArm';
@@ -848,6 +849,10 @@ const definitions: NodeDefinition[] = [
     tslImportModule: 'three/tsl',
     inputs: [{ id: 'v', label: 'Vector', dataType: 'vec3' }],
     outputs: [{ id: 'out', label: 'Result', dataType: 'vec3' }],
+    // Unwired, `normalize(vec3(0))` has no direction — and WebGPU rejects the
+    // constant zero vector outright, so a freshly dropped Normalize took the
+    // whole module down. The evaluator falls back to the same 1.
+    defaultValues: { v: 1 },
     description: 'Rescale a vector to length 1, keeping its direction. Also: unit vector',
   },
   {
@@ -2015,8 +2020,13 @@ export function displayDescription(def: NodeDefinition): string | undefined {
 export const NO_MATCH = Number.POSITIVE_INFINITY;
 
 /**
- * How well `def` matches a lowercased search query — LOWER IS BETTER,
- * `NO_MATCH` for no match at all.
+ * How well `def` matches a search query — LOWER IS BETTER, `NO_MATCH` for no
+ * match at all.
+ *
+ * Both sides go through `foldSearchText` (lower-case, diacritics dropped), so
+ * "krasa" is an exact-name hit on Color's Latvian label "Krāsa". The query is
+ * folded HERE as well as by `searchNodes`: folding is idempotent, and a caller
+ * that hands in a merely lower-cased "krāsa" must still match the folded names.
  *
  * A node's NAME must always outrank its prose. Without this, results came out
  * in raw registry order, so a node that merely *mentions* the query in its
@@ -2028,22 +2038,23 @@ export const NO_MATCH = Number.POSITIVE_INFINITY;
  * `displayDescription`, which strips it from the UI), so it ranks above prose
  * but below a real name.
  */
-export function nodeMatchRank(def: NodeDefinition, q: string): number {
-  const names = [def.label.toLowerCase(), def.type.toLowerCase(), def.tslFunction.toLowerCase()];
+export function nodeMatchRank(def: NodeDefinition, query: string): number {
+  const q = foldSearchText(query);
+  const names = [foldSearchText(def.label), foldSearchText(def.type), foldSearchText(def.tslFunction)];
   // The Latvian label is a name too — a Latvian user typing it deserves the
   // same rank an English user gets for the English label.
-  const lvLabel = nodeLabelLV(def.type).toLowerCase();
+  const lvLabel = foldSearchText(nodeLabelLV(def.type));
   if (lvLabel) names.push(lvLabel);
 
   if (names.some((n) => n === q)) return 0;
   if (names.some((n) => n.startsWith(q))) return 1;
   if (names.some((n) => n.includes(q))) return 2;
 
-  const [prose = '', aliases = ''] = (def.description?.toLowerCase() ?? '').split(/\s*also:/);
+  const [prose = '', aliases = ''] = foldSearchText(def.description ?? '').split(/\s*also:/);
   if (aliases.includes(q)) return 3;
   if (prose.includes(q)) return 4;
   // Latvian description last, mirroring the English prose tier.
-  if (nodeSearchLV(def.type).includes(q)) return 5;
+  if (foldSearchText(nodeSearchLV(def.type)).includes(q)) return 5;
   return NO_MATCH;
 }
 
@@ -2060,7 +2071,7 @@ export function nodeMatchRank(def: NodeDefinition, q: string): number {
  */
 export function searchNodes(query: string, hidden?: ReadonlySet<NodeCategory>): NodeDefinition[] {
   const defs = getEditorDefinitions(hidden);
-  const q = query.trim().toLowerCase();
+  const q = foldSearchText(query.trim());
   if (!q) return defs;
   return defs
     .map((d) => ({ d, rank: nodeMatchRank(d, q) }))

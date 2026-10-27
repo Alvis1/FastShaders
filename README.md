@@ -4,7 +4,7 @@ FastShaders is a visual 3D graphics editor for web-based virtual reality content
 
 Main features:
 
-- **Nodes and code in sync**: build a shader as a node graph or write it as [TSL (Three.js Shading Language)](https://github.com/mrdoob/three.js/wiki/Three.js-Shading-Language). The code follows every graph edit, and **Apply** turns edited code back into nodes.
+- **Nodes and code in sync**: build a shader as a node graph or write it as [TSL (Three.js Shading Language)](https://github.com/mrdoob/three.js/wiki/Three.js-Shading-Language). The code follows every graph edit and shows only the nodes that feed an Output; **Apply** turns edited code back into nodes and keeps the unconnected ones on the canvas.
 - **Performance cost while you build**: each node's GPU cost is measured on the target VR headset. Every device's budget reads as 100 points, so a node's points are its share of that device's frame, and the editor shows the shader's total out of 100.
 - **Beginner recipes** — one idea in one to five nodes, wired into the Output with one click — and the larger **visual-effect presets** (Presets 2) to start from or take apart, plus reconstructed TSL textures and distance-field (SDF) nodes. Switch the Presets 2, Textures and SDF tabs on from the toolbar's right-click menu.
 - **Your own material**: images, 3D models (`.obj`, `.glb`, `.gltf`), Gaussian splats, colour palettes, microphone or desktop audio, and CSV data.
@@ -252,6 +252,17 @@ Alvis Misjuns
 FastShaders is doctoral research at the Faculty of Engineering, Vidzeme University of Applied Sciences, on
 performance-aware shader authoring for standalone VR headsets: per-node GPU costs are measured on the target
 device with the bundled ShaderCarousel benchmark, so the editor can show a shader's cost against a real
-budget while it is being built. A paper is in preparation; until it appears, please link to this repository.
+budget while it is being built. A paper is in preparation; until it appears, please cite the software:
+
+> Misjuns, A. *FastShaders*. Zenodo. [doi:10.5281/zenodo.21133254](https://doi.org/10.5281/zenodo.21133254)
+
+That DOI always points to the newest release. Every release is also archived on its own, with its own DOI,
+and none is ever overwritten, so a result can name the exact version it was produced with. Each version's
+DOI is listed on the [Zenodo record](https://doi.org/10.5281/zenodo.21133254). For example, the first user
+study ran on v0.3.41, [doi:10.5281/zenodo.23495140](https://doi.org/10.5281/zenodo.23495140). Each version's
+desktop builds stay on its [GitHub release](https://github.com/Alvis1/FastShaders/releases), so an old version
+can still be run. The Zenodo archive holds this repository's source only: the shader loader is the
+[a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader) submodule, at the commit the release
+tag records.
 
 This research was supported by the project No. 1.1.1.8/1/24/I/001 VeA and ViA Doctoral Grants, co-funded by the European Union (European Regional Development Fund) and the Latvian state budget within the European Union Cohesion Policy Programme 2021–2027.

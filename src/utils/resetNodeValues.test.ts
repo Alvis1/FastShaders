@@ -93,6 +93,17 @@ describe('resetNodeValues', () => {
     expect(out).toEqual({ functionName: 'mystery', rawExpression: 'mystery(uv(), 2.0)' });
   });
 
+  it('keeps the names an Unknown node binds to its sockets (`refs`)', () => {
+    // Without them the text is verbatim again, and each stored name reads
+    // whichever node the namer has given it since (engine/unknownExpression.ts).
+    const out = resetNodeValues(def('unknown'), {
+      functionName: 'saturate',
+      rawExpression: 'saturate(a, b)',
+      refs: 'a b',
+    });
+    expect(out).toEqual({ functionName: 'saturate', rawExpression: 'saturate(a, b)', refs: 'a b' });
+  });
+
   it('is idempotent', () => {
     const once = resetNodeValues(def('slider'), { value: 9 });
     expect(resetNodeValues(def('slider'), once)).toEqual(once);
@@ -142,7 +153,9 @@ describe('isAtDefaultValues', () => {
 
 describe('hasResettableValues', () => {
   it('is false for nodes that carry no settings at all', () => {
-    for (const type of ['add', 'positionGeometry', 'normalize', 'output']) {
+    // (Not `normalize`: since 2026-10-28 it declares `v: 1` — unwired, the zero
+    // vector failed WebGPU's compile — so like Clamp or Log2 it has a reset.)
+    for (const type of ['add', 'positionGeometry', 'dot', 'output']) {
       expect(hasResettableValues(def(type), {}), type).toBe(false);
     }
   });

@@ -31,6 +31,7 @@ import { SeamLens, aimSeamLens } from '@/components/Layout/SeamLens';
 import { registerAssetBarDrag } from '@/components/Layout/assetBarDrag';
 import { assetText, formatCategoryLabel, t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
+import { foldSearchText } from '@/utils/searchFold';
 import type { AppNode, NodeCategory, NodeDefinition } from '@/types';
 import { CAT_HEX } from '@/utils/colorUtils';
 import { assetCostPoints, freshNodeCost } from '@/utils/nodeCost';
@@ -96,18 +97,13 @@ interface BuiltinLibraries {
 }
 
 /**
- * Does a preset/texture answer the (already lower-cased) query? By name, id or
+ * Does a preset/texture answer the (already folded) query? By name, id or
  * description, and by its LATVIAN name and description whichever language is
- * on: the same rule node search follows (`nodeMatchRank`).
+ * on: the same rule node search follows (`nodeMatchRank`), on the same fold.
  */
 function assetMatches(a: { id: string; name: string; description: string }, q: string): boolean {
-  return (
-    a.name.toLowerCase().includes(q) ||
-    a.id.toLowerCase().includes(q) ||
-    a.description.toLowerCase().includes(q) ||
-    assetText(a.name, 'lv').toLowerCase().includes(q) ||
-    assetText(a.description, 'lv').toLowerCase().includes(q)
-  );
+  return [a.name, a.id, a.description, assetText(a.name, 'lv'), assetText(a.description, 'lv')]
+    .some((x) => foldSearchText(x).includes(q));
 }
 
 /** Tab style for a coloured category button: the active tab's bg + bottom
@@ -695,7 +691,8 @@ export const ContentBrowser = memo(function ContentBrowser() {
   // The SETTLED query, never the live box value — every memo below keys on it,
   // and each one is expensive enough that running it per keystroke is what made
   // the first character of a search drop its own frame (see `settledSearch`).
-  const q = settledSearch.trim().toLowerCase();
+  // FOLDED like every text it meets (`foldSearchText`), so "krasa" finds Krāsa.
+  const q = foldSearchText(settledSearch.trim());
 
   // One shared match+rank rule with the Add-node menu (nodeRegistry.searchNodes),
   // so the same query orders the same way on both surfaces — a node's NAME
@@ -743,7 +740,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
 
   const filteredSavedGroups = useMemo(() => {
     if (!q) return savedGroups;
-    return savedGroups.filter((g) => g.name.toLowerCase().includes(q));
+    return savedGroups.filter((g) => foldSearchText(g.name).includes(q));
   }, [savedGroups, q]);
 
   // The lessons, by title or summary in either language. Only on their own
@@ -753,7 +750,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
     if (!OFFER_TUTORIALS) return [];
     if (!q) return TUTORIALS;
     return TUTORIALS.filter((d) =>
-      [d.title, d.summary, t(d.title, 'lv'), t(d.summary, 'lv')].some((x) => x.toLowerCase().includes(q)),
+      [d.title, d.summary, t(d.title, 'lv'), t(d.summary, 'lv')].some((x) => foldSearchText(x).includes(q)),
     );
   }, [q]);
 

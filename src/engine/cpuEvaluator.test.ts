@@ -13,10 +13,20 @@ import type { AppNode } from '@/types';
 
 describe('evaluateNodeOutput — constants', () => {
   it('emits a scalar for float / int / slider / property_float', () => {
-    for (const type of ['float', 'int', 'slider', 'property_float']) {
+    for (const type of ['float', 'slider', 'property_float']) {
       const n = makeNode('n', type, { value: 3.25 });
       expect(evaluateNodeOutput('n', [n], [], 0)).toEqual([3.25]);
     }
+    // `int(3.25)` is 3 wherever three converts it (generateConst rounds).
+    expect(evaluateNodeOutput('n', [makeNode('n', 'int', { value: 3.25 })], [], 0)).toEqual([3]);
+  });
+
+  it('a missing or junk value is the default the module emits, not 0 or NaN', () => {
+    // graphToCode's zero-input branch: `values.value ?? default`, a non-finite
+    // number replaced by the default — `uniform(1)`, `float(0.5)`.
+    expect(evaluateNodeOutput('n', [makeNode('n', 'property_float')], [], 0)).toEqual([1]);
+    expect(evaluateNodeOutput('n', [makeNode('n', 'slider')], [], 0)).toEqual([0.5]);
+    expect(evaluateNodeOutput('n', [makeNode('n', 'slider', { value: 'abc' })], [], 0)).toEqual([0.5]);
   });
 
   it('falls back to 0 when value is missing', () => {
@@ -100,11 +110,11 @@ describe('evaluateNodeOutput — arithmetic with broadcast', () => {
     expect(evaluateNodeOutput('op', [A, B, op], edges, 0)).toEqual([6]);
   });
 
-  it('div(2, 0) returns 0 (safe-divide)', () => {
+  it('div(2, 0) is +∞ as on the GPU, never a "safe" 0 the shader does not hold', () => {
     const zero = makeNode('z', 'float', { value: 0 });
     const op = makeNode('op', 'div');
     const edges = [makeEdge('a', 'out', 'op', 'a'), makeEdge('z', 'out', 'op', 'b')];
-    expect(evaluateNodeOutput('op', [A, zero, op], edges, 0)).toEqual([0]);
+    expect(evaluateNodeOutput('op', [A, zero, op], edges, 0)).toEqual([Infinity]);
   });
 
   it('broadcasts a scalar across a vec3 (vec3 + float = vec3)', () => {
@@ -140,16 +150,16 @@ describe('evaluateNodeOutput — unary math', () => {
     expect(unary('abs', 7)).toBe(7);
   });
 
-  it('sqrt clamps negatives to 0 (no NaN)', () => {
+  it('sqrt of a negative has no value (NaN, as on the GPU)', () => {
     expect(unary('sqrt', 9)).toBe(3);
-    expect(unary('sqrt', -4)).toBe(0);
+    expect(unary('sqrt', -4)).toBeNaN();
   });
 
-  it('exp / log2 use Math equivalents (log2 guarded against 0)', () => {
+  it('exp / log2 use Math equivalents — log2(0) is −∞ and below 0 NaN, never a floored −33', () => {
     expect(unary('exp', 1)).toBeCloseTo(Math.E, 10);
     expect(unary('log2', 8)).toBe(3);
-    expect(unary('log2', 0)).toBeLessThan(0); // guarded but still very negative
-    expect(Number.isFinite(unary('log2', 0))).toBe(true);
+    expect(unary('log2', 0)).toBe(-Infinity);
+    expect(unary('log2', -1)).toBeNaN();
   });
 
   it('floor / round / fract', () => {
@@ -174,12 +184,23 @@ describe('evaluateNodeOutput — binary math and clamp', () => {
     expect(evaluateNodeOutput('op', [base, exp, op], edges, 0)).toEqual([1024]);
   });
 
-  it('mod handles divisor=0 with safe return', () => {
+  it('mod by 0 has no value (NaN on both backends), never a "safe" 0', () => {
     const x = makeNode('x', 'float', { value: 5 });
     const y = makeNode('y', 'float', { value: 0 });
     const op = makeNode('op', 'mod');
     const edges = [makeEdge('x', 'out', 'op', 'x'), makeEdge('y', 'out', 'op', 'y')];
-    expect(evaluateNodeOutput('op', [x, y, op], edges, 0)).toEqual([0]);
+    expect(evaluateNodeOutput('op', [x, y, op], edges, 0)).toEqual([NaN]);
+  });
+
+  it('mod is FLOORED, as three emits it (GLSL mod, the WGSL polyfill), not JS %', () => {
+    const mod = (a: number, b: number) => {
+      const op = makeNode('op', 'mod');
+      const nodes = [makeNode('x', 'float', { value: a }), makeNode('y', 'float', { value: b }), op];
+      return evaluateNodeOutput('op', nodes, [makeEdge('x', 'out', 'op', 'x'), makeEdge('y', 'out', 'op', 'y')], 0)![0];
+    };
+    expect(mod(-0.3, 1)).toBeCloseTo(0.7, 12);
+    expect(mod(0.3, -1)).toBeCloseTo(-0.7, 12);
+    expect(mod(5.5, 2)).toBeCloseTo(1.5, 12);
   });
 
   it('min and max', () => {
@@ -453,14 +474,25 @@ describe('evaluateNodeRange', () => {
     expect(evaluateNodeRange('n', [n], [], 0)).toEqual({ min: [0], max: [1] });
   });
 
-  it('keeps cellNoise and voronoi at [0, 1] in both cases — they were never signed', () => {
-    for (const type of ['cellNoise', 'voronoi']) {
-      expect(evaluateNodeRange('n', [makeNode('n', type)], [], 0), type)
-        .toEqual({ min: [0], max: [1] });
+  it('cellNoise and voronoi carry no range flag — and Voronoi is a SQUARED distance', () => {
+    // three r184 calls MaterialX Worley with metric int(1): dot(diff, diff),
+    // no sqrt. F1²/F2²/F3² are bounded by the 3×3×3 search window, not by 1.
+    const bounds: Record<string, { min: number[]; max: number[] }> = {
+      cellNoise: { min: [0], max: [1] },
+      voronoi: { min: [0], max: [3] },
+      voronoiVec2: { min: [0, 0], max: [3, 3] },
+      voronoiVec3: { min: [0, 0, 0], max: [3, 3, 3.5] },
+    };
+    for (const [type, b] of Object.entries(bounds)) {
+      expect(evaluateNodeRange('n', [makeNode('n', type)], [], 0), type).toEqual(b);
       // Even with a tampered flag: the def type gates the whole feature.
-      expect(evaluateNodeRange('n', [makeNode('n', type, { signed: 0 })], [], 0), type)
-        .toEqual({ min: [0], max: [1] });
+      expect(evaluateNodeRange('n', [makeNode('n', type, { signed: 0 })], [], 0), type).toEqual(b);
     }
+  });
+
+  it('fBm sums three octaves (1 + ½ + ¼), so its bound is ±1.75, not one octave\'s ±1', () => {
+    expect(evaluateNodeRange('n', [makeNode('n', 'fbm')], [], 0)).toEqual({ min: [-1.75], max: [1.75] });
+    expect(evaluateNodeRange('n', [makeNode('n', 'fbm', { signed: 0 })], [], 0)).toEqual({ min: [-0.375], max: [1.375] });
   });
 
   it('reports unit-vector ranges for normals, tangents, and view directions', () => {
@@ -472,18 +504,20 @@ describe('evaluateNodeRange', () => {
     }
   });
 
-  it('reports the fit-bounds range for model-space positions', () => {
+  it('reports ±1 for model-space positions — the built-in sphere has radius 1', () => {
+    // The primitives are not fitted (sphere radius 1, plane 2×2); fit-bounds'
+    // ±0.8 holds only for dropped models, the teapot and splats.
     for (const type of ['positionGeometry', 'positionLocal']) {
       const n = makeNode('n', type);
       expect(evaluateNodeRange('n', [n], [], 0)).toEqual({
-        min: [-0.8, -0.8, -0.8], max: [0.8, 0.8, 0.8],
+        min: [-1, -1, -1], max: [1, 1, 1],
       });
     }
   });
 
   it('propagates an additive offset through interval arithmetic', () => {
-    // positionGeometry carries the analytical fit-bounds range [-0.8, 0.8] per
-    // channel; the add shifts the interval: [-0.8..0.8] + 1 → [0.2..1.8].
+    // positionGeometry carries the analytical range [-1, 1] per channel; the
+    // add shifts the interval: [-1..1] + 1 → [0..2].
     const pos = makeNode('p', 'positionGeometry');
     const one = makeNode('one', 'float', { value: 1 });
     const op = makeNode('op', 'add');
@@ -492,8 +526,8 @@ describe('evaluateNodeRange', () => {
     expect(r).not.toBeNull();
     expect(r.min).toHaveLength(3);
     for (let i = 0; i < 3; i++) {
-      expect(r.min[i]).toBeCloseTo(0.2, 10);
-      expect(r.max[i]).toBeCloseTo(1.8, 10);
+      expect(r.min[i]).toBeCloseTo(0, 10);
+      expect(r.max[i]).toBeCloseTo(2, 10);
     }
   });
 });
@@ -725,10 +759,11 @@ describe('append — grown operands agree with buildAppendConstructor', () => {
   });
 
   it('walks every grown operand when the range has to be INFERRED', () => {
-    // `split` evaluates to null, so this graph skips the deterministic
+    // The position is a field, so this graph skips the deterministic
     // short-circuit and lands in computeRange's own `append` case — the branch
-    // the two tests above never reach. Each unknown scalar contributes the
-    // "assume normalized" [0, 1], so a walk that stopped at the base a/b pair
+    // the two tests above never reach. Each Split socket carries its own
+    // channel of the position's ±1 (it used to be an invented [0, 1], Split
+    // having no rule at all), so a walk that stopped at the base a/b pair
     // would come back one entry short of the emitted vec3.
     const nodes = [
       makeNode('p', 'positionGeometry'),
@@ -744,7 +779,7 @@ describe('append — grown operands agree with buildAppendConstructor', () => {
     expect(evaluateNodeOutput('op', nodes, edges, 0)).toBeNull();
     expect(getNodeOutputShape('op', nodes, edges)).toBe(3);
     expect(evaluateNodeRange('op', nodes, edges, 0)).toEqual({
-      min: [0, 0, 0], max: [1, 1, 1],
+      min: [-1, -1, -1], max: [1, 1, 1],
     });
   });
 
@@ -798,7 +833,7 @@ describe('append — grown operands agree with buildAppendConstructor', () => {
     expect(evaluateNodeOutput('op', nodes, edges, 0)).toBeNull();
     expect(getNodeOutputShape('op', nodes, edges)).toBe(4);
     expect(evaluateNodeRange('op', nodes, edges, 0)).toEqual({
-      min: [-0.8, -0.8, -0.8, 2], max: [0.8, 0.8, 0.8, 2],
+      min: [-1, -1, -1, 2], max: [1, 1, 1, 2],
     });
   });
 
@@ -946,11 +981,12 @@ describe('field gate — a probe point is not a range (the "goes in a range, com
         makeEdge('s', 'x', 'pw', 'base'), makeEdge('k', 'out', 'pw', 'exp')], 0),
     ).toEqual({ min: [0], max: [1] });
 
+    // u in [0, 1] stays inside ONE period of 2, where mod is u itself.
     const md = makeNode('md', 'mod');
     expect(
       evaluateNodeRange('md', [...base, two, md], [...wire,
         makeEdge('s', 'x', 'md', 'x'), makeEdge('k', 'out', 'md', 'y')], 0),
-    ).toEqual({ min: [0], max: [2] });
+    ).toEqual({ min: [0], max: [1] });
 
     const nw = makeNode('nw', 'normalWorld');
     const dt = makeNode('dt', 'dot');

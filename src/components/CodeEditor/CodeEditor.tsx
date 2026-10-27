@@ -24,6 +24,7 @@ import { fillTemplate } from '@/utils/fillTemplate';
 import { parseCostFile, parseCostProfileBundle } from '@/utils/costOverride';
 import { getNodeValues } from '@/types';
 import type { OutputNodeData } from '@/types';
+import { useNodeCodeHighlight } from './useNodeCodeHighlight';
 import './CodeEditor.css';
 
 /** The tab label's note for a graph with import-built index sections: the
@@ -92,12 +93,19 @@ export function CodeEditor() {
   // `src:` and the downloaded file agree without the user renaming anything.
   const shaderName = useAppStore((s) => s.shaderName);
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+  // The selected node's code, marked in the TSL editor (never in a study).
+  const attachHighlight = useNodeCodeHighlight();
 
   // The settled copy of `code` — see CODE_SETTLE_MS. Everything expensive reads
   // THIS one (Monaco's model, the A-Frame module); `code` itself stays live for
   // Apply, for the store and for the empty-editor hint, which must follow the
   // user's own typing frame by frame.
   const [settledCode, setSettledCode] = useState(code);
+  // The text Monaco shows — what a keystroke edits, which during the settle
+  // window is an OLDER pass than the store's `code` (handleChange's `base`).
+  // Child effects run first, so by this one @monaco-editor/react has pushed it.
+  const shownRef = useRef(settledCode);
+  useEffect(() => { shownRef.current = settledCode; }, [settledCode]);
   useEffect(() => {
     if (code === settledCode) {
       // Nothing to schedule — but the `value` prop can no longer CHANGE from
@@ -107,7 +115,10 @@ export function CodeEditor() {
       // text inside the settle window: rare, self-correcting on the next
       // differing write, and this closes it outright.
       const editor = editorRef.current;
-      if (editor && editor.getValue() !== code) editor.setValue(code);
+      if (editor && editor.getValue() !== code) {
+        editor.setValue(code);
+        shownRef.current = code;
+      }
       return;
     }
     const id = window.setTimeout(() => setSettledCode(code), CODE_SETTLE_MS);
@@ -172,8 +183,11 @@ export function CodeEditor() {
       // in a source file makes grep/ripgrep classify it as binary and silently
       // skip the file (SoundNode.tsx/OutputNode.tsx trip exactly that today).
       key += rt === 'property_color'
-        ? `c${JSON.stringify(String(v.name ?? 'color1'))}${JSON.stringify(String(v.hex ?? '#ff0000'))};`
-        : `f${JSON.stringify(String(v.name ?? 'property1'))}${Number(v.value ?? 1.0)};`;
+        ? `c${JSON.stringify(String(v.name ?? 'color1'))}${JSON.stringify(String(v.hex ?? '#ff0000'))}`
+        : `f${JSON.stringify(String(v.name ?? 'property1'))}${Number(v.value ?? 1.0)}`;
+      // The EMITTED name too: the namer renames a property a driving march or
+      // splat would shadow (`bend` → `bend2`) without touching its node.
+      key += `${JSON.stringify(s.nodeVarNames[n.id] ?? '')};`;
     }
     return key;
   });
@@ -181,7 +195,10 @@ export function CodeEditor() {
   // cannot drift from the file the user actually gets (`collectShaderProperties`
   // — this was a byte-for-byte hand copy of it).
   const properties: PropertyInfo[] = useMemo(
-    () => collectShaderProperties(useAppStore.getState().nodes),
+    () => {
+      const s = useAppStore.getState();
+      return collectShaderProperties(s.nodes, (id) => s.nodeVarNames[id]);
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [propertiesKey],
   );
@@ -189,12 +206,17 @@ export function CodeEditor() {
   const handleMount: OnMount = useCallback((editor, monaco) => {
     editorRef.current = editor;
     registerTSLLanguage(monaco);
-  }, []);
+    attachHighlight(editor, monaco);
+  }, [attachHighlight]);
 
   const handleChange = useCallback(
     (value: string | undefined) => {
       if (value !== undefined) {
-        setCode(value, 'code');
+        // `base`: the text this edit was made ON, so an Apply reads that
+        // text's scope even when a newer pass has not settled into Monaco yet.
+        const base = shownRef.current;
+        shownRef.current = value;
+        setCode(value, 'code', undefined, { base });
       }
     },
     [setCode]

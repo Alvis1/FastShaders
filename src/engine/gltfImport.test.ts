@@ -46,7 +46,8 @@ import { PNG_COLOR, aiGlb, blenderGlb, fakeEncoder, fakeStash, glbOf, hugeTextur
 // The `unknown`-node expression validator parses with @babel/parser, which is
 // loaded ON DEMAND (engine/unknownExpression), and codegen FAILS CLOSED until it
 // lands: the apply∘apply rows below are written against the loaded validator
-// (`normalMap(image3)` round-trips verbatim), so wait for it once. Without this
+// (`normalMap(image3)` round-trips as `normalMap(float(0))`: image nodes are one-way,
+// and a name the module no longer declares is read as 0), so wait for it once. Without this
 // the suite passed only when an earlier test in the worker had finished the
 // load — a shuffled run emitted the `float(0)` fallback and failed.
 beforeAll(() => loadUnknownExpressionValidator());
@@ -283,14 +284,14 @@ describe('emission and the module', () => {
       // The code panel never carries the mirrors.
       expect(code).not.toContain('materialPartsMirror');
       // Image nodes are one-way through the parse; from the parsed graph on
-      // the sections must be stable (BLENDER's flipped normal map is the
-      // documented exception: its `unknown` fallback renames once, see
-      // gltfSectionBuilder.test.ts).
+      // the sections must be stable — BLENDER's flipped normal map too, since
+      // its dangling image read became `float(0)` IN the call (it renamed its
+      // whole-call fallback once, `normalMap1` → `float5`, until 2026-10-27).
       const a = codeToGraph(code);
       const second = graphToCode(a.nodes, a.edges).code;
       const b = codeToGraph(second);
       const third = graphToCode(b.nodes, b.edges).code;
-      expect(name === 'BLENDER' ? third.replace(/\bfloat5\b/g, 'normalMap1') : third).toBe(second);
+      expect(third).toBe(second);
       expect(b.nodes.length).toBe(a.nodes.length);
       expect(module.replace(/data:image\/webp;base64,[A-Za-z0-9+/=]+/g, '<payload>')).toMatchSnapshot();
     });

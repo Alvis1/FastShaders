@@ -1,5 +1,6 @@
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
+import type { Binding, Scope } from '@babel/traverse';
 import * as t from '@babel/types';
 import type { AppNode, AppEdge, NodeDefinition, ParseError, TSLDataType, MaterialSettings } from '@/types';
 import { setNodeValues } from '@/types';
@@ -7,7 +8,7 @@ import { isUsableMeshName } from '@/utils/meshInventory';
 import { MAX_PARTS, MAX_PART_ENTRIES, MAX_INDEX_MATERIALS, defaultOutput, outputNodes } from '@/utils/outputMaterials';
 import { MATERIAL_PART_KEY_RE, emitRank, sanitizeModelSignature } from './materialPartsContract';
 import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF, getFlowNodeType, chainPortId, growsOperands, MAX_CHAIN_OPERANDS } from '@/registry/nodeRegistry';
-import { MODULE_HELPERS, MODULE_HELPER_NAMES, HELPER_ALIASES } from './moduleHelpers';
+import { MODULE_HELPERS, MODULE_HELPER_NAMES, HELPER_ALIASES, UV_CHANNEL_HELPER } from './moduleHelpers';
 import { PART_SETTING_KEYS, materialSettingsFromSource } from './materialSettingsCode';
 import {
   ACTIVE_OUTPUT_KEY,
@@ -24,10 +25,13 @@ import { generateId } from '@/utils/idGenerator';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
 import { makeTypedEdge } from '@/utils/edgeUtils';
 import { freshNodeCost, nodeCostPoints } from '@/utils/nodeCost';
-import { VALID_SWIZZLE, TOHSL_COMPONENT_TO_HANDLE, OWN_MEMBER_TO_HANDLE } from './graphToCode';
+import { VALID_SWIZZLE, TOHSL_COMPONENT_TO_HANDLE, OWN_MEMBER_TO_HANDLE, VECTOR_ONLY_FNS } from './graphToCode';
+import { INT_PRESERVING_TYPES, isIntSource } from './intPromotion';
+import { intGraphOver } from './cpuEvaluator';
 import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import { DEFAULT_RAMP_STOPS, formatRampStops, isRampInterp, parseRampStops } from '@/utils/colorRamp';
 import { IDENTITY_CURVE, formatCurve, parseCurve, isCurveExtend } from '@/utils/rgbCurves';
+import { MAX_UNKNOWN_REFS, isUnknownRefName, unknownCallRefNames, unknownRefHandle } from './unknownExpression';
 
 /** Output channels whose widget stores a NUMBER / a HEX color — the parse
  *  twin of graphToCode's stored-value emission (keep the two in sync). */
@@ -110,6 +114,16 @@ export function codeToGraph(code: string): CodeToGraphResult {
       edges: [],
       errors: [{ message: err.message, line: err.loc?.line }],
     };
+  }
+
+  // Its scope crawl THROWS on a duplicate declaration — reported like the main
+  // traverse's own failures below, never thrown out of codeToGraph.
+  let lostIntCandidates: Map<t.Node, string>;
+  try {
+    lostIntCandidates = stripIntPromotions(ast, code);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { nodes: [], edges: [], errors: [{ message: msg }] };
   }
 
   const varToNodeId = new Map<string, string>();
@@ -1148,8 +1162,15 @@ export function codeToGraph(code: string): CodeToGraphResult {
           return;
         }
 
-        // Raymarch Output emission (see the state block above).
-        const marchChannel = /^rm\d+(Field|Density|Color|Emissive|Glow|Background|LightColor|Ambient)$/.exec(varName);
+        // Raymarch Output emission (see the state block above). graphToCode
+        // never emits a march channel as `uniform(…)`, so a declaration that is
+        // one is a PROPERTY that happens to carry the name (`rm1Field`, or a
+        // parked march's `rm1Ambient`) and falls through to the ordinary parse —
+        // caught here, `path.skip()` dropped it on every Apply.
+        const isUniformDecl = t.isCallExpression(init) && t.isIdentifier(init.callee) && init.callee.name === 'uniform';
+        const marchChannel = isUniformDecl
+          ? null
+          : /^rm\d+(Field|Density|Color|Emissive|Glow|Background|LightColor|Ambient)$/.exec(varName);
         if (marchChannel) {
           const handle = MARCH_HELPER_HANDLES[marchChannel[1]];
           // Per-step function: walk INTO the body — it is graph content — and
@@ -1529,6 +1550,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
     if (!wired) (nodeById(rawNodes, id)!.data as Record<string, unknown>)[ACTIVE_OUTPUT_KEY] = true;
   }
 
+  warnings.push(...lostIntConversions(lostIntCandidates, rawNodes, rawEdges));
   return { nodes: rawNodes, edges: rawEdges, errors: warnings };
 }
 
@@ -1609,6 +1631,212 @@ function ensureBareInputNode(
   nodes.push(createNode(nodeId, def, name));
   varToNodeId.set(name, nodeId);
   return nodeId;
+}
+
+/** The graph node each int-preserving call became (processCall), so a lost
+ *  float() conversion is judged on the GRAPH the parse built. */
+const CALL_NODE_IDS = new WeakMap<t.Node, string>();
+
+const SINGLE_COMPONENT = /^[xyzwrgba]$/;
+
+/**
+ * Read graphToCode's int→float promotion back as the plain wire: every
+ * `float(<ref>)` whose ref is provably a SCALAR becomes `<ref>`
+ * (engine/intPromotion.ts), in ANY position — the wrapper lands wherever a
+ * consumer puts its wire: an argument, a channel value, a return, a Raymarch
+ * field's arrow body, a receiver. Without it every Apply grew a Float node
+ * between an Int and each float consumer: the parse of `float(<ref>)` is a
+ * Float 0 with a dead wire. For a scalar the conversion is the identity, or an
+ * int → float graphToCode adds back wherever it is still needed — so editing
+ * the Int a wrapper names (`int(4)` → `float(4.5)`) keeps the wire too. A ref
+ * that is not provably scalar keeps the old parse: float(vec) is its x, and
+ * `.x` would drop an int → float. A COMPARISON's ref is stripped whatever its
+ * operands: graphToCode wraps a scalar one in `float(…)` wherever it meets a
+ * number (promotesLogicWire) — the bool would not compile there.
+ *
+ * Scalar is decided per BINDING (Babel scope), never per name — a Fn parameter
+ * shadowing a declared name is not that declaration — and only for a binding
+ * nothing reassigns: a number, a `float`/`int`/`uniform(<number>)` call, a
+ * single-component swizzle, a bare or imported scalar input (`time`), a def
+ * declared float that is a source or reduces a vector (Length, the distance
+ * fields), or an operation over scalars (the arithmetic, the maths, Smoothstep
+ * and Remap — declared float, but per component in TSL). A local named `float`
+ * does not stop the strip: graphToCode's text means three's conversion there
+ * (fixTDZ renames such a Property). One forward walk: a declaration is
+ * classified on exit, before any later use.
+ *
+ * Returns the Divide and Mod calls that read such a conversion — directly or
+ * through other int-preserving operations, whose result carries it on. The
+ * graph has no conversion node, so where that call becomes a node over Ints
+ * ALONE (`div(float(a), b)`, written for the fraction), the operation is
+ * whole-number — `lostIntConversions` says so once the graph is built, which is
+ * what knows whether the call became a node at all. The others keep their value.
+ */
+function stripIntPromotions(ast: t.File, code: string): Map<t.Node, string> {
+  const candidates = new Map<t.Node, string>();
+  const scalars = new WeakSet<Binding>();
+  // What a strip left behind, and bindings declared from one (`const c =
+  // float(a)`, `const y = c.x`), each with the conversion it stood for.
+  const stripped = new WeakMap<t.Node, string>();
+  const converted = new WeakMap<Binding, string>();
+  const passThroughOf = (n: t.Node): t.Node | undefined =>
+    t.isCallExpression(n) && n.arguments.length === 0 && t.isMemberExpression(n.callee) && !n.callee.computed
+      && t.isIdentifier(n.callee.property) && (n.callee.property.name === 'toVar' || n.callee.property.name === 'toConst')
+      ? n.callee.object
+      : undefined;
+  const defOf = (name: string) => {
+    const alias = HELPER_ALIASES.get(name);
+    return alias ? NODE_REGISTRY.get(alias.type) : TSL_FUNCTION_TO_DEF.get(name) ?? NODE_REGISTRY.get(name);
+  };
+  const isScalar = (scope: Scope, n: t.Node | null | undefined): boolean => {
+    if (!n) return false;
+    if (t.isNumericLiteral(n)) return true;
+    if (t.isUnaryExpression(n)) return (n.operator === '-' || n.operator === '+') && t.isNumericLiteral(n.argument);
+    if (t.isIdentifier(n)) {
+      const binding = scope.getBinding(n.name);
+      if (binding && binding.kind !== 'module') return scalars.has(binding);
+      const global = TSL_FUNCTION_TO_DEF.get(n.name); // a bare or imported input such as `time`
+      return !!global && global.inputs.length === 0 && ['float', 'int'].includes(global.outputs[0]?.dataType ?? '');
+    }
+    if (t.isMemberExpression(n)) return !n.computed && t.isIdentifier(n.property) && SINGLE_COMPONENT.test(n.property.name);
+    if (!t.isCallExpression(n)) return false;
+    const through = passThroughOf(n);
+    if (through) return isScalar(scope, through);
+    let name: string | undefined;
+    let operands: t.Node[] = n.arguments;
+    if (t.isIdentifier(n.callee)) name = n.callee.name;
+    else if (t.isMemberExpression(n.callee) && !n.callee.computed && t.isIdentifier(n.callee.property)) {
+      name = n.callee.property.name;
+      operands = [n.callee.object, ...n.arguments];
+    }
+    if (!name) return false;
+    if (name === 'float' || name === 'int') return true;
+    if (name === 'uniform') return n.arguments.length === 1 && isScalar(scope, n.arguments[0]);
+    const def = defOf(name);
+    const out = def?.outputs[0]?.dataType;
+    // A def declared float is a SOURCE (no inputs: Float, Time, the noises) or
+    // REDUCES a vector input (Length, Dot, the distance fields); one whose
+    // inputs are all scalar-typed (Smoothstep, Remap) computes per component in
+    // TSL, so — like an any-typed operation — it is scalar only over scalars.
+    if ((out === 'float' || out === 'int')
+      && (def!.inputs.length === 0 || def!.inputs.some((i) => i.dataType !== 'float' && i.dataType !== 'int'))) return true;
+    return (out === 'float' || out === 'int' || out === 'any') && operands.length > 0 && operands.every((o) => isScalar(scope, o));
+  };
+  // Bindings declared from a COMPARISON (Greater Than, Less Than, Equal): graphToCode
+  // wraps a scalar one in `float(…)` wherever it meets a number, so `float(<that
+  // ref>)` is its own wrapper even when the operands' scalar-ness is not provable here.
+  const comparisons = new WeakSet<Binding>();
+  const isComparisonCall = (n: t.Node): boolean => {
+    if (!t.isCallExpression(n)) return false;
+    const name = t.isIdentifier(n.callee) ? n.callee.name
+      : t.isMemberExpression(n.callee) && !n.callee.computed && t.isIdentifier(n.callee.property) ? n.callee.property.name
+        : undefined;
+    return !!name && defOf(name)?.category === 'logic';
+  };
+  const isComparisonRef = (scope: Scope, n: t.Node): boolean => {
+    const binding = t.isIdentifier(n) ? scope.getBinding(n.name) : undefined;
+    return !!binding && comparisons.has(binding);
+  };
+  const conversionIn = (scope: Scope, n: t.Node): string | undefined => {
+    const through = passThroughOf(n);
+    if (through) return conversionIn(scope, through);
+    const left = stripped.get(n);
+    if (left) return left;
+    if (t.isMemberExpression(n) && !n.computed) return conversionIn(scope, n.object);
+    if (!t.isIdentifier(n)) return undefined;
+    const binding = scope.getBinding(n.name);
+    return binding ? converted.get(binding) : undefined;
+  };
+  /** The operands of an int-preserving call, either call form, or null. */
+  const intOpOperands = (n: t.Node): t.Node[] | null => {
+    if (!t.isCallExpression(n)) return null;
+    if (t.isIdentifier(n.callee)) return INT_PRESERVING_TYPES.has(n.callee.name) ? n.arguments : null;
+    if (t.isMemberExpression(n.callee) && !n.callee.computed && t.isIdentifier(n.callee.property)
+      && INT_PRESERVING_TYPES.has(n.callee.property.name)) return [n.callee.object, ...n.arguments];
+    return null;
+  };
+  traverse(ast, {
+    CallExpression: {
+      enter(path) {
+        const { node } = path;
+        if (!t.isIdentifier(node.callee) || node.callee.name !== 'float' || node.arguments.length !== 1) return;
+        const inner = node.arguments[0];
+        const isRef = t.isIdentifier(inner) || (t.isMemberExpression(inner) && !inner.computed && t.isIdentifier(inner.object));
+        if (!isRef || !(isScalar(path.scope, inner) || isComparisonRef(path.scope, inner))) return;
+        stripped.set(inner, inner.start != null && inner.end != null ? `float(${code.slice(inner.start, inner.end)})` : 'float(…)');
+        path.replaceWith(inner);
+      },
+      exit(path) {
+        // graphToCode's vec3 widening of an all-scalar dot/normalize (VECTOR_ONLY_FNS)
+        // reads back as its argument — a real Vec3 node always emits three. On EXIT,
+        // so a promotion inside it (`vec3(float(int1))`) is already read back.
+        const { node } = path;
+        const parent = path.parentPath;
+        if (t.isIdentifier(node.callee) && node.callee.name === 'vec3' && node.arguments.length === 1
+          && path.listKey === 'arguments' && parent?.isCallExpression() && t.isIdentifier(parent.node.callee)
+          && VECTOR_ONLY_FNS.has(parent.node.callee.name)) {
+          const inner = node.arguments[0];
+          // Only what graphToCode widens — a certain scalar or a number: a hand-written
+          // vec3(<vec4>) NARROWS, and stripping it changed the value on Apply.
+          const isRef = t.isIdentifier(inner) || (t.isMemberExpression(inner) && !inner.computed && t.isIdentifier(inner.object));
+          if ((isRef && (isScalar(path.scope, inner) || isComparisonRef(path.scope, inner)))
+            || t.isNumericLiteral(inner) || (t.isUnaryExpression(inner) && inner.operator === '-' && t.isNumericLiteral(inner.argument))) {
+            path.replaceWith(inner);
+            return;
+          }
+        }
+        let lost: string | undefined;
+        for (const operand of intOpOperands(path.node) ?? []) lost ??= conversionIn(path.scope, operand);
+        if (!lost) return;
+        // The operation's result carries the conversion on to whatever reads it
+        // (`add(float(a), b)` then `div(c, b)`), and only a Divide or Mod CHANGES
+        // value when the operation becomes whole-number.
+        stripped.set(path.node, lost);
+        const callee = path.node.callee;
+        const name = t.isIdentifier(callee) ? callee.name : t.isMemberExpression(callee) && t.isIdentifier(callee.property) ? callee.property.name : '';
+        if (name === 'div' || name === 'mod') candidates.set(path.node, lost);
+      },
+    },
+    VariableDeclarator: {
+      exit(path) {
+        const { id, init } = path.node;
+        if (!t.isIdentifier(id) || !init) return;
+        const binding = path.scope.getBinding(id.name);
+        if (!binding || !binding.constant) return;
+        if (isScalar(path.scope, init)) scalars.add(binding);
+        if (isComparisonCall(init) || isComparisonRef(path.scope, init)) comparisons.add(binding);
+        const lost = conversionIn(path.scope, init);
+        if (lost) converted.set(binding, lost);
+      },
+    },
+  });
+  return candidates;
+}
+
+/** The candidates (stripIntPromotions) that became an int-preserving node over
+ *  Ints ALONE in the built graph: the conversion they were written with is lost. */
+function lostIntConversions(candidates: Map<t.Node, string>, nodes: AppNode[], edges: AppEdge[]): ParseError[] {
+  const out: ParseError[] = [];
+  if (candidates.size === 0) return out;
+  const byId = new Map(nodes.map((n) => [n.id, n] as const));
+  const incoming = new Map<string, AppEdge[]>();
+  for (const e of edges) {
+    const list = incoming.get(e.target);
+    if (list) list.push(e);
+    else incoming.set(e.target, [e]);
+  }
+  const graph = intGraphOver(byId, incoming);
+  const memo = new Map<string, boolean>();
+  for (const [call, lost] of candidates) {
+    const nodeId = CALL_NODE_IDS.get(call);
+    if (!nodeId || !isIntSource(graph, nodeId, memo)) continue;
+    out.push({
+      message: `${lost} has no graph equivalent here: an operation on Ints alone stays whole-number (Int 7 ÷ Int 2 = 3), so it was read as the Int. Use a Float node where the fraction matters.`,
+      line: call.loc?.start.line,
+      severity: 'warning',
+    });
+  }
+  return out;
 }
 
 /**
@@ -2018,7 +2246,24 @@ function processCall(
       ? code.slice(callExpr.start, callExpr.end)
       : `${funcName}(/* ... */)`;
     const node = createNode(nodeId, unknownDef, varName);
-    setNodeValues(node, { functionName: funcName, rawExpression: rawExpr });
+    // BIND every identifier the call reads that names a node already declared
+    // (engine/unknownExpression.ts, "BOUND REFERENCES"): one edge per name into
+    // a positional socket, the names in `refs`. Only existing names — a global
+    // such as `time` stays verbatim text, as before — and only a call
+    // graphToCode would emit (unknownCallRefNames is the validator's walker).
+    const bound: string[] = [];
+    for (const name of unknownCallRefNames(callExpr) ?? []) {
+      if (bound.length >= MAX_UNKNOWN_REFS) break;
+      const sourceId = varToNodeId.get(name);
+      if (!sourceId || sourceId === nodeId || !isUnknownRefName(name)) continue;
+      addEdge(edges, sourceId, varToHandle.get(name) ?? 'out', nodeId, unknownRefHandle(bound.length));
+      bound.push(name);
+    }
+    setNodeValues(node, {
+      functionName: funcName,
+      rawExpression: rawExpr,
+      ...(bound.length > 0 ? { refs: bound.join(' ') } : {}),
+    });
     nodes.push(node);
     varToNodeId.set(varName, nodeId);
     errors.push({
@@ -2034,6 +2279,7 @@ function processCall(
   if (alias?.values) setNodeValues(node, alias.values);
   nodes.push(node);
   varToNodeId.set(varName, nodeId);
+  if (INT_PRESERVING_TYPES.has(def.type)) CALL_NODE_IDS.set(callExpr, nodeId);
 
   // fs* helpers carry non-socket arguments (Fresnel's implicit geometry, the Color Ramp / RGB Curves canonical
   // strings): a per-type reader stores them in `values` (PARSE-THEN-RE-EMIT) and returns only the SOCKET
@@ -2233,8 +2479,9 @@ function tryParseUVTiling(
 ): boolean {
   const [arg0, arg1] = callExpr.arguments;
 
-  // arg0 must be uv() or uv(channel)
-  if (!t.isCallExpression(arg0) || !t.isIdentifier(arg0.callee) || arg0.callee.name !== 'uv') {
+  // arg0 must be uv(), uv(channel) or the wired-Channel helper fsUvChannel(ref)
+  if (!t.isCallExpression(arg0) || !t.isIdentifier(arg0.callee)
+    || (arg0.callee.name !== 'uv' && arg0.callee.name !== UV_CHANNEL_HELPER)) {
     return false;
   }
   // arg1 must be vec2(x, y)
@@ -2259,16 +2506,19 @@ function tryParseUVTiling(
   });
   nodes.push(node);
   varToNodeId.set(varName, nodeId);
-  // A WIRED tiling (`vec2(float1, 1)`, `vec2(fresnel1.y, 1)`) is an edge into
-  // its socket — graphToCode resolves a wired tiling to the ref. Without this
-  // the wire was lost on every Apply, with no message.
+  // A WIRED tiling (`vec2(float1, 1)`, `vec2(fresnel1.y, 1)`) or channel
+  // (`fsUvChannel(int1)`, a hand-written `uv(int1)`) is an edge into its socket
+  // — graphToCode resolves a wired socket to the ref. Without this the wire was
+  // lost on every Apply, with no message.
   if (refs) {
-    (['tilingU', 'tilingV'] as const).forEach((port, i) => {
-      const a = arg1.arguments[i];
+    const wire = (a: t.Node | undefined, port: string, dataType: TSLDataType) => {
       if (!a || !(t.isIdentifier(a) || t.isMemberExpression(a))) return;
       const ref = resolveRefExpr(a, nodes, refs.edges, varToNodeId, refs.varToHandle, refs.splitNodesMap);
-      if (ref) addEdge(refs.edges, ref.nodeId, ref.handle, nodeId, port, 'float');
-    });
+      if (ref) addEdge(refs.edges, ref.nodeId, ref.handle, nodeId, port, dataType);
+    };
+    wire(arg0.arguments[0], 'channel', 'int');
+    wire(arg1.arguments[0], 'tilingU', 'float');
+    wire(arg1.arguments[1], 'tilingV', 'float');
   }
   return true;
 }

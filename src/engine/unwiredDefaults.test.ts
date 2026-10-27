@@ -41,6 +41,13 @@ describe('a freshly dropped node never emits a toxic argument', () => {
     expect(Number(args![0])).not.toBe(0);
   });
 
+  it('dot and normalize never get bare scalars, nor normalize the zero vector (WGSL rejects all three)', () => {
+    expect(emitBare('dot')).toMatch(/\bdot\(vec3\([^)]*\), vec3\([^)]*\)\)/);
+    const normalized = /\bnormalize\(vec3\(([^)]*)\)\)/.exec(emitBare('normalize'));
+    expect(normalized).not.toBeNull();
+    expect(Number(normalized![1])).not.toBe(0);
+  });
+
   it('smoothstep never gets edge0 === edge1 (undefined in GLSL, a WGSL error)', () => {
     const args = argsOf(emitBare('smoothstep'), 'smoothstep');
     expect(args).not.toBeNull();

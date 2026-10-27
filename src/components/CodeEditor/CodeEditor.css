@@ -270,3 +270,27 @@
   user-select: none;
   white-space: pre;
 }
+
+/* The selected node's code (useNodeCodeHighlight.ts). Flat like the rest of
+   the chrome: a tint and a square bar in the gutter, no radius, no blur. The
+   bar is a border inside Monaco's lines-decorations box (inline width 10px),
+   which the fold chevrons share. */
+.code-editor .monaco-editor .fs-code-node-line,
+.code-editor .monaco-editor .fs-code-node-range {
+  background: color-mix(in srgb, var(--code-node-highlight) 14%, transparent);
+}
+
+.code-editor .monaco-editor .margin-view-overlays .fs-code-node-bar {
+  box-sizing: border-box;
+  border-left: 3px solid var(--code-node-highlight);
+}
+
+/* A Split's read inside its consumer: dotted, since the line is the consumer's. */
+.code-editor .monaco-editor .margin-view-overlays .fs-code-node-bar--use {
+  border-left-style: dotted;
+}
+
+.code-editor .monaco-editor .fs-code-node-use {
+  text-decoration: underline dotted var(--code-node-highlight);
+  text-underline-offset: 3px;
+}

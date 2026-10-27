@@ -4,6 +4,7 @@ import { useAppStore, cancelPendingGraphSave } from '@/store/useAppStore';
 import { makeEdge, makeNode } from '@/test-utils';
 import { readZip } from '@/utils/zipReader';
 import { graphToCode } from './graphToCode';
+import { panelCodegen } from './panelCode';
 import { extractProjectState } from './fastShadersProject';
 import {
   connectedExportIds,
@@ -78,6 +79,16 @@ describe('connectedExportIds', () => {
     const r = pruneToConnected(nodes, []);
     expect(r.nodes).toBe(nodes);
     expect(r.omitted).toBe(0);
+  });
+
+  it('keeps a node an unknown expression reads: its bound reference is an edge', () => {
+    const nodes = [
+      makeNode('v', 'vec3'),
+      makeNode('u', 'unknown', { functionName: 'saturate', rawExpression: 'saturate(a)', refs: 'a' }),
+      makeNode('out1', 'output'),
+    ];
+    const edges = [makeEdge('v', 'out', 'u', 'ref0'), makeEdge('u', 'out', 'out1', 'color')];
+    expect([...connectedExportIds(nodes, edges)!].sort()).toEqual(['out1', 'u', 'v']);
   });
 
   it('keeps an unwired Output: a sink is the anchor, wired or not', () => {
@@ -188,6 +199,41 @@ describe('planExportGraph', () => {
     expect(g.nodes).toBe(nodes);
     expect(g.code).toBe(typed);
     expect(g.omitted).toBe(0);
+  });
+
+  it('the connected-only PANEL text (engine/panelCode.ts) still prunes — it is the graph’s own codegen too', () => {
+    // Before the equality check knew the panel's text, EXPORT silently fell
+    // back to the whole canvas with `omitted: 0` and announced nothing.
+    const { nodes, edges } = chain();
+    const panel = panelCodegen(nodes, edges, false).result.code;
+    expect(panel).not.toBe(graphToCode(nodes, edges).code);
+    const g = planExportGraph({ nodes, edges, code: panel }, 'connected');
+    expect(g.omitted).toBe(2);
+    expect(g.code).toBe(graphToCode(g.nodes, g.edges).code);
+    // …while panel text the user edited still exports whole, unchanged.
+    const typed = panel + '\n// my edit\n';
+    const t = planExportGraph({ nodes, edges, code: typed }, 'connected');
+    expect(t.nodes).toBe(nodes);
+    expect(t.code).toBe(typed);
+    expect(t.omitted).toBe(0);
+  });
+
+  it('the panel keeps the WHOLE graph’s names, so the re-key from them is still right', () => {
+    const nodes = [
+      makeNode('pA', 'property_float', { name: 'speed', value: 1 }),
+      makeNode('pB', 'property_float', { name: 'speed', value: 2 }),
+      makeNode('out1', 'output'),
+      makeNode('dead', 'multiply'),
+    ];
+    const edges = [makeEdge('pB', 'out', 'out1', 'roughness'), makeEdge('pA', 'out', 'dead', 'a')];
+    const panel = panelCodegen(nodes, edges, false).result.code;
+    // The panel (and every tuned uniform keyed from it) says `speed2`…
+    expect(panel).toContain('const speed2 = uniform(2);');
+    expect(panel).not.toMatch(/const speed = /);
+    // …and the export, regenerated from the pruned graph, says `speed`.
+    const g = planExportGraph({ nodes, edges, code: panel }, 'connected');
+    expect(g.code).toContain('const speed = uniform(2);');
+    expect({ ...remapUniformKeys({ speed2: 0.9 }, g.uniformKeys) }).toEqual({ speed: 0.9 });
   });
 
   it('re-keys tuned uniforms when a left-out property freed the name a survivor takes', () => {

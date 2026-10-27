@@ -6,6 +6,7 @@ import { COUNT_CARD_COLORS, COUNT_LABELS } from '@/utils/colorUtils';
 import { appTime } from '@/utils/appClock';
 import { useFrameLoop } from '@/hooks/useFrameLoop';
 import { evaluateEdgeRange, getEdgeOutputShape, getTimeUpstreamSet, type RangeResult } from '@/engine/cpuEvaluator';
+import { tinyNum } from '@/utils/edgeValueText';
 import { visibleArcMidpoint, type BezierSegment } from './bezierGeometry';
 import './EdgeInfoCard.css';
 
@@ -60,17 +61,25 @@ export function sameRange(a: RangeResult | null, b: RangeResult | null): boolean
  *
  *  - degenerate range (min === max) → single number "0.42"
  *  - bounded range → "min…max" (e.g. "0.00…1.00")
- *  - unbounded (Infinity) or no range data → "…" (honest unknown, no guess)
+ *  - a figure below 0.01 but not zero keeps ONE significant digit ("0.003",
+ *    the on-node labels' `tinyNum`), never a misleading "0.00"
+ *  - unbounded (Infinity), inverted (min above max) or no range data → "…"
+ *    (honest unknown, no guess)
  */
 export function edgeChipChannels(range: RangeResult | null, shapeLen: number): { count: number; values: string[] } {
   const rangeLen = range?.min.length ?? 0;
   const count = Math.min(Math.max(rangeLen, shapeLen, 1), 4);
   const PLACEHOLDER = '…';
   const RANGE_EPSILON = 0.005; // values closer than this collapse to a single display
+  const fmt = (n: number): string => tinyNum(n) ?? n.toFixed(2);
   const formatChannel = (lo: number, hi: number): string => {
-    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return PLACEHOLDER;
-    if (Math.abs(hi - lo) < RANGE_EPSILON) return lo.toFixed(2);
-    return `${lo.toFixed(2)}…${hi.toFixed(2)}`;
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo > hi) return PLACEHOLDER;
+    const a = fmt(lo), b = fmt(hi);
+    // One figure when both ends print alike, or when they sit closer than the
+    // chip's two decimals can show — unless an end is a tiny non-zero, whose
+    // own digit is the point ([0, 0.003] must not read as a flat "0.00").
+    if (a === b || (Math.abs(hi - lo) < RANGE_EPSILON && tinyNum(lo) === null && tinyNum(hi) === null)) return a;
+    return `${a}…${b}`;
   };
   const values: string[] = [];
   for (let i = 0; i < count; i++) {

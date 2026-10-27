@@ -17,7 +17,7 @@ import { NodeTitle } from './NodeTitle';
 import { useHeaderTip } from './headerTip';
 // One rule for "what is arriving on this input", shared with ShaderNode/SoundNode
 // (whose stylesheet also owns .shader-node__edge-val).
-import { edgeValueLabel } from './ShaderNode';
+import { edgeLabelFlags, edgeValueLabel } from './ShaderNode';
 // getTargetEdges, NOT raw s.edges — same reason as SoundNode/OutputNode: the
 // unwrapped edge names the REAL producer, so a feeder inside a collapsed group
 // still shows its number instead of a grey ellipsis.
@@ -84,7 +84,9 @@ export const ClockNode = memo(function ClockNode({
     const e = getTargetEdges(s.nodes, s.edges, id).find((ed) => ed.targetHandle === 'speed');
     if (!e) return '';
     const l = edgeValueLabel(e.source, s.nodes, s.edges, e.sourceHandle);
-    return `${e.source} ${e.sourceHandle ?? ''} ${l.text} ${l.live ? 1 : 0}${l.animated ? 1 : 0}`;
+    // Every label flag (`edgeLabelFlags`): a field-fed speed ticks its interval
+    // (`range`), and an edit can flip that while the text stays the same.
+    return `${e.source} ${e.sourceHandle ?? ''} ${l.text} ${edgeLabelFlags(l)}`;
   });
   const wiredSpeed = useMemo(() => {
     if (!speedEdgeKey) return null;

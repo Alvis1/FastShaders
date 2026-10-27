@@ -103,7 +103,7 @@ function cases(): Record<string, Graph> {
       edges: [makeEdge('f1', 'out', 'c1', 'value'), makeEdge('c1', 'out', 'out', 'color')],
     },
     unknown: {
-      nodes: [makeNode('u', 'unknown', { functionName: 'mysteryFn', rawExpression: 'mysteryFn(1, 2, 3)' }), out()],
+      nodes: [makeNode('u', 'unknown', { functionName: 'saturate', rawExpression: 'saturate(1, 2, 3)' }), out()],
       edges: [makeEdge('u', 'out', 'out', 'color')],
     },
     raymarch: {
@@ -232,7 +232,7 @@ describe('the exported shaderloader module is byte-stable', () => {
     expect(m.data).toContain('data1_col0');
     expect(m.colormap).toContain('colormap1');
     // Warm validator: the raw expression, not the fail-closed `float(0)`.
-    expect(m.unknown).toContain('const mysteryFn1 = mysteryFn(1, 2, 3);');
+    expect(m.unknown).toContain('const saturate1 = saturate(1, 2, 3);');
     expect(m.raymarch).toContain('rm1Field');
     expect(m.raymarch).toMatch(/\bside: 2\b/); // THREE.DoubleSide, forced by marchMaterialSettings
     expect(m.parts).toMatch(/parts:\s*\{/);

@@ -10,6 +10,7 @@ import { nodeBox, hasNodeGlyph, usesOperatorLayout, nodeScale } from '@/componen
 import { COLOR_NODE_SIZE } from '@/components/NodeEditor/nodes/ColorNode';
 import { SOUND_W, SOUND_HEADER_H, SOUND_BODY_H } from '@/components/NodeEditor/nodes/soundGeometry';
 import { edgePortRailHeight } from '@/components/NodeEditor/nodes/edgePorts';
+import { unknownRefSlots } from './unknownExpression';
 
 // ── Node-size estimation ─────────────────────────────────────────────────────
 // autoLayout usually runs BEFORE React Flow measures a node (on import/paste/
@@ -190,7 +191,12 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
       const glyphPx = Math.round(34 * nodeScale(type));
       bodyH = Math.max(52, glyphPx + 10);
     } else {
-      const rows = Math.max(def ? def.inputs.length : 1, def ? def.outputs.length : 1, 1);
+      // An unknown node draws one row per BOUND reference (ShaderNode's
+      // unknownCardDef) where its registry def lists no input.
+      const inputRows = type === 'unknown'
+        ? unknownRefSlots((node.data as { values?: Record<string, unknown> }).values ?? {}).length
+        : def ? def.inputs.length : 1;
+      const rows = Math.max(inputRows, def ? def.outputs.length : 1, 1);
       const glyph = hasNodeGlyph(type) ? GLYPH_H : 0;
       bodyH = Math.max(28, rows * ROW_H + glyph + 8) + (ART_H.get(type) ?? 0);
     }

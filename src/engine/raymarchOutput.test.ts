@@ -1,8 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { graphToCode } from './graphToCode';
+import { parse } from '@babel/parser';
+import _traverse, { type Binding, type NodePath } from '@babel/traverse';
+import * as t from '@babel/types';
+import { graphToCode, MARCH_IIFE_LOCALS } from './graphToCode';
 import { codeToGraph } from './codeToGraph';
+import { buildExportModule } from './exportShader';
 import { computeReachableCost, nodeCostPoints, getCost } from '@/utils/nodeCost';
-import { drivingMarchOutput, marchWindowRadius } from '@/utils/sdfPartition';
+import { drivingMarchOutput, marchWindowRadius, MARCH_SCOPES } from '@/utils/sdfPartition';
+import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { makeNode, makeEdge } from '@/test-utils';
 import { getNodeValues } from '@/types';
 import type { AppNode, AppEdge } from '@/types';
@@ -220,5 +225,252 @@ describe('the march\'s own light (2026-09-03): direction, colours, occlusion, sh
     const fieldCost = getCost('sdCircle');
     expect(computeReachableCost(aoOn.nodes, aoOn.edges)).toBe(base + 5 * fieldCost);
     expect(computeReachableCost(shOn.nodes, shOn.edges)).toBe(base + 24 * fieldCost);
+  });
+});
+
+describe('property names vs the march\'s own names', () => {
+  const traverse = (typeof (_traverse as unknown as { default?: unknown }).default === 'function'
+    ? (_traverse as unknown as { default: typeof _traverse }).default
+    : _traverse) as typeof _traverse;
+  /** The 13 number sockets — the ones read as `float(<ref>)` / `int(<ref>)` inside the march IIFE. */
+  const NUMBER_SOCKETS = Object.keys(NODE_REGISTRY.get('raymarchOutput')!.defaultValues!);
+  const prop = (name: string, value = 0.5) => makeNode('pr', 'property_float', { name, value });
+
+  /**
+   * Everything switched on — Field, Density, Glow, Color, Emissive and
+   * Background all depend on their root, Occlusion, Shadow, Bend and Horizon
+   * are non-zero — so every local the march can declare is in the text.
+   */
+  const fullMarch = (values: Record<string, string | number> = {}) => {
+    const rm = makeNode('rm', 'raymarchOutput', { ao: 0.5, shadow: 0.3, bend: 0.2, horizon: 0.1, ...values });
+    const nodes: AppNode[] = [
+      makeNode('pos', 'positionLocal'), makeNode('sd', 'sdCircle'), makeNode('len', 'length'), makeNode('dens', 'oneMinus'),
+      makeNode('gl', 'abs'), makeNode('cl', 'fract'), makeNode('em', 'normalize'),
+      makeNode('dir', 'rayDirection'), makeNode('sky', 'length'), rm,
+    ];
+    const edges: AppEdge[] = [
+      makeEdge('pos', 'out', 'sd', 'p'), makeEdge('sd', 'out', 'rm', 'field'),
+      makeEdge('pos', 'out', 'len', 'v'), makeEdge('len', 'out', 'dens', 'x'), makeEdge('dens', 'out', 'rm', 'density'),
+      makeEdge('pos', 'out', 'gl', 'x'), makeEdge('gl', 'out', 'rm', 'glow'),
+      makeEdge('pos', 'out', 'cl', 'x'), makeEdge('cl', 'out', 'rm', 'color'),
+      makeEdge('pos', 'out', 'em', 'v'), makeEdge('em', 'out', 'rm', 'emissive'),
+      makeEdge('dir', 'out', 'sky', 'v'), makeEdge('sky', 'out', 'rm', 'background'),
+    ];
+    return { nodes, edges };
+  };
+
+  /** The `const rm<n> = Fn(() => {…})()` declarator's path. */
+  const marchPath = (ast: ReturnType<typeof parse>, base = 'rm1'): NodePath<t.VariableDeclarator> => {
+    let found: NodePath<t.VariableDeclarator> | null = null;
+    traverse(ast, {
+      VariableDeclarator(p) {
+        if (t.isIdentifier(p.node.id, { name: base }) && t.isCallExpression(p.node.init) && t.isCallExpression(p.node.init.callee)) found = p;
+      },
+    });
+    expect(found, base).not.toBeNull();
+    return found!;
+  };
+
+  /** The IIFE body's own locals, every local at ANY depth inside it, and the step Fns' parameters. */
+  const marchNames = (code: string) => {
+    const ast = parse(code, { sourceType: 'module' });
+    const rm = marchPath(ast);
+    const iifeArrow = ((rm.node.init as t.CallExpression).callee as t.CallExpression).arguments[0];
+    const iife = new Set<string>();
+    const all = new Set<string>();
+    rm.traverse({
+      VariableDeclarator(p) {
+        if (!t.isIdentifier(p.node.id)) return;
+        all.add(p.node.id.name);
+        if (p.getFunctionParent()?.node === iifeArrow) iife.add(p.node.id.name);
+      },
+      Function(p) {
+        for (const prm of p.node.params) {
+          const ids = t.isArrayPattern(prm) ? prm.elements : [prm];
+          for (const id of ids) if (t.isIdentifier(id)) all.add(id.name);
+        }
+      },
+    });
+    const stepParams = new Set<string>();
+    traverse(ast, {
+      VariableDeclarator(p) {
+        const init = p.node.init;
+        if (!t.isIdentifier(p.node.id) || !/^rm1(Field|Density|Color|Emissive|Glow|Background)$/.test(p.node.id.name)) return;
+        if (!t.isCallExpression(init) || !t.isIdentifier(init.callee, { name: 'Fn' })) return;
+        const arrow = init.arguments[0];
+        if (!t.isArrowFunctionExpression(arrow)) return;
+        for (const prm of arrow.params) if (t.isArrayPattern(prm)) for (const id of prm.elements) if (t.isIdentifier(id)) stepParams.add(id.name);
+      },
+    });
+    return { iife, all, stepParams };
+  };
+
+  it('MARCH_IIFE_LOCALS is exactly what the IIFE body declares, and the step Fns take only `p` and `dir`', () => {
+    const { nodes, edges } = fullMarch();
+    const { iife, stepParams } = marchNames(graphToCode(nodes, edges).code);
+    expect([...iife].sort()).toEqual([...MARCH_IIFE_LOCALS].sort());
+    expect([...stepParams].sort()).toEqual(['dir', 'p']);
+    expect([...new Set(MARCH_SCOPES.flatMap((sp) => sp.params.map((prm) => prm.name)))].sort()).toEqual(['dir', 'p']);
+  });
+
+  it('a property named like ANY march local, wired to ANY number socket, is the one the march reads — and round-trips with its wire', () => {
+    const { nodes: fullNodes, edges: fullEdges } = fullMarch();
+    const { all } = marchNames(graphToCode(fullNodes, fullEdges).code);
+    // The reserved names are a subset of what the walk sees; the rest (loop and
+    // `nrm` locals) must stay bindable WITHOUT a rename.
+    for (const name of MARCH_IIFE_LOCALS) expect(all.has(name), name).toBe(true);
+    const bad: string[] = [];
+    for (const name of all) {
+      for (const socket of NUMBER_SOCKETS) {
+        const nodes = [...fullNodes, prop(name)];
+        const edges = [...fullEdges, makeEdge('pr', 'out', 'rm', socket)];
+        const out = graphToCode(nodes, edges);
+        const emitted = out.varNames.get('pr')!;
+        const tag = `${name} → ${socket} (as ${emitted})`;
+        let ast: ReturnType<typeof parse>;
+        try {
+          ast = parse(out.code, { sourceType: 'module' });
+        } catch {
+          bad.push(`${tag}: does not parse`);
+          continue;
+        }
+        // The socket's ONE read must resolve to the property's declaration. A
+        // shadowed read binds to the march's own local instead (or dies in its
+        // TDZ), which leaves the uniform with no reference inside the march.
+        const decl: { binding?: Binding } = {};
+        traverse(ast, {
+          VariableDeclarator(p) {
+            const init = p.node.init;
+            if (t.isIdentifier(p.node.id, { name: emitted }) && t.isCallExpression(init) && t.isIdentifier(init.callee, { name: 'uniform' })) {
+              decl.binding = p.scope.getBinding(emitted);
+            }
+          },
+        });
+        if (!decl.binding) { bad.push(`${tag}: no uniform declaration`); continue; }
+        const rm = marchPath(ast);
+        const reads = decl.binding.referencePaths.filter((rp) => rp.isDescendant(rm));
+        if (reads.length !== 1) bad.push(`${tag}: the march reads the property ${reads.length} times`);
+        const r = codeToGraph(out.code);
+        if (r.errors.length) bad.push(`${tag}: ${r.errors.map((e) => e.message).join('; ')}`);
+        const pr = r.nodes.find((n) => n.data.registryType === 'property_float');
+        if (!pr || !r.edges.some((e) => e.source === pr.id && e.targetHandle === socket)) bad.push(`${tag}: the wire is lost`);
+        if (graphToCode(r.nodes, r.edges).code !== out.code) bad.push(`${tag}: not byte-stable`);
+      }
+    }
+    expect(bad).toEqual([]);
+    // Every local × every socket, each parsed and round-tripped: ~4 s in a full
+    // run, so the default 5 s limit would fail the release gate under load
+    // (docs/dev/testing.md, wall-clock tests).
+  }, 60_000);
+
+  it('`p` and `dir` are the step Fns\' parameters: a property of that name moves to p2 / dir2 and is read as itself', () => {
+    // Read inside the Field chain: the chain's own `p` must not capture it.
+    const inChain = {
+      nodes: [makeNode('pos', 'positionLocal'), makeNode('sd', 'sdCircle'), makeNode('ad', 'add'), prop('p'), makeNode('rm', 'raymarchOutput')],
+      edges: [makeEdge('pos', 'out', 'sd', 'p'), makeEdge('sd', 'out', 'ad', 'a'), makeEdge('pr', 'out', 'ad', 'b'), makeEdge('ad', 'out', 'rm', 'field')],
+    };
+    // Wired straight into Field (a constant field) and into Density.
+    const constField = { nodes: [prop('p'), makeNode('rm', 'raymarchOutput')], edges: [makeEdge('pr', 'out', 'rm', 'field')] };
+    const constDensity = { nodes: [prop('p'), makeNode('rm', 'raymarchOutput')], edges: [makeEdge('pr', 'out', 'rm', 'density')] };
+    // Read inside the Background chain, whose parameter is `dir`.
+    const { nodes: vn, edges: ve } = volumeGraph();
+    const inSky = {
+      nodes: [...vn, makeNode('dir', 'rayDirection'), makeNode('mu', 'mul'), prop('dir')],
+      edges: [...ve, makeEdge('dir', 'out', 'mu', 'a'), makeEdge('pr', 'out', 'mu', 'b'), makeEdge('mu', 'out', 'rm', 'background')],
+    };
+    const cases: [string, { nodes: AppNode[]; edges: AppEdge[] }, string, string][] = [
+      ['in the Field chain', inChain, 'p2', 'add(sdCircle1, p2)'],
+      ['a constant Field', constField, 'p2', 'const rm1Field = Fn(([p]) => p2);'],
+      ['a constant Density', constDensity, 'p2', '  const rm1Density = Fn(([p]) => {\n    return p2;\n  });'],
+      ['in the Background chain', inSky, 'dir2', 'mul(rayDirection1, dir2)'],
+    ];
+    for (const [label, g, name, text] of cases) {
+      const { code } = graphToCode(g.nodes, g.edges);
+      expect(code, label).toContain(`const ${name} = uniform(0.5);`);
+      expect(code, label).toContain(text);
+      const r = codeToGraph(code);
+      expect(r.errors, label).toEqual([]);
+      expect(graphToCode(r.nodes, r.edges).code, label).toBe(code);
+    }
+  });
+
+  it('a march that does not DRIVE renames nothing: a mesh shader\'s public property keeps its name, byte for byte', () => {
+    // A property's name is its schema key, its A-Frame attribute and its
+    // persisted-uniform key — reserved names move it only while the march runs.
+    const flag = (n: AppNode): AppNode => ({ ...n, data: { ...n.data, activeOutput: true } }) as AppNode;
+    for (const name of [...MARCH_IIFE_LOCALS, 'p', 'dir']) {
+      const pr = prop(name, 3);
+      const mesh = { nodes: [pr, makeNode('out', 'output')], edges: [makeEdge('pr', 'out', 'out', 'roughness')] };
+      const before = graphToCode(mesh.nodes, mesh.edges).code;
+      expect(before, name).toContain(`const ${name} = uniform(3);`);
+      // Unwired…
+      expect(graphToCode([...mesh.nodes, makeNode('rm', 'raymarchOutput')], mesh.edges).code, name).toBe(before);
+      // …and wired but parked behind a flagged plain Output.
+      const parked = graphToCode(
+        [pr, flag(makeNode('out', 'output')), makeNode('pos', 'positionLocal'), makeNode('sd', 'sdCircle'), makeNode('rm', 'raymarchOutput')],
+        [...mesh.edges, makeEdge('pos', 'out', 'sd', 'p'), makeEdge('sd', 'out', 'rm', 'field')],
+      ).code;
+      expect(parked, name).toContain(`const ${name} = uniform(3);`);
+      // The moment it drives, the march's name wins and the property moves.
+      const driving = graphToCode([pr, makeNode('rm', 'raymarchOutput')], [makeEdge('pr', 'out', 'rm', 'field')]).code;
+      expect(driving, name).toContain(`const ${name}2 = uniform(3);`);
+    }
+  });
+
+  it('the exported module names a RENAMED property as the body reads it: no dead attribute beside it', () => {
+    // A property named like a march local, read in the flat body (Glow) and in
+    // the IIFE (Bend): the namer moves it to `shadow2` / `bend2` while the march
+    // drives, so the schema and the usage header must say so too — the stored
+    // name would be an attribute nothing reads (review 2026-10-27).
+    for (const [name, socket] of [['shadow', 'glow'], ['bend', 'bend']] as const) {
+      const { nodes: fullNodes, edges: fullEdges } = fullMarch();
+      const nodes = [...fullNodes.filter((n) => socket !== 'glow' || n.id !== 'gl'), prop(name, 0.4)];
+      const edges = [...fullEdges.filter((e) => e.targetHandle !== socket), makeEdge('pr', 'out', 'rm', socket)];
+      const { code, varNames } = graphToCode(nodes, edges);
+      expect(varNames.get('pr'), name).toBe(`${name}2`);
+      const m = buildExportModule({ inlineImages: true, graph: { nodes, edges, code, omitted: 0, uniformKeys: null } });
+      expect(m, name).toContain(`shader="src: shader.js; ${name}2: 0.4"`);
+      expect(m, name).toContain(`  ${name}2: { type: 'number', default: 0.4 },`);
+      expect(m, name).not.toContain(`  ${name}: { type: 'number'`);
+      expect(m, name).toContain(`const ${name}2 = params.${name}2;`);
+    }
+  });
+
+  it('a property already called rm1LightColor / rm1Ambient moves the march to rm2 instead of declaring the name twice', () => {
+    for (const name of ['rm1LightColor', 'rm1Ambient']) {
+      const nodes = [makeNode('pos', 'positionLocal'), makeNode('sd', 'sdCircle'), prop(name), makeNode('rm', 'raymarchOutput', { lightColor: '#ffcc88', ambient: '#102030' })];
+      const edges = [makeEdge('pos', 'out', 'sd', 'p'), makeEdge('sd', 'out', 'rm', 'field'), makeEdge('pr', 'out', 'rm', 'bend')];
+      const { code } = graphToCode(nodes, edges);
+      expect(code, name).toContain(`  const ${name} = uniform(0.5);`);
+      expect(code, name).toContain('  const rm2LightColor = color(0xffcc88);');
+      expect(code, name).toContain('  const rm2Ambient = color(0x102030);');
+      expect(code, name).toContain(`    const bend = float(${name});`);
+      expect(() => parse(code, { sourceType: 'module' }), name).not.toThrow();
+      const r = codeToGraph(code);
+      expect(r.errors, name).toEqual([]);
+      expect(r.nodes.some((n) => n.data.registryType === 'property_float' && getNodeValues(n).name === name), name).toBe(true);
+      expect(getNodeValues(r.nodes.find((n) => n.data.registryType === 'raymarchOutput')!), name).toMatchObject({ lightColor: '#ffcc88', ambient: '#102030' });
+      expect(graphToCode(r.nodes, r.edges).code, name).toBe(code);
+    }
+  });
+
+  it('the parse tells a property named like a march channel from the channel: a `uniform(…)` is never one', () => {
+    for (const name of ['rm1Field', 'rm1Ambient', 'rm1LightColor', 'rm1Color']) {
+      const nodes = [prop(name), makeNode('out', 'output')];
+      const edges = [makeEdge('pr', 'out', 'out', 'roughness')];
+      const { code } = graphToCode(nodes, edges);
+      expect(code, name).toContain(`const ${name} = uniform(0.5);`);
+      const r = codeToGraph(code);
+      expect(r.errors, name).toEqual([]);
+      expect(r.nodes.map((n) => n.data.registryType).sort(), name).toEqual(['output', 'property_float']);
+      expect(r.nodes.some((n) => n.data.registryType === 'raymarchOutput'), name).toBe(false);
+      expect(graphToCode(r.nodes, r.edges).code, name).toBe(code);
+    }
+    // A colour property, through the same guard.
+    const pc = makeNode('pc', 'property_color', { name: 'rm1Color', hex: '#336699' });
+    const { code } = graphToCode([pc, makeNode('out', 'output')], [makeEdge('pc', 'out', 'out', 'color')]);
+    const r = codeToGraph(code);
+    expect(r.nodes.some((n) => n.data.registryType === 'property_color' && getNodeValues(n).name === 'rm1Color')).toBe(true);
+    expect(graphToCode(r.nodes, r.edges).code).toBe(code);
   });
 });

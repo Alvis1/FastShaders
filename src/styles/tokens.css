@@ -80,6 +80,9 @@
   --text-secondary: #555555;
   --text-muted: #999999;
   --text-accent: #3366CC;
+  /* The code panel's mark for the selected node's code (CodeEditor's
+     useNodeCodeHighlight). CHROME: flips with the theme, below. */
+  --code-node-highlight: #3366CC;
 
   /* ===== SHADOWS (hard-edged — zero blur, offset encodes ELEVATION) =====
      Technical style: a shadow is a solid down-right offset with NO blur, and
@@ -323,6 +326,9 @@
   --text-primary: #eceef0;
   --text-secondary: #c0c5cc;
   --text-muted: #9aa1aa;
+  /* Lifted for the dark editor (#1e1e1e): ~6.2:1 there, as #3366CC is ~5.4:1
+     on the light one. */
+  --code-node-highlight: #6f9cff;
 
   /* Chrome elevation shadows: SAME hard-offset geometry as light mode (the
      offset is the elevation system — it never changes per theme), only the

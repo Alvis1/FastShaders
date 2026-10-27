@@ -111,6 +111,35 @@ describe('LiveEdgeValue width reservation is opt-in, from the row layout only', 
   });
 });
 
+describe('LiveEdgeValue never leaves a stale number up', () => {
+  // A .tsx in a `node` env: the guards read the source, like the ones above.
+  const text = src('LiveEdgeValue.tsx');
+  const onStop = text.slice(text.indexOf('onStop:'));
+
+  it('writes the RESTING text back when the loop stops (React only patches a CHANGED prop)', () => {
+    // Delete the Time node feeding Sin -> Multiply: the new resting text can
+    // equal the old one, React writes nothing, and the last tick stayed up.
+    expect(text).toContain('restingRef.current = text;');
+    expect(onStop.slice(0, 300)).toContain('el.textContent = restingRef.current');
+  });
+
+  it('a tick with nothing to print writes "…", and compares against the DOM, not a cache', () => {
+    expect(text).toMatch(/\?\? '…';/);
+    expect(text).toContain('if (el.textContent !== next) el.textContent = next;');
+  });
+
+  it('a field-fed wire ticks its interval; range and compact restart the loop', () => {
+    expect(text).toContain('liveEdgeRangeText(sourceId, nodes, edges, t, sourceHandle, compact)');
+    expect(text).toContain('liveEdgeText(sourceId, nodes, edges, t, sourceHandle, compact)');
+    expect(text).toContain('[sourceId, sourceHandle, animated, range, compact]');
+  });
+
+  it('blue follows `live` alone — a ticking interval is not a live point value', () => {
+    expect(text).toContain("style={live ? { color: '#2D6CDF' } : undefined}");
+    expect(text).not.toContain('live || animated');
+  });
+});
+
 /** A fake SVG element: just the attribute surface applyWaveFrame touches. */
 function fakeEl() {
   const attrs = new Map<string, string>();
@@ -171,5 +200,26 @@ describe('applyWaveFrame writes only what moved', () => {
     expect(els.dot.getAttribute('visibility')).toBe('hidden');
     expect(els.drop.getAttribute('visibility')).toBe('hidden');
     expect(els.text.textContent).toBe('…');
+  });
+
+  it('a null readout scrolls the curve by the phase but prints no value for it', () => {
+    // The sin card's X is a field, or a chain the CPU cannot evaluate: the
+    // curve still moves with the clock, the dot and the number do not lie.
+    const { els, r } = refs();
+    applyWaveFrame(r, Math.sin, 'sin', 2.5, { current: null }, null);
+    const scrolled = refs();
+    applyWaveFrame(scrolled.r, Math.sin, 'sin', 2.5, { current: null });
+    expect(els.curve.getAttribute('transform')).toBe(scrolled.els.curve.getAttribute('transform'));
+    expect(els.dot.getAttribute('visibility')).toBe('hidden');
+    expect(els.drop.getAttribute('visibility')).toBe('hidden');
+    expect(els.text.textContent).toBe('…');
+    expect(els.text.textContent).not.toContain(Math.sin(2.5).toFixed(2));
+  });
+
+  it('the readout defaults to the phase (the dot rides the curve centre)', () => {
+    const { els, r } = refs();
+    applyWaveFrame(r, Math.sin, 'sin', 1, { current: null });
+    expect(els.dot.getAttribute('visibility')).toBe('visible');
+    expect(els.text.textContent).toContain(Math.sin(1).toFixed(2));
   });
 });

@@ -1,6 +1,7 @@
 import { useContext, type CSSProperties } from 'react';
 import type { NodeDefinition } from '@/types';
 import { getTypeColor } from '@/utils/colorUtils';
+import { intLiteral } from '@/engine/intPromotion';
 import { getColormap, colormapGradientCss } from '@/utils/colormaps';
 import { ColorRampStrip } from './ColorRampArt';
 import { CurvesArt } from './CurvesArt';
@@ -11,7 +12,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { useDeviceBudget } from '@/hooks/useDeviceBudget';
 import { toBudgetPoints } from '@/utils/budgetPoints';
 import { Points } from '@/components/Points/Points';
-import { buildRows, visiblePortRows, outputRowLabel, ImageCardPicture, IMAGE_EMPTY_HINT_EVAL, PortValueCell } from './ShaderNode';
+import { buildRows, visiblePortRows, rowHoldsInt, outputRowLabel, ImageCardPicture, IMAGE_EMPTY_HINT_EVAL, PortValueCell } from './ShaderNode';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
@@ -524,7 +525,12 @@ export function NodeVisual({
                         readOnly={!interactive} />
                     )}
                     {row.settingKey && row.settingType === 'number' && !isConnected && !(def.type === 'slider' && row.settingKey === 'value') && (
-                      <DragNumberInput compact value={num(row.settingKey)} onChange={(v) => change(row.settingKey!, v)} />
+                      <DragNumberInput
+                        compact
+                        step={rowHoldsInt(def, row) ? 1 : undefined}
+                        value={num(row.settingKey)}
+                        onChange={(v) => change(row.settingKey!, rowHoldsInt(def, row) ? intLiteral(v) : v)}
+                      />
                     )}
                     {/* Colour row — the same swatch a colour OPERAND gets;
                         see `colorSwatch` for the interactive/inert split. */}
@@ -541,7 +547,7 @@ export function NodeVisual({
                         compact
                         step={row.input!.dataType === 'int' ? 1 : undefined}
                         value={num(row.input!.id)}
-                        onChange={(v) => change(row.input!.id, row.input!.dataType === 'int' ? Math.round(v) : v)}
+                        onChange={(v) => change(row.input!.id, row.input!.dataType === 'int' ? intLiteral(v) : v)}
                       />
                     )}
                   </div>

@@ -323,8 +323,8 @@ describe('evaluateNodeOutput — variadic arithmetic', () => {
 describe('evaluateNodeRange — variadic arithmetic', () => {
   it('folds interval arithmetic across all wired operands', () => {
     // positionGeometry isn't CPU-evaluable → true interval propagation.
-    // Its per-channel range is [-0.8, 0.8]; + 0.5 + 0.5 → [0.2, 1.8].
-    // A 2-operand-only fold would wrongly stop at [-0.3, 1.3].
+    // Its per-channel range is [-1, 1]; + 0.5 + 0.5 → [0, 2].
+    // A 2-operand-only fold would wrongly stop at [-0.5, 1.5].
     const pos = makeNode('n', 'positionGeometry');
     const half1 = makeNode('h1', 'float', { value: 0.5 });
     const half2 = makeNode('h2', 'float', { value: 0.5 });
@@ -335,8 +335,8 @@ describe('evaluateNodeRange — variadic arithmetic', () => {
       makeEdge('h2', 'out', 'op', 'c'),
     ];
     const r = evaluateNodeRange('op', [pos, half1, half2, op], edges, 0)!;
-    expect(r.min[0]).toBeCloseTo(0.2);
-    expect(r.max[0]).toBeCloseTo(1.8);
+    expect(r.min[0]).toBeCloseTo(0);
+    expect(r.max[0]).toBeCloseTo(2);
   });
 });
 

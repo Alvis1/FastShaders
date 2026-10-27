@@ -8,6 +8,7 @@ import { codeToGraph } from './codeToGraph';
 import { buildShaderModule } from './tslCodeProcessor';
 import { scriptToTSL } from './scriptToTSL';
 import { evaluateNodeOutput } from './cpuEvaluator';
+import { srgbToLinear01 } from '@/utils/colorUtils';
 import { convertPropertyNode, nextPropertyName } from '@/utils/propertyConvert';
 import { getNodeValues } from '@/types';
 import { makeNode, makeEdge } from '@/test-utils';
@@ -131,13 +132,21 @@ describe('property name pre-claim — swatch collision', () => {
 });
 
 describe('property_color — CPU evaluation', () => {
-  it('evaluates to the hex as rgb01 triple', () => {
+  it('evaluates to the hex in LINEAR light, as the uniform holds it', () => {
+    // `new THREE.Color(0xff8000)` converts sRGB → linear (ColorManagement on):
+    // 0x80 is 0.2159, not 0x80/255 = 0.502.
     const n = makeNode('n', 'property_color', { hex: '#ff8000', name: 'tint' });
     const res = evaluateNodeOutput('n', [n], [], 0);
     expect(res).not.toBeNull();
     expect(res![0]).toBeCloseTo(1, 5);
-    expect(res![1]).toBeCloseTo(0x80 / 255, 5);
+    expect(res![1]).toBeCloseTo(srgbToLinear01(0x80 / 255), 5);
+    expect(res![1]).toBeCloseTo(0.2159, 4);
     expect(res![2]).toBeCloseTo(0, 5);
+  });
+
+  it('a hex that is not #rrggbb is the black the module emits (hexLiteral)', () => {
+    expect(evaluateNodeOutput('n', [makeNode('n', 'property_color', { hex: 'red', name: 't' })], [], 0)).toEqual([0, 0, 0]);
+    expect(evaluateNodeOutput('n', [makeNode('n', 'property_color', { name: 't' })], [], 0)).toEqual([0, 0, 0]);
   });
 });
 

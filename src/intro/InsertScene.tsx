@@ -266,7 +266,7 @@ export function InsertScene() {
         <div ref={outputRef} className="react-flow__node fs-intro__node" style={{ left: OUTPUT_AT.x, top: OUTPUT_AT.y }}>
           <OutputCardContent
             {...outputChrome}
-            wired={intoColor ? { color: wiredValue(SCENE_NODES, edges, intoColor).val } : undefined}
+            wired={intoColor ? { color: wiredValue(SCENE_NODES, edges, intoColor, { compact: true }).val } : undefined}
           />
         </div>
         <div

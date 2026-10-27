@@ -67,7 +67,7 @@ export function ExposeScene() {
   const noiseChrome = useCardChrome(noiseDef);
   const outputChrome = useCardChrome(outputDef);
   const wiredText = useMemo(
-    () => wiredValue([{ id: WIRE.source, def: noiseDef }, { id: WIRE.target, def: outputDef }], [WIRE], WIRE).val,
+    () => wiredValue([{ id: WIRE.source, def: noiseDef }, { id: WIRE.target, def: outputDef }], [WIRE], WIRE, { compact: true }).val,
     [],
   );
 

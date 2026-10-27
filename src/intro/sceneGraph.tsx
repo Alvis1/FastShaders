@@ -8,7 +8,7 @@ import { getBezierPath, Position } from '@xyflow/react';
 import { useAppStore } from '@/store/useAppStore';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import type { AppEdge, AppNode, NodeDefinition } from '@/types';
-import { channelCount, edgeValueLabel } from '@/components/NodeEditor/nodes/ShaderNode';
+import { channelCount, edgeValueLabel, type EdgeLabelOptions } from '@/components/NodeEditor/nodes/ShaderNode';
 import type { PortPreviewState } from '@/components/NodeEditor/nodes/NodeVisual';
 import {
   ClockCardContent,
@@ -68,21 +68,25 @@ export function sceneNodes(list: ReadonlyArray<{ id: string; def: NodeDefinition
 }
 
 /** What arrives on `edge` — the label a connected input shows, evaluated on
- *  the scene's own graph. */
+ *  the scene's own graph. `opts.compact` exactly where the canvas passes it:
+ *  for the text an Output card's FIXED-width value cell shows (`wired=`),
+ *  never for a ShaderCardContent row (`portStates`), which grows. */
 export function wiredValue(
   nodes: ReadonlyArray<{ id: string; def: NodeDefinition }>,
   edges: readonly SceneEdge[],
   edge: SceneEdge,
+  opts?: EdgeLabelOptions,
 ): PortPreviewState {
-  return edgePortState(sceneNodes(nodes), toAppEdges(edges), edge);
+  return edgePortState(sceneNodes(nodes), toAppEdges(edges), edge, opts);
 }
 
 /** The same, on a graph of real nodes (a built-in asset's), with the channel
- *  count ShaderNode stacks its card by. */
-export function edgePortState(nodes: AppNode[], edges: AppEdge[], edge: SceneEdge): PortPreviewState {
-  const l = edgeValueLabel(edge.source, nodes, edges, edge.sourceHandle);
+ *  count ShaderNode stacks its card by. Blue ('live') for a POINT value only,
+ *  as LiveEdgeValue colours it — a time-fed interval stays grey. */
+export function edgePortState(nodes: AppNode[], edges: AppEdge[], edge: SceneEdge, opts?: EdgeLabelOptions): PortPreviewState {
+  const l = edgeValueLabel(edge.source, nodes, edges, edge.sourceHandle, opts);
   return {
-    mode: l.live || l.animated ? 'live' : 'inf',
+    mode: l.live ? 'live' : 'inf',
     ch: channelCount(edge.source, edge.sourceHandle, nodes, edges),
     val: l.text,
   };
@@ -92,8 +96,9 @@ export function wiredValueText(
   nodes: ReadonlyArray<{ id: string; def: NodeDefinition }>,
   edges: readonly SceneEdge[],
   edge: SceneEdge,
+  opts?: EdgeLabelOptions,
 ): string {
-  return wiredValue(nodes, edges, edge).val;
+  return wiredValue(nodes, edges, edge, opts).val;
 }
 
 /** TypedEdge's one-channel wire colour. */
@@ -236,17 +241,18 @@ export const GraphCard = memo(function GraphCard({
   const sinkCost = def.type === 'output' ? computeReachableCost(graph.nodes, graph.edges) : 0;
   const sinkChrome = useCostChrome(sinkCost);
   const into = graph.edges.filter((e) => e.target === node.id);
-  const arriving = (e: AppEdge) =>
+  const arriving = (e: AppEdge, compact = false) =>
     edgePortState(graph.nodes, graph.edges, {
       source: e.source,
       sourceHandle: e.sourceHandle ?? 'out',
       target: e.target,
       targetHandle: e.targetHandle ?? 'in',
-    });
+    }, { compact });
   const flow = getFlowNodeType(def);
   if (flow === 'output') {
+    // The Output's value cells are FIXED-width, as on the canvas (compact).
     const wired: Record<string, string> = {};
-    for (const e of into) wired[e.targetHandle ?? 'color'] = arriving(e).val;
+    for (const e of into) wired[e.targetHandle ?? 'color'] = arriving(e, true).val;
     return <OutputCardContent {...chrome} {...sinkChrome} cost={sinkCost} wired={wired} />;
   }
   if (flow === 'clock') return <ClockCardContent {...chrome} handRef={refs.hand} />;

@@ -12,7 +12,7 @@ import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { WaveformSvg, applyWaveFrame, type WaveformDynamicRefs } from './WaveformSvg';
 import { useFrameLoop } from '@/hooks/useFrameLoop';
-import { evaluateEdgeSource, getTargetEdges, getTimeUpstreamSet } from '@/engine/cpuEvaluator';
+import { evaluateEdgeSource, getFieldUpstreamSet, getTargetEdges, getTimeUpstreamSet } from '@/engine/cpuEvaluator';
 import './MathPreviewNode.css';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
 import { NodeTitle } from './NodeTitle';
@@ -74,10 +74,15 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   // primitive string, so a position-only notify produces an identical string
   // and Object.is bails before any re-render.
   //
-  // The key needs exactly two facts, each protecting a different thing:
+  // The key needs exactly three facts, each protecting a different thing:
   //   * the X feeder's node id — decides hasConnection (socket vs the inline
   //     number widget) AND is the animated tick's evaluation target;
-  //   * whether Time is upstream of it — picks the animated branch.
+  //   * whether Time is upstream of it — picks the animated branch;
+  //   * whether a sampled FIELD is upstream of it — X then has no single
+  //     value, so the card shows NO dot and no readout (the point the CPU
+  //     evaluator would hand back is one arbitrary centre sample, and printing
+  //     it as "the" value is the lie edgeValueLabel's field rule exists to
+  //     stop). A time-fed field still scrolls the curve, as decoration.
   // The upstream VALUE is deliberately NOT folded in: the static branch
   // renders phase 0 with no readout for a connected input and therefore never
   // reads it, and the animated branch re-reads the graph every frame. If the
@@ -94,22 +99,30 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   // ctx, which unwraps by construction — that is why getTimeUpstreamSet is
   // used here and not `hasTimeUpstream`, which takes the edge array as an
   // argument and so leaves the trap open at every call site.
-  // The flag is a single leading char so the key needs no separator (a raw NUL
-  // would make grep treat this file as binary — see SoundNode/OutputNode).
+  // The field check rides the same shared ctx, so it unwraps the same way.
+  // The flags are two fixed leading chars (time, field) so the key needs no
+  // separator (a raw NUL would make grep treat this file as binary — see
+  // SoundNode/OutputNode).
   const xKey = useAppStore((s) => {
     const e = getTargetEdges(s.nodes, s.edges, id).find((x) => x.targetHandle === 'x');
     if (!e) return '';
     const timeFed = getTimeUpstreamSet(s.nodes, s.edges).has(e.source);
+    const fieldFed = getFieldUpstreamSet(s.nodes, s.edges).has(e.source);
     // The SOCKET rides the key too — re-wiring from one output of a source to
     // another leaves source/target/targetHandle identical, so a source-only
     // key would keep the waveform on the old channel.
-    return `${timeFed ? '1' : '0'}${e.source}|${e.sourceHandle ?? ''}`;
+    return `${timeFed ? '1' : '0'}${fieldFed ? '1' : '0'}${e.source}|${e.sourceHandle ?? ''}`;
   });
   const hasConnection = xKey !== '';
   const [xSource, xHandle] = hasConnection
-    ? (() => { const r = xKey.slice(1); const i = r.lastIndexOf('|'); return [r.slice(0, i), r.slice(i + 1) || null]; })()
+    ? (() => { const r = xKey.slice(2); const i = r.lastIndexOf('|'); return [r.slice(0, i), r.slice(i + 1) || null]; })()
     : [null, null];
   const hasTime = xKey.charCodeAt(0) === 49; // '1' — ''.charCodeAt(0) is NaN
+  const hasField = xKey.charCodeAt(1) === 49;
+  // A dot and a number only for a value that IS one number: an unwired X (its
+  // own box), or a time-fed chain the CPU evaluates point-wise. A connected
+  // static X shows the bare curve, as before; a field never gets a readout.
+  const showReadout = !hasField && (hasTime || !hasConnection);
 
   const inputX = valueNum(data.values?.x ?? 0);
 
@@ -121,24 +134,35 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   useFrameLoop(
     hasTime,
     plotRef,
-    () => (t) => {
-      // `t` is the shared app clock — every animated surface (this card, the
-      // noise previews, the edge info chip) evaluates the same t per tick, so
-      // their displayed values agree; per-loop epochs made a sin card show
-      // sin(48.3) while the freshly-hovered edge chip showed sin(0.15).
-      //
-      // Evaluate the actual input flowing into this node's X port by walking
-      // the upstream graph with the current time. The graph is read FRESH
-      // from the store each tick (PreviewNode does the same): this component
-      // no longer subscribes to nodes/edges, so a mirror ref would never be
-      // refreshed and the waveform WOULD freeze on upstream edits.
-      const { nodes, edges } = useAppStore.getState();
-      const evaluated = xSource
-        ? evaluateEdgeSource({ source: xSource, sourceHandle: xHandle }, nodes, edges, t)?.[0] ?? null
-        : null;
-      applyWaveFrame(dynamicRefs, func, data.registryType, evaluated ?? t, lastLabelRef);
+    () => {
+      // A (re)start can follow a readout REMOUNT (showReadout flipping with
+      // the field flag), whose fresh text element holds the declarative
+      // label: forget what the last loop wrote so the first tick rewrites it.
+      lastLabelRef.current = null;
+      return (t) => {
+        // `t` is the shared app clock — every animated surface (this card, the
+        // noise previews, the edge info chip) evaluates the same t per tick, so
+        // their displayed values agree; per-loop epochs made a sin card show
+        // sin(48.3) while the freshly-hovered edge chip showed sin(0.15).
+        //
+        // Evaluate the actual input flowing into this node's X port by walking
+        // the upstream graph with the current time. The graph is read FRESH
+        // from the store each tick (PreviewNode does the same): this component
+        // no longer subscribes to nodes/edges, so a mirror ref would never be
+        // refreshed and the waveform WOULD freeze on upstream edits. A FIELD is
+        // never evaluated point-wise (one centre sample is not its value).
+        const { nodes, edges } = useAppStore.getState();
+        const evaluated = xSource && !hasField
+          ? evaluateEdgeSource({ source: xSource, sourceHandle: xHandle }, nodes, edges, t)?.[0] ?? null
+          : null;
+        const x = evaluated !== null && Number.isFinite(evaluated) ? evaluated : null;
+        // The curve follows X when X is known, else scrolls by the clock as
+        // decoration; the dot and readout follow X ALONE — `t` is never
+        // printed as the value of a wire that is not t ("…" instead).
+        applyWaveFrame(dynamicRefs, func, data.registryType, x ?? t, lastLabelRef, x);
+      };
     },
-    [data.registryType, func, xSource, xHandle, dynamicRefs],
+    [data.registryType, func, xSource, xHandle, hasField, dynamicRefs],
   );
 
   // Static branches: snap the dynamic attributes to the declared state. A
@@ -183,7 +207,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
           func={func}
           funcLabel={data.registryType}
           phase={hasConnection ? 0 : inputX}
-          showReadout={hasTime || !hasConnection}
+          showReadout={showReadout}
           dynamicRefs={dynamicRefs}
         />
       </div>

@@ -8,15 +8,17 @@
  *
  * Version bg-3 (consent-13, 2026-10-25) asks what people have DONE, never
  * what they ARE: which tools they have made materials or shaders with (one
- * Yes/No row each — Blender, Unreal, Unity, three.js/A-Frame, and "another
- * node-based shader editor", whose Yes opens ONE write-in that takes several
+ * Yes/No row each — Blender, Unreal, Unity, three.js/A-Frame, and "other
+ * node-based shader editor" (read "Another…" until 2026-10-27; same
+ * question, same id), whose Yes opens ONE write-in that takes several
  * names, which the owner wants to know; the web row is what tells an
  * engine-side professional from a web-side one). The owner turned the
  * catch-all "Other tools" into the node-editor write-in, kept last
  * (2026-10-26, bg-3 still undeployed, so the version stays), how much they have worked with node editors (never →
- * use them in paid work), and whether they have written or changed shader
- * code (no → changed existing code → written their own) — three behavioural
- * rungs, kept because the research question names its population as "users
+ * use them in paid work), and how they have worked with shader code (no →
+ * changed existing code → written their own; until 2026-10-27 the stem read
+ * "Have you written or changed shader code?" — same rungs, same ids) — three
+ * behavioural rungs, kept because the research question names its population as "users
  * without programming expertise" and nothing else here tells a shader
  * programmer from an artist fluent in Blender nodes. bg-2 (consent-12, never
  * deployed) had a TouchDesigner row, an "another node editor" row and a
@@ -80,7 +82,7 @@ export const BACKGROUND_ITEMS: readonly QItem[] = [
       { id: 'unreal', en: 'Unreal Engine', lv: 'Unreal Engine' },
       { id: 'unity', en: 'Unity', lv: 'Unity' },
       { id: 'web3d', en: 'three.js or A-Frame (web 3D)', lv: 'three.js vai A-Frame (tīmekļa 3D)' },
-      { id: 'otherNodeEditor', en: 'Another node-based shader editor', lv: 'Cits mezglu ēnotāju redaktors' },
+      { id: 'otherNodeEditor', en: 'Other node-based shader editor', lv: 'Cits mezglu ēnotāju redaktors' },
     ],
     columns: [YES, NO],
     otherRowId: 'otherNodeEditor',
@@ -103,13 +105,13 @@ export const BACKGROUND_ITEMS: readonly QItem[] = [
   {
     kind: 'choice', id: 'shaderCodeWritten', group: 'experience',
     question: {
-      en: 'Have you written or changed shader code (GLSL, HLSL, WGSL…)?',
-      lv: 'Vai jums ir nācies rakstīt vai mainīt ēnotāju kodu (GLSL, HLSL, WGSL…)?',
+      en: 'How have you worked with shader code (GLSL, HLSL, WGSL…)?',
+      lv: 'Kā jums ir nācies strādāt ar ēnotāju kodu (GLSL, HLSL, WGSL…)?',
     },
     options: [
-      { id: 'no', en: 'No', lv: 'Nē' },
+      { id: 'no', en: 'I have not', lv: 'Nav nācies' },
       { id: 'changed', en: 'Only changed existing code (values, small edits)', lv: 'Tikai mainīju gatavu kodu (vērtības, nelieli labojumi)' },
-      { id: 'own', en: 'Yes, I have written my own shaders', lv: 'Jā, rakstīju savus ēnotājus' },
+      { id: 'own', en: 'I have written my own shaders', lv: 'Rakstīju savus ēnotājus' },
     ],
   },
 ];

@@ -165,7 +165,7 @@ export function PreviewScene() {
   const wire = anchors
     ? wirePaths(state.attached ? anchors.voronoi : anchors.perlin, anchors.color, Position.Right)
     : null;
-  const colorText = wiredValue(SCENE, edges, edges[0]).val;
+  const colorText = wiredValue(SCENE, edges, edges[0], { compact: true }).val;
   const feederName = (id: string) => built.before.varNames.get(id) ?? id;
 
   return (

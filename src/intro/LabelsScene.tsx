@@ -77,8 +77,12 @@ export function LabelsScene() {
     return { ...imageDef.defaultValues, ...(url ? { imageB64: url } : {}) } as Record<string, string | number>;
   }, []);
   // What arrives on each wire — its channel count and the value text the
-  // input it reaches shows.
-  const arriving = useMemo(() => EDGES.map((e) => wiredValue(SCENE_NODES, EDGES, e)), []);
+  // input it reaches shows: compact into the Output's FIXED-width value cell,
+  // the full form on Mix's growing row.
+  const arriving = useMemo(
+    () => EDGES.map((e) => wiredValue(SCENE_NODES, EDGES, e, { compact: e.target === 'output' })),
+    [],
+  );
 
   const layerRef = useRef<HTMLDivElement>(null);
   const clockRef = useRef<number | null>(null);

@@ -97,12 +97,13 @@ export function DrawToolbarView({
       <button
         type="button"
         tabIndex={tab}
-        className={`fs-draw-btn${active ? ' is-active' : ''}`}
+        className={`fs-draw-btn fs-draw-btn--icon${active ? ' is-active' : ''}`}
         aria-pressed={active}
+        aria-label={t('Draw', language)}
         title={active ? t('Exit draw mode (Esc)', language) : t('Draw on the board', language)}
         onClick={() => onActive(!active)}
       >
-        <span aria-hidden="true">✏️</span> {t('Draw', language)}
+        <span aria-hidden="true">✏️</span>
       </button>
 
       {active && (

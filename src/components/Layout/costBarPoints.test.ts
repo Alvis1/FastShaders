@@ -8,8 +8,8 @@
  *    (`useBudgetPoints`), so rounding never compounds; the figure prints
  *    through <Points> (0.01, a centred dot when rounded) and the total's title
  *    states the EXACT figure, so hovering the number shows what it stands for;
- *  - the budget is POINT_BUDGET, never a device's `maxPoints` — on the meter's
- *    two ends, after the slash, in the device dropdown (no `(200 pts)` beside a
+ *  - the budget is POINT_BUDGET, never a device's `maxPoints` — printed once,
+ *    after the slash (the ramp's ends carry no numbers), in the device dropdown (no `(200 pts)` beside a
  *    name) and in the intro's copy of the readout;
  *  - the right-click point-cap editor is gone with `fs:costBudgets`: a typed cap
  *    over a fixed 100 would be a second budget nobody measured;
@@ -42,10 +42,9 @@ describe('the readout prints budget points against 100', () => {
     expect(BAR).not.toMatch(/total=\{totalCost\}/);
   });
 
-  it('prints the figure through <Points>, then the fixed budget, on both ends of the meter too', () => {
+  it('prints the figure through <Points>, then the fixed budget, beside the device on one row', () => {
     expect(meter).toContain('<Points value={points} tip={false} /> / {POINT_BUDGET} {t(\'pts\', language)}');
-    expect(meter).toContain('<span className="cost-bar__label-end">0</span>');
-    expect(meter).toContain('<span className="cost-bar__label-end">{POINT_BUDGET}</span>');
+    expect(meter).toMatch(/<div className="cost-bar__head">\s*\{device\}/);
     expect(meter).toContain('const percentage = Math.min(points / POINT_BUDGET, 1);');
     expect(meter).toContain('const over = points > POINT_BUDGET;');
     expect(meter).not.toMatch(/\bmax\b|maxPoints/);

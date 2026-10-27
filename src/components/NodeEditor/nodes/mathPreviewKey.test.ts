@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { makeNode, makeEdge } from '@/test-utils';
-import { getTargetEdges, getTimeUpstreamSet, evaluateNodeOutput } from '@/engine/cpuEvaluator';
+import { getFieldUpstreamSet, getTargetEdges, getTimeUpstreamSet, evaluateNodeOutput } from '@/engine/cpuEvaluator';
 import type { AppNode, AppEdge, BoundarySocket } from '@/types';
 
 /**
@@ -50,13 +50,21 @@ function makeGroup(
 function xState(nodes: AppNode[], edges: AppEdge[], id: string) {
   const e = getTargetEdges(nodes, edges, id).find((x) => x.targetHandle === 'x');
   const xKey = e
-    ? `${getTimeUpstreamSet(nodes, edges).has(e.source) ? '1' : '0'}${e.source}`
+    ? `${getTimeUpstreamSet(nodes, edges).has(e.source) ? '1' : '0'}${getFieldUpstreamSet(nodes, edges).has(e.source) ? '1' : '0'}${e.source}|${e.sourceHandle ?? ''}`
     : '';
+  const hasConnection = xKey !== '';
+  const hasTime = xKey.charCodeAt(0) === 49;
+  const hasField = xKey.charCodeAt(1) === 49;
+  const rest = hasConnection ? xKey.slice(2) : '';
   return {
     xKey,
-    hasConnection: xKey !== '',
-    xSource: xKey !== '' ? xKey.slice(1) : null,
-    hasTime: xKey.charCodeAt(0) === 49,
+    hasConnection,
+    xSource: hasConnection ? rest.slice(0, rest.lastIndexOf('|')) : null,
+    hasTime,
+    hasField,
+    // The component's readout rule: a dot and a number only for a value
+    // that IS one number.
+    showReadout: !hasField && (hasTime || !hasConnection),
   };
 }
 
@@ -80,6 +88,22 @@ describe('MathPreviewNode xKey — drift guard', () => {
     // re-opens the trap. Keep it out of this selector entirely — including the
     // spelling that happens to be correct today.
     expect(selector).not.toContain('hasTimeUpstream');
+    // The field check rides the same unwrapped ctx.
+    expect(selector).toContain('getFieldUpstreamSet(s.nodes, s.edges)');
+  });
+
+  it('keeps the readout rule and the parse this mirror copies', () => {
+    expect(COMPONENT_SRC).toContain('const showReadout = !hasField && (hasTime || !hasConnection);');
+    expect(COMPONENT_SRC).toContain('showReadout={showReadout}');
+    expect(COMPONENT_SRC).toContain('const r = xKey.slice(2);');
+    expect(COMPONENT_SRC).toContain('const hasField = xKey.charCodeAt(1) === 49;');
+  });
+
+  it('never prints the clock as the value of a wire that is not the clock', () => {
+    // The tick used to pass `evaluated ?? t`: an unevaluable X printed sin(t).
+    // The curve may scroll by t; the dot and readout get X or nothing.
+    expect(COMPONENT_SRC).not.toContain('evaluated ?? t');
+    expect(COMPONENT_SRC).toContain('applyWaveFrame(dynamicRefs, func, data.registryType, x ?? t, lastLabelRef, x);');
   });
 
   it('holds no whole-array subscription and no nodes/edges mirror ref', () => {
@@ -148,13 +172,16 @@ describe('MathPreviewNode xKey — the time-driven path is still detected', () =
       hasConnection: false,
       xSource: null,
       hasTime: false,
+      hasField: false,
+      showReadout: true,
     });
   });
 
   it('the leading-flag key is unambiguous for any node id (no separator needed)', () => {
-    // The flag is exactly one char and the id is everything after it, so an id
-    // that itself starts with '0' or '1' cannot be misparsed.
-    for (const id of ['1weird', '0weird', 'time1']) {
+    // The flags are exactly two chars and the id is everything after them up
+    // to the LAST '|', so an id that itself starts with '0' or '1' (or holds a
+    // '|') cannot be misparsed.
+    for (const id of ['1weird', '0weird', '11weird', 'time1', 'a|b']) {
       const nodes = [
         { ...makeNode(id, 'time') } as AppNode,
         makeNode('sin1', 'sin', { x: 0 }),
@@ -162,5 +189,40 @@ describe('MathPreviewNode xKey — the time-driven path is still detected', () =
       const edges = [makeEdge(id, 'out', 'sin1', 'x')];
       expect(xState(nodes, edges, 'sin1')).toMatchObject({ xSource: id, hasTime: true });
     }
+  });
+});
+
+describe('MathPreviewNode xKey — a FIELD feeder has no single value to print', () => {
+  it('UV + Time → sin: the curve animates, but there is no dot and no readout', () => {
+    const nodes = [
+      makeNode('uv1', 'uv'),
+      makeNode('time1', 'time'),
+      makeNode('add1', 'add'),
+      makeNode('sin1', 'sin', { x: 0 }),
+    ];
+    const edges = [
+      makeEdge('uv1', 'out', 'add1', 'a'),
+      makeEdge('time1', 'out', 'add1', 'b'),
+      makeEdge('add1', 'out', 'sin1', 'x'),
+    ];
+    expect(xState(nodes, edges, 'sin1')).toMatchObject({
+      hasConnection: true,
+      xSource: 'add1',
+      hasTime: true,
+      hasField: true,
+      showReadout: false,
+    });
+  });
+
+  it('a static field (UV → sin) shows the bare curve, as any connected static X', () => {
+    const nodes = [makeNode('uv1', 'uv'), makeNode('sin1', 'sin', { x: 0 })];
+    const edges = [makeEdge('uv1', 'out', 'sin1', 'x')];
+    expect(xState(nodes, edges, 'sin1')).toMatchObject({ hasTime: false, hasField: true, showReadout: false });
+  });
+
+  it('Time → sin keeps its readout (a point the CPU evaluates)', () => {
+    const nodes = [makeNode('time1', 'time'), makeNode('sin1', 'sin', { x: 0 })];
+    const edges = [makeEdge('time1', 'out', 'sin1', 'x')];
+    expect(xState(nodes, edges, 'sin1')).toMatchObject({ hasTime: true, hasField: false, showReadout: true });
   });
 });

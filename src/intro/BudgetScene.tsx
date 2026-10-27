@@ -143,7 +143,10 @@ export function BudgetScene() {
         targetHandle: e.targetHandle ?? 'in',
       };
       const states = out.get(e.target) ?? {};
-      states[edge.targetHandle] = edgePortState(graph.nodesAfter, graph.edgesAfter, edge);
+      // The Output's value cell is FIXED-width (compact); a member's row grows.
+      states[edge.targetHandle] = edgePortState(graph.nodesAfter, graph.edgesAfter, edge, {
+        compact: e.target === graph.wire.target,
+      });
       out.set(e.target, states);
     }
     return out;
@@ -313,14 +316,16 @@ export function BudgetScene() {
       {/* The cost bar, where the canvas has it: its device row and readout. */}
       <div ref={costRef} className="node-editor__cost-overlay">
         <div className="cost-bar">
-          <div className="cost-bar__device-row">
-            <select className="cost-bar__headset-select" tabIndex={-1} value={device.id} onChange={noop}>
-              <option value={device.id}>{deviceOptionText(device)}</option>
-            </select>
-          </div>
           <CostMeter
             points={points}
             language={language}
+            device={
+              <div className="cost-bar__device-row">
+                <select className="cost-bar__headset-select" tabIndex={-1} value={device.id} onChange={noop}>
+                  <option value={device.id}>{deviceOptionText(device)}</option>
+                </select>
+              </div>
+            }
             colorLow={costLow}
             colorHigh={costHigh}
             lowPole={<span className="palette-swatch cost-bar__pole-picker" style={{ background: costLow }} />}

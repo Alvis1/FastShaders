@@ -203,9 +203,12 @@ export const PreviewNode = memo(function PreviewNode({
     time: number,
   ): Record<string, string | number> => {
     const resolved: Record<string, string | number> = { ...data.values };
+    const wired = new Set<string>();
     for (const edge of getTargetEdges(currentNodes, currentEdges, id)) {
       const handle = edge.targetHandle;
-      if (!handle) continue;
+      // A socket reads its FIRST wire, as codegen and the evaluator do.
+      if (!handle || wired.has(handle)) continue;
+      wired.add(handle);
       // Per-SOCKET: an HSL Lightness wire into `scale` must sample the
       // noise at L, not at channel 0's Hue.
       const val = evaluateEdgeSource(edge, currentNodes, currentEdges, time)?.[0] ?? null;

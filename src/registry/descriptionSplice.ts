@@ -2,6 +2,7 @@ import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import type { NodePath } from '@babel/traverse';
 import * as t from '@babel/types';
+import { foldSearchText } from '@/utils/searchFold';
 
 // Handle babel traverse CJS/ESM interop (same shim as src/engine/codeToGraph.ts)
 const traverse = (
@@ -348,8 +349,9 @@ export const MAX_NODE_LABEL_LENGTH = 40;
  * Uniqueness has to be judged against the whole map: `nodeMatchRank` tiers an exact name
  * hit above everything else, so two nodes sharing a label make that tier ambiguous and
  * the Add-node menu grows two identical-looking rows with no way to tell them apart.
- * Comparison is case-insensitive because the ranker lowercases before matching, so
- * "Multiply"/"multiply" would collide there while looking distinct here.
+ * Comparison goes through the ranker's own fold (`foldSearchText`: case AND diacritics),
+ * so "Multiply"/"multiply" — or "Krāsa"/"Krasa" — would collide there while looking
+ * distinct here.
  *
  * Empty labels are rejected outright (a node whose name renders as "" is
  * indistinguishable from a broken registry entry), and so is surrounding whitespace —
@@ -391,7 +393,7 @@ export function assertValidNodeLabels(labels: Record<string, string>, kind = 'la
         `${kind} for "${key}" is ${value.length} characters (max ${MAX_NODE_LABEL_LENGTH})`,
       );
     }
-    const fold = value.toLowerCase();
+    const fold = foldSearchText(value);
     const owner = seen.get(fold);
     // Name BOTH sides. Callers hand in the whole post-patch map, which iterates in
     // registry order rather than "patched key last", so `owner` is whichever node comes

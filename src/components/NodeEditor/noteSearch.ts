@@ -1,3 +1,5 @@
+import { foldSearchText as fold } from '@/utils/searchFold';
+
 /**
  * Words that find the note, in both UI languages — the Add menu's "Add Note"
  * row and the asset bar's Note tile alike. A note is not a registry node, so
@@ -9,8 +11,7 @@ const NOTE_WORDS = [
   'piezīme', 'piezīmes', 'piezīmi', 'teksts', 'komentārs', 'anotācija',
 ];
 
-/** Lower-case, with diacritics dropped, so "piezime" finds "piezīme". */
-const fold = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+/** Folded once (`foldSearchText`), so "piezime" finds "piezīme". */
 const FOLDED = NOTE_WORDS.map(fold);
 
 /** True when `query` names the note: a word starts with it, or one of its own

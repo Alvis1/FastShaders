@@ -32,6 +32,7 @@ import { GLYPH_PALETTE, normalizePaintValue, normalizePaintNumber, displayPaintN
 import { isTypingTarget } from '@/utils/isTypingTarget';
 import { ARROW_FLARE, RIBBON_GAP, arrowMarks, chevronPath, ribbonHalfWidth, ribbonStrokeWidth } from '@/components/NodeEditor/edges/bezierGeometry';
 import { downloadBlob } from '@/utils/downloadBlob';
+import { foldSearchText } from '@/utils/searchFold';
 
 /* ---------------- registry data (live imports — see bridge.tsx) ---------------- */
 const NODES = ND.designerNodes();
@@ -2232,7 +2233,7 @@ function nameProblem(type, en) {
   if (!v.trim()) return 'Name must not be empty.';
   if (v.trim() !== v) return 'Name has leading or trailing space.';
   if (/[\u200B-\u200D\u2060\u180E\uFEFF]/.test(v)) return 'Name contains an invisible character.';
-  const fold = v.toLowerCase();
+  const fold = foldSearchText(v);
   /* Check against EVERY labelled definition, not just the designable ones.
      NODES is designerNodes() — the 59 ShaderNode-rendered types — but the writers
      validate against all 74 label slots, so a collision with one of the 15 excluded
@@ -2244,9 +2245,9 @@ function nameProblem(type, en) {
   for (let i = 0; i < all.length; i++) {
     const other = all[i];
     if (other === type) continue;
-    // Case-insensitive: nodeMatchRank lowercases before matching, so "Multiply"
-    // and "multiply" collide in search while looking distinct here.
-    if (labelEn(other).toLowerCase() === fold) return 'Already the name of "' + other + '".';
+    // Folded like nodeMatchRank folds (case AND diacritics), so "Multiply" and
+    // "multiply", or "Krasa" and "Krāsa", collide in search while looking distinct here.
+    if (foldSearchText(labelEn(other)) === fold) return 'Already the name of "' + other + '".';
   }
   return '';
 }
@@ -2259,7 +2260,7 @@ function allLabelledTypes() {
   return Object.keys(savedLabels).length ? Object.keys(savedLabels) : NODES.map((n) => n.type);
 }
 function nameWarning(type, en) {
-  const fold = String(en == null ? '' : en).trim().toLowerCase();
+  const fold = foldSearchText(String(en == null ? '' : en).trim());
   if (!fold) return '';
   /* nodeMatchRank's top tier is FOUR names per node - label, type, tslFunction and the
      Latvian label - so a new label equal to another node's type or TSL function ties at
@@ -2277,14 +2278,14 @@ function nameWarning(type, en) {
     if (other === type) continue;
     const def = ND.definitionOf(other);
     if (!def) continue;
-    if (other.toLowerCase() === fold) {
+    if (foldSearchText(other) === fold) {
       return 'Ties with the "' + other + '" node type in search - registry order decides which wins.';
     }
-    if (def.tslFunction && String(def.tslFunction).toLowerCase() === fold) {
+    if (def.tslFunction && foldSearchText(String(def.tslFunction)) === fold) {
       return 'Ties with "' + other + '" TSL function `' + def.tslFunction + '` in search.';
     }
     const lv = labelLv(other);
-    if (lv && lv.toLowerCase() === fold) {
+    if (lv && foldSearchText(lv) === fold) {
       return 'Ties with the Latvian name of "' + other + '" in search.';
     }
   }
@@ -2294,7 +2295,7 @@ function nameWarning(type, en) {
     if (other === type) continue;
     const def = ND.definitionOf(other);
     const desc = (def && def.description) || '';
-    if (desc.toLowerCase().indexOf(fold) >= 0) {
+    if (foldSearchText(desc).indexOf(fold) >= 0) {
       return '"' + other + '" mentions this word in its description - search may rank it above this node (nodeSearch.test.ts covers that).';
     }
   }
@@ -2307,10 +2308,10 @@ function canRename() { return labelApi || !!dirHandle; }
 /* ---------------- selection / dropdown / search ---------------- */
 let filterText = '';
 function visibleNodes() {
-  const q = filterText.trim().toLowerCase();
+  const q = foldSearchText(filterText.trim());
   // labelEn/labelLv, not n.label — a node renamed this session must be findable
   // by its NEW name, and its old one must stop matching.
-  return q ? NODES.filter((n) => n.type.toLowerCase().includes(q) || labelEn(n.type).toLowerCase().includes(q) || labelLv(n.type).toLowerCase().includes(q)) : NODES;
+  return q ? NODES.filter((n) => [n.type, labelEn(n.type), labelLv(n.type)].some((x) => foldSearchText(x).includes(q))) : NODES;
 }
 function rebuildDropdown() {
   const sel = el('nodeSel'); const cur = state.type; sel.innerHTML = '';

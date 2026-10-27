@@ -20,7 +20,13 @@
  * straight after ten SUS ones, three of them the SUS's own content — followed
  * by four credibility items that said one thing twice; the owner found it
  * repetitive (2026-10-25). The pilot items stay on the STUDENT paper form,
- * where the continuity hypothesis (H2) lives. In screen order:
+ * where the continuity hypothesis (H2) lives. pro-4 (consent-14, 2026-10-27,
+ * owner): pro-3's ±20 % per-node tolerance item (E7) is cut, the fit question
+ * asks the respondent's OPINION rather than "as you used it today"
+ * (`suitedFor`), the years question asks about WORK experience in real-time
+ * 3D computer graphics only, without XR or teaching (`paidYears`), and the
+ * main-work list gives graphics programmers, film/VFX and researchers an
+ * answer of their own. In screen order:
  *   1. the tool — could a node's LOOK tell what it does and what it costs
  *      (Cognitive Dimensions role-expressiveness, CD5, answered as two
  *      Yes/Partly/No rows so the cost half, design principle P1, reads alone),
@@ -31,31 +37,31 @@
  *      concordance), whether the points CHANGED what was built as five
  *      behavioural rungs (E2 recast: ignored / looked, stayed within budget /
  *      looked, went over / chose cheaper from the start / replaced or removed
- *      — only the last pairs with a logged edit), tolerance of a ±20 % per-node
- *      error (E7, spelled out so every expert answers the same question), and
- *      where such a system might mislead (E6, open);
- *   3. fit — teaching / prototyping / production as forced Yes/No rows (H2),
- *      and what got in the way or would have to change (H6 + H7, open);
+ *      — only the last pairs with a logged edit), and where such a system
+ *      might mislead (E6, open);
+ *   3. fit — in the respondent's opinion, teaching / prototyping / production
+ *      as forced Yes/No rows (H2), and what got in the way or would have to
+ *      change (H6 + H7, open);
  *   4. the respondent's own work — whether WebXR's constraints deter them (W2,
  *      the Introduction's motivating claim measured on the people it is made
  *      about; the second and last agreement item), how they find out today
  *      that a shader is too expensive (F1, the feedforward mechanism in their
- *      own words), main work (B1) and years of paid experience (B2, the
- *      inclusion criterion). Tools and shader code are the shared experience
- *      block's (background.ts) — nothing is asked twice.
+ *      own words), main work (B1) and years of paid experience in real-time
+ *      3D computer graphics (B2, the inclusion criterion). Tools and shader code are the
+ *      shared experience block's (background.ts) — nothing is asked twice.
  * Cut from the planned E1 form, deliberately: QUESI and the technology-
  * familiarity list (the student line; no 0–4 kind here), E1 (the intro's
  * budget slide makes "without explanation" false), E4 (collinear with E3),
- * E5 (E7 asks it in the respondent's terms), F2–F4, W1 and W3–W5, H0
- * ("reminded me of" is near-tautological for someone who just ticked
- * Blender), H1 (one comparative item against heterogeneous reference tools is
- * uninterpretable at this n), H3 (no 0–10 kind; fitFor is the verdict), the
- * issue log (missingForWork and the comment box), and pro-2's 12-month
- * platform grid (the experience block's web row carries the engine/web
- * split). Every required question has an honest answer for everyone ("Can't
- * judge", "Did not use", "I have not had to find out", "Studying", "No paid
- * experience"). Each agreement item is FIRST in its group: the renderer
- * prints the 1–5 legend above the first agree item of a run.
+ * E5 and E7, F2–F4, W1 and W3–W5, H0 ("reminded me of" is near-tautological
+ * for someone who just ticked Blender), H1 (one comparative item against
+ * heterogeneous reference tools is uninterpretable at this n), H3 (no 0–10
+ * kind; suitedFor is the verdict), the issue log (missingForWork and the
+ * comment box), and pro-2's 12-month platform grid (the experience block's
+ * web row carries the engine/web split). Every required question has an
+ * honest answer for everyone ("Can't judge", "Did not use", "I have not had
+ * to find out", "Studying", "No work experience"). Each agreement item is
+ * FIRST in its group: the renderer prints the 1–5 legend above the first
+ * agree item of a run.
  *
  * The item model and the Latvian-beside-English rule are questionItems.ts's.
  *
@@ -94,20 +100,21 @@ export type ProGridItem = GridItem;
 export type ProTextItem = TextItem;
 export type ProGroup = 'tool' | 'points' | 'fit' | 'work';
 
-export const PRO_ITEMS_VERSION = 'pro-3';
+export const PRO_ITEMS_VERSION = 'pro-4';
 
-/** Ids of the first draft (consent-6 … consent-11) and of pro-2 (consent-12,
- *  never deployed). Never reuse one. */
+/** Ids of the first draft (consent-6 … consent-11), of pro-2 (consent-12,
+ *  never deployed) and the three pro-3 ids pro-4 cut or reworded. Never reuse one. */
 export const RETIRED_PRO_IDS: readonly string[] = [
   'role', 'years', 'shaderFrequency', 'performanceBudget', 'platforms', 'wouldUse',
   'pilotQ5', 'pilotQ6', 'pilotQ7', 'pilotQ8', 'pilotQ9',
   'pointsUnderstood', 'pointsInfluenced', 'pointsTrusted', 'pointsRanking', 'pointsOff20',
   'platforms12m', 'realtimeYears',
+  'pointsOff20PerNode', 'fitFor', 'proYears',
 ];
 
 export const PRO_GROUP_HEADINGS: Record<ProGroup, QText> = {
   tool: { en: 'FastShaders as a tool', lv: 'FastShaders kā rīks' },
-  points: { en: 'The cost points', lv: 'Izmaksu punkti' },
+  points: { en: 'The performance impact points', lv: 'Veiktspējas ietekmes punkti' },
   fit: { en: 'FastShaders and your work', lv: 'FastShaders un jūsu darbs' },
   work: { en: 'Your own work', lv: 'Jūsu darbs' },
 };
@@ -116,14 +123,6 @@ export const PRO_GROUP_NOTES: Partial<Record<ProGroup, QText>> = {
   tool: {
     en: 'About the editor you just used: the nodes, the code panel and the presets.',
     lv: 'Par redaktoru, ko tikko lietojāt, — mezgliem, koda paneli un sagatavēm.',
-  },
-  points: {
-    en: 'About the point numbers you saw on the nodes and in the cost bar.',
-    lv: 'Par punktu skaitļiem, ko redzējāt pie mezgliem un izmaksu joslā.',
-  },
-  work: {
-    en: 'About your usual work, not about FastShaders.',
-    lv: 'Par jūsu ierasto darbu, nevis par FastShaders.',
   },
 };
 
@@ -141,7 +140,7 @@ export const PRO_ITEMS: readonly QItem[] = [
     },
     rows: [
       { id: 'does', en: 'What it does', lv: 'Ko mezgls dara' },
-      { id: 'cost', en: 'How many points it costs', lv: 'Cik punktu tas maksā' },
+      { id: 'cost', en: 'Its impact on performance', lv: 'Tā ietekmi uz veiktspēju' },
     ],
     columns: [YES, PARTLY, NO],
   },
@@ -178,8 +177,8 @@ export const PRO_ITEMS: readonly QItem[] = [
   {
     kind: 'choice', id: 'pointsChangedBuild', group: 'points',
     question: {
-      en: 'Did the cost points change what you built? Mark the one that fits best.',
-      lv: 'Vai izmaksu punkti mainīja to, ko veidojāt? Atzīmējiet atbilstošāko.',
+      en: 'Did the points change what you built?',
+      lv: 'Vai punkti mainīja to, ko veidojāt?',
     },
     // Five states, each with its own cell: "looked, stayed within budget" is
     // the meter working as a guide, "chose cheaper from the start" the
@@ -193,16 +192,6 @@ export const PRO_ITEMS: readonly QItem[] = [
     ],
   },
   {
-    kind: 'choice', id: 'pointsOff20PerNode', group: 'points',
-    // The error is spelled per node and either way: a uniform 20 % bias
-    // leaves every ranking intact, so "off by 20 %" alone was two questions.
-    question: {
-      en: "If each node's points could be about 20% too high or too low, would the meter still help keep a shader within budget?",
-      lv: 'Ja katra mezgla punkti varētu būt par aptuveni 20 % par lielu vai par mazu, vai rādītājs joprojām palīdzētu ēnotājam iekļauties budžetā?',
-    },
-    options: [YES, PARTLY, NO, CANT],
-  },
-  {
     kind: 'text', id: 'pointsMisleading', group: 'points',
     question: {
       en: 'Where might such a point system mislead its user? (optional)',
@@ -212,10 +201,10 @@ export const PRO_ITEMS: readonly QItem[] = [
 
   // 3. Fit (E1 form H2), one Yes/No row per use, then the obstacles.
   {
-    kind: 'grid', id: 'fitFor', group: 'fit',
+    kind: 'grid', id: 'suitedFor', group: 'fit',
     question: {
-      en: 'What is FastShaders, as you used it today, suited for?',
-      lv: 'Kam FastShaders — tāds, kādu to šodien lietojāt — ir piemērots?',
+      en: 'In your opinion, what is FastShaders suited for?',
+      lv: 'Kam, jūsuprāt, FastShaders ir piemērots?',
     },
     rows: [
       { id: 'teaching', en: 'Teaching or learning shader basics', lv: 'Ēnotāju pamatu mācīšanai un apguvei' },
@@ -266,11 +255,13 @@ export const PRO_ITEMS: readonly QItem[] = [
     options: [
       { id: 'gameDev', en: 'Game development', lv: 'Spēļu izstrāde' },
       { id: 'xrDev', en: 'XR (VR/AR) development', lv: 'XR (VR/AR) izstrāde' },
+      { id: 'filmVfx', en: 'Film, VFX or animation', lv: 'Kino, VFX vai animācija' },
       { id: 'webCreative', en: 'Web 3D or creative coding (e.g. three.js, A-Frame)', lv: 'Tīmekļa 3D vai radošā programmēšana (piem., three.js, A-Frame)' },
-      { id: 'shaderGraphics', en: 'Shader or graphics programming', lv: 'Ēnotāju vai grafikas programmēšana' },
+      { id: 'graphicsProgramming', en: 'Graphics or rendering programming', lv: 'Grafikas vai renderēšanas programmēšana' },
+      { id: 'shaderProgramming', en: 'Shader programming', lv: 'Ēnotāju programmēšana' },
       { id: 'techArt', en: 'Technical art', lv: 'Tehniskā māksla (technical art)' },
       { id: 'artDesign', en: '3D or media art and design', lv: '3D, mediju māksla vai dizains' },
-      { id: 'teaching', en: 'Teaching computer graphics or 3D', lv: 'Datorgrafikas vai 3D mācīšana' },
+      { id: 'teachingResearch', en: 'Teaching or research in computer graphics', lv: 'Datorgrafikas mācīšana vai pētniecība' },
       { id: 'studying', en: 'Studying', lv: 'Studēju' },
       { id: 'other', en: 'Other', lv: 'Cits' },
     ],
@@ -281,14 +272,14 @@ export const PRO_ITEMS: readonly QItem[] = [
     },
   },
   {
-    kind: 'choice', id: 'proYears', group: 'work',
+    kind: 'choice', id: 'paidYears', group: 'work',
     question: {
-      en: 'How many years of paid experience do you have in real-time 3D, XR or teaching computer graphics?',
-      lv: 'Cik gadu algota darba pieredze jums ir reāllaika 3D vai XR jomā vai datorgrafikas mācīšanā?',
+      en: 'How many years of work experience do you have in real-time 3D computer graphics?',
+      lv: 'Cik gadu darba pieredze jums ir reāllaika 3D datorgrafikā?',
     },
     // Bands that neither overlap nor leave a gap (five and a half years has a cell).
     options: [
-      { id: 'none', en: 'No paid experience', lv: 'Nav algota darba pieredzes' },
+      { id: 'none', en: 'No work experience', lv: 'Nav darba pieredzes' },
       { id: 'under2', en: 'Less than 2 years', lv: 'Mazāk par 2 gadiem' },
       { id: 'y2to5', en: '2–5 years', lv: '2–5 gadi' },
       { id: 'y5to10', en: 'More than 5, up to 10 years', lv: 'Vairāk par 5, līdz 10 gadiem' },

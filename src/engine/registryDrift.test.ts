@@ -105,6 +105,13 @@ describe('registry defaults and evaluator fallbacks agree', () => {
     expect(evalBare('smoothstep', { edge0: -1 })).toEqual([0.5]);
   });
 
+  it('normalize declares v = 1 (the zero vector has no direction, and WebGPU rejects a constant one)', () => {
+    declares('normalize', 'v', 1);
+    const res = evalBare('normalize');
+    expect(res).toHaveLength(3); // a scalar goes in as vec3(1)
+    for (const c of res!) expect(c).toBeCloseTo(1 / Math.sqrt(3), 12);
+  });
+
   it('clamp declares min = 0, max = 1 (x = 2 clamps down to 1, not to 0)', () => {
     declares('clamp', 'min', 0);
     declares('clamp', 'max', 1);

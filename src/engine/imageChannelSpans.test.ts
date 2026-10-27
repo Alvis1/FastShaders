@@ -113,8 +113,9 @@ describe('the Texture node\'s range — [0,1] per channel, projected per socket'
 
   it('an Image-fed label reads the bound (`0…1`), where it read `…`', () => {
     const { nodes, edges } = graph();
-    expect(edgeValueLabel('img1', nodes, edges, 'out')).toEqual({ text: '0…1', live: false, animated: false });
-    expect(edgeValueLabel('img1', nodes, edges, 'alpha')).toEqual({ text: '0…1', live: false, animated: false });
+    // `range`: the Texture is a FIELD, so the label (and any tick) is its interval.
+    expect(edgeValueLabel('img1', nodes, edges, 'out')).toEqual({ text: '0…1', live: false, animated: false, range: true, compact: false });
+    expect(edgeValueLabel('img1', nodes, edges, 'alpha')).toEqual({ text: '0…1', live: false, animated: false, range: true, compact: false });
   });
 
   it('holds with an INVALID payload too — the fallback texel is opaque black, inside the bound', () => {

@@ -36,7 +36,8 @@ import type { GltfModelReport } from '@/utils/gltfReader';
 // The `unknown`-node expression validator parses with @babel/parser, which is
 // loaded ON DEMAND (engine/unknownExpression), and codegen FAILS CLOSED until it
 // lands: the apply∘apply pins below are written against the loaded validator
-// (`normalMap(image3)` round-trips verbatim), so wait for it once. Without this
+// (`normalMap(image3)` round-trips as `normalMap(float(0))`: image nodes are one-way,
+// and a name the module no longer declares is read as 0), so wait for it once. Without this
 // the suite passed only when an earlier test in the worker had finished the
 // load — a shuffled run emitted the `float(0)` fallback and failed.
 beforeAll(() => loadUnknownExpressionValidator());
@@ -446,18 +447,12 @@ describe('what the restore paths and the parse make of it', () => {
       const second = graphToCode(a.nodes, a.edges).code;
       const b = codeToGraph(second);
       const third = graphToCode(b.nodes, b.edges).code;
-      if (name === 'BLENDER') {
-        // The tangent-less normal map emits Phase 4's flipped form,
-        // `normalMap(imageN, vec2(1, -1))`, which the parse turns into an
-        // `unknown` node named after the channel; the NEXT Apply renames its
-        // `float(0)` fallback (`normalMap1` → `float5`) and it is stable from
-        // there — a pre-existing one-way shape, pinned rather than hidden.
-        expect(third.replace(/\bfloat5\b/g, 'normalMap1')).toBe(second);
-        const c = codeToGraph(third);
-        expect(graphToCode(c.nodes, c.edges).code).toBe(third);
-      } else {
-        expect(third).toBe(second);
-      }
+      // The tangent-less normal map emits Phase 4's flipped form,
+      // `normalMap(imageN, vec2(1, -1))`, which the parse turns into an
+      // `unknown` node named after the channel. Its image is gone (one-way), so
+      // the read is `float(0)` IN the call and the text is a fixed point — it
+      // used to fall back whole and rename once (`normalMap1` → `float5`).
+      expect(third).toBe(second);
       expect(b.nodes.length).toBe(a.nodes.length);
       const outA = a.nodes.find((n) => n.data.registryType === 'output')!;
       const outB = b.nodes.find((n) => n.data.registryType === 'output')!;

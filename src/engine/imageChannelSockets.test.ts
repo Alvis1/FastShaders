@@ -288,7 +288,7 @@ describe('memo keys already fold sourceHandle (re-wiring Color → Alpha must re
     ['../components/NodeEditor/nodes/MathPreviewNode.tsx', "${e.source}|${e.sourceHandle ?? ''}"],
     ['../components/NodeEditor/nodes/PreviewNode.tsx', "${e.sourceHandle ?? ''}"],
     ['../components/NodeEditor/nodes/ClockNode.tsx', "${e.sourceHandle ?? ''}"],
-    ['../components/NodeEditor/nodes/LiveEdgeValue.tsx', '[sourceId, sourceHandle, animated]'],
+    ['../components/NodeEditor/nodes/LiveEdgeValue.tsx', '[sourceId, sourceHandle, animated, range, compact]'],
     ['../components/NodeEditor/edges/EdgeInfoCard.tsx', '[sourceId, sourceHandle, isTimeDriven]'],
     ['../components/NodeEditor/edges/TypedEdge.tsx', 'sourceHandle: un?.sourceHandle ?? sourceHandleId ?? null,'],
   ])('%s', (file, needle) => {

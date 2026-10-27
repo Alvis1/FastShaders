@@ -23,6 +23,9 @@ interface TypedHandleProps {
    *  connected. Appended to the tooltip as its TSL type name so the socket
    *  reports what it receives, not just what it's called. */
   channels?: number;
+  /** The label is CODE (an `unknown` node's bound identifier), shown as
+   *  written: never looked up as a port name to translate. */
+  verbatimLabel?: boolean;
 }
 
 /** How long a touch-tapped socket keeps its tooltip up. */
@@ -41,7 +44,7 @@ export function clearSocketTapTooltip() {
   activeTapClear?.();
 }
 
-export function TypedHandle({ type, position, id, dataType, label, style, reveal, channels }: TypedHandleProps) {
+export function TypedHandle({ type, position, id, dataType, label, style, reveal, channels, verbatimLabel }: TypedHandleProps) {
   // Touch has no hover, so a direct tap on the socket shows its own tooltip
   // briefly (selecting the node no longer pins every label — see the CSS).
   // Gated per-gesture on pointerType rather than a media query: iPadOS
@@ -92,7 +95,7 @@ export function TypedHandle({ type, position, id, dataType, label, style, reveal
       onPointerDown={handleTapPointerDown}
       onPointerCancel={handleTapPointerCancel}
       isConnectableStart
-      {...{ 'data-tooltip': socketTooltip(label ?? id, dataType, channels, language) }}
+      {...{ 'data-tooltip': socketTooltip(label ?? id, dataType, channels, language, verbatimLabel) }}
     />
   );
 }
@@ -108,6 +111,8 @@ export function socketTooltip(
   dataType: TSLDataType,
   channels: number | null | undefined,
   language: Language,
+  /** Show `label` as written (code, not a port name) — see TypedHandle. */
+  verbatim = false,
 ): string {
   // A color IS a vec3 — the evaluator already counts it as 3 channels, so a
   // CONNECTED color reads "vec3". Normalise the declared name to match, or the
@@ -121,6 +126,6 @@ export function socketTooltip(
   // Socket display name is translated (Latvian mode); the appended TSL type
   // (vec3, float…) stays canonical. `id` fallbacks (e.g. 'a', 'x') have no
   // translation so portLabel returns them unchanged.
-  const name = portLabel(label, language);
+  const name = verbatim ? label : portLabel(label, language);
   return typeName ? `${name} · ${typeName}` : name;
 }

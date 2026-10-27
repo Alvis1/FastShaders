@@ -6,6 +6,7 @@ import { contributingOutputs, materialPartsMirrorPlanAcross, moduleSettingsOutpu
 import { tslToShaderModule, type PropertyInfo, type ShaderModuleOptions } from './tslToShaderModule';
 import { embedProjectState, type FastShadersProject } from './fastShadersProject';
 import { planExportGraph, remapUniformKeys, type ExportGraph, type ExportScope } from './exportGraph';
+import { graphToCode } from './graphToCode';
 import { activeExportModel, exportFormatFor } from './exportModel';
 import { inlineImageAssetsFromNodes, imageAssetFor } from './imageAssets';
 import { EXPORT_IMAGE_REFS, referenceImagesInModule } from './projectImageRefs';
@@ -42,21 +43,35 @@ import { downloadBlob } from '@/utils/downloadBlob';
  * everything is read imperatively from the store at click time.
  */
 
-/** Property definitions from property_float / property_color nodes. */
-export function collectShaderProperties(nodes: AppNode[]): PropertyInfo[] {
+/**
+ * Property definitions from property_float / property_color nodes.
+ *
+ * `emittedName` is the name the module's codegen gave each node (graphToCode's
+ * `varNames`): a property keeps its stored name unless the namer had to rename
+ * it — a march local or a splat parameter it would shadow while that output
+ * drives (`bend` → `bend2`), a helper's name. The schema and the usage header
+ * must name what the body reads (`params.bend2`), or they document an
+ * attribute nothing reads beside the real one. Absent or unknown for a node,
+ * the stored name — which is what an un-renamed property emits anyway.
+ */
+export function collectShaderProperties(
+  nodes: AppNode[],
+  emittedName?: (nodeId: string) => string | undefined,
+): PropertyInfo[] {
   return nodes
     .filter((n) => n.data.registryType === 'property_float' || n.data.registryType === 'property_color')
     .map((n) => {
       const values = getNodeValues(n);
+      const emitted = emittedName?.(n.id);
       if (n.data.registryType === 'property_color') {
         return {
-          name: valueStr(values.name ?? 'color1'),
+          name: emitted ?? valueStr(values.name ?? 'color1'),
           type: 'color' as const,
           defaultValue: valueStr(values.hex ?? '#ff0000'),
         };
       }
       return {
-        name: valueStr(values.name ?? 'property1'),
+        name: emitted ?? valueStr(values.name ?? 'property1'),
         type: 'float' as const,
         defaultValue: valueNum(values.value ?? 1.0),
       };
@@ -190,13 +205,17 @@ export function buildExportModule(opts: BuildExportModuleOptions): string {
   );
   const moduleOpts: ShaderModuleOptions = opts.glbFile !== undefined ? { glbFile: opts.glbFile } : {};
   try {
+    // The names THIS graph's codegen gives its properties (the pruned graph's
+    // own, for a pruned export), so the schema and header name what the body
+    // reads — see collectShaderProperties.
+    const { varNames } = graphToCode(graph.nodes, graph.edges);
     // The .js export must be self-contained, so image placeholders are
     // expanded back to their real `data:` payloads before the module is built;
     // the .glb keeps them for the loader to resolve from the file's images.
     return tslToShaderModule(
       opts.inlineImages ? inlineImageAssetsFromNodes(graph.code, graph.nodes) : graph.code,
       materialSettings,
-      collectShaderProperties(graph.nodes),
+      collectShaderProperties(graph.nodes, (id) => varNames.get(id)),
       // The loader-0.6 mirrors of an import-built Output's index sections —
       // module-only (materialPartsContract R7), and the SAME plan the preview
       // passes, so the download is what the author previewed.

@@ -60,6 +60,12 @@ function setAttr(el: Element, name: string, value: string): void {
  * degrades the readout to "…". Only attributes whose value changed are
  * written, and the label (and its pill width) is only touched when the string
  * actually changes — pass `lastLabel` storage.
+ *
+ * The CURVE follows `phase`; the dot, drop line and readout follow `readout`,
+ * which is `phase` unless the caller knows better. A live card whose X has no
+ * single value — a sampled field, or a chain the CPU cannot evaluate — still
+ * scrolls the curve by the clock as decoration, but passes `readout: null`:
+ * no dot, and "…" rather than sin(t) printed for a wire that is not t.
  */
 export function applyWaveFrame(
   refs: WaveformDynamicRefs,
@@ -67,10 +73,12 @@ export function applyWaveFrame(
   funcLabel: string,
   phase: number,
   lastLabel: { current: string | null },
+  readout: number | null = phase,
 ): void {
   const { curve, drop, dot, pill, text } = refs;
-  const val = func(phase);
-  const finite = Number.isFinite(phase) && Number.isFinite(val);
+  const x = readout ?? NaN;
+  const val = func(x);
+  const finite = Number.isFinite(x) && Number.isFinite(val);
 
   if (curve.current) setAttr(curve.current, 'transform', `translate(${waveTranslateX(phase)} 0)`);
 
@@ -87,7 +95,7 @@ export function applyWaveFrame(
     }
   }
 
-  const label = waveLabel(funcLabel, phase, val);
+  const label = waveLabel(funcLabel, x, val);
   if (label !== lastLabel.current && pill.current && text.current) {
     lastLabel.current = label;
     text.current.textContent = label;

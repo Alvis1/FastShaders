@@ -1,17 +1,18 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
-import { graphToCode } from '@/engine/graphToCode';
+import { panelCodegen } from '@/engine/panelCode';
+import { isEvalMode } from '@/eval/evalMode';
 import { onUnknownExpressionValidated, loadUnknownExpressionValidator } from '@/engine/unknownExpression';
 // NB codeToGraph is deliberately NOT imported here — see doCodeSync, which
 // pulls it in on demand so the Babel front end stays off the boot wave.
 import { autoLayout } from '@/engine/layoutEngine';
-import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { computeReachableCost, sinkCosts, sinkBadgesStale, stampSinkCosts } from '@/utils/nodeCost';
 import { activeSink, isSinkNode, hasActiveFlag, normalizeActiveOutput } from '@/utils/sdfPartition';
 import { carryModelMeshes, isOutputNode } from '@/utils/outputMaterials';
 import { carryMaterialSettings, pairResyncNodes, placeParsedOutputs } from '@/utils/resyncPairing';
 import { carryInactiveSinks } from '@/utils/sinkCarry';
+import { carryPanelHidden, inOldOrder, panelCarryIds, panelFeederResolver } from '@/utils/panelCarry';
 import { carryDormantLightEdges, carrySplatLightValues } from '@/utils/splatLight';
 import { carrySplatReplaceColor, splatStoredColor } from '@/utils/splatColor';
 import { isDirectAssignmentCode } from '@/engine/evaluateTSLScript';
@@ -125,7 +126,13 @@ export function useSyncEngine() {
     // `syncSource` with the value the guard above already required it to have,
     // so none of this effect's deps changes value and it cannot re-trigger.
     try {
-      const result = graphToCode(nodes, edges, NODE_REGISTRY);
+      // The panel shows only the nodes that FEED AN OUTPUT (engine/panelCode.ts)
+      // — and so does the preview, which runs the same text: a dead chain is
+      // dead code, so a Time node in one no longer keeps the preview drawing
+      // and an unwired Image no longer crosses into it. Names are still the
+      // whole graph's (`result.varNames`). A study session keeps the whole
+      // panel, the editor its participants started with.
+      const { result, emitted } = panelCodegen(nodes, edges, isEvalMode());
       // PREVIEW MODE: the 3D view renders the DERIVED graph — the previewed
       // socket routed to the Output's Color, every other sink input dropped
       // (utils/nodePreview.ts) — while `code` stays the real graph's, so the
@@ -140,9 +147,12 @@ export function useSyncEngine() {
       let previewText: string | undefined;
       if (live) {
         const derived = previewGraph(nodes, edges, live);
-        previewText = graphToCode(derived.nodes, derived.edges, NODE_REGISTRY).code;
+        previewText = panelCodegen(derived.nodes, derived.edges, isEvalMode()).result.code;
       }
-      setCode(result.code, 'graph', previewText);
+      // `nodeSpans` rides the same write: the panel's node → code highlight
+      // (CodeEditor/useNodeCodeHighlight.ts) pairs it with THIS text only.
+      // So do the whole graph's names: an Apply pairs and re-wires by them.
+      setCode(result.code, 'graph', previewText, { emitted, names: result.varNames, nodeSpans: result.nodeSpans });
       lastSyncedCodeRef.current = result.code;
       // Update node variable names for display.
       //
@@ -266,12 +276,26 @@ export function useSyncEngine() {
           // the split retired.
           const oldActive = activeSink(oldNodes, unwrapCollapsedGroupEdges(oldNodes, oldEdges)) ?? null;
 
+          // The CONNECTED-ONLY panel (engine/panelCode.ts): the text held only
+          // the nodes in `codeEmitted`, so every other old node is carried
+          // back whole (utils/panelCarry.ts) and may not be paired. Null — a
+          // study session, no sink, a bare-script import — carries nothing.
+          const scope = useAppStore.getState().codeEmitted;
+          const carriedIds = panelCarryIds(oldNodes, scope);
+          // The text's names (`codeNames`): pass 0 of the pairing and the
+          // carried wires follow them. Null with the scope.
+          const textNames = scope !== null ? useAppStore.getState().codeNames : null;
+
           // Merge a matched old node with a new node: preserve position + UI-only data
           const mergeMatch = (newNode: AppNode, match: AppNode): AppNode => {
             const merged = {
               ...newNode,
               id: match.id,
               position: { ...match.position },
+              // The id is kept, so the selection is too: a selected node is
+              // still selected (and its code still marked) after an Apply. Not
+              // in a study, whose Apply is the one its sessions always met.
+              ...(match.selected === true && !isEvalMode() ? { selected: true } : {}),
             };
             // The active flag is not in the code, so it can only come from
             // the old node — and only if it was really there: an implicit
@@ -386,7 +410,7 @@ export function useSyncEngine() {
           // Pass 1 (exact key, the BINDING for an Output) then pass 2
           // (registryType alone) — `pairResyncNodes`, which returns them in
           // that order so the merged list is built exactly as it always was.
-          const pairing = pairResyncNodes(oldNodes, result.nodes, oldActive?.id ?? null);
+          const pairing = pairResyncNodes(oldNodes, result.nodes, oldActive?.id ?? null, carriedIds, textNames);
           for (const { node, match } of pairing.paired) {
             idMap.set(node.id, match.id);
             positioned.push(mergeMatch(node, match));
@@ -424,12 +448,28 @@ export function useSyncEngine() {
               };
             });
 
+          // Unwrapped, so every carry below matches graphToCode's own reading
+          // of the old graph (see the orphan carry for why a raw read is wrong).
+          const realOldEdges = unwrapCollapsedGroupEdges(oldNodes, oldEdges);
+          // What the parse produced, under the ids it now carries — what a
+          // carried node may still be wired from, and the next Apply's scope.
+          const parseIds = new Set([...positioned, ...unpositioned].map((n) => n.id));
+          // The panel's hidden nodes, BEFORE the layout decision: a relayout
+          // (a node typed in the panel) lays them out with the rest rather
+          // than deleting them. Their wires from the text's nodes follow the
+          // feeder's NAME (panelFeederResolver), so a paste keeps them bound as
+          // if their lines were still in the text; only an import, which nulls
+          // `codeEmitted`, carries nothing.
+          const feederOf = panelFeederResolver(oldNodes, [...positioned, ...unpositioned], textNames);
+          const hidden = carryPanelHidden(oldNodes, realOldEdges, carriedIds, feederOf, unpositioned.length > 0);
+          remappedEdges.push(...hidden.edges);
+
           let finalNodes: AppNode[];
           if (unpositioned.length > 0) {
             // New or changed nodes — auto-layout ALL to maintain left-to-right flow
-            finalNodes = autoLayout([...positioned, ...unpositioned], remappedEdges);
+            finalNodes = autoLayout([...positioned, ...unpositioned, ...hidden.nodes], remappedEdges);
           } else {
-            finalNodes = positioned;
+            finalNodes = [...positioned, ...hidden.nodes];
           }
 
           // Preserve ORPHANED PROPERTY NODES — the same problem as groups, from
@@ -456,12 +496,14 @@ export function useSyncEngine() {
           // member is a carried property is itself kept.
           if (unpositioned.length === 0) {
             const survivingIds = new Set(finalNodes.map((n) => n.id));
-            // Unwrapped, so the test matches graphToCode's own decision exactly:
-            // a collapsed group rewrites its boundary edges to synthetic group
-            // sockets, so a raw read would see a property feeding OUT of a
-            // collapsed group as having no consumer, call it an orphan, and carry
-            // a duplicate of a node the parse legitimately produced.
-            const realOldEdges = unwrapCollapsedGroupEdges(oldNodes, oldEdges);
+            // `realOldEdges` (above) is unwrapped, so the test matches
+            // graphToCode's own decision exactly: a collapsed group rewrites
+            // its boundary edges to synthetic group sockets, so a raw read
+            // would see a property feeding OUT of a collapsed group as having
+            // no consumer, call it an orphan, and carry a duplicate of a node
+            // the parse legitimately produced. The panel carry above already
+            // brought every orphan back (none is emitted), so this one now
+            // matters where `codeEmitted` is null.
             const hasConsumer = new Set(realOldEdges.map((e) => e.source));
             const orphanProps = oldNodes.filter(
               (n) =>
@@ -509,6 +551,12 @@ export function useSyncEngine() {
             );
             if (dormantLight.length > 0) remappedEdges.push(...dormantLight);
           }
+
+          // The array order is the namer's (topologicalSort queues roots in
+          // it): every surviving node goes back to its old place, or the
+          // carried ones — appended above — rename the parsed ones on the next
+          // pass and the panel's text changes under an unchanged Apply.
+          if (scope !== null) finalNodes = inOldOrder(finalNodes, oldNodes);
 
           // Preserve group nodes from the old graph — codeToGraph doesn't know about
           // them, so they'd otherwise be lost on every Save. Carry over both the
@@ -569,6 +617,20 @@ export function useSyncEngine() {
 
           setNodes(finalNodes, 'code');
           setEdges(remappedEdges, 'code');
+          // The text now on the panel is the one just parsed, and nothing
+          // regenerates it on purpose (syncSource is 'code'), so the scope
+          // must follow it: left at the pre-Apply set, a node typed in this
+          // Apply and deleted before the next would be carried back.
+          // The names with it: each parsed node's label is its declared name.
+          // The ring of older passes' scopes is done with — the text on the
+          // panel is this one now.
+          if (scope !== null) {
+            useAppStore.setState({
+              codeEmitted: parseIds,
+              codeNames: new Map([...positioned, ...unpositioned].map((n) => [n.id, String(n.data.label)] as const)),
+              codeScopes: [],
+            });
+          }
         }
         if (!skipHistory) {
           setCodeErrors(result.errors);

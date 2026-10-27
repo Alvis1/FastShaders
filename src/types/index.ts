@@ -25,6 +25,8 @@ export { getNodeValues, outputNodeValues, setNodeValues, getNodeExposedPorts, ch
 export type {
   ParseError,
   GeneratedCode,
+  CodeSpan,
+  CodeNodeSpans,
 } from './tsl.types';
 
 export type {

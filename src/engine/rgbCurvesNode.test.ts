@@ -295,8 +295,9 @@ describe('RGB Curves — the CPU twin, the range and the price', () => {
     const edges = [makeEdge('u', 'out', 'k', 'color')];
     expect(evaluateNodeRange('k', nodes, edges, 0)).toEqual(rgbCurvesRange(readRgbCurves({ curveC: S }), [0, 0, 0], [1, 1, 0], 1, 1));
     // An unwired junk colour reads the registry's 1 (the POISON cases above pin the value); a wired NaN is unknown.
-    const nan = [makeNode('f', 'float', { value: 'abc' }), makeNode('k', 'rgbCurves', { curveC: S })];
-    expect(evaluateNodeOutput('k', nan, [makeEdge('f', 'out', 'k', 'color')], 0)).toBeNull();
+    // The NaN comes from √−1: a junk Float is no NaN source, it emits its default `float(0)`.
+    const nan = [makeNode('f', 'float', { value: -1 }), makeNode('r', 'sqrt'), makeNode('k', 'rgbCurves', { curveC: S })];
+    expect(evaluateNodeOutput('k', nan, [makeEdge('f', 'out', 'r', 'x'), makeEdge('r', 'out', 'k', 'color')], 0)).toBeNull();
   });
 
   it('costs 1 in its identity form and six colormap fetches + 16 ALU otherwise, repriced with Colormap', () => {

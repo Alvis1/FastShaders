@@ -84,10 +84,14 @@ export function deviceOptionText(device: { label: string; meta?: CostProfile['me
  * poles (intro/BudgetScene.tsx).
  */
 export function CostMeter({
-  points, language, colorLow, colorHigh, value, lowPole, highPole,
+  points, language, colorLow, colorHigh, device, value, lowPole, highPole,
 }: {
   points: number;
   language: Language;
+  /** The device control, sharing the top row with the total — two rows in
+   *  all: device + total, then the ramp. The budget is printed once, after
+   *  the slash, so the ramp's ends carry no numbers. */
+  device: ReactNode;
   colorLow: string;
   colorHigh: string;
   /** Wraps the total; it gets the value's class and its text. A wrapper that
@@ -107,10 +111,9 @@ export function CostMeter({
   const cls = `cost-bar__value ${over ? 'cost-bar__value--over' : ''}`;
   return (
     <>
-      <div className="cost-bar__labels">
-        <span className="cost-bar__label-end">0</span>
+      <div className="cost-bar__head">
+        {device}
         {value ? value(cls, label) : <span className={cls}>{label}</span>}
-        <span className="cost-bar__label-end">{POINT_BUDGET}</span>
       </div>
       <div className="cost-bar__track-row">
         {lowPole}
@@ -508,121 +511,6 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
       onDragLeave={onDragLeave}
       title={t('Drop a benchmark result or an exported profile (.json) here to add it as a device profile.', language)}
     >
-      <div className="cost-bar__device-row">
-        <select
-          className="cost-bar__headset-select"
-          value={selectValue}
-          onChange={handleDeviceChange}
-          onKeyDown={handleDeviceKeyDown}
-          onPointerDown={handleDevicePointerDown}
-          // A device sets the node PRICES, never the printed budget: every
-          // device's reads 100 (utils/budgetPoints.ts) — its measured one is
-          // only the divisor — which is why no row prints one.
-          title={fillTemplate(t('Performance device — sets the per-node prices this bar adds up. Every device’s budget is {max} points.', language), { max: POINT_BUDGET })}
-          aria-label={t('Performance device', language)}
-        >
-          <optgroup label={t('Headsets', language)}>
-            {VR_HEADSETS.map((h) => (
-              <option key={h.id} value={h.id}>
-                {deviceOptionText(h)}
-              </option>
-            ))}
-          </optgroup>
-          {measuredProfiles.length > 0 && (
-            <optgroup label={t('Measured (dropped benchmark)', language)}>
-              {measuredProfiles.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {deviceOptionText(p)}
-                </option>
-              ))}
-            </optgroup>
-          )}
-          {/* Hand-authored profiles are their own group with their own mark:
-              a typed table must never sit under a heading that says the
-              numbers were measured. */}
-          {manualProfiles.length > 0 && (
-            <optgroup label={t('Custom (hand-authored)', language)}>
-              {manualProfiles.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {deviceOptionText(p)}
-                </option>
-              ))}
-            </optgroup>
-          )}
-          <optgroup label={t('Profiles', language)}>
-            <option value={IMPORT_OPTION}>{t('Import result JSON…', language)}</option>
-            <option value={NEW_OPTION}>{t('New profile…', language)}</option>
-            {/* Only with a profile active: there is nothing to download for a
-                built-in headset, and New is the way to fork one. */}
-            {activeProfile && <option value={EDIT_OPTION}>{t('Edit profile…', language)}</option>}
-            {costProfiles.length > 0 && (
-              <option value={EXPORT_OPTION}>{t('Export profiles…', language)}</option>
-            )}
-            {/* Last, below the rows that manage profiles: it opens a page
-                rather than acting on this list. */}
-            {OFFERS_COMPARE && <option value={COMPARE_OPTION}>{t('Compare devices…', language)}</option>}
-          </optgroup>
-        </select>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".json,application/json"
-          style={{ display: 'none' }}
-          onChange={handlePickedFile}
-          aria-hidden="true"
-          tabIndex={-1}
-        />
-        {activeProfile && (
-          <button
-            className="cost-bar__device-remove"
-            onClick={removeActiveProfile}
-            title={t('Remove this profile', language)}
-            aria-label={t('Remove this profile', language)}
-          >
-            ✕
-          </button>
-        )}
-      </div>
-      {notice && (
-        <div className="cost-bar__notice" role="status" aria-live="polite">
-          <span className="cost-bar__notice-text">{notice.text}</span>
-          {notice.action && (
-            <button className="cost-bar__bench-add" onClick={notice.action.run}>
-              {notice.action.label}
-            </button>
-          )}
-          <button
-            className="cost-bar__bench-dismiss"
-            onClick={() => setNotice(null)}
-            title={t('Dismiss', language)}
-            aria-label={t('Dismiss', language)}
-          >
-            ✕
-          </button>
-        </div>
-      )}
-      {pendingBench && (
-        <div
-          className="cost-bar__bench-offer"
-          title={t('A ShaderCarousel benchmark finished on this browser. Add adds it as a measured device profile — same as dragging the profile file here.', language)}
-        >
-          <span className="cost-bar__bench-offer-label">
-            {pendingBench.parsed.meta.valid === false ? '⚠ ' : '◆ '}
-            {pendingBench.label} · {pendingBench.parsed.meta.count} {t('nodes', language)} {t('measured', language)}
-          </span>
-          <button className="cost-bar__bench-add" onClick={addPendingBench}>
-            {t('Add', language)}
-          </button>
-          <button
-            className="cost-bar__bench-dismiss"
-            onClick={dismissPendingBench}
-            title={t('Dismiss', language)}
-            aria-label={t('Dismiss', language)}
-          >
-            ✕
-          </button>
-        </div>
-      )}
       {/* The total is the shader's price, and the Output node is where that
           price is spent — so the number doubles as the way to GET there, the
           same "take me to it" affordance the Output's palette tile and its
@@ -639,6 +527,83 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
         language={language}
         colorLow={costColorLow}
         colorHigh={costColorHigh}
+        device={
+          <div className="cost-bar__device-row">
+            <select
+              className="cost-bar__headset-select"
+              value={selectValue}
+              onChange={handleDeviceChange}
+              onKeyDown={handleDeviceKeyDown}
+              onPointerDown={handleDevicePointerDown}
+              // A device sets the node PRICES, never the printed budget: every
+              // device's reads 100 (utils/budgetPoints.ts) — its measured one is
+              // only the divisor — which is why no row prints one.
+              title={fillTemplate(t('Performance device — sets the per-node prices this bar adds up. Every device’s budget is {max} points.', language), { max: POINT_BUDGET })}
+              aria-label={t('Performance device', language)}
+            >
+              <optgroup label={t('Headsets', language)}>
+                {VR_HEADSETS.map((h) => (
+                  <option key={h.id} value={h.id}>
+                    {deviceOptionText(h)}
+                  </option>
+                ))}
+              </optgroup>
+              {measuredProfiles.length > 0 && (
+                <optgroup label={t('Measured (dropped benchmark)', language)}>
+                  {measuredProfiles.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {deviceOptionText(p)}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {/* Hand-authored profiles are their own group with their own mark:
+                  a typed table must never sit under a heading that says the
+                  numbers were measured. */}
+              {manualProfiles.length > 0 && (
+                <optgroup label={t('Custom (hand-authored)', language)}>
+                  {manualProfiles.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {deviceOptionText(p)}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              <optgroup label={t('Profiles', language)}>
+                <option value={IMPORT_OPTION}>{t('Import result JSON…', language)}</option>
+                <option value={NEW_OPTION}>{t('New profile…', language)}</option>
+                {/* Only with a profile active: there is nothing to download for a
+                    built-in headset, and New is the way to fork one. */}
+                {activeProfile && <option value={EDIT_OPTION}>{t('Edit profile…', language)}</option>}
+                {costProfiles.length > 0 && (
+                  <option value={EXPORT_OPTION}>{t('Export profiles…', language)}</option>
+                )}
+                {/* Last, below the rows that manage profiles: it opens a page
+                    rather than acting on this list. */}
+                {OFFERS_COMPARE && <option value={COMPARE_OPTION}>{t('Compare devices…', language)}</option>}
+              </optgroup>
+            </select>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json,application/json"
+              style={{ display: 'none' }}
+              onChange={handlePickedFile}
+              aria-hidden="true"
+              tabIndex={-1}
+            />
+            {activeProfile && (
+              <button
+                className="cost-bar__device-remove"
+                onClick={removeActiveProfile}
+                title={t('Remove this profile', language)}
+                aria-label={t('Remove this profile', language)}
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        }
         value={(cls, label) => {
           // deviceLabel can be an imported profile's label, so every sentence
           // it goes into is filled in ONE pass (utils/fillTemplate.ts). The
@@ -679,6 +644,46 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
           />
         }
       />
+      {notice && (
+        <div className="cost-bar__notice" role="status" aria-live="polite">
+          <span className="cost-bar__notice-text">{notice.text}</span>
+          {notice.action && (
+            <button className="cost-bar__bench-add" onClick={notice.action.run}>
+              {notice.action.label}
+            </button>
+          )}
+          <button
+            className="cost-bar__bench-dismiss"
+            onClick={() => setNotice(null)}
+            title={t('Dismiss', language)}
+            aria-label={t('Dismiss', language)}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+      {pendingBench && (
+        <div
+          className="cost-bar__bench-offer"
+          title={t('A ShaderCarousel benchmark finished on this browser. Add adds it as a measured device profile — same as dragging the profile file here.', language)}
+        >
+          <span className="cost-bar__bench-offer-label">
+            {pendingBench.parsed.meta.valid === false ? '⚠ ' : '◆ '}
+            {pendingBench.label} · {pendingBench.parsed.meta.count} {t('nodes', language)} {t('measured', language)}
+          </span>
+          <button className="cost-bar__bench-add" onClick={addPendingBench}>
+            {t('Add', language)}
+          </button>
+          <button
+            className="cost-bar__bench-dismiss"
+            onClick={dismissPendingBench}
+            title={t('Dismiss', language)}
+            aria-label={t('Dismiss', language)}
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {splatFacts && (
         <div className="cost-bar__override">
           <span className="cost-bar__override-tag" title={t(SPLAT_FIGURE_HINT_KEY, language)}>

@@ -59,7 +59,8 @@
   display: flex;
   align-items: stretch;
   gap: var(--space-1);
-  margin-bottom: var(--space-2);
+  flex: 1;
+  min-width: 0;
 }
 
 /* Flexes in the device row; the ✕ sits beside it. */
@@ -73,7 +74,7 @@
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
-  padding: var(--space-1) var(--space-2);
+  padding: 2px var(--space-1);
   cursor: pointer;
   transition: border-color var(--transition-fast);
 }
@@ -180,22 +181,19 @@
   border-color: var(--border-focus);
 }
 
-.cost-bar__labels {
+/* Row one of two: the device control flexes, the total keeps its width. */
+.cost-bar__head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-2);
-}
-
-.cost-bar__label-end {
-  font-size: var(--font-size-xs);
-  color: var(--text-muted);
-  font-family: var(--font-mono);
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
 }
 
 .cost-bar__value {
+  flex-shrink: 0;
+  white-space: nowrap;
   font-family: var(--font-mono);
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-sm);
   font-weight: 700;
   color: var(--text-primary);
 }
@@ -229,7 +227,7 @@
 .cost-bar__track-row {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1);
 }
 
 /* The two gradient poles are the app-wide picker's trigger `<button>`s, filled
@@ -239,8 +237,8 @@
    TWO classes: a bare `.cost-bar__pole-picker` would tie with
    `.palette-swatch`'s 26x12 and leave the size to stylesheet order. */
 .cost-bar__track-row .cost-bar__pole-picker {
-  width: 20px;
-  height: 20px;
+  width: 10px;
+  height: 10px;
   padding: 0;
   border: 1px solid var(--border-subtle);
   border-radius: 0;
@@ -250,6 +248,7 @@
 
 .cost-bar__track {
   flex: 1;
+  /* As thick as the pole squares beside it. */
   height: 10px;
   border-radius: 0;
   position: relative;
@@ -257,9 +256,9 @@
 
 .cost-bar__indicator {
   position: absolute;
-  top: -3px;
-  width: 5px;
-  height: 16px;
+  top: -2px;
+  width: 3px;
+  height: 14px;
   background: var(--text-primary);
   border-radius: 0;
   transform: translateX(-50%);

@@ -519,7 +519,9 @@ export function OutputCardContent({
    *  whose user exposed more (the node's right-click menu does that). */
   exposedPorts?: readonly string[];
   /** Channel → the value text arriving on its wire. A wired row shows that
-   *  text where the stored-value widget was, as OutputNode's `rowWidget` does. */
+   *  text where the stored-value widget was, as OutputNode's `rowWidget` does.
+   *  The cell is the node's FIXED 20px one, so the text should be formatted
+   *  the way OutputNode formats it: `edgeValueLabel(…, { compact: true })`. */
   wired?: Readonly<Record<string, string>>;
 }) {
   // The labels follow the UI language like the canvas node's do (OutputNode.tsx).

@@ -174,8 +174,8 @@ describe('toHsl — round trip', () => {
 });
 
 describe('toHsl — per-socket evaluation (the honesty contract)', () => {
-  // #3366cc: H ≈ 0.611, S = 0.6, L = 0.5 — three values that cannot be
-  // confused for one another.
+  // #3366cc in LINEAR light, as `color(0x3366cc)` holds it: H ≈ 0.638,
+  // S ≈ 0.896, L ≈ 0.318 — three values that cannot be confused for one another.
   const { nodes, edges } = hslGraph();
   const whole = evaluateNodeOutput('th', nodes, edges, 0)!;
 
@@ -207,8 +207,8 @@ describe('toHsl — per-socket evaluation (the honesty contract)', () => {
   it('the on-node label shows the socket the wire actually carries', () => {
     const s = edgeValueLabel('th', nodes, edges, 's');
     const l = edgeValueLabel('th', nodes, edges, 'l');
-    expect(s.text).toBe('0.6');
-    expect(l.text).toBe('0.5');
+    expect(s.text).toBe('0.9');
+    expect(l.text).toBe('0.32');
     expect(s.text).not.toBe(l.text);
   });
 

@@ -205,7 +205,7 @@ export function DrawScene() {
       </div>
 
       {/* The canvas bar (NodeEditor's bottom-left Panel): history, the real
-          draw cluster, zoom and the backdrop swatch — drawn inert. */}
+          draw cluster with the backdrop swatch, zoom, fit and pan — drawn inert. */}
       <div ref={barRef} className="react-flow__panel bottom left fs-canvas-bar">
         <div className="fs-canvas-bar__group fs-canvas-bar__group--history">
           <button type="button" tabIndex={-1} disabled className="fs-canvas-bar__btn fs-canvas-bar__btn--history">
@@ -235,13 +235,18 @@ export function DrawScene() {
             onWidth={noop}
             onClear={noop}
           />
+          <button type="button" tabIndex={-1} className="fs-canvas-bar__btn node-editor__bg-color-btn">
+            <span className="node-editor__bg-color-swatch" style={{ background: bg }} />
+          </button>
         </div>
         <div className="fs-canvas-bar__group">
           <button type="button" tabIndex={-1} className="fs-canvas-bar__btn">−</button>
           <button type="button" tabIndex={-1} className="fs-canvas-bar__btn">+</button>
           <button type="button" tabIndex={-1} className="fs-canvas-bar__btn">⤢</button>
-          <button type="button" tabIndex={-1} className="fs-canvas-bar__btn node-editor__bg-color-btn">
-            <span className="node-editor__bg-color-swatch" style={{ background: bg }} />
+          <button type="button" tabIndex={-1} className="fs-canvas-bar__btn fs-canvas-bar__btn--pan">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M12 2l3.5 3.5h-2.5v5.5h5.5v-2.5l3.5 3.5-3.5 3.5v-2.5h-5.5v5.5h2.5l-3.5 3.5-3.5-3.5h2.5v-5.5h-5.5v2.5l-3.5-3.5 3.5-3.5v2.5h5.5v-5.5h-2.5z" />
+            </svg>
           </button>
         </div>
       </div>

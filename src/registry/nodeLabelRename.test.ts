@@ -233,9 +233,11 @@ describe('assertValidNodeLabels', () => {
     // positionGeometry, i.e. the node blaming itself.
     expect(() => assertValidNodeLabels({ a: 'Multiply', b: 'Multiply' }))
       .toThrow(/"b".*collides with "a"|"a".*collides with "b"/);
-    // nodeMatchRank lowercases before matching, so these two collide there while
-    // looking distinct in the file.
+    // nodeMatchRank folds case AND diacritics before matching (foldSearchText), so
+    // these pairs collide there while looking distinct in the file.
     expect(() => assertValidNodeLabels({ a: 'Multiply', b: 'multiply' }))
+      .toThrow(/collides with/);
+    expect(() => assertValidNodeLabels({ a: 'Krāsa', b: 'Krasa' }, 'lv label'))
       .toThrow(/collides with/);
   });
 

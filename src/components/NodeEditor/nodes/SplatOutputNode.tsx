@@ -166,8 +166,9 @@ export const SplatOutputNode = memo(function SplatOutputNode({ id, data, selecte
   const values = getNodeValues({ id, data } as unknown as ShaderFlowNode);
 
   // What is arriving on each wired socket (useWiredLabels: the cheap-string
-  // key, the unwrapped-edge rule).
-  const wiredLabels = useWiredLabels(id);
+  // key, the unwrapped-edge rule). `compact`: the Output's FIXED 20px value
+  // cell, ~4 characters.
+  const wiredLabels = useWiredLabels(id, { compact: true });
 
   /** Is this socket's row on the node? Exposed — and a Light socket only
    *  while the node is lit, or when a wire already reaches it. */

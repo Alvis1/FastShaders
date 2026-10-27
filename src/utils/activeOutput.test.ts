@@ -603,7 +603,8 @@ describe('carryInactiveSinks — an Apply keeps the inactive outputs and their w
     const src = readFileSync(resolve(__dirname, '../hooks/useSyncEngine.ts'), 'utf8');
     // WHICH old sinks may be paired at all is `pairable` in resyncPairing.ts,
     // pinned by its own suite; the hook only supplies the active id.
-    expect(src).toContain('pairResyncNodes(oldNodes, result.nodes, oldActive?.id ?? null)');
+    // …and the panel's carried ids (utils/panelCarry.ts), which may never pair.
+    expect(src).toContain('pairResyncNodes(oldNodes, result.nodes, oldActive?.id ?? null, carriedIds, textNames)');
     expect(src).toContain('if (isSinkNode(match) && hasActiveFlag(match)) {');
     expect(src).toContain("carryInactiveSinks(oldNodes, realOldEdges, oldActive?.id ?? null, survivingIds, parseHasPlainOutput)");
     // …and the 5th argument is read off the PARSE. Only a source pin can cover

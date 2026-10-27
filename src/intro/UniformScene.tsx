@@ -76,7 +76,7 @@ export function UniformScene() {
   const propChrome = useCardChrome(propDef);
   const noiseChrome = useCardChrome(noiseDef);
   const outputChrome = useCardChrome(outputDef);
-  const colorText = useMemo(() => wiredValue(SCENE, EDGES, EDGES[1]).val, []);
+  const colorText = useMemo(() => wiredValue(SCENE, EDGES, EDGES[1], { compact: true }).val, []);
 
   const propRef = useRef<HTMLDivElement>(null);
   const noiseRef = useRef<HTMLDivElement>(null);

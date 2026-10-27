@@ -433,6 +433,11 @@ function applyConvertedScript(
     // A bare script carries no palettes, so the previous shader's must go.
     shaderPalettes: [],
     syncSource: 'code',
+    // The imported script is not panel text generated from this graph, so its
+    // Apply must carry nothing of the old one (utils/panelCarry.ts).
+    codeEmitted: null,
+    codeNames: null,
+    codeScopes: [],
     // Every nodes-writing path clears this. Load-bearing HERE: with
     // syncSource 'code' the graph→code effect never reaches the `finally` that
     // clears it, and pushHistory bails while it is set (no undo for the import).

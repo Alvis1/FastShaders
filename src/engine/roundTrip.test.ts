@@ -202,15 +202,15 @@ describe('round-trip: graphToCode → codeToGraph → graphToCode is stable', ()
 
   it('unknown node preserves its raw expression verbatim', () => {
     const u = makeNode('u', 'unknown', {
-      functionName: 'foo',
-      rawExpression: 'foo(1, 2)',
+      functionName: 'fwidth',
+      rawExpression: 'fwidth(1, 2)',
     });
     const out = makeNode('out', 'output');
     const { code1, code2 } = roundTrip([u, out], [makeEdge('u', 'out', 'out', 'color')]);
     expect(code2).toBe(code1);
     // And the raw expression survives both passes
-    expect(code1).toContain('foo(1, 2)');
-    expect(code2).toContain('foo(1, 2)');
+    expect(code1).toContain('fwidth(1, 2)');
+    expect(code2).toContain('fwidth(1, 2)');
   });
 });
 

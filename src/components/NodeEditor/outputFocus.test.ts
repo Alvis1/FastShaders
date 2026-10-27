@@ -642,11 +642,11 @@ describe('view glides — the canvas bar and F move the view like the cost pill'
 
   it('abandons a pending zoom target whenever the user drives the view', () => {
     // React Flow's own wheel/drag report a non-null event to onMoveStart; the
-    // three custom paths call setViewport by hand and must clear it themselves.
+    // four custom paths (the bar's pan button the fourth) call setViewport by hand and must clear it themselves.
     expect(nodeEditor).toMatch(/onMoveStartBusy = useCallback\(\(event[^)]*\) => \{\s*if \(event\) zoomGlideRef\.current = null;/);
     const direct = nodeEditor.split('setViewport({').length - 1;
     const cleared = nodeEditor.match(/zoomGlideRef\.current = null;[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*(?:const vp = getViewport\(\);\s*)?setViewport\(\{/g) ?? [];
-    expect(direct).toBe(3);
+    expect(direct).toBe(4);
     expect(cleared).toHaveLength(direct);
   });
 });

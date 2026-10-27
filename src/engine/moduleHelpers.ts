@@ -59,6 +59,23 @@ export interface ModuleHelper {
 }
 
 /**
+ * A WIRED UV Channel. three's `uv(index)` names its attribute from a JS number
+ * at BUILD time (`'uv' + (index > 0 ? index : '')`), so a node there — any wire
+ * — always read channel 0. This chooses among the four UV maps IN the shader,
+ * by the wire ROUNDED (three's own `int()` rounds a constant but truncates a
+ * run-time value, so a computed 0.99999994 picked map 0); any other value
+ * reads channel 0. A map the mesh lacks reads (0, 0), with three's console
+ * warning.
+ */
+export const UV_CHANNEL_HELPER = 'fsUvChannel';
+const UV_CHANNEL_LINES = [
+  `const ${UV_CHANNEL_HELPER} = Fn(([index]) => {`,
+  '  const c = round(float(index));',
+  '  return select(equal(c, 1), uv(1), select(equal(c, 2), uv(2), select(equal(c, 3), uv(3), uv())));',
+  '});',
+];
+
+/**
  * HSL → RGB helper emitted at module scope when the graph contains an hsl node.
  * `hsl` is not an export of `three/tsl`, so we ship our own branchless implementation
  * (GLSL-style — no conditionals, suitable for the GPU).
@@ -485,6 +502,7 @@ export const MODULE_HELPERS: ReadonlyMap<string, ModuleHelper> = new Map<string,
   ['fsLut', { lines: [...FS_LUT_LINES], imports: ['texture', 'vec2', 'float'], kind: 'js', support: true }],
   ['fsColorRamp', { lines: [...FS_COLOR_RAMP_LINES], imports: [], kind: 'js', requires: ['fsLut'] }],
   ['fsRgbCurves', { lines: [...FS_RGB_CURVES_LINES], imports: ['vec3', 'float', 'mix'], kind: 'js', requires: ['fsLut'] }],
+  [UV_CHANNEL_HELPER, { lines: UV_CHANNEL_LINES, imports: ['round', 'float', 'select', 'equal', 'uv'], alias: { type: 'uv', ports: ['channel'] } }],
 ]);
 
 /** Every emitted helper name — what codeToGraph skips as a declarator. */

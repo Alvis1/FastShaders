@@ -15,10 +15,9 @@
  * single-GLB plan), so one click prunes once and every part of the file agrees.
  */
 import type { AppEdge, AppNode, GroupNodeData } from '@/types';
-import { isSinkNode } from '@/utils/sdfPartition';
-import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { graphToCode } from './graphToCode';
+import { feedsAnOutputIds, panelCodegen } from './panelCode';
 
 export type ExportScope = 'connected' | 'whole';
 
@@ -70,25 +69,11 @@ const isNote = (n: AppNode): boolean => n.type === 'note';
  * cycle must not hang the export).
  */
 export function connectedExportIds(nodes: readonly AppNode[], edges: readonly AppEdge[]): Set<string> | null {
+  // The sink-plus-upstream half is the code panel's own set (engine/panelCode.ts).
+  const keep = feedsAnOutputIds(nodes, edges);
+  if (!keep) return null;
   const byId = new Map<string, AppNode>();
   for (const n of nodes) byId.set(n.id, n);
-  const sinks = nodes.filter((n) => !isFrame(n) && !isNote(n) && isSinkNode(n));
-  if (sinks.length === 0) return null;
-
-  const feeders = new Map<string, string[]>();
-  for (const e of unwrapCollapsedGroupEdges(nodes as AppNode[], edges as AppEdge[])) {
-    const list = feeders.get(e.target);
-    if (list) list.push(e.source);
-    else feeders.set(e.target, [e.source]);
-  }
-  const keep = new Set<string>();
-  const stack = sinks.map((n) => n.id);
-  while (stack.length > 0) {
-    const id = stack.pop()!;
-    if (keep.has(id)) continue;
-    keep.add(id);
-    for (const s of feeders.get(id) ?? []) if (!keep.has(s) && byId.has(s)) stack.push(s);
-  }
 
   const parentOf = (n: AppNode): AppNode | undefined =>
     typeof n.parentId === 'string' ? byId.get(n.parentId) : undefined;
@@ -205,11 +190,15 @@ export function remapUniformKeys<T>(
  * arrays and code unchanged.
  *
  * The pruned module is REGENERATED from the pruned graph, which is only the
- * same shader when the code panel holds exactly what the graph generates. Code
- * typed and not applied, an applied text codeToGraph could not fully walk (an
- * imperative block is skipped with a warning), or a direct-assignment script
- * whose graph is not the code at all would each be silently replaced, so any
- * difference exports the whole canvas with the panel's text, as today.
+ * same shader when the code panel holds exactly what the graph generates —
+ * the whole graph's codegen (a study session) or the panel's own
+ * connected-only text (`panelCodegen`, everyone else). Code typed and not
+ * applied, an applied text codeToGraph could not fully walk (an imperative
+ * block is skipped with a warning), or a direct-assignment script whose graph
+ * is not the code at all would each be silently replaced, so any other text
+ * exports the whole canvas with the panel's text, as today. The uniform
+ * re-key still compares against the WHOLE graph's names, which are the
+ * panel's names too (the panel scopes emission, never naming).
  */
 export function planExportGraph(
   src: { nodes: AppNode[]; edges: AppEdge[]; code: string },
@@ -221,7 +210,7 @@ export function planExportGraph(
   if (pruned.nodes === src.nodes) return whole;
   try {
     const full = graphToCode(src.nodes, src.edges, NODE_REGISTRY);
-    if (full.code !== src.code) return whole;
+    if (full.code !== src.code && panelCodegen(src.nodes, src.edges, false).result.code !== src.code) return whole;
     const part = graphToCode(pruned.nodes, pruned.edges, NODE_REGISTRY);
     const keptIds = new Set(pruned.nodes.map((n) => n.id));
     return {

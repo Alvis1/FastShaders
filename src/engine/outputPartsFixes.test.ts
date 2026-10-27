@@ -122,12 +122,12 @@ describe('a hostile mesh name cannot break out of the HTML script context', () =
     //
     // An `unknown` node is the vehicle: codeToGraph keeps an unrecognised call
     // verbatim, so this really is a string the emitter never inspects.
-    const parsed = codeToGraph('const u = notARealTslFunction(1.0);\nreturn vec3(u);');
+    const parsed = codeToGraph('const u = saturate(1.0);\nreturn vec3(u);');
     const unknown = parsed.nodes.find((n) => n.data.registryType === 'unknown');
     expect(unknown, 'needs an unknown node to carry the payload').toBeTruthy();
     (unknown!.data as { values?: Record<string, unknown> }).values = {
-      functionName: 'notARealTslFunction',
-      rawExpression: 'notARealTslFunction(1.0) /* </script><img src=x onerror=alert(1)> */',
+      functionName: 'saturate',
+      rawExpression: 'saturate(1.0) /* </script><img src=x onerror=alert(1)> */',
     };
     const { code } = graphToCode(parsed.nodes, parsed.edges);
 

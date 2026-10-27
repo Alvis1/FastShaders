@@ -241,7 +241,7 @@ export function ValuesScene() {
   const wired = {
     [shownEdge.targetHandle ?? 'color']: live.has(shownEdge.source)
       ? edgeChipChannels(evaluateEdgeRange(shownEdge, graph.nodes, graph.edges, liveT), 1).values[0]
-      : edgePortState(graph.nodes, graph.edges, sceneEdge(shownEdge)).val,
+      : edgePortState(graph.nodes, graph.edges, sceneEdge(shownEdge), { compact: true }).val,
   };
   /** The shown phase's cards, wires and chip fade with it; the Output stays. */
   const phaseFade = { opacity: 'var(--fs-intro-phase, 1)' } as const;

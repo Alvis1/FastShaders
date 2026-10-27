@@ -56,7 +56,7 @@ export function ConnectScene() {
   const outputChrome = useCardChrome(outputDef);
   const noiseChrome = useCardChrome(noiseDef);
   const wiredText = useMemo(
-    () => wiredValueText([{ id: NOISE_ID, def: noiseDef }, { id: OUTPUT_ID, def: outputDef }], [DROP_EDGE], DROP_EDGE),
+    () => wiredValueText([{ id: NOISE_ID, def: noiseDef }, { id: OUTPUT_ID, def: outputDef }], [DROP_EDGE], DROP_EDGE, { compact: true }),
     [],
   );
   const ink = useWireInk();

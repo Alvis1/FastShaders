@@ -145,14 +145,14 @@ describe('summary.csv + README', () => {
     expect(student.pro_items_version).toBe('');
     expect(student.pro_pointsCredible).toBe('');
     const pro = parse(buildSummaryCsv('FS_LD_01', 70, input.summary, {
-      susBlock: { professional: buildProRecord({ pointsCredible: 'na', pointsChangedBuild: 'chose', mainWork: 'techArt', 'fitFor.teaching': 'yes' }) },
+      susBlock: { professional: buildProRecord({ pointsCredible: 'na', pointsChangedBuild: 'chose', mainWork: 'techArt', 'suitedFor.teaching': 'yes' }) },
     }));
     expect(pro).toMatchObject({
       pro_items_version: PRO_ITEMS_VERSION,
       pro_pointsCredible: 'na',
       pro_pointsChangedBuild: 'chose',
       pro_mainWork: 'techArt',
-      pro_fitFor_teaching: 'yes',
+      pro_suitedFor_teaching: 'yes',
     });
   });
 
