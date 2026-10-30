@@ -90,6 +90,11 @@ export function EmbedBridge() {
       const text = data.module;
       const nameFallback = nameOf(data.name);
       lastOpened = text;
+      // An open supersedes the mount-time broadcast below: the import's own settle broadcasts.
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
       void preloadShaderImport().then(() => {
         try {
           importShaderText(text, { nameFallback, parsed: extractProjectState(text) });
@@ -100,6 +105,10 @@ export function EmbedBridge() {
     };
     window.addEventListener('message', onMessage);
     post({ type: 'superwxr:ready' });
+    // A lazy chunk comes up AFTER the first settle, so nothing would change the
+    // store again on a host that just shows what the editor holds: tell it, at
+    // the same trailing delay — unless an open arrives first (above).
+    timer = setTimeout(broadcast, SETTLE_MS);
     return () => {
       window.removeEventListener('message', onMessage);
       unsubscribe();
