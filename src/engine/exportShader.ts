@@ -36,6 +36,7 @@ import type { SingleGlbBuildMode } from './exportSingleGlb';
 import type { ImportNoteLine } from '@/utils/importNote';
 import { safeJsonReviver } from '@/utils/safeJson';
 import { downloadBlob } from '@/utils/downloadBlob';
+import { embedTargetOrigin, isEmbedMode } from '@/embed/embedMode';
 
 /**
  * Shared "Download Shader" path. Lives outside any component so the toolbar
@@ -541,7 +542,16 @@ export async function buildShaderExportChecked(asks: ShaderExportAsks): Promise<
 export function downloadShader(bundle: ShaderExport): void {
   // Eval telemetry only — a no-op outside a study session.
   evalLog('export', { kind: bundle.kind });
-  downloadBlob(new Blob([bundle.bytes], { type: bundle.mime }), bundle.fileName);
+  if (isEmbedMode()) {
+    // Embedded (embed/EmbedBridge.tsx): the host page takes delivery instead of
+    // the browser's download folder — the same bytes, the same name.
+    window.parent.postMessage(
+      { type: 'superwxr:export', kind: bundle.kind, fileName: bundle.fileName, mime: bundle.mime, bytes: bundle.bytes },
+      embedTargetOrigin(),
+    );
+  } else {
+    downloadBlob(new Blob([bundle.bytes], { type: bundle.mime }), bundle.fileName);
+  }
   announceExportDelivered(bundle);
 }
 
