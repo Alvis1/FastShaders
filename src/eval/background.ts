@@ -1,10 +1,21 @@
 /**
- * The experience block, asked BEFORE the SUS in every arm.
+ * The experience block, asked AFTER the SUS (and after the arm-specific
+ * session/professional questions) in every arm.
  *
  * It exists because a usability score is not interpretable without knowing
  * who gave it: "this editor is easy to learn" means something different from
  * someone who builds materials in Blender every week than from someone who
  * has never seen a node editor.
+ *
+ * Why after the SUS (consent-15): asking prior-tool and shader-code questions
+ * before SUS item 1 forced novices to declare "Never / No / I have not" seven
+ * times immediately before rating ease-of-use and confidence (SUS items 3, 4,
+ * 7, 8, 9, 10), risking competence-threat assimilation/contrast effects
+ * (Tourangeau, Rips & Rasinski 2000) and violating Brooke's (1996) rule that
+ * SUS be administered immediately upon task completion. Because the three bg-3
+ * items ask factual behavioural history ("Have you made…", "How much have you
+ * worked…") rather than subjective self-ratings, placing them after the SUS
+ * protects SUS from competence priming without colouring factual recall.
  *
  * Version bg-3 (consent-13, 2026-10-25) asks what people have DONE, never
  * what they ARE: which tools they have made materials or shaders with (one
@@ -32,12 +43,8 @@
  * (`background.items[].level`, 0–4); `scripts/eval-analysis.mjs` reads both,
  * never pooled. RETIRED_BACKGROUND_IDS are never reused.
  *
- * The block stays before the SUS, as it has been since the first packages and
- * as the pilot asked it. That order does NOT keep self-assessment from
- * colouring the SUS — it makes these answers the SUS's immediate context, so
- * a context effect cannot be ruled out and the paper says so; what the order
- * protects is these answers from the SUS ones. Latvian lives beside the
- * English (questionItems.ts says why).
+ * The block sits after the SUS and arm-specific questions (consent-15).
+ * Latvian lives beside the English (questionItems.ts says why).
  *
  * PURE (node-tested).
  */
@@ -99,7 +106,6 @@ export const BACKGROUND_ITEMS: readonly QItem[] = [
       { id: 'tried', en: 'Tried once or twice', lv: 'Izmēģināju pāris reizes' },
       { id: 'few', en: 'Made a few things', lv: 'Izveidoju dažas lietas' },
       { id: 'regular', en: 'Use them regularly', lv: 'Lietoju regulāri' },
-      { id: 'paid', en: 'Use them in paid work', lv: 'Lietoju algotā darbā' },
     ],
   },
   {
@@ -110,8 +116,8 @@ export const BACKGROUND_ITEMS: readonly QItem[] = [
     },
     options: [
       { id: 'no', en: 'I have not', lv: 'Nav nācies' },
-      { id: 'changed', en: 'Only changed existing code (values, small edits)', lv: 'Tikai mainīju gatavu kodu (vērtības, nelieli labojumi)' },
-      { id: 'own', en: 'I have written my own shaders', lv: 'Rakstīju savus ēnotājus' },
+      { id: 'changed', en: 'Only edited existing code', lv: 'Tikai mainīju gatavu kodu' },
+      { id: 'own', en: 'Written my own shaders', lv: 'Rakstīju savus ēnotājus' },
     ],
   },
 ];

@@ -10,6 +10,7 @@ import {
 import { deriveSummary, runQualityChecks, type EvalEvent } from './telemetryModel';
 import { backgroundCsvColumns, buildBackgroundRecord } from './background';
 import { PRO_ITEMS_VERSION, buildProRecord } from './proQuestions';
+import { TASK_ITEMS_VERSION, buildTaskRecord } from './taskQuestions';
 
 function fixtureInput(withShader: boolean): EvalPackageInput {
   const events: EvalEvent[] = [
@@ -135,24 +136,45 @@ describe('summary.csv + README', () => {
     expect(cells).toMatchObject({ bg_items_version: 'bg-3', bg_toolsMade_blender: 'yes', bg_toolsMade_unity: 'no', bg_toolsMade_otherNodeEditor: 'yes', bg_nodeEditorUse: 'few', bg_shaderCodeWritten: '' });
   });
 
-  it('carries the pro_* columns: empty for a student, the choices for a professional', () => {
+  it('carries the tq_* and pro_* columns: tq_* for students, pro_* for professionals', () => {
     const input = fixtureInput(true);
     const parse = (csv: string) => {
       const [header, row] = csv.split('\n');
       return Object.fromEntries(header.split(',').map((h, i) => [h, row.split(',')[i]]));
     };
-    const student = parse(buildSummaryCsv('J01', 50, input.summary, { susBlock: {} }));
-    expect(student.pro_items_version).toBe('');
-    expect(student.pro_pointsCredible).toBe('');
+    const student = parse(buildSummaryCsv('J01', 50, input.summary, {
+      susBlock: {
+        taskQuestions: buildTaskRecord({
+          finished: 'yes',
+          mentalEffort: 'low',
+          'nodeLookTold.does': 'yes',
+          'nodeLookTold.cost': 'partly',
+          pointsChangedBuild: 'looked',
+        }, {}, true),
+      },
+    }));
+    expect(student).toMatchObject({
+      tq_items_version: TASK_ITEMS_VERSION,
+      tq_finished: 'yes',
+      tq_mentalEffort: 'low',
+      tq_nodeLookTold_does: 'yes',
+      tq_nodeLookTold_cost: 'partly',
+      tq_pointsChangedBuild: 'looked',
+      pro_items_version: '',
+      pro_pointsCredible: '',
+    });
     const pro = parse(buildSummaryCsv('FS_LD_01', 70, input.summary, {
-      susBlock: { professional: buildProRecord({ pointsCredible: 'na', pointsChangedBuild: 'chose', mainWork: 'techArt', 'suitedFor.teaching': 'yes' }) },
+      susBlock: { professional: buildProRecord({ pointsCredible: 'na', pointsChangedBuild: 'chose', mainWork: 'techArt', 'suitedFor.teaching': 'partly', shaderPerfBarrier: 'major' }) },
     }));
     expect(pro).toMatchObject({
+      tq_items_version: '',
+      tq_finished: '',
       pro_items_version: PRO_ITEMS_VERSION,
       pro_pointsCredible: 'na',
       pro_pointsChangedBuild: 'chose',
       pro_mainWork: 'techArt',
-      pro_suitedFor_teaching: 'yes',
+      pro_suitedFor_teaching: 'partly',
+      pro_shaderPerfBarrier: 'major',
     });
   });
 

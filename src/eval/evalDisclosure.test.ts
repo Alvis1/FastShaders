@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { CONSENT_TEXT_VERSION, EVAL_SERVER_HOSTS } from './evalMode';
 import { BACKGROUND_ITEMS } from './background';
 import { PRO_ITEMS } from './proQuestions';
+import { TASK_ITEMS } from './taskQuestions';
 import lv from '@/i18n/lv.json';
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
@@ -116,7 +117,7 @@ describe('the consent and disclosure are fully translated', () => {
     // (questionItems.ts) and are checked in their own suites; neither may
     // fall back to lv.json keys, which other screens share.
     const keys: string[] = [];
-    expect([...BACKGROUND_ITEMS, ...PRO_ITEMS].every((q) => q.question.lv.length > 0)).toBe(true);
+    expect([...BACKGROUND_ITEMS, ...TASK_ITEMS, ...PRO_ITEMS].every((q) => q.question.lv.length > 0)).toBe(true);
     const missing = keys.filter((k) => !(k in ui));
     expect(missing, `untranslated: ${missing.join(' | ')}`).toEqual([]);
   });

@@ -6,6 +6,7 @@ import { useDeviceBudget } from '@/hooks/useDeviceBudget';
 import { nodeCostPoints } from '@/utils/nodeCost';
 import { toBudgetPoints } from '@/utils/budgetPoints';
 import { getCostColor, getCostScale, getCostTextColor, getContrastColor } from '@/utils/colorUtils';
+import { evalTask } from '@/eval/evalTask';
 
 /**
  * The cost-driven chrome every node card wears: header fill and its text
@@ -25,12 +26,18 @@ export function useCostChrome(cost: number) {
   // is the app-wide dark switch; the store field keeps its historical name.
   const dark = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
   const points = toBudgetPoints(cost, useDeviceBudget());
-  const costColor = getCostColor(points, low, high, dark);
+  // In the no-points condition (`/evalp`, `pointsVisible === false`), nodes and
+  // palette tiles must not leak cost through header colour or card scaling:
+  // passing 0 selects `getCostColor`'s built-in neutral header grey and a 1×
+  // scale (`getCostScale(0) === 1`), while `points` keeps its value for callers
+  // whose `<Points>` component already gates on `pointsVisible`.
+  const visiblePoints = evalTask().pointsVisible ? points : 0;
+  const costColor = getCostColor(visiblePoints, low, high, dark);
   return {
     costColor,
     headerTextColor: getContrastColor(costColor),
-    costTextColor: getCostTextColor(points, low, high),
-    costScale: getCostScale(points),
+    costTextColor: getCostTextColor(visiblePoints, low, high),
+    costScale: getCostScale(visiblePoints),
     points,
   };
 }

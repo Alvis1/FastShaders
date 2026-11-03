@@ -34,17 +34,19 @@
  *      presets — the one invented item; the plan had none for them);
  *   2. the cost points (SQ3, the expert half of thesis 3) — credibility (E3,
  *      the block's first agreement item, reported beside the measured ranking
- *      concordance), whether the points CHANGED what was built as five
- *      behavioural rungs (E2 recast: ignored / looked, stayed within budget /
- *      looked, went over / chose cheaper from the start / replaced or removed
- *      — only the last pairs with a logged edit), and where such a system
- *      might mislead (E6, open);
+ *      concordance), whether the points CHANGED what was built as four
+ *      behavioural rungs (E2 recast: ignored / checked, changed nothing /
+ *      picked cheaper when adding / replaced or removed expensive nodes
+ *      — telemetry's `budgetCrossings` already separates staying within budget
+ *      from going over, and `replaced` pairs with a logged edit), and where such a
+ *      system might mislead (E6, open);
  *   3. fit — in the respondent's opinion, teaching / prototyping / production
- *      as forced Yes/No rows (H2), and what got in the way or would have to
- *      change (H6 + H7, open);
- *   4. the respondent's own work — whether WebXR's constraints deter them (W2,
- *      the Introduction's motivating claim measured on the people it is made
- *      about; the second and last agreement item), how they find out today
+ *      as Yes/Partly/No/Can't-judge rows (H2), and what would have to change
+ *      before they used FastShaders in their own work (H7, open);
+ *   4. the respondent's own work — how much of a practical problem keeping
+ *      shaders within frame budgets on mobile XR or web 3D is in their
+ *      experience (`shaderPerfBarrier`, replacing pro-4's triple-barrelled
+ *      `webxrConstraintsDeter`), how they find out today
  *      that a shader is too expensive (F1, the feedforward mechanism in their
  *      own words), main work (B1) and years of paid experience in real-time
  *      3D computer graphics (B2, the inclusion criterion). Tools and shader code are the
@@ -100,16 +102,19 @@ export type ProGridItem = GridItem;
 export type ProTextItem = TextItem;
 export type ProGroup = 'tool' | 'points' | 'fit' | 'work';
 
-export const PRO_ITEMS_VERSION = 'pro-4';
+export const PRO_ITEMS_VERSION = 'pro-5';
 
 /** Ids of the first draft (consent-6 … consent-11), of pro-2 (consent-12,
- *  never deployed) and the three pro-3 ids pro-4 cut or reworded. Never reuse one. */
+ *  never deployed), the three pro-3 ids pro-4 cut or reworded, and pro-4's
+ *  triple-barrelled `webxrConstraintsDeter` (replaced by `shaderPerfBarrier`
+ *  in pro-5). Never reuse one. */
 export const RETIRED_PRO_IDS: readonly string[] = [
   'role', 'years', 'shaderFrequency', 'performanceBudget', 'platforms', 'wouldUse',
   'pilotQ5', 'pilotQ6', 'pilotQ7', 'pilotQ8', 'pilotQ9',
   'pointsUnderstood', 'pointsInfluenced', 'pointsTrusted', 'pointsRanking', 'pointsOff20',
   'platforms12m', 'realtimeYears',
   'pointsOff20PerNode', 'fitFor', 'proYears',
+  'webxrConstraintsDeter',
 ];
 
 export const PRO_GROUP_HEADINGS: Record<ProGroup, QText> = {
@@ -151,8 +156,8 @@ export const PRO_ITEMS: readonly QItem[] = [
       lv: 'Vai šīs iespējas jums palīdzēja?',
     },
     rows: [
-      { id: 'codePanel', en: 'The code panel (the TSL code beside the graph)', lv: 'Koda panelis (TSL kods blakus grafam)' },
-      { id: 'presets', en: 'Presets (ready-made effects you can open and edit)', lv: 'Sagataves (gatavi efekti, ko var atvērt un rediģēt)' },
+      { id: 'codePanel', en: 'Code panel (TSL code beside the graph)', lv: 'Koda panelis (TSL kods blakus grafam)' },
+      { id: 'presets', en: 'Presets (ready-made effects)', lv: 'Sagataves (gatavi efekti)' },
     ],
     // "Got in the way" is kept apart from "No difference": the code panel is
     // the feature most likely to HINDER, and the student sheet's CF1 keeps
@@ -170,8 +175,8 @@ export const PRO_ITEMS: readonly QItem[] = [
   {
     kind: 'agree', id: 'pointsCredible', group: 'points', cantJudge: true,
     question: {
-      en: 'The point values seemed credible given my experience with real-time performance.',
-      lv: 'Punktu vērtības šķita ticamas, ņemot vērā manu pieredzi ar reāllaika veiktspēju.',
+      en: 'The point values seemed credible for real-time performance.',
+      lv: 'Punktu vērtības šķita ticamas reāllaika veiktspējai.',
     },
   },
   {
@@ -180,66 +185,73 @@ export const PRO_ITEMS: readonly QItem[] = [
       en: 'Did the points change what you built?',
       lv: 'Vai punkti mainīja to, ko veidojāt?',
     },
-    // Five states, each with its own cell: "looked, stayed within budget" is
-    // the meter working as a guide, "chose cheaper from the start" the
-    // strongest feedforward case and the one telemetry cannot see.
+    // Four states: "checked, changed nothing" is separated into within-budget
+    // vs. over-budget automatically by telemetry (`budgetCrossings`), "picked
+    // cheaper when adding" captures feedforward pre-selection that logs cannot
+    // see, and "replaced or removed" pairs with logged graph edits.
     options: [
-      { id: 'ignored', en: 'No — I paid no attention to them', lv: 'Nē — nepievērsu tiem uzmanību' },
-      { id: 'lookedWithin', en: 'I looked, but changed nothing: my build stayed within budget', lv: 'Skatījos, bet neko nemainīju: mans darbs palika budžetā' },
-      { id: 'lookedOver', en: 'I looked, but changed nothing, even when it went over budget', lv: 'Skatījos, bet neko nemainīju, arī tad, kad tas pārsniedza budžetu' },
-      { id: 'chose', en: 'Yes — I chose cheaper nodes from the start', lv: 'Jā — jau no sākuma izvēlējos lētākus mezglus' },
-      { id: 'replaced', en: 'Yes — I replaced or removed something', lv: 'Jā — kaut ko aizstāju vai noņēmu' },
+      { id: 'ignored', en: 'No — I did not pay attention to them', lv: 'Nē — nepievērsu tiem uzmanību' },
+      { id: 'looked', en: 'No — I checked them, but changed nothing', lv: 'Nē — sekoju tiem līdzi, bet neko nemainīju' },
+      { id: 'chose', en: 'Yes — I picked cheaper nodes when adding', lv: 'Jā — pievienojot izvēlējos lētākus mezglus' },
+      { id: 'replaced', en: 'Yes — I replaced or removed expensive nodes', lv: 'Jā — aizstāju vai noņēmu dārgus mezglus' },
     ],
   },
   {
     kind: 'text', id: 'pointsMisleading', group: 'points',
     question: {
-      en: 'Where might such a point system mislead its user? (optional)',
-      lv: 'Kur, jūsuprāt, šāda punktu sistēma varētu maldināt lietotāju? (pēc izvēles)',
+      en: 'Where might this point system mislead users? (optional)',
+      lv: 'Kur šāda punktu sistēma varētu maldināt? (pēc izvēles)',
     },
   },
 
-  // 3. Fit (E1 form H2), one Yes/No row per use, then the obstacles.
+  // 3. Fit (E1 form H2), one Yes/Partly/No/Can't-judge row per use, then adoption barriers.
   {
     kind: 'grid', id: 'suitedFor', group: 'fit',
     question: {
-      en: 'In your opinion, what is FastShaders suited for?',
-      lv: 'Kam, jūsuprāt, FastShaders ir piemērots?',
+      en: 'What is FastShaders suited for?',
+      lv: 'Kam FastShaders ir piemērots?',
     },
     rows: [
       { id: 'teaching', en: 'Teaching or learning shader basics', lv: 'Ēnotāju pamatu mācīšanai un apguvei' },
       { id: 'prototyping', en: 'Quick prototyping of effects', lv: 'Ātrai efektu prototipēšanai' },
       { id: 'production', en: 'Production work in real projects', lv: 'Darbam reālos projektos' },
     ],
-    columns: [YES, NO, CANT],
+    columns: [YES, PARTLY, NO, CANT],
   },
   {
     kind: 'text', id: 'missingForWork', group: 'fit',
     question: {
-      en: 'What got in your way, or would have to change, before you used FastShaders in your own work? (optional)',
-      lv: 'Kas jums traucēja vai kam būtu jāmainās, lai jūs FastShaders lietotu savā darbā? (pēc izvēles)',
+      en: 'What would need to change for you to use FastShaders in your work? (optional)',
+      lv: 'Kam būtu jāmainās, lai jūs lietotu FastShaders savā darbā? (pēc izvēles)',
     },
   },
 
   // 4. The respondent's own work. Options name ACTIVITIES, not people, so the
   // Latvian never has to pick a gender for the respondent.
   {
-    kind: 'agree', id: 'webxrConstraintsDeter', group: 'work', cantJudge: true,
+    kind: 'choice', id: 'shaderPerfBarrier', group: 'work',
     question: {
-      en: 'The constraints of WebXR development (performance, tooling, browser support) deter me from using it.',
-      lv: 'WebXR izstrādes ierobežojumi (veiktspēja, rīki, pārlūku atbalsts) mani attur no tā lietošanas.',
+      en: 'How big a problem is keeping shaders within frame budgets on mobile XR or web 3D?',
+      lv: 'Cik liela problēma ir ēnotāju iekļaušana kadra budžetā mobilajā XR vai tīmekļa 3D?',
     },
+    options: [
+      { id: 'notAProblem', en: 'Not a problem', lv: 'Nav problēma' },
+      { id: 'minor', en: 'Minor problem', lv: 'Neliela problēma' },
+      { id: 'moderate', en: 'Moderate problem', lv: 'Vidēja problēma' },
+      { id: 'major', en: 'Major problem', lv: 'Liela problēma' },
+      CANT,
+    ],
   },
   {
     kind: 'choice', id: 'costToday', group: 'work',
     question: {
-      en: 'In your own work, how do you usually find out that a shader is too expensive?',
+      en: 'In your work, how do you usually find out a shader is too expensive?',
       lv: 'Kā jūs savā darbā parasti uzzināt, ka ēnotājs ir pārāk dārgs?',
     },
     options: [
-      { id: 'afterRun', en: 'Profiling or testing on the device, after it runs', lv: 'Profilējot vai testējot uz ierīces pēc palaišanas' },
-      { id: 'intuition', en: 'From experience or intuition while building', lv: 'Pēc pieredzes vai nojautas veidošanas laikā' },
-      { id: 'editorCount', en: 'From an instruction count or cost indicator in the editor', lv: 'Pēc instrukciju skaita vai izmaksu rādītāja redaktorā' },
+      { id: 'afterRun', en: 'Profiling on the device', lv: 'Profilējot uz ierīces' },
+      { id: 'intuition', en: 'Experience or intuition while building', lv: 'Pēc pieredzes vai nojautas veidošanas laikā' },
+      { id: 'editorCount', en: 'Instruction count or cost indicator in the editor', lv: 'Pēc instrukciju skaita vai izmaksu rādītāja redaktorā' },
       { id: 'notNeeded', en: 'I have not had to find out', lv: 'Man tas nav bijis jānoskaidro' },
       { id: 'other', en: 'Another way', lv: 'Citādi' },
     ],
@@ -256,7 +268,7 @@ export const PRO_ITEMS: readonly QItem[] = [
       { id: 'gameDev', en: 'Game development', lv: 'Spēļu izstrāde' },
       { id: 'xrDev', en: 'XR (VR/AR) development', lv: 'XR (VR/AR) izstrāde' },
       { id: 'filmVfx', en: 'Film, VFX or animation', lv: 'Kino, VFX vai animācija' },
-      { id: 'webCreative', en: 'Web 3D or creative coding (e.g. three.js, A-Frame)', lv: 'Tīmekļa 3D vai radošā programmēšana (piem., three.js, A-Frame)' },
+      { id: 'webCreative', en: 'Web 3D or creative coding', lv: 'Tīmekļa 3D vai radošā programmēšana' },
       { id: 'graphicsProgramming', en: 'Graphics or rendering programming', lv: 'Grafikas vai renderēšanas programmēšana' },
       { id: 'shaderProgramming', en: 'Shader programming', lv: 'Ēnotāju programmēšana' },
       { id: 'techArt', en: 'Technical art', lv: 'Tehniskā māksla (technical art)' },
@@ -274,16 +286,16 @@ export const PRO_ITEMS: readonly QItem[] = [
   {
     kind: 'choice', id: 'paidYears', group: 'work',
     question: {
-      en: 'How many years of work experience do you have in real-time 3D computer graphics?',
-      lv: 'Cik gadu darba pieredze jums ir reāllaika 3D datorgrafikā?',
+      en: 'How many years have you worked in real-time 3D graphics?',
+      lv: 'Cik gadu darba pieredze jums ir reāllaika 3D grafikā?',
     },
     // Bands that neither overlap nor leave a gap (five and a half years has a cell).
     options: [
       { id: 'none', en: 'No work experience', lv: 'Nav darba pieredzes' },
-      { id: 'under2', en: 'Less than 2 years', lv: 'Mazāk par 2 gadiem' },
+      { id: 'under2', en: 'Under 2 years', lv: 'Mazāk par 2 gadiem' },
       { id: 'y2to5', en: '2–5 years', lv: '2–5 gadi' },
-      { id: 'y5to10', en: 'More than 5, up to 10 years', lv: 'Vairāk par 5, līdz 10 gadiem' },
-      { id: 'over10', en: 'More than 10 years', lv: 'Vairāk par 10 gadiem' },
+      { id: 'y5to10', en: 'Over 5 to 10 years', lv: 'Vairāk par 5, līdz 10 gadiem' },
+      { id: 'over10', en: 'Over 10 years', lv: 'Vairāk par 10 gadiem' },
     ],
   },
 ];

@@ -31,6 +31,7 @@ import {
   type BackgroundAnswers,
 } from './background';
 import { PRO_GROUP_HEADINGS, PRO_GROUP_NOTES, PRO_ITEMS, buildProRecord, proMissing } from './proQuestions';
+import { TASK_GROUP_HEADINGS, buildTaskRecord, taskItemsFor, taskMissing } from './taskQuestions';
 import { CANT_JUDGE, OTHER_CAP, TEXT_CAP, gridKey, otherKey, type QAnswers, type QItem, type QLang, type QText } from './questionItems';
 import { LangSwitch } from './LangSwitch';
 import { summarizeAnswerLanguages } from './answerLanguage';
@@ -123,18 +124,19 @@ export function SusModal({ open, onClose }: Props) {
     () => Array<number | null>(SUS_ITEM_COUNT).fill(null),
   );
   const [comment, setComment] = useState('');
-  // Asked BEFORE the SUS, in every arm, since the first study packages — kept
-  // there for comparability with them and with the pilot, which asked them
-  // first too. That order makes them the SUS's immediate context (it protects
-  // the self-ratings from the SUS answers, not the reverse), so a context
-  // effect on the SUS cannot be ruled out; the paper says so.
+  // Asked AFTER the SUS (and after the arm-specific session / professional
+  // questions) in every arm (consent-15): every participant now reaches SUS
+  // item 1 immediately upon ending the session (Brooke 1996), with no prior
+  // competence-priming self-report.
   const [background, setBackground] = useState<BackgroundAnswers>({});
-  // The professional block — only in the /evalpro arm, AFTER SUS item 10, so
-  // every arm reaches the SUS the same way (proQuestions.ts).
+  // The arm-specific block after SUS item 10: `taskQuestions` on `/eval` and
+  // `/evalp` (`taskQuestions.ts`), or `pro` on `/evalpro` (`proQuestions.ts`).
+  const [taskAnswers, setTaskAnswers] = useState<QAnswers>({});
   const [pro, setPro] = useState<QAnswers>({});
-  // The UI language each experience / professional answer was given in,
-  // keyed like the answers (answerLanguage.ts says why Submit's is not enough).
+  // The UI language each experience / session / professional answer was given
+  // in, keyed like the answers (answerLanguage.ts says why Submit's is not enough).
   const backgroundLangRef = useRef<Record<string, QLang>>({});
+  const taskAnswerLangRef = useRef<Record<string, QLang>>({});
   const proAnswerLangRef = useRef<Record<string, QLang>>({});
   // Set by a Submit press on an incomplete form: every unanswered question is
   // then marked, and the first one is scrolled into view.
@@ -171,19 +173,24 @@ export function SusModal({ open, onClose }: Props) {
   const anchorLow = language === 'lv' ? SUS_ANCHOR_LOW_LV : SUS_ANCHOR_LOW_EN;
   const anchorHigh = language === 'lv' ? SUS_ANCHOR_HIGH_LV : SUS_ANCHOR_HIGH_EN;
   const answered = useMemo(() => responses.filter((r) => r != null).length, [responses]);
-  const proAsked = evalTask().proQuestions;
+  const taskSpec = evalTask();
+  const proAsked = taskSpec.proQuestions;
+  const pointsVisible = taskSpec.pointsVisible;
   // Every required answer still missing, as the `data-q` keys the form's rows
-  // carry, in screen order: experience, SUS, then the professional block.
+  // carry, in screen order: SUS 1–10, the arm-specific post-SUS block
+  // (`pro-*` on /evalpro, `tq-*` on /eval and /evalp), then experience (`bg-*`).
   const missing = useMemo(() => [
-    ...backgroundMissing(background).map((k) => `bg-${k}`),
     ...responses.flatMap((r, i) => (r == null ? [`sus-${i}`] : [])),
-    ...(proAsked ? proMissing(pro).map((k) => `pro-${k}`) : []),
-  ], [background, responses, pro, proAsked]);
+    ...(proAsked
+      ? proMissing(pro).map((k) => `pro-${k}`)
+      : taskMissing(taskAnswers, pointsVisible).map((k) => `tq-${k}`)),
+    ...backgroundMissing(background).map((k) => `bg-${k}`),
+  ], [responses, proAsked, pro, taskAnswers, pointsVisible, background]);
   const complete = missing.length === 0;
   const missingSet = useMemo(() => new Set(missing), [missing]);
   const isMissing = (key: string) => showMissing && missingSet.has(key);
   // One block = its answers, their languages and the name prefix its radios
-  // share; the renderer below draws either block from it.
+  // share; the renderer below draws each block from it.
   interface Block { prefix: string; answers: QAnswers; set: (key: string, value: QAnswers[string]) => void }
   const bgBlock: Block = {
     prefix: 'bg',
@@ -191,6 +198,14 @@ export function SusModal({ open, onClose }: Props) {
     set: (key, value) => {
       backgroundLangRef.current[key] = language;
       setBackground((prev) => ({ ...prev, [key]: value }));
+    },
+  };
+  const taskBlock: Block = {
+    prefix: 'tq',
+    answers: taskAnswers,
+    set: (key, value) => {
+      taskAnswerLangRef.current[key] = language;
+      setTaskAnswers((prev) => ({ ...prev, [key]: value }));
     },
   };
   const proBlock: Block = {
@@ -251,6 +266,7 @@ export function SusModal({ open, onClose }: Props) {
     // Taken with `filled`, before the await below: both must describe the
     // same moment, the click.
     const answerLangs = susAnswerLangRef.current.slice();
+    const taskLangs = { ...taskAnswerLangRef.current };
     const proLangs = { ...proAnswerLangRef.current };
     const bgLangs = { ...backgroundLangRef.current };
     const score = computeSusScore(filled);
@@ -292,7 +308,9 @@ export function SusModal({ open, onClose }: Props) {
       language: answeredIn.language,
       languageAtSubmit: language,
       background: buildBackgroundRecord(background, bgLangs),
-      ...(proAsked ? { professional: buildProRecord(pro, proLangs) } : {}),
+      ...(proAsked
+        ? { professional: buildProRecord(pro, proLangs) }
+        : { taskQuestions: buildTaskRecord(taskAnswers, taskLangs, pointsVisible) }),
       itemsVersion: 'brooke-1996-item8-awkward',
       items: filled.map((response, i) => {
         const itemLanguage = answeredIn.perItem[i];
@@ -710,15 +728,10 @@ export function SusModal({ open, onClose }: Props) {
           {t('Type the code the researcher gave you, not your name.', language)}
         </div>
 
-        {/* The experience block — BEFORE the SUS in every arm, as it has been
-            since the first packages (background.ts says what that order does
-            and does not protect). */}
-        {renderBlock(BACKGROUND_ITEMS, bgBlock, BACKGROUND_GROUP_HEADINGS)}
-
         <div className="sus-modal__section-head">{t('Statements about FastShaders', language)}</div>
-        {/* Brooke's own instruction, placed on the SUS block it applies to: the
-            experience block above is Yes/No rows and option strips, where
-            "centre point" would be meaningless. */}
+        {/* Brooke's own instruction, placed on the SUS block it applies to:
+            the SUS comes FIRST in every arm so it is answered immediately
+            after the task under identical context. */}
         <div className="csv-import-modal__message">
           {t('Mark your immediate response to each statement without thinking long. If you cannot respond to one, mark the centre point (3).', language)}
         </div>
@@ -763,7 +776,13 @@ export function SusModal({ open, onClose }: Props) {
           ))}
         </div>
 
-        {proAsked && renderBlock(PRO_ITEMS, proBlock, PRO_GROUP_HEADINGS, PRO_GROUP_NOTES)}
+        {proAsked
+          ? renderBlock(PRO_ITEMS, proBlock, PRO_GROUP_HEADINGS, PRO_GROUP_NOTES)
+          : renderBlock(taskItemsFor(pointsVisible), taskBlock, TASK_GROUP_HEADINGS)}
+
+        {/* The shared experience block — AFTER the SUS and the arm-specific
+            session/professional questions in every arm (background.ts). */}
+        {renderBlock(BACKGROUND_ITEMS, bgBlock, BACKGROUND_GROUP_HEADINGS)}
 
         <label className="csv-import-modal__message" htmlFor="sus-comment">
           {t('Comments (optional)', language)}

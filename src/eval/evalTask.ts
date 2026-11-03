@@ -20,10 +20,10 @@
  * the app URL stays clean and the parameters survive a mid-session reload.
  */
 
-// The storage keys all live in evalMode.ts, so the writer (the redirector),
-// this reader and clearEvalMode's eraser cannot drift apart. Importing the
-// key rather than defining it here also keeps the dependency one-way.
-import { EVAL_TASK_KEY, isEvalMode } from './evalMode';
+// The storage keys live in the zero-import leaf `evalArm.ts` (re-exported by
+// `evalMode.ts`), so `evalTask.ts` can be imported by `layoutEngine.ts` and
+// `useCostChrome.ts` without forming a cycle through `evalMode.ts` -> store.
+import { EVAL_TASK_KEY, isEvalMode } from './evalArm';
 
 /** The three study entries. Each redirector stamps its own name. */
 export const EVAL_ARMS = ['eval', 'evalp', 'evalpro'] as const;

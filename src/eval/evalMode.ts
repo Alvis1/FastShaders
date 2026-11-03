@@ -17,15 +17,14 @@
 
 import { safeJsonReviver } from '@/utils/safeJson';
 import { FEEDBACK_EMAIL } from '@/utils/feedbackReport';
-import { EVAL_ARM_KEY } from './evalArm';
+import { EVAL_ARM_KEY, EVAL_TASK_KEY } from './evalArm';
 
-// The flag and its reader live in the leaf `evalArm.ts` (the registry reads it
-// at module init); re-exported so every other consumer keeps this one import.
-export { EVAL_ARM_KEY, isEvalMode } from './evalArm';
+// The flag, its reader and the task query key live in the leaf `evalArm.ts`
+// (the registry and layoutEngine read them at module init); re-exported so
+// every other consumer keeps this one import.
+export { EVAL_ARM_KEY, EVAL_TASK_KEY, isEvalMode } from './evalArm';
 export const EVAL_SESSION_KEY = 'fs:evalSession';
 export const EVAL_JOURNAL_KEY = 'fs:evalJournal';
-/** The raw query string the /eval and /evalp redirectors capture at launch. */
-export const EVAL_TASK_KEY = 'fs:evalTaskQuery';
 
 /** Where the study package is addressed. Kept beside FEEDBACK_EMAIL on purpose
  *  — one constant to change if the study uses a different inbox. */
@@ -39,7 +38,7 @@ export const EVAL_SCHEMA = 'fs-eval-1';
  * package says which wording its participant agreed to. BUMP IT whenever the
  * text changes materially; the per-version history is in docs/dev/eval-mode.md.
  */
-export const CONSENT_TEXT_VERSION = 'consent-14';
+export const CONSENT_TEXT_VERSION = 'consent-15';
 
 /**
  * The two addresses the study app is served from. Only alvismisjuns.lv has

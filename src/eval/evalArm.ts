@@ -11,6 +11,8 @@
  */
 
 export const EVAL_ARM_KEY = 'fs:evalArm';
+/** The raw query string the /eval, /evalp and /evalpro redirectors capture at launch. */
+export const EVAL_TASK_KEY = 'fs:evalTaskQuery';
 
 const armed = (() => {
   try {

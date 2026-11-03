@@ -117,10 +117,11 @@
 }
 
 /* End anchors above the strip, stated once (per Brooke's form the scale is
-   anchored only at the ends). */
+   anchored only at the ends) and right-aligned over the 1–5 radios rather than
+   stretched across the statement column. */
 .sus-modal__anchors {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: var(--space-3);
   font-size: var(--font-size-xs);
   color: var(--text-secondary);

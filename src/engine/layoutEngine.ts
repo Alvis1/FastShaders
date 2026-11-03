@@ -2,6 +2,7 @@ import dagre from '@dagrejs/dagre';
 import type { AppNode, AppEdge } from '@/types';
 import { getCostScale } from '@/utils/colorUtils';
 import { nodeCostPoints, budgetPointsOf } from '@/utils/nodeCost';
+import { evalTask } from '@/eval/evalTask';
 import { storedCost } from '@/utils/costTable';
 import { OUTPUT_DEFAULT_EXPOSED, SPLAT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import { SPLAT_LIGHT_PORTS } from '@/utils/splatLight';
@@ -78,6 +79,7 @@ export const COST_SCALED_TYPES: ReadonlySet<string> = new Set(['shader', 'clock'
  * list-mode HEIGHT already follows `inDegree`.
  */
 export function drawnCostScale(node: AppNode, edges: AppEdge[]): number {
+  if (!evalTask().pointsVisible) return 1;
   return getCostScale(budgetPointsOf(nodeCostPoints(node, edges)));
 }
 

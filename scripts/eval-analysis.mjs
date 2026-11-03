@@ -99,6 +99,29 @@ function adjective(score) {
   return 'Poor';
 }
 
+function median(xs) {
+  const s = xs.filter((v) => typeof v === 'number' && Number.isFinite(v)).slice().sort((a, b) => a - b);
+  if (!s.length) return null;
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+function quantile(sorted, p) {
+  if (!sorted.length) return null;
+  const pos = (sorted.length - 1) * p;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+}
+
+function iqr(xs) {
+  const s = xs.filter((v) => typeof v === 'number' && Number.isFinite(v)).slice().sort((a, b) => a - b);
+  if (s.length < 2) return null;
+  const q1 = quantile(s, 0.25);
+  const q3 = quantile(s, 0.75);
+  return { q1, q3, iqr: q3 - q1 };
+}
+
 // ---------- ingestion ----------
 
 const args = process.argv.slice(2);
@@ -135,13 +158,21 @@ if (zipPaths.length === 0) {
  * FAILURE (the exit code stays 0); both are reported so the split can be
  * stated honestly.
  */
-/** A versioned question block (questionItems.ts) as flat CSV cells. */
+/** A versioned question block (questionItems.ts) as flat CSV cells, including
+ *  write-ins (`_otherText`) and open-text items for the offline analysis CSV. */
 function flattenBlock(prefix, block) {
   const out = {};
   for (const it of block?.items ?? []) {
     if (it.kind === 'agree') out[`${prefix}_${it.id}`] = it.na ? 'na' : (it.response ?? '');
-    else if (it.kind === 'choice') out[`${prefix}_${it.id}`] = it.choice ?? '';
-    else if (it.kind === 'grid') for (const r of it.rows ?? []) out[`${prefix}_${it.id}_${r.id}`] = r.answer ?? '';
+    else if (it.kind === 'choice') {
+      out[`${prefix}_${it.id}`] = it.choice ?? '';
+      if ('otherText' in it) out[`${prefix}_${it.id}_otherText`] = it.otherText ?? '';
+    } else if (it.kind === 'grid') {
+      for (const r of it.rows ?? []) out[`${prefix}_${it.id}_${r.id}`] = r.answer ?? '';
+      if ('otherText' in it) out[`${prefix}_${it.id}_otherText`] = it.otherText ?? '';
+    } else if (it.kind === 'text') {
+      out[`${prefix}_${it.id}`] = it.text ?? '';
+    }
   }
   return out;
 }
@@ -209,12 +240,16 @@ for (const zp of zipPaths) {
     }
 
     const task = session.task ?? {};
-    // The professional block (sus.json `professional`, /evalpro only since
-    // consent-12): flattened to pro_<id> / pro_<id>_<row>, choices only —
-    // typed text stays out of the CSV.
+    // The student / general-session post-SUS block (sus.json `taskQuestions`,
+    // /eval and /evalp since consent-15) and the professional block
+    // (sus.json `professional`, /evalpro only since consent-12).
+    const tq = flattenBlock('tq', sus.taskQuestions);
     const pro = flattenBlock('pro', sus.professional);
     if (sus.professional && task.arm !== 'evalpro') {
       problems.push(`${name}: a professional block under arm "${task.arm ?? '?'}" — only /evalpro asks it; analyse apart`);
+    }
+    if (sus.taskQuestions && task.arm === 'evalpro') {
+      problems.push(`${name}: a student taskQuestions block under arm "evalpro" — analyse apart`);
     }
     const consent = session.consent ?? {};
     if (consent.participantEdited) {
@@ -274,6 +309,9 @@ for (const zp of zipPaths) {
       introOpens: s.introOpenCount ?? 0,
       introS: (s.introMs ?? 0) / 1000,
       introSlides: s.introSlidesSeen ?? 0,
+      tutorialStarts: s.tutorialStartCount ?? 0,
+      tutorialsCompleted: s.tutorialsCompleted ?? 0,
+      tutorialAutoSteps: s.tutorialAutoSteps ?? 0,
       connects: s.counts?.['edge-connect'] ?? 0,
       undos: s.undoCount ?? 0,
       redos: s.redoCount ?? 0,
@@ -291,9 +329,11 @@ for (const zp of zipPaths) {
       shownBudget: session.costTable?.shownBudget ?? '',
       overBudgetMin: (s.overBudgetMs ?? 0) / 60000,
       comment: sus.comment ?? '',
+      tqItemsVersion: sus.taskQuestions?.itemsVersion ?? '',
       proItemsVersion: sus.professional?.itemsVersion ?? '',
       participantAtConsent: consent.participantAtConsent ?? '',
       susOpens,
+      ...tq,
       ...pro,
     });
   } catch (e) {
@@ -356,14 +396,17 @@ console.log('\n(experience: first-wave packages show 0–4 = none…expert in th
 // student arms', and /evalpro is reported per person and by its median
 // (descriptive only — a different population, recruitment and setting).
 const proRows = rows.filter((r) => r.arm === 'evalpro');
-const scores = rows.filter((r) => r.arm !== 'evalpro').map((r) => r.sus).filter((v) => typeof v === 'number');
+const studentRows = rows.filter((r) => r.arm !== 'evalpro');
+const scores = studentRows.map((r) => r.sus).filter((v) => typeof v === 'number');
 if (scores.length >= 2) {
   const n = scores.length;
   const mean = scores.reduce((a, b) => a + b, 0) / n;
   const sd = Math.sqrt(scores.map((v) => (v - mean) ** 2).reduce((a, b) => a + b, 0) / (n - 1));
   const half = t95(n - 1) * sd / Math.sqrt(n);
+  const med = median(scores);
+  const spread = iqr(scores);
   console.log(`\n## SUS aggregate${proRows.length ? ' (student arms — /evalpro is reported apart below)' : ''}`);
-  console.log(`- N = ${n}, mean = ${mean.toFixed(1)}, SD = ${sd.toFixed(1)}`);
+  console.log(`- N = ${n}, mean = ${mean.toFixed(1)}, SD = ${sd.toFixed(1)}, median = ${fmt(med)}${spread ? `, IQR = ${spread.iqr.toFixed(1)} (Q1 ${spread.q1.toFixed(1)} – Q3 ${spread.q3.toFixed(1)})` : ''}`);
   console.log(`- 95% t-CI: ${(mean - half).toFixed(1)} … ${(mean + half).toFixed(1)} (±${half.toFixed(1)})`);
   // A t-CI at n=2..4 routinely runs outside SUS's own 0-100 range: it is
   // arithmetically correct and substantively useless, so say so rather than
@@ -373,31 +416,38 @@ if (scores.length >= 2) {
     console.log(`  ⚠ this interval is not informative at N = ${n} — it exceeds the 0-100 scale; collect the planned 12-15 before interpreting`);
   }
   console.log(`- vs. industrial mean 68: ${mean >= 68 ? 'above' : 'below'} average · Sauro–Lewis grade ${grade(mean)} · adjective ≈ ${adjective(mean)} (Bangor et al. 2009)`);
-  // Condition breakdown — the point of recording the task/costbar identity.
+  // Condition breakdown across student arms (never pooling /evalpro).
   const conds = new Map();
-  for (const r of rows) {
-    const key = `${r.arm || 'arm?'} / ${r.task || 'untasked'} / costbar ${r.costBarVisible === 'false' ? 'OFF' : 'on'}`;
+  for (const r of studentRows) {
+    const key = `${r.arm || 'arm?'} / ${r.task || 'untasked'} / points ${r.pointsVisible === 'false' ? 'OFF' : 'on'} / costbar ${r.costBarVisible === 'false' ? 'OFF' : 'on'}`;
     if (!conds.has(key)) conds.set(key, []);
-    conds.get(key).push(r.sus);
+    conds.get(key).push(r);
   }
   if (conds.size > 1) {
-    console.log('\n## By condition');
-    for (const [key, xs] of conds) {
-      const m = xs.reduce((a, b) => a + b, 0) / xs.length;
-      console.log(`- ${key}: n = ${xs.length}, SUS mean = ${m.toFixed(1)}`);
+    console.log('\n## By condition (student arms)');
+    for (const [key, rs] of conds) {
+      const susVals = rs.map((r) => r.sus).filter((v) => typeof v === 'number');
+      const m = susVals.reduce((a, b) => a + b, 0) / (susVals.length || 1);
+      const pts = rs.map((r) => r.finalPoints).filter((v) => typeof v === 'number');
+      const over = rs.map((r) => r.overBudgetMin).filter((v) => typeof v === 'number');
+      console.log(
+        `- ${key}: n = ${rs.length}, SUS mean = ${m.toFixed(1)} (median ${fmt(median(susVals))})` +
+        (pts.length ? ` · finalPoints median = ${fmt(median(pts))} (mean ${fmt(pts.reduce((a, b) => a + b, 0) / pts.length)})` : '') +
+        (over.length ? ` · overBudgetMin median = ${fmt(median(over), 2)}` : ''),
+      );
     }
-    console.log('  (descriptive only — a single-tool study cannot attribute a difference to the condition)');
+    console.log('  (descriptive — compare /eval vs /evalp on finalPoints, overBudgetMin and tq_nodeLookTold_cost for RQ2)');
   }
-  const tables = [...new Set(rows.map((r) => r.costTable).filter(Boolean))];
+  const tables = [...new Set(studentRows.map((r) => r.costTable).filter(Boolean))];
   if (tables.length > 1) {
-    problems.push(`packages were priced by DIFFERENT cost tables (${tables.join(', ')}) — point totals are not comparable across them`);
+    problems.push(`student packages were priced by DIFFERENT cost tables (${tables.join(', ')}) — point totals are not comparable across them`);
   }
-  const langs = [...new Set(rows.map((r) => r.language))];
-  console.log(`- language versions answered: ${langs.map((l) => `${l}×${rows.filter((r) => r.language === l).length}`).join(', ')} (report the split; the LV form is a non-validated adaptation; "mixed" = answered partly in each, "lv?"/"en?" = an older package whose language changed while the form was open)`);
+  const langs = [...new Set(studentRows.map((r) => r.language))];
+  console.log(`- language versions answered: ${langs.map((l) => `${l}×${studentRows.filter((r) => r.language === l).length}`).join(', ')} (report the split; the LV form is a non-validated adaptation; "mixed" = answered partly in each, "lv?"/"en?" = an older package whose language changed while the form was open)`);
 
-  // Per-item means — the Lewis & Sauro (2018) item-diagnosis view.
+  // Per-item means — the Lewis & Sauro (2018) item-diagnosis view (student arms only).
   const itemMeans = Array.from({ length: 10 }, (_, i) => {
-    const vs = rows.map((r) => r.responses[i]).filter((v) => Number.isInteger(v));
+    const vs = studentRows.map((r) => r.responses[i]).filter((v) => Number.isInteger(v));
     return vs.reduce((a, b) => a + b, 0) / (vs.length || 1);
   });
   console.log(`- per-item response means (1–5, odd items positive / even negative): ${itemMeans.map((m, i) => `i${i + 1}=${m.toFixed(1)}`).join(' ')}`);
@@ -405,12 +455,32 @@ if (scores.length >= 2) {
   console.log(`\n## SUS aggregate\n- N = 1, score = ${scores[0]} — no CI at N=1; collect more sessions before interpreting.`);
 }
 
+// Helper to summarize categorical/grid/agree/text columns across a subset of rows.
+function summarizeBlockCols(subset, prefix) {
+  const keys = [...new Set(subset.flatMap((r) => Object.keys(r).filter((k) => k.startsWith(`${prefix}_`))))];
+  for (const k of keys) {
+    const vals = subset.map((r) => r[k]).filter((v) => v !== '' && v != null);
+    if (!vals.length) continue;
+    const counts = new Map();
+    for (const v of vals) counts.set(v, (counts.get(v) ?? 0) + 1);
+    console.log(`  - ${k}: ${[...counts.entries()].map(([v, c]) => `${v}×${c}`).join(', ')}`);
+  }
+}
+
+const tqRows = studentRows.filter((r) => r.tqItemsVersion);
+if (tqRows.length) {
+  console.log(`\n## Student post-SUS task questions (tq-*, n = ${tqRows.length})`);
+  summarizeBlockCols(tqRows, 'tq');
+}
+
 if (proRows.length) {
   const xs = proRows.map((r) => r.sus).filter((v) => typeof v === 'number').sort((a, b) => a - b);
-  const med = xs.length ? (xs.length % 2 ? xs[(xs.length - 1) / 2] : (xs[xs.length / 2 - 1] + xs[xs.length / 2]) / 2) : null;
+  const med = median(xs);
+  const spread = iqr(xs);
   console.log(`\n## Professionals (/evalpro) — descriptive, never pooled with the students`);
-  console.log(`- n = ${proRows.length}; SUS median ${fmt(med)} (range ${xs.length ? `${xs[0]}–${xs[xs.length - 1]}` : '—'}); per person: ${proRows.map((r) => `${r.participant} ${fmt(r.sus)}`).join(', ')}`);
-  console.log('- answers per person in the pro_* CSV columns (itemsVersion in proItemsVersion)');
+  console.log(`- n = ${proRows.length}; SUS median ${fmt(med)}${spread ? ` (IQR ${spread.iqr.toFixed(1)}, Q1 ${spread.q1.toFixed(1)} – Q3 ${spread.q3.toFixed(1)})` : ''} (range ${xs.length ? `${xs[0]}–${xs[xs.length - 1]}` : '—'}); per person: ${proRows.map((r) => `${r.participant} ${fmt(r.sus)}`).join(', ')}`);
+  console.log('- answers per person in the pro_* CSV columns (itemsVersion in proItemsVersion):');
+  summarizeBlockCols(proRows, 'pro');
 }
 
 if (problems.length) {
@@ -419,8 +489,8 @@ if (problems.length) {
 }
 
 // CSV — one row per participant, spreadsheet-ready.
-const proCols = [...new Set(rows.flatMap((r) => Object.keys(r).filter((k) => k.startsWith('bg_') || k.startsWith('pro_'))))];
-const cols = ['file', 'sessionId', 'participant', 'participantAtConsent', 'susOpens', 'expBlender', 'expUnreal', 'expOtherNodeEditors', 'expShaderCode', 'expOther', 'arm', 'task', 'briefBudget', 'costBarVisible', 'pointsVisible', 'costTable', 'device', 'hasShot', 'budgetCrossings', 'finalPoints', 'finalPointsAll', 'deviceBudget', 'shownBudget', 'overBudgetMin', 'language', 'languageAtSubmit', 'sus', 'activeMin', 'wallMin', 'idleThresholdS', 'events', 'nodeAdds', 'distinctTypes', 'presetDrops', 'textureDrops', 'assetNodes', 'nodeEdits', 'gestures', 'connects', 'undos', 'redos', 'applies', 'rebuilds', 'ttfConnectS', 'ttfNodeS', 'introOpens', 'introS', 'introSlides', 'comment', 'bgItemsVersion', 'proItemsVersion', ...proCols];
+const blockCols = [...new Set(rows.flatMap((r) => Object.keys(r).filter((k) => k.startsWith('bg_') || k.startsWith('tq_') || k.startsWith('pro_'))))];
+const cols = ['file', 'sessionId', 'participant', 'participantAtConsent', 'susOpens', 'expBlender', 'expUnreal', 'expOtherNodeEditors', 'expShaderCode', 'expOther', 'arm', 'task', 'briefBudget', 'costBarVisible', 'pointsVisible', 'costTable', 'device', 'hasShot', 'budgetCrossings', 'finalPoints', 'finalPointsAll', 'deviceBudget', 'shownBudget', 'overBudgetMin', 'language', 'languageAtSubmit', 'sus', 'activeMin', 'wallMin', 'idleThresholdS', 'events', 'nodeAdds', 'distinctTypes', 'presetDrops', 'textureDrops', 'assetNodes', 'nodeEdits', 'gestures', 'connects', 'undos', 'redos', 'applies', 'rebuilds', 'ttfConnectS', 'ttfNodeS', 'introOpens', 'introS', 'introSlides', 'tutorialStarts', 'tutorialsCompleted', 'tutorialAutoSteps', 'comment', 'bgItemsVersion', 'tqItemsVersion', 'proItemsVersion', ...blockCols];
 const esc = (v) => {
   let s = v == null ? '' : String(v);
   if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;

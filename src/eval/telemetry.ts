@@ -358,9 +358,9 @@ function attachListeners(): void {
     // Focus moving INTO one of the app's own iframes (the 3D preview) blurs
     // the window, but the participant has not left — record the distinction
     // so the presence model doesn't count shader-inspection as absence.
-    // (Input inside the sandboxed iframe is unobservable from here; the
-    // derivation treats the entry as an activity marker and the README
-    // documents the conservative counting.)
+    // (The preview stage also posts throttled `fs:activity` markers on
+    // pointer/wheel/key input, and `deriveSummary` treats the iframe focus
+    // entry itself as an activity marker too.)
     const toIframe = document.activeElement?.tagName === 'IFRAME';
     evalLog('focus', toIframe ? { focused: false, target: 'iframe' } : { focused: false });
   };
