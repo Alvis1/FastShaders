@@ -390,7 +390,7 @@ export default function App() {
       )}
       <AppLayout />
       {desktopBooting && <DesktopBootOverlay />}
-      {introVia && !desktopBooting && (
+      {introVia && !desktopBooting && !isEmbedMode() && (
         <Suspense fallback={null}>
           {/* The window writes its own "Don't show this again" on close —
               outside a study session; inside one it logs instead. */}

@@ -10,6 +10,7 @@ import { TooltipLayer } from '@/components/Tooltip/TooltipLayer';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { lazyOr } from '@/utils/lazyOr';
+import { isEmbedMode } from '@/embed/embedMode';
 import './AppLayout.css';
 
 // Monaco (a ~3.7MB chunk + its CSS) rides CodeEditor's import graph; loading
@@ -115,6 +116,26 @@ const OVERLAYS = (
 );
 
 export function AppLayout() {
+  return isEmbedMode() ? <EmbeddedLayout /> : <FullLayout />;
+}
+
+/**
+ * Embedded (embed/EmbedBridge.tsx), the host page owns the 3D view and the
+ * file handling: only the canvas and its asset bar show. The preview is NOT
+ * mounted rather than hidden, so no second renderer runs behind the host's;
+ * nothing else depends on it, the module the bridge broadcasts comes from the
+ * store (previewCode).
+ */
+function EmbeddedLayout() {
+  return (
+    <div className="app-layout app-layout--embed">
+      {CANVAS_PANE}
+      {OVERLAYS}
+    </div>
+  );
+}
+
+function FullLayout() {
   const splitRatio = useAppStore((s) => s.splitRatio);
   const setSplitRatio = useAppStore((s) => s.setSplitRatio);
   const rightSplitRatio = useAppStore((s) => s.rightSplitRatio);
