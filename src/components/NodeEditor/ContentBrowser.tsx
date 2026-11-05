@@ -26,6 +26,7 @@ import { setHtml5TileDrag, endHtml5TileDrag } from './tileDrag';
 import { applyTileSilhouettes } from './tileSilhouette';
 import { useAppStore } from '@/store/useAppStore';
 import { readPersisted, usePersistedState } from '@/hooks/usePersistedState';
+import { isEmbedMode } from '@/embed/embedMode';
 import { beginDragChrome } from '@/utils/dragChrome';
 import { SeamLens, aimSeamLens } from '@/components/Layout/SeamLens';
 import { registerAssetBarDrag } from '@/components/Layout/assetBarDrag';
@@ -154,6 +155,13 @@ const BAR_DEFAULT_SCALE = 1.35;
 const BAR_CANVAS_RESERVE = 120;
 /** Floor when the tabs row hasn't been measured yet (its own height). */
 const BAR_MIN_H = 28;
+/**
+ * Embedded in a host panel (embed/embedMode.ts) the canvas shares a much shorter
+ * pane, so the bar starts compact, and under its own key: a height saved by the
+ * full app at this origin would leave the canvas a sliver.
+ */
+const EMBED_BAR_DEFAULT_H = 120;
+const BAR_HEIGHT_KEY = isEmbedMode() ? 'fs:embedAssetBarHeight' : 'fs:assetBarHeight';
 
 /** Quiet period before a typed query is applied to the strip — see the
  *  `settledSearch` state, which is where the reason lives. Long enough to sit
@@ -308,8 +316,9 @@ export const ContentBrowser = memo(function ContentBrowser() {
   // side stays local because it is debounced (see the persist effect below),
   // which the write-per-change hook deliberately doesn't model.
   const [barHeight, setBarHeight] = useState<number>(() => {
-    const stored = readPersisted('fs:assetBarHeight', validateBarHeight);
+    const stored = readPersisted(BAR_HEIGHT_KEY, validateBarHeight);
     if (stored != null) return stored;
+    if (isEmbedMode()) return EMBED_BAR_DEFAULT_H;
     // Migrate the two controls this replaced, so returning users keep the size
     // they had: a collapsed bar becomes the minimum height, and a tile zoom
     // becomes the height that reproduces it.
@@ -319,7 +328,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
   });
   useEffect(() => {
     const t = window.setTimeout(() => {
-      try { localStorage.setItem('fs:assetBarHeight', String(Math.round(barHeight))); } catch { /* private mode */ }
+      try { localStorage.setItem(BAR_HEIGHT_KEY, String(Math.round(barHeight))); } catch { /* private mode */ }
     }, 300);
     return () => window.clearTimeout(t);
   }, [barHeight]);

@@ -35,11 +35,30 @@ describe('embed mode', () => {
     expect(app).toMatch(/isEmbedMode\(\) && !isEvalMode\(\) && \(/);
   });
 
+  it('embedded, only the canvas pane mounts: no toolbar, no preview, no code pane, no intro', () => {
+    const layout = read('../components/Layout/AppLayout.tsx');
+    expect(layout).toMatch(/isEmbedMode\(\) \? <EmbeddedLayout \/> : <FullLayout \/>/);
+    const embedded = layout.match(/function EmbeddedLayout\(\) \{[\s\S]*?\n\}/)![0];
+    expect(embedded).toMatch(/CANVAS_PANE/);
+    expect(embedded).not.toMatch(/TOOLBAR|PREVIEW_PANE|CODE_PANE/);
+    expect(read('../App.tsx')).toMatch(/introVia && !desktopBooting && !isEmbedMode\(\) && \(/);
+  });
+
   it('the bridge accepts messages from the parent at its own origin only', () => {
     const bridge = read('./EmbedBridge.tsx');
     expect(bridge).toMatch(/e\.source !== window\.parent \|\| e\.origin !== embedTargetOrigin\(\)/);
     expect(bridge).toMatch(/typeof data\.module !== 'string'/);
     expect(bridge).toMatch(/window\.parent\.postMessage\(message, embedTargetOrigin\(\)\)/);
+  });
+
+  it('dedupes on ONE slot, the text the host holds, so editing back to an opened module still posts it', () => {
+    const bridge = read('./EmbedBridge.tsx');
+    // A second "last opened" slot suppressed X after open X → edit to Y → undo
+    // to X, leaving the host on Y.
+    expect(bridge).not.toMatch(/lastOpened/);
+    expect(bridge).toMatch(/if \(text === lastPosted\) return;/);
+    const onMessage = bridge.match(/const onMessage = [\s\S]*?\n {4}\};/)![0];
+    expect(onMessage).toMatch(/lastPosted = text;/);
   });
 
   it('EXPORT posts its bytes to the host instead of downloading, only when embedded', () => {

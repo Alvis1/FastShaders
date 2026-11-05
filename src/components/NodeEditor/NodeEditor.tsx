@@ -103,6 +103,7 @@ import { outputEdgeIsDormant, findDefaultOutput } from '@/utils/outputMaterials'
 import { edgeIdFromError008 } from './flowErrors';
 import { CostBar } from '@/components/Layout/CostBar';
 import { PreviewLink } from '@/components/Layout/PreviewLink';
+import { isEmbedMode } from '@/embed/embedMode';
 import { PreviewRail } from '@/components/Layout/PreviewRail';
 import { RAIL_ADD_OUTPUT_EVENT, RAIL_FOCUS_EVENT, focusRequestId } from '@/components/Layout/previewRailEvents';
 import { canvasInkColor, canvasInkShadow, canvasGridColor } from '@/utils/colorUtils';
@@ -3787,7 +3788,7 @@ export function NodeEditor() {
             — the wires are clipped by `.node-editor__canvas`, so an element
             that must sit ON that clip belongs beside the canvas chrome, not
             inside the transformed viewport. */}
-        <PreviewRail />
+        {!isEmbedMode() && <PreviewRail />}
         <div className="node-editor__cost-overlay">
           {/* The study's cost-feedback condition can hide the bar entirely
               (`?costbar=off` on the /eval launch URL). Outside eval mode the
@@ -3940,7 +3941,7 @@ export function NodeEditor() {
           {/* Symbolic Output→preview wire. Sits at z-index -1 (behind node
               cards, above the canvas bg) and is clipped by the pane, so it
               tucks behind the code/preview frames. */}
-          <PreviewLink />
+          {!isEmbedMode() && <PreviewLink />}
           {/* Preview mode's straight route line — ABOVE the nodes (z 5, before
               the panels in DOM order so the canvas bar still wins). */}
           <PreviewRoute />

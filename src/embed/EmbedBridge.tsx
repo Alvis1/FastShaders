@@ -49,8 +49,9 @@ function nameOf(raw: unknown): string {
 
 export function EmbedBridge() {
   useEffect(() => {
+    // The text the host holds: what was last posted OR last opened. One slot,
+    // so an edit away from an opened module and back to it is posted again.
     let lastPosted = '';
-    let lastOpened = '';
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     const broadcast = () => {
@@ -58,7 +59,7 @@ export function EmbedBridge() {
       const module = buildExportModule({ inlineImages: true });
       if (module.startsWith(EXPORT_ERROR_PREFIX)) return;
       const text = embedProjectState(module, buildProjectState());
-      if (text === lastPosted || text === lastOpened) return;
+      if (text === lastPosted) return;
       lastPosted = text;
       post({ type: 'superwxr:module', module: text, name: useAppStore.getState().shaderName });
     };
@@ -89,7 +90,7 @@ export function EmbedBridge() {
       if (typeof data.module !== 'string' || data.module.length === 0) return;
       const text = data.module;
       const nameFallback = nameOf(data.name);
-      lastOpened = text;
+      lastPosted = text;
       // An open supersedes the mount-time broadcast below: the import's own settle broadcasts.
       if (timer !== null) {
         clearTimeout(timer);
