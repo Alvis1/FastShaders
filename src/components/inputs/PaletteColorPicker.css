@@ -107,6 +107,12 @@
   flex-shrink: 0;
 }
 
+.palette-pop__eyedrop-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
 .palette-pop__section {
   display: flex;
   flex-direction: column;

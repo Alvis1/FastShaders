@@ -463,14 +463,27 @@ export const LIGHT_PRESETS: Record<LightingMode, LightSpec[]> = {
 
 // Resolve full absolute URLs for the IIFE bundle and shaderloader at runtime.
 // The sandboxed iframe can't resolve path-only URLs — see resolveAssetUrl.
+//
+// Every runtime URL carries the app VERSION as a query. The file names never
+// change between releases (the loader is additive under one name), and a host
+// may cache them for a week (fs.sferas.lv: `max-age=604800`), so without it a
+// browser that opened the app before a release kept running the OLD loader
+// under the new app — measured 2026-11-10: a model's faces still flew apart
+// under Merge Vertices because the cached 0.8 predated the model weld.
+const RUNTIME_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '';
+function runtimeUrl(pathFromBase: string): string {
+  const url = resolveAssetUrl(pathFromBase);
+  return RUNTIME_VERSION ? `${url}?v=${encodeURIComponent(RUNTIME_VERSION)}` : url;
+}
+
 function getScriptUrls() {
   return {
-    iife: resolveAssetUrl('js/a-frame-180-a-01.min.js'),
-    shaderloader: resolveAssetUrl(`js/${LOADER_FILE}`),
-    orbitControls: resolveAssetUrl('js/aframe-orbit-controls.min.js'),
+    iife: runtimeUrl('js/a-frame-180-a-01.min.js'),
+    shaderloader: runtimeUrl(`js/${LOADER_FILE}`),
+    orbitControls: runtimeUrl('js/aframe-orbit-controls.min.js'),
     // The Gaussian-splat runtime (the `splat-model` component). Referenced
     // only by a document that shows a splat model — see tslToPreviewHTML.
-    splatRuntime: resolveAssetUrl(`js/${SPLAT_RUNTIME_FILE}`),
+    splatRuntime: runtimeUrl(`js/${SPLAT_RUNTIME_FILE}`),
   };
 }
 

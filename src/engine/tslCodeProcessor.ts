@@ -735,6 +735,13 @@ export function buildShaderModule(
   const { body, preambleImports, preambleDecls } = extractFnBody(tslCode, tslNames);
   const { body: processedBody, renames } = fixTDZ(body, tslNames);
   const { defLines, channels } = parseBody(processedBody, tslNames);
+  // An UNLIT material's colour IS its emitted light (its Color socket reads
+  // "Emissive"), so the separate Emissive channel is dormant there
+  // (utils/unlitMaterial.ts). Loader 0.8 drops the other unlit-ignored
+  // channels itself but would ADD an emissive, so it is dropped HERE — the
+  // panel code keeps it, so the wire and the round trip through the editor
+  // stay. A part body does the same in `translatePartBody`.
+  if (materialSettings?.unlit === true) delete channels.emissive;
 
   // Module-scope helper Fns (hsl/toHsl) live in the preamble and need `Fn`.
   if (/\bFn\s*\(/.test(preambleDecls.join('\n'))) need('Fn');
@@ -911,6 +918,7 @@ export function buildShaderModule(
     // The part's own Faces and Unlit material settings decide its positionNode
     // (neither reads a vertex normal), so read them first.
     let partFlat = false;
+    let partUnlit = false;
     let partMode: 'normal' | 'offset' = displacementMode;
     for (const partProp of partProps) {
       const c = partProp.indexOf(':');
@@ -918,6 +926,7 @@ export function buildShaderModule(
       if (k === 'flatShading' || k === 'unlit') {
         const parsed = materialSettingsFromSource({ [k]: partProp.slice(c + 1).trim() });
         if (parsed?.flatShading === true || parsed?.unlit === true) partFlat = true;
+        if (parsed?.unlit === true) partUnlit = true;
       }
       // The part's own displacement form; absent follows the module's.
       if (k === 'displacementMode') {
@@ -936,6 +945,8 @@ export function buildShaderModule(
       const val = partProp.slice(c + 1).trim();
       if (!key || !val) continue;
       if (key === 'discard') { partDiscard = val; continue; }
+      // Dormant on an unlit part, as on the default (see the parseBody site).
+      if (key === 'emissive' && partUnlit) continue;
       if (PART_SETTING_KEYS.has(key)) { partSettingText[key] = val; continue; }
       if (PART_VERTEX_KEYS.has(key)) { partVertexText[key] = val; continue; }
       const partPropName = CHANNEL_TO_PROP.get(key);

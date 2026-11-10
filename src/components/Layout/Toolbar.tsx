@@ -967,7 +967,8 @@ export function Toolbar() {
                   : `${t('Download the shader — .js with the FastShaders project embedded (drag it back in to continue); becomes a .zip with the image and 3D-model files alongside when the graph embeds images or a custom 3D model is shown in the preview', language)}. ${exportWhyNotGlb ? `${exportWhyNotGlb} ` : ''}${t('Right-click for export settings.', language)}`
             }
           >
-            {t('Export', language)}
+            {/* A study session names the button for what it does there. */}
+            {isEvalMode() ? t('End Test', language) : t('Export', language)}
           </button>
           {exportOpen && (
             <div

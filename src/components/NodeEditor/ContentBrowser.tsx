@@ -106,12 +106,16 @@ function assetMatches(a: { id: string; name: string; description: string }, q: s
     .some((x) => foldSearchText(x).includes(q));
 }
 
-/** Tab style for a coloured category button: the active tab's bg + bottom
- *  border match the items-area tint, so it merges with the content below. */
+const ACTIVE_TAB_BG = '#1A1A1A';
+
+/** Tab style for a coloured category button: the active tab is dark (light
+ *  text from the CSS class) with its bottom border in the same colour. */
 function tabStyle(hex: string, active: boolean): React.CSSProperties {
   if (active) {
-    const body = `${hex}1A`;
-    return { background: body, borderColor: `${hex}66`, borderBottomColor: body };
+    // Owner 2026-11-10: the chosen tab is DARK with light text (the colour in
+    // .content-browser__cat-btn--active), whatever the theme; the category
+    // hue stays in its border and in the tile strip underneath.
+    return { background: ACTIVE_TAB_BG, borderColor: `${hex}66`, borderBottomColor: ACTIVE_TAB_BG };
   }
   return { background: `${hex}15`, borderColor: `${hex}33` };
 }
@@ -1013,11 +1017,10 @@ export const ContentBrowser = memo(function ContentBrowser() {
             style={
               activeCategory === 'all'
                 ? {
-                    // Merges into the bar below, which is theme panel color —
-                    // NOT the user's canvas pick (see ContentBrowser.css).
-                    background: 'var(--bg-panel)',
+                    // Dark like every active tab (tabStyle).
+                    background: ACTIVE_TAB_BG,
                     borderColor: 'var(--border-subtle)',
-                    borderBottomColor: 'var(--bg-panel)',
+                    borderBottomColor: ACTIVE_TAB_BG,
                   }
                 : {}
             }

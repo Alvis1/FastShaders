@@ -121,15 +121,16 @@ const FS_BASE = process.env.FS_BASE ?? (FS_DESKTOP ? '/' : '/FastShaders/');
 const FS_PREVIEW_ORIGIN = process.env.FS_PREVIEW_ORIGIN ?? '';
 
 /**
- * Where EVERY build posts a finished study package: ViA's server, so the data
- * controller the consent names also holds the data (consent-16, 2026-11-09;
- * until then the researcher's own alvismisjuns.lv, by a relative path only that
- * host served). One copy: scripts/check-eval-upload.sh reads this LINE with sed
+ * Where EVERY build posts a finished study package. Since 2026-11-10 (owner)
+ * that is the researcher's alvismisjuns.lv endpoint again, as a STAGING inbox:
+ * the owner copies every package from it to ViA's imgame.va.lv by hand, so the
+ * consent text (consent-16) still names imgame.va.lv as where the data is held
+ * and deliberately does not mention this hop. From 2026-11-09 to 11-10 builds
+ * posted to imgame.va.lv directly. One copy: scripts/check-eval-upload.sh reads this LINE with sed
  * (keep it on one line, single-quoted), evalUpload.ts carries the same literal
- * as its bare-node fallback, and evalUpload.test.ts pins all three — plus the
- * consent's host, through evalDisclosure.test.ts.
+ * as its bare-node fallback, and evalUpload.test.ts pins all three.
  */
-const DEFAULT_EVAL_UPLOAD_URL = 'https://imgame.va.lv/fastshaders-eval/upload.php';
+const DEFAULT_EVAL_UPLOAD_URL = 'https://alvismisjuns.lv/fastshaders-eval/upload.php';
 
 /**
  * FS_EVAL_UPLOAD_URL, checked when the config loads, so a typo fails the BUILD

@@ -1,6 +1,15 @@
 /**
- * Delivery option B — automatic upload of the study package to ViA's server
+ * Delivery option B — automatic upload of the study package
  * (see EVAL_MODE_PLAN.md §4 Phase 5 and §7).
+ *
+ * SINCE 2026-11-10 (owner) every build posts to the researcher's
+ * `https://alvismisjuns.lv/fastshaders-eval/upload.php` as a STAGING inbox; the
+ * owner copies the packages from there to ViA's imgame.va.lv by hand. The
+ * consent (consent-16) keeps naming imgame.va.lv as where the data is held and
+ * deliberately does not mention the hop. The alvismisjuns endpoint is the
+ * pre-11-09 deployment (not rendered by deploy-eval-endpoint.sh, which targets
+ * ViA); its `$ALLOWED_ORIGINS` must list every app origin, as the template's
+ * does. What follows describes the ViA endpoint, which stays deployed:
  *
  * The endpoint is `https://imgame.va.lv/fastshaders-eval/upload.php`, on the
  * server of Vidzeme University of Applied Sciences — the data controller the
@@ -22,8 +31,8 @@
  * those origins (`$ALLOWED_ORIGINS`); without the POST's Allow-Origin the
  * browser would hide the response, and a package the server STORED would still
  * read 'failed'. Both host deploys check the live preflight and the inbox
- * before they build (scripts/check-eval-upload.sh). The consent names the host
- * (`EVAL_UPLOAD_HOST`), and evalDisclosure.test.ts ties it to this URL.
+ * before they build (scripts/check-eval-upload.sh). The consent names ViA's
+ * host (`EVAL_UPLOAD_HOST`), which is no longer this URL's host (see above).
  *
  * The upload is ALWAYS in addition to the download, never instead of it —
  * the downloaded zip on the study machine is the in-person safety net, and a
@@ -37,12 +46,12 @@
 
 /**
  * The build's upload URL (vite.config.ts: FS_EVAL_UPLOAD_URL, else
- * DEFAULT_EVAL_UPLOAD_URL — ViA's endpoint). The literal after `||` is the same
+ * DEFAULT_EVAL_UPLOAD_URL — the alvismisjuns.lv staging endpoint). The literal after `||` is the same
  * URL, for bare node, where no Vite define exists; evalUpload.test.ts pins the
  * two copies equal. Passing '' to uploadEvalPackage disables the upload.
  */
 export const EVAL_UPLOAD_URL: string =
-  (typeof __FS_EVAL_UPLOAD_URL__ === 'string' && __FS_EVAL_UPLOAD_URL__) || 'https://imgame.va.lv/fastshaders-eval/upload.php';
+  (typeof __FS_EVAL_UPLOAD_URL__ === 'string' && __FS_EVAL_UPLOAD_URL__) || 'https://alvismisjuns.lv/fastshaders-eval/upload.php';
 /** Must match $SECRET in scripts/eval-endpoint/fastshaders-eval-upload.php. */
 export const EVAL_UPLOAD_KEY: string = 'fsx-ecec3b0ce84df95b09ca';
 

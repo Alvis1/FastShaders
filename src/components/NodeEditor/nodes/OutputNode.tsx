@@ -52,7 +52,7 @@ import { IndexSectionChip } from './IndexSectionChip';
 import { SECTION_SILENT_KEY, PARKED_KEY, formatSectionLabel, joinCapped } from './sectionLabelText';
 import './OutputNode.css';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
-import { UNLIT_IGNORED_CHANNELS, isUnlitSettings } from '@/utils/unlitMaterial';
+import { UNLIT_IGNORED_CHANNELS, isUnlitSettings, unlitPortLabel } from '@/utils/unlitMaterial';
 
 /** Ports that belong to the pixel (fragment) shader section.
  *  Exported so the asset/overview card replica groups the channels the same
@@ -413,7 +413,8 @@ export const OutputNode = memo(function OutputNode({
 
   // Only permanently exposed channels render (as rows) — no drag reveal here.
   // An UNLIT material draws none of the channels it ignores (roughness,
-  // metalness, normal, environment): row and socket are unmounted, but the
+  // metalness, normal, environment, and the separate emissive — its Color row
+  // reads "Emissive" instead, `unlitPortLabel`): row and socket are unmounted, but the
   // stored values, the exposure and any WIRE stay exactly as they were — React
   // Flow keeps an edge whose handle is absent and does not draw it — so
   // unticking Unlit brings every one of them back, wired. Nothing here writes.
@@ -506,10 +507,10 @@ export const OutputNode = memo(function OutputNode({
           position={Position.Left}
           id={handle}
           dataType={port.dataType}
-          label={port.label}
+          label={unlitPortLabel(port.id, port.label, unlit)}
         />
         {rowWidget(port.id)}
-        <span className="output-node__port-label">{portLabel(port.label, language)}</span>
+        <span className="output-node__port-label">{portLabel(unlitPortLabel(port.id, port.label, unlit), language)}</span>
       </div>
     );
   };

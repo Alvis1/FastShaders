@@ -73,9 +73,12 @@ describe('the consent text matches what the package actually contains', () => {
     // alvismisjuns.lv to ViA's server, so the data controller the consent names
     // also holds the data. The text spells the host literally (the English
     // sentence is the i18n key), so it is held here to the host of the URL the
-    // build ACTUALLY posts to: moving the endpoint without rewording the consent
-    // fails this test, and so does rewording it without moving the endpoint.
-    expect(new URL(EVAL_UPLOAD_URL).host).toBe(EVAL_UPLOAD_HOST);
+    // build posted to. Since 2026-11-10 (owner) the build posts to a STAGING
+    // inbox on alvismisjuns.lv and the owner copies every package to ViA by
+    // hand, so the text keeps naming imgame.va.lv — where the data is held —
+    // and the URL is deliberately NOT tied to it any more. What stays pinned:
+    // the endpoint is one of exactly those two hosts.
+    expect(['alvismisjuns.lv', EVAL_UPLOAD_HOST]).toContain(new URL(EVAL_UPLOAD_URL).host);
     const sentence = (src: string) => {
       const m = src.match(/t\('((?:[^'\\]|\\.)*study server(?:[^'\\]|\\.)*)', language\)/);
       expect(m, 'the "study server" sentence').not.toBeNull();

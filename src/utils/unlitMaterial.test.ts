@@ -14,7 +14,7 @@ import { graphToCode } from '@/engine/graphToCode';
 import { scriptToTSLWithSettings } from '@/engine/scriptToTSL';
 import { computeReachableCost, sinkCosts } from '@/utils/nodeCost';
 import {
-  UNLIT_HINT_KEY, UNLIT_IGNORED_CHANNELS, UNLIT_OFF_HINT_KEY, isUnlitSettings,
+  UNLIT_HINT_KEY, UNLIT_IGNORED_CHANNELS, UNLIT_OFF_HINT_KEY, isUnlitSettings, unlitPortLabel,
 } from './unlitMaterial';
 
 const outWith = (settings: MaterialSettings | undefined, exposed: string[]): AppNode => {
@@ -57,6 +57,29 @@ describe('the module', () => {
     );
     expect(unlit).not.toContain('__fsDisp');
     expect(unlit).toContain('unlit: true');
+  });
+
+  it('drops the separate Emissive (its Color IS the emission) — the panel code keeps it, a lit material keeps it', () => {
+    const c = makeNode('c', 'cellNoise');
+    const g = makeNode('g', 'perlin');
+    const e = [makeEdge('c', 'out', 'out', 'color'), makeEdge('g', 'out', 'out', 'emissive')];
+    const code = graphToCode([c, g, outWith({ unlit: true }, ['color', 'emissive'])], e).code;
+    expect(code).toContain('emissive:');
+    expect(buildShaderModule(code, { materialSettings: { unlit: true } })).not.toContain('emissiveNode');
+    expect(buildShaderModule(code, {})).toContain('emissiveNode');
+    // An emissive-only unlit material shows the default colour, not the dormant channel.
+    const only = graphToCode([g, outWith({ unlit: true }, ['emissive'])], [e[1]]).code;
+    expect(buildShaderModule(only, { materialSettings: { unlit: true } })).not.toContain('emissiveNode');
+  });
+
+  it('drops it from an unlit PART body too, and only there', () => {
+    const tsl = `import { Fn, color } from 'three/tsl';\nconst shader = Fn(() => {\n  return { color: color(0xff0000), parts: { "A": { color: color(0x00ff00), emissive: color(0x0000ff), unlit: true }, "B": { color: color(0x00ff00), emissive: color(0x0000ff) } } };\n});\nexport default shader;\n`;
+    const mod = buildShaderModule(tsl, {});
+    const a = mod.slice(mod.indexOf('"A"'), mod.indexOf('"B"'));
+    const b = mod.slice(mod.indexOf('"B"'));
+    expect(a).toContain('unlit: true');
+    expect(a).not.toContain('emissiveNode');
+    expect(b).toContain('emissiveNode');
   });
 });
 
@@ -107,7 +130,15 @@ describe('the menu and the node', () => {
     expect(NODE).not.toContain('output-node__row--off');
     // The hiding is a render filter: no write path may mention Unlit in the node.
     expect(NODE).not.toMatch(/updateNodeData\([^)]*unlit/);
-    expect([...UNLIT_IGNORED_CHANNELS].sort()).toEqual(['env', 'metalness', 'normal', 'roughness']);
+    expect([...UNLIT_IGNORED_CHANNELS].sort()).toEqual(['emissive', 'env', 'metalness', 'normal', 'roughness']);
+  });
+
+  it('labels Color "Emissive" while Unlit is on — display only, the handle id stays `color`', () => {
+    expect(unlitPortLabel('color', 'Color', true)).toBe('Emissive');
+    expect(unlitPortLabel('color', 'Color', false)).toBe('Color');
+    expect(unlitPortLabel('opacity', 'Opacity', true)).toBe('Opacity');
+    expect(NODE).toContain('label={unlitPortLabel(port.id, port.label, unlit)}');
+    expect(NODE).toContain('id={handle}');
   });
 
   it('carries its Latvian', () => {

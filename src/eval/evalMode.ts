@@ -41,14 +41,14 @@ export const EVAL_SCHEMA = 'fs-eval-1';
 export const CONSENT_TEXT_VERSION = 'consent-16';
 
 /**
- * The host every build uploads the study package to: imgame.va.lv, the server
- * of Vidzeme University of Applied Sciences — so the data controller the
- * consent names also holds the data (consent-16, 2026-11-09; until then the
- * researcher's own alvismisjuns.lv). The consent text and the disclosure spell
+ * The host the consent names as holding the study package: imgame.va.lv, the
+ * server of Vidzeme University of Applied Sciences — the data controller
+ * (consent-16, 2026-11-09). Since 2026-11-10 (owner) builds upload to a staging
+ * inbox on alvismisjuns.lv and the owner copies the packages here by hand, so
+ * this is no longer EVAL_UPLOAD_URL's host. The consent text and the disclosure spell
  * it literally, because in this codebase the English sentence IS the i18n key
  * and an interpolated constant would never match an entry in lv.json; named
- * here so evalDisclosure.test.ts can hold the text, its Latvian AND the host of
- * EVAL_UPLOAD_URL to this one value.
+ * here so evalDisclosure.test.ts can hold the text and its Latvian to it.
  */
 export const EVAL_UPLOAD_HOST = 'imgame.va.lv';
 

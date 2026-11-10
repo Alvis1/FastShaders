@@ -33,12 +33,12 @@ afterEach(() => {
 });
 
 describe('uploadEvalPackage', () => {
-  it('points every build at ViA’s endpoint by default', async () => {
-    // consent-16 (2026-11-09): the package goes to imgame.va.lv, the server of
-    // the data controller the consent names. vitest runs the default build (no
-    // FS_EVAL_UPLOAD_URL), so this is what every deploy ships — the pins below
-    // hold the copies of the URL to one value.
-    expect(EVAL_UPLOAD_URL).toBe('https://imgame.va.lv/fastshaders-eval/upload.php');
+  it('points every build at the alvismisjuns.lv staging endpoint by default', async () => {
+    // Owner, 2026-11-10: packages land on alvismisjuns.lv and are copied to
+    // ViA's imgame.va.lv by hand (the consent still names imgame.va.lv). vitest
+    // runs the default build (no FS_EVAL_UPLOAD_URL), so this is what every
+    // deploy ships — the pins below hold the copies of the URL to one value.
+    expect(EVAL_UPLOAD_URL).toBe('https://alvismisjuns.lv/fastshaders-eval/upload.php');
   });
 
   it('no test can post to the REAL endpoint: every suite that uploads stubs fetch', () => {

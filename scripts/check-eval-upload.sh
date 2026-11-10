@@ -7,7 +7,7 @@
 #   bash scripts/check-eval-upload.sh <app origin>   # e.g. https://fs.sferas.lv
 #   bash scripts/check-eval-upload.sh --url          # print the URL the build posts to
 #
-# Every build posts finished study packages to ViA's endpoint on imgame.va.lv
+# Every build posts finished study packages to the endpoint named by
 # (DEFAULT_EVAL_UPLOAD_URL in vite.config.ts, read from that line so there is
 # one copy; an FS_EVAL_UPLOAD_URL override moves the build AND this check).
 # Two checks, because each catches what the other cannot:
@@ -61,8 +61,17 @@ echo "  upload preflight from $ORIGIN: status ${PF_STATUS:-none}, origin ${CORS:
 
 EVAL_CONF="$ROOT/.vscode/eval-endpoint.json"
 [ -f "$EVAL_CONF" ] || { echo "missing $EVAL_CONF (the inbox login for the store check)" >&2; exit 1; }
-VIEW_USER="$(node -e 'process.stdout.write(String(require(process.argv[1]).viewUser ?? ""))' "$EVAL_CONF")"
-VIEW_PW="$(node -e 'process.stdout.write(String(require(process.argv[1]).viewPassword ?? ""))' "$EVAL_CONF")"
+# The login of the endpoint the URL names: the config's top level (ViA's) or a
+# nested block with the same publicBase (the alvismisjuns.lv staging inbox).
+VIEW_LOGIN="$(node -e '
+  const [conf, base] = process.argv.slice(1);
+  const c = require(conf);
+  const e = [c, ...Object.values(c).filter((v) => v && typeof v === "object")].find((x) => x.publicBase === base);
+  if (!e) { console.error(`no block with publicBase ${base} in ${conf}`); process.exit(1); }
+  process.stdout.write(String(e.viewUser ?? "") + "\n" + String(e.viewPassword ?? ""));
+' "$EVAL_CONF" "${UPLOAD_URL%/upload.php}")" || exit 1
+VIEW_USER="$(printf '%s\n' "$VIEW_LOGIN" | sed -n 1p)"
+VIEW_PW="$(printf '%s\n' "$VIEW_LOGIN" | sed -n 2p)"
 HEALTH="$(curl -sS -u "$VIEW_USER:$VIEW_PW" "${UPLOAD_URL%/upload.php}/list.php?health" | head -1 || true)"
 echo "  upload inbox: ${HEALTH:-no answer} (expected inbox ok)"
 [ "${HEALTH#inbox ok:}" != "$HEALTH" ] \

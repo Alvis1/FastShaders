@@ -10,12 +10,29 @@
  */
 
 /**
- * The Output channels an unlit material does not read: the loader does not
- * apply them, the cost walk does not price what feeds only them, and the menu
- * and the node show them disabled. Colour, Emissive (added on top), Opacity,
- * Discard and Position still apply.
+ * The Output channels an unlit material does not read: the cost walk does not
+ * price what feeds only them, and the menu and the node show them disabled.
+ * Colour, Opacity, Discard and Position still apply.
+ *
+ * Emissive is here too (owner, 2026-11-10): on an unlit material the colour IS
+ * the emitted light, so the Color socket is LABELLED Emissive
+ * (`unlitPortLabel`) and the separate Emissive channel goes dormant like the
+ * others. The loader drops the other four itself (delta 13's LIT_ONLY_PROPS)
+ * but would ADD an emissive, so the MODULE emitter drops that one
+ * (`buildShaderModule`, default and part bodies alike) — the panel code keeps
+ * it, so the wire survives every resync and returns when Unlit is unticked.
  */
-export const UNLIT_IGNORED_CHANNELS: ReadonlySet<string> = new Set(['roughness', 'metalness', 'normal', 'env']);
+export const UNLIT_IGNORED_CHANNELS: ReadonlySet<string> = new Set(['roughness', 'metalness', 'normal', 'env', 'emissive']);
+
+/**
+ * The label an Output port shows: an unlit material's Color socket reads
+ * "Emissive" — what it is once nothing lights it. Display only: the handle id,
+ * the stored values and the emitted key stay `color`. Returns an English
+ * label, translated by the caller like any other.
+ */
+export function unlitPortLabel(portId: string, label: string, unlit: boolean): string {
+  return unlit && portId === 'color' ? 'Emissive' : label;
+}
 
 /** Is this material Unlit? Strict, as the setting is stored only as `true`. */
 export function isUnlitSettings(settings: unknown): boolean {
@@ -24,7 +41,7 @@ export function isUnlitSettings(settings: unknown): boolean {
 
 /** The Unlit checkbox's tooltip — an i18n KEY (lv.json carries its Latvian). */
 export const UNLIT_HINT_KEY =
-  'No lighting: the surface shows exactly the colour wired to Color, the same from every side, with no shadows or reflections. Roughness, Metalness, Normal, Environment and Faces have no effect and are switched off.';
+  'No lighting: the surface glows with exactly the colour wired to Emissive (the Color socket), the same from every side, with no shadows or reflections. The separate Emissive, Roughness, Metalness, Normal, Environment and Faces have no effect and are switched off.';
 
 /** The tooltip on a setting the Unlit material switches off — an i18n KEY. */
 export const UNLIT_OFF_HINT_KEY = 'No effect while Unlit is on: nothing on this material is lit.';

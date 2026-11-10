@@ -88,6 +88,11 @@
 - **Professional block `pro-5` (`src/eval/proQuestions.ts`)**: `suitedFor` now offers `Yes / Partly / No / Can't judge`; `missingForWork` asks only what would have to change for workflow adoption; and triple-barrelled `webxrConstraintsDeter` (retired into `RETIRED_PRO_IDS`) is replaced by `shaderPerfBarrier` (5-option construct-specific scale on keeping shaders within frame budgets on mobile XR or web 3D).
 - **`/evalp` (`pointsVisible === false`) neutralizes visual cost chrome (`useCostChrome.ts`, `layoutEngine.ts`)**: in addition to hiding numeric badges and the cost bar, `useCostChrome` and `drawnCostScale` pass `0` / return `1` when `!evalTask().pointsVisible`, so node headers render in neutral grey (`getCostColor(0, ...)`) and cards sit at `costScale = 1` instead of leaking cost through green-to-orange header colour and 1.0×–1.35× card scaling.
 
+### 2026-11-10: uploads STAGE on alvismisjuns.lv again (owner)
+
+- **What**: every build posts to `https://alvismisjuns.lv/fastshaders-eval/upload.php` (`DEFAULT_EVAL_UPLOAD_URL`), the pre-11-09 endpoint; the owner copies the packages to ViA's imgame.va.lv by hand shortly after. The consent text is UNCHANGED (`consent-16`, naming imgame.va.lv) and deliberately does not mention the hop, so `evalDisclosure.test.ts` no longer ties `EVAL_UPLOAD_URL`'s host to `EVAL_UPLOAD_HOST` — only to one of the two hosts. The ViA endpoint stays deployed.
+- **The alvismisjuns endpoint is NOT rendered by `deploy-eval-endpoint.sh`** (that targets ViA): its live `upload.php` is the pre-11-09 file, whose `$ALLOWED_ORIGINS` must be widened by hand to the template's four origins (fs.sferas.lv, both alvismisjuns origins, GitHub Pages). `check-eval-upload.sh` finds its inbox login in `.vscode/eval-endpoint.json` by `publicBase` (the `_retiredAlvismisjuns` block, still a 4-digit password).
+
 ### The 2026-11-09 move of the upload to ViA's server (`consent-16`)
 
 - **Why**: the consent names Vidzeme University of Applied Sciences (ViA) as the data controller, while every package went to the researcher's own alvismisjuns.lv, "operated by the researcher". The owner asked for the data to sit on ViA's server so that statement stays valid; the endpoint now runs on imgame.va.lv (the ImGame project's site, `scripts/eval-endpoint/README.md`), and every build posts there.

@@ -298,7 +298,7 @@ describe('tslToPreviewHTML — mesh decoders (loader 0.8 FastShaders.decoders)',
 
   it('a sandboxed model document configures the decoders after the loader and before the scene', () => {
     for (const html of [customGlb(), tslToPreviewHTML(TSL, { geometry: 'bunny' })]) {
-      const loader = html.indexOf(`${LOADER_FILE}"`);
+      const loader = html.indexOf(`${LOADER_FILE}?v=${__APP_VERSION__}"`);
       const configure = html.indexOf(CONFIGURE);
       expect(loader).toBeGreaterThan(-1);
       expect(configure).toBeGreaterThan(loader);
@@ -394,7 +394,7 @@ describe('tslToPreviewHTML — mesh decoders (loader 0.8 FastShaders.decoders)',
       expect(urls).toEqual(Object.fromEntries(Object.values(DECODER_FILES).map((f) => [f, decoderAssetUrl(f)])));
       expect(html).toContain('return Object.prototype.hasOwnProperty.call(__fsDec,f)?__fsDec[f]:null;');
       expect(html).not.toContain('__fsDecoderUrls');
-      expect(html.indexOf(CONFIGURE)).toBeGreaterThan(html.indexOf(`${LOADER_FILE}"`));
+      expect(html.indexOf(CONFIGURE)).toBeGreaterThan(html.indexOf(`${LOADER_FILE}?v=${__APP_VERSION__}"`));
     }
   });
 
@@ -574,8 +574,8 @@ describe('tslToPreviewHTML — Gaussian-splat documents', () => {
       const srcs = scriptSrcLines(html);
       const bundle = srcs.findIndex((l) => l.includes('js/a-frame-180-a-01.min.js'));
       expect(bundle).toBeGreaterThan(-1);
-      expect(srcs[bundle + 1]).toContain(`js/${SPLAT_RUNTIME_FILE}"`);
-      expect(srcs[bundle + 2]).toContain(`js/${LOADER_FILE}"`);
+      expect(srcs[bundle + 1]).toContain(`js/${SPLAT_RUNTIME_FILE}?v=${__APP_VERSION__}"`);
+      expect(srcs[bundle + 2]).toContain(`js/${LOADER_FILE}?v=${__APP_VERSION__}"`);
       // A 404 names itself like every vendored script's does.
       expect(srcs[bundle + 1]).toContain("__fsShowStickyError('Failed to load the Gaussian splat runtime')");
       expect(html.split(SPLAT_RUNTIME_FILE)).toHaveLength(2);
