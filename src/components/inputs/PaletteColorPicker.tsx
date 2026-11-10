@@ -47,6 +47,17 @@ const EyeDropperCtor: (new () => EyeDropperLike) | undefined =
     ? (window as unknown as { EyeDropper?: new () => EyeDropperLike }).EyeDropper
     : undefined;
 
+/** Where `EyeDropper` is missing, the button opens the SYSTEM colour picker
+ *  instead (the popover's own native input) — but only on Apple platforms,
+ *  whose pickers carry an eyedropper of their own: the macOS colour panel's
+ *  magnifier (Safari, Firefox, the desktop app's WKWebView) and the
+ *  iOS/iPadOS picker's. Firefox on Windows/Linux opens a dialog without one,
+ *  so there the row stays absent rather than promising what it cannot do. */
+const SYSTEM_PICKER_HAS_EYEDROPPER: boolean =
+  !EyeDropperCtor &&
+  typeof navigator !== 'undefined' &&
+  (/Macintosh|Mac OS X|iPad|iPhone|iPod/.test(navigator.userAgent) || navigator.platform === 'MacIntel');
+
 /** Only one colour popover may be open app-wide. Mouse gets this for free —
  *  opening picker B fires a pointerdown that lands outside A and closes it —
  *  but KEYBOARD activation (Enter/Space on a focused swatch) fires a click with
@@ -222,8 +233,21 @@ export function ColorPickerPopover({
    *  recent), unlike a palette pick. Aborted on close/unmount so the OS
    *  magnifier never outlives the popover. */
   const eyeAbortRef = useRef<AbortController | null>(null);
+  const customInputRef = useRef<HTMLInputElement | null>(null);
   const handleEyeDropper = useCallback(async () => {
-    if (!EyeDropperCtor) return;
+    if (!EyeDropperCtor) {
+      // Fallback: the system picker, whose own eyedropper samples the screen.
+      // Its picks arrive through the Custom input's onChange (the live path).
+      const input = customInputRef.current;
+      if (!input) return;
+      try {
+        if (typeof input.showPicker === 'function') input.showPicker();
+        else input.click();
+      } catch {
+        input.click();
+      }
+      return;
+    }
     eyeAbortRef.current?.abort();
     const ctl = new AbortController();
     eyeAbortRef.current = ctl;
@@ -387,11 +411,15 @@ export function ColorPickerPopover({
 
   return createPortal(
     <div ref={popRef} className="palette-pop nodrag" style={{ left: pos.left, top: pos.top }}>
-      {EyeDropperCtor && (
+      {(EyeDropperCtor || SYSTEM_PICKER_HAS_EYEDROPPER) && (
         <button
           type="button"
           className="palette-pop__clear palette-pop__eyedrop"
-          title={t('Pick a color from the screen', language)}
+          title={
+            EyeDropperCtor
+              ? t('Pick a color from the screen', language)
+              : t("Opens the system color picker: use its eyedropper to pick a color from the screen", language)
+          }
           onClick={handleEyeDropper}
         >
           <svg className="palette-pop__eyedrop-icon" viewBox="0 0 16 16" aria-hidden="true">
@@ -502,6 +530,7 @@ export function ColorPickerPopover({
             dialog's own commit, deduped. It is therefore the LIVE path only —
             the recent colour is recorded by the idle/blur/close flush. */}
         <input
+          ref={customInputRef}
           type="color"
           value={value ?? '#ffffff'}
           onChange={(e) => applyLive(e.target.value)}
