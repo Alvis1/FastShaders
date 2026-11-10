@@ -25,7 +25,7 @@ function geometry(rowPitch = 22): TourGeometry {
   };
 }
 
-const ROUTE = ['roughness', 'emissive', 'color'];
+const ROUTE = ['color'];
 
 function tour(geo = geometry()): Tour {
   const built = buildTour(geo, ROUTE);
@@ -44,7 +44,7 @@ function ringedSequence(t: Tour): string[] {
 }
 
 describe('intro scene 1: the drag-connect tour', () => {
-  it('pauses over Roughness, then Emissive, then Color — as the canvas planner picks them', () => {
+  it('pauses over Color — the Output\'s main input, as the canvas planner picks it', () => {
     const t = tour();
     expect(t.holds.map((h) => h.socket)).toEqual(ROUTE);
     for (const hold of t.holds) {
@@ -68,7 +68,7 @@ describe('intro scene 1: the drag-connect tour', () => {
     expect(f.plan).toBeNull();
   });
 
-  it('follows the design: re-spaced sockets are still found, because the stops are planned, not authored', () => {
+  it('follows the design: re-spaced sockets still ring the main input, because the stop is planned, not authored', () => {
     expect(ringedSequence(tour(geometry(34)))).toEqual(ROUTE);
     expect(ringedSequence(tour(geometry(16)))).toEqual(ROUTE);
   });
@@ -93,8 +93,9 @@ describe('intro scene 1: the drag-connect tour', () => {
     expect(tourFrame(t, t.tl.total - 1).opacity).toBeLessThan(0.01);
   });
 
-  it('builds nothing for a socket the planner can never pick', () => {
-    expect(buildTour(geometry(), ['roughness', 'metalness'])).toBeNull();
+  it('builds nothing for a socket the planner can never pick (it no longer follows the drag\'s height)', () => {
+    expect(buildTour(geometry(), ['roughness'])).toBeNull();
+    expect(buildTour(geometry(), ['color', 'roughness'])).toBeNull();
     expect(buildTour(geometry(), [])).toBeNull();
   });
 

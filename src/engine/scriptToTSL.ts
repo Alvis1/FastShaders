@@ -13,6 +13,7 @@
  *   - Strips header comment block
  */
 
+import { DISPLACED_NORMAL_IMPORTS, stripDisplacedNormals } from './displacedNormals';
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import * as t from '@babel/types';
@@ -144,6 +145,15 @@ export function scriptToTSLWithSettings(
   // which only recognises the empty-param closure form.
   scriptCode = inlinePixelFn(scriptCode);
 
+  // Pre-pass: drop the normals-follow-displacement Fns (engine/
+  // displacedNormals.ts) and unwrap `__fsDisplaced<N>(X)` to X, today's
+  // positionNode — the recompute is DERIVED from Faces + the chain on every
+  // export, never a part of the graph. Before inlineIIFEAssignments, whose
+  // nested-Fn handling would otherwise meet them.
+  scriptCode = stripDisplacedNormals(scriptCode);
+  const bodyMask = maskNonCode(scriptCode).replace(/^\s*import\b.*$/gm, '');
+  const bodyUses = (name: string): boolean => new RegExp(`(?<![\\w$.])${name}(?![\\w$])`).test(bodyMask);
+
   // Pre-pass: inline IIFE-style Fn wrappers used to give Discard/If an active
   // TSL stack — `const X = Fn(() => { ...Discard/If...; return Y; })();`. The
   // legacy `__pixel` closure form is one case; hand-authored scripts may
@@ -217,7 +227,9 @@ export function scriptToTSLWithSettings(
         if (!names.includes('Fn')) names.unshift('Fn');
         if (hasProperties && !names.includes('uniform')) names.push('uniform');
         // Remove positionLocal/normalLocal that were injected for displacement
-        const filtered = names.filter(n => n !== 'positionLocal' && n !== 'normalLocal');
+        const filtered = names.filter(n => n !== 'positionLocal' && n !== 'normalLocal')
+          // …and what the displaced-normal pass imported, once its Fns are gone.
+          .filter(n => !DISPLACED_NORMAL_IMPORTS.has(n) || bodyUses(n));
         outLines.push(`import { ${filtered.join(', ')} } from "three/tsl";`);
       }
       continue;

@@ -11,7 +11,7 @@
 .typed-handle {
   width: var(--handle-size) !important;
   height: var(--handle-size) !important;
-  border: var(--handle-border) solid white !important;
+  border: var(--handle-border) solid var(--handle-ring) !important;
   border-radius: 50% !important;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
   transition: none !important;

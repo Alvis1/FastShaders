@@ -15,6 +15,7 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { effectiveExposedPorts, usesExposedPorts } from '@/utils/exposedPorts';
 import { makeTypedEdge } from '@/utils/edgeUtils';
 import { pickSpliceInputPort } from './edgeSplice';
+import { primaryInputId } from '@/utils/primaryInput';
 import { splitWaypointsAtNode } from './edges/bezierGeometry';
 import { inheritedImageUv } from './imageUvHandoff';
 import type { AppNode, AppEdge, NodeDefinition } from '@/types';
@@ -220,9 +221,10 @@ export interface DroppedPin {
  */
 export function connectDroppedWire(pin: DroppedPin, newNodeId: string, def: NodeDefinition): boolean {
   if (pin.handleType === 'source') {
-    const input = def.inputs[0];
-    if (!input) return false;
-    connectNodes(pin.nodeId, pin.handleId, newNodeId, input.id);
+    // The new node's MAIN input (utils/primaryInput.ts), not its registry-first.
+    const inputId = primaryInputId(def);
+    if (!inputId) return false;
+    connectNodes(pin.nodeId, pin.handleId, newNodeId, inputId);
     return true;
   }
   const output = def.outputs[0];

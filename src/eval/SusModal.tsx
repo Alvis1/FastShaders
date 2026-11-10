@@ -11,6 +11,7 @@ import {
   EVAL_STUDY_EMAIL,
   IDLE_THRESHOLD_MS,
   clearEvalMode,
+  linkParticipantCode,
   readEvalSession,
 } from './evalMode';
 import {
@@ -149,6 +150,10 @@ export function SusModal({ open, onClose }: Props) {
   // onChange (answerLanguage.ts says why the language at Submit is not enough).
   const susAnswerLangRef = useRef<(Language | undefined)[]>(Array(SUS_ITEM_COUNT).fill(undefined));
   const [participant, setParticipant] = useState(() => readEvalSession()?.participant ?? '');
+  // A code the study LINK gave is fixed here too (evalMode.ts,
+  // linkParticipantCode): shown as "Your code", never a field, and the one
+  // submitted. Read at mount, before anything could clear it.
+  const [linkCode] = useState(linkParticipantCode);
   const [done, setDone] = useState<DoneState | null>(null);
 
   // One sus-open marker per opening (not while the thank-you screen shows).
@@ -272,7 +277,7 @@ export function SusModal({ open, onClose }: Props) {
     const score = computeSusScore(filled);
     const submittedIso = new Date().toISOString();
     const session = readEvalSession();
-    const trimmedParticipant = participant.trim() || session?.participant || '';
+    const trimmedParticipant = linkCode || participant.trim() || session?.participant || '';
 
     // The image is captured FIRST, while the preview still shows the finished
     // shader and before the session is torn down. Best-effort: a null here
@@ -707,26 +712,35 @@ export function SusModal({ open, onClose }: Props) {
         </div>
 
         <div className="sus-modal__meta">
-          <div className="eval-consent__code-row">
-            <label htmlFor="sus-participant">{t('Participant code (from the researcher):', language)}</label>
-            <input
-              id="sus-participant"
-              type="text"
-              value={participant}
-              maxLength={40}
-              placeholder="P01"
-              aria-describedby="sus-participant-hint"
-              disabled={busy}
-              onChange={(e) => setParticipant(e.target.value)}
-            />
-          </div>
+          {linkCode ? (
+            <div className="eval-consent__code-row">
+              <span>{t('Your code:', language)}</span>
+              <strong className="eval-consent__code-fixed">{linkCode}</strong>
+            </div>
+          ) : (
+            <div className="eval-consent__code-row">
+              <label htmlFor="sus-participant">{t('Participant code (from the researcher):', language)}</label>
+              <input
+                id="sus-participant"
+                type="text"
+                value={participant}
+                maxLength={40}
+                placeholder="P01"
+                aria-describedby="sus-participant-hint"
+                disabled={busy}
+                onChange={(e) => setParticipant(e.target.value)}
+              />
+            </div>
+          )}
           <div className="sus-modal__progress">
             {answered}/{SUS_ITEM_COUNT}
           </div>
         </div>
-        <div className="sus-modal__hint" id="sus-participant-hint">
-          {t('Type the code the researcher gave you, not your name.', language)}
-        </div>
+        {!linkCode && (
+          <div className="sus-modal__hint" id="sus-participant-hint">
+            {t('Type the code the researcher gave you, not your name.', language)}
+          </div>
+        )}
 
         <div className="sus-modal__section-head">{t('Statements about FastShaders', language)}</div>
         {/* Brooke's own instruction, placed on the SUS block it applies to:

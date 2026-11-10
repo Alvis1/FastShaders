@@ -61,83 +61,9 @@ const RENDER = (() => {
   return code(IMAGE_MENU.slice(at));
 })();
 
-/** Every `{!study && …}` block of `jsx`, as [start, end), by brace matching
- *  from its own `{` — no string in this JSX holds a brace. */
-function studyBlocks(jsx: string): [number, number][] {
-  const out: [number, number][] = [];
-  const re = /\{!study && /g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(jsx)) !== null) {
-    let depth = 0;
-    for (let i = m.index; i < jsx.length; i++) {
-      if (jsx[i] === '{') depth++;
-      else if (jsx[i] === '}' && --depth === 0) {
-        out.push([m.index, i + 1]);
-        break;
-      }
-    }
-  }
-  return out;
-}
-
-/** The JSX a study participant gets: every `{!study && …}` block removed. */
-function studyVisible(jsx: string): string {
-  let out = jsx;
-  for (const [a, b] of studyBlocks(jsx).reverse()) out = out.slice(0, a) + out.slice(b);
-  return out;
-}
-
 /** The `t('…')` / `t("…")` keys of `src`, in order. */
 const tKeys = (src: string) =>
   [...src.matchAll(/\bt\(\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")/g)].map((m) => m[1] ?? m[2]);
-
-/**
- * The Image rows a study participant saw BEFORE this change, in order — every
- * label, tooltip and option ImageNodeSettings rendered outside its
- * `{!study && …}` blocks (the texture picker and the glTF-mapping fold-out
- * were already study-hidden). The generic loop's Tile/Offset rows come before
- * these and are pinned separately.
- */
-const STUDY_ROWS = [
-  'Format',
-  'Re-encode this image from the stored original at a smaller size. Lower resolution costs less GPU bandwidth.',
-  'Resolution',
-  'Re-encoding…',
-  'original',
-  'Resolution',
-  'This node holds no image yet, so there is no resolution to change.',
-  'Choosing a resolution needs the stored original, which lives on this device only.',
-  'This image is too large for a copy of the original to be kept on this device, so its resolution cannot be changed without losing the way back.',
-  'Size',
-  'Repeat (tile the image)',
-  'On: the image wraps/tiles. Off: edge pixels clamp beyond 0–1 UV.',
-  'Flip X',
-  'Mirror the image left–right',
-  'Flip Y',
-  'Mirror the image top–bottom',
-  'Sample as linear data (normal/height maps) instead of sRGB color. Also restores the original image, since a resampled normal map has wrong normals.',
-  'Data map (linear, no mipmaps)',
-  'How the image fills in between its pixels. Linear blends neighbouring pixels for a smooth look; Nearest takes the closest pixel and keeps hard edges, for pixel art or a deliberately blocky look.',
-  'Filtering',
-  'Linear (smooth)',
-  'Nearest (sharp pixels)',
-  'Applies to every image you drop from now on, not just this one.',
-  'Optimize on import',
-  'Ask each time',
-  'Always',
-  'Never',
-  'Original',
-  'not on this device',
-  'The image as imported, before the automatic power-of-two step or any resolution you have chosen — same EXIF strip and same device texture cap, not the raw source file.',
-  'The pre-conversion copy is kept on this device only, so it is unavailable after sharing a project, in a different browser, or once it ages out of the cache.',
-  'Put this image back to its original resolution',
-  'Looking for the stored original…',
-  'This image is already the original',
-  'No stored original for this image',
-  'Revert to original',
-  'already original',
-  'unavailable',
-];
 
 /** three.js's and glTF's sign, and which way it reads per shape: counter-
  *  clockwise on the built-in shapes, the Bunny included since its generated
@@ -148,14 +74,13 @@ const ROTATION_TIP =
 const OLDER_TIP =
   'A transform saved by an earlier FastShaders that Tile, Offset and Rotation cannot express. It still applies. Clearing it changes the picture.';
 
-describe('a study session keeps today’s menu', () => {
-  it('the generic loop skips the Image node’s rows ONLY outside a study session', () => {
-    expect(NODE_MENU).toContain("import { isEvalMode } from '@/eval/evalMode';");
-    expect(NODE_MENU).toContain('const imageOwnsParamRows = imageNode && !isEvalMode();');
+describe('a study session gets the same menu (since 2026-11-10)', () => {
+  it('the generic loop always skips the Image node’s rows: ImageNodeSettings draws them', () => {
+    expect(NODE_MENU).not.toMatch(/isEvalMode/);
+    expect(NODE_MENU).toContain('const imageOwnsParamRows = imageNode;');
     expect(NODE_MENU).toMatch(
       /\{def\?\.defaultValues &&\s*!imageOwnsParamRows &&\s*Object\.keys\(def\.defaultValues\)\.map\(\(key\) => <ParamRow key=\{key\} nodeId=\{nodeId\} paramKey=\{key\} \/>\)\}/,
     );
-    // …and with no `label`, a row prints its raw key, as these always have.
     expect(PARAM_ROW).toContain('{label ?? paramKey}');
   });
 
@@ -163,20 +88,8 @@ describe('a study session keeps today’s menu', () => {
     expect(NODE_MENU).toContain('<ParamRow key={inp.id} nodeId={nodeId} paramKey={inp.id} label={portLabel(inp.label, language)} />');
   });
 
-  it('ImageNodeSettings shows a participant exactly the rows it showed before, in that order', () => {
-    expect(IMAGE_MENU).toContain('const study = isEvalMode();');
-    expect(tKeys(studyVisible(RENDER))).toEqual(STUDY_ROWS);
-    // The new rows draw nothing a participant sees, ParamRows included.
-    expect(studyVisible(RENDER)).not.toContain('<ParamRow');
-    expect(studyVisible(RENDER)).not.toContain('<DragNumberInput');
-  });
-});
-
-describe('the new rows render only outside a study session, where the spec puts them', () => {
-  it('the placement block, the turn, Older transform and the model binding all sit inside {!study && …}', () => {
-    const blocks = studyBlocks(RENDER);
-    // Picker, placement block, model binding.
-    expect(blocks.length).toBe(3);
+  it('ImageNodeSettings has no study branch, and every row is drawn', () => {
+    expect(IMAGE_MENU).not.toMatch(/isEvalMode|\{!study/);
     for (const anchor of [
       '<TexturePicker',
       '<ParamRow',
@@ -188,12 +101,12 @@ describe('the new rows render only outside a study session, where the spec puts 
       "t('UV 0 (default)'",
       "t('Flip normal green (Y)'",
     ]) {
-      const at = RENDER.indexOf(anchor);
-      expect(at, anchor).toBeGreaterThan(-1);
-      expect(blocks.some(([a, b]) => at > a && at < b), anchor).toBe(true);
+      expect(RENDER.indexOf(anchor), anchor).toBeGreaterThan(-1);
     }
   });
+});
 
+describe('where the spec puts the rows', () => {
   it('Tile/Offset and the turn follow Size; the model binding follows Filtering', () => {
     const order = tKeys(RENDER);
     const at = (k: string) => {

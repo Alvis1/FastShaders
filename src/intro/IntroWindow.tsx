@@ -31,7 +31,7 @@ const SLIDES: ReadonlyArray<{ id: string; Scene: ComponentType; caption: string 
   {
     id: 'connect',
     Scene: ConnectScene,
-    caption: 'Drag a node onto another node to connect them. Move it up or down to pick the socket.',
+    caption: 'Drag a node onto another node to connect them. It plugs into the main socket.',
   },
   {
     id: 'values',

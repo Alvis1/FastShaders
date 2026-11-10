@@ -32,13 +32,11 @@
  * a human's click lands); a click while the panel is hidden (another tab, a
  * collapsed pane) is parked and flushed ONCE when it shows lines again.
  *
- * A study session gets none of it (isEvalMode(), sampled once per page): the
- * panel stays the one its participants started with.
+ * A study session gets it too (2026-11-10; the first study round had none).
  */
 import { useCallback, useEffect, useRef } from 'react';
 import type { OnMount } from '@monaco-editor/react';
 import { useAppStore } from '@/store/useAppStore';
-import { isEvalMode } from '@/eval/evalMode';
 import type { CodeNodeSpans, CodeSpan } from '@/types';
 import { expandSelection, monacoText, planHighlight, revealTarget, selectionKey, type HighlightItem } from './nodeCodeHighlight';
 
@@ -62,7 +60,7 @@ export function useNodeCodeHighlight(): (editor: Ed, monaco: Mo) => void {
   useEffect(() => {
     // StrictMode (and a fast refresh) replays effects on a LIVE editor: attach
     // again to the one already mounted.
-    if (!ctrl.current && last.current && !isEvalMode()) ctrl.current = attachNodeCodeHighlight(...last.current);
+    if (!ctrl.current && last.current) ctrl.current = attachNodeCodeHighlight(...last.current);
     return () => {
       ctrl.current?.dispose();
       ctrl.current = null;
@@ -72,7 +70,6 @@ export function useNodeCodeHighlight(): (editor: Ed, monaco: Mo) => void {
     ctrl.current?.dispose();
     ctrl.current = null;
     last.current = [editor, monaco];
-    if (isEvalMode()) return;
     ctrl.current = attachNodeCodeHighlight(editor, monaco);
   }, []);
 }

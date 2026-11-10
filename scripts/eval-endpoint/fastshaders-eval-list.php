@@ -4,9 +4,10 @@
  * Companion of fastshaders-eval-upload.php (which receives) — this one lets
  * you SEE and download what arrived, from any browser.
  *
- * DEPLOY: upload beside upload.php (e.g. /fastshaders-eval/list.php), set
- * $VIEW_USER/$VIEW_PASSWORD below, and keep $INBOX identical to the one in
- * upload.php. Open https://<host>/fastshaders-eval/list.php.
+ * DEPLOY: `bash scripts/deploy-eval-endpoint.sh` uploads it beside upload.php
+ * with $VIEW_USER/$VIEW_PASSWORD_SHA256 and $INBOX rendered in ($INBOX identical to
+ * upload.php's). Live: https://imgame.va.lv/fastshaders-eval/list.php (ViA's
+ * server, since 2026-11-09).
  *
  * *** THE PASSWORD HERE MUST NOT BE THE UPLOAD KEY. ***
  * The upload key ships inside the app's JavaScript bundle and is therefore
@@ -18,15 +19,27 @@
  * upload.php: ideally a path OUTSIDE the docroot).
  */
 
-$VIEW_USER     = 'researcher';
-$VIEW_PASSWORD = 'CHANGE-ME-AND-MAKE-IT-DIFFERENT';
-$INBOX         = __DIR__ . '/eval-inbox';   // must match upload.php (absolute path recommended)
+// A PHP warning printed into the page would also be sent before any header
+// below, so nothing is ever displayed: the ViA container has no php.ini, and
+// PHP's built-in default is display_errors=1 (the folder's .htaccess says the
+// same; this line holds without it).
+ini_set('display_errors', '0');
+
+$VIEW_USER            = 'researcher';
+// SHA-256 (hex) of the listing password, rendered from `viewPassword` by
+// render-eval-endpoint.mjs — which refuses a password shorter than 20
+// characters, so an unsalted hash is not guessable. A hash, never the password:
+// this file sits in a docroot another project shares, and a server that ever
+// stopped running PHP would serve it as text. (Until 2026-11-09 the password
+// was a 4-digit number stored here in plain text.)
+$VIEW_PASSWORD_SHA256 = 'CHANGE-ME';
+$INBOX                = __DIR__ . '/eval-inbox';   // must match upload.php (absolute path recommended)
 
 // --- auth ---------------------------------------------------------------
 $user = $_SERVER['PHP_AUTH_USER'] ?? '';
 $pass = $_SERVER['PHP_AUTH_PW'] ?? '';
-$ok = $VIEW_PASSWORD !== 'CHANGE-ME-AND-MAKE-IT-DIFFERENT'
-   && hash_equals($VIEW_USER, $user) && hash_equals($VIEW_PASSWORD, $pass);
+$ok = $VIEW_PASSWORD_SHA256 !== 'CHANGE-ME'
+   && hash_equals($VIEW_USER, $user) && hash_equals($VIEW_PASSWORD_SHA256, hash('sha256', $pass));
 if (!$ok) {
   header('WWW-Authenticate: Basic realm="FastShaders eval inbox"');
   http_response_code(401);
@@ -58,8 +71,9 @@ function inbox_health(string $inbox): array {
   return [true, 'writable' . ($free !== false ? sprintf(', %.0f MB free', $free / 1048576) : '')];
 }
 
-// `?health` is what both deploy scripts ask (deploy-eval-endpoint.sh after it
-// uploads, deploy-sferas.sh before it builds): they pass only on "inbox ok".
+// `?health` is what every deploy script asks (deploy-eval-endpoint.sh after it
+// uploads, and both host deploys through check-eval-upload.sh before they
+// build): they pass only on "inbox ok".
 if (isset($_GET['health'])) {
   [$healthy, $why] = inbox_health($INBOX);
   header('Content-Type: text/plain; charset=utf-8');

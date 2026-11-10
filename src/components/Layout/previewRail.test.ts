@@ -177,7 +177,7 @@ describe('the rail socket is the SAME OBJECT as the node socket it connects to',
     // side would leave one of them the wrong size on touch.
     for (const css of [RAIL_CSS, NODE_CSS]) {
       expect(css).toContain('width: calc(var(--handle-size) * 2);');
-      expect(css).toContain('border: var(--handle-border) solid white;');
+      expect(css).toContain('border: var(--handle-border) solid var(--handle-ring);');
     }
   });
 });

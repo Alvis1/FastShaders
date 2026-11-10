@@ -27,10 +27,8 @@ function codeOnly(src: string): string {
 describe('requestShaderImport — the ONE gate', () => {
   const code = codeOnly(REQUEST);
 
-  it('is skipped in a study session, so a drop there stays byte-for-byte today', () => {
-    // The model-drop dialog's rule (docs/dev/eval-mode.md): a study measures
-    // the editor the participants were given, and a new dialog is a change.
-    expect(code).toMatch(/if \(isEvalMode\(\)\) return false/);
+  it('asks in a study session too: no study branch (since 2026-11-10)', () => {
+    expect(code).not.toMatch(/isEvalMode/);
   });
 
   it('bounds the file name ONCE, here, before anything renders it', () => {
@@ -129,7 +127,7 @@ describe('the ADD path', () => {
     const at = IMPORT.indexOf('export async function addDroppedShader');
     expect(at).toBeGreaterThan(-1);
     const body = IMPORT.slice(at);
-    expect(body).toContain('announceGraphMerged()');
+    expect(body).toContain("announceGraphMerged('add')");
     expect(codeOnly(body.slice(0, body.indexOf('\n}')))).not.toContain('announceGraphImport()');
   });
 

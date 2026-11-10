@@ -37,10 +37,10 @@ const EVAL_EVENT_TYPES = [
   'budget-crossed',
   // the participant switched the UI language (`from`/`to`: 'en' | 'lv')
   'lang-switch',
-  // the intro slides (/eval, /evalpro): opened after Agree or from the toolbar
+  // the intro slides (every study entry): opened after Agree or from the toolbar
   // "i", each slide shown (`slide` = the scene id), and closed
   'intro-open', 'intro-slide', 'intro-close',
-  // the step-by-step lessons (/evalpro only, src/tutorials): a lesson took
+  // the step-by-step lessons (every study entry, src/tutorials): a lesson took
   // over the canvas (`lesson` = its id), a step was shown (`step`, 0-based),
   // "Do it for me" performed one, and the lesson closed (`outcome` keep|new,
   // `completed` when its finish screen was reached). Graph events a "Do it for

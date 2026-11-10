@@ -1,6 +1,7 @@
 import { useAppStore } from '@/store/useAppStore';
 import type { AppEdge, AppNode, BoundarySocket, GroupNodeData, TSLDataType } from '@/types';
 import { generateEdgeId } from '@/utils/idGenerator';
+import { groupDescendantIds, hiddenByInnerCollapse } from '@/utils/groupFrame';
 
 /**
  * The one canonical edge factory: every edge in the app is a typed animated
@@ -113,6 +114,13 @@ export function removeEdgesForPort(nodeId: string, portId: string): void {
   }
 }
 
+/** How many groups are collapsed — the longest socket chain possible. */
+function collapsedCount(nodes: AppNode[]): number {
+  let k = 0;
+  for (const n of nodes) if (n.type === 'group' && (n.data as GroupNodeData).collapsed) k++;
+  return k;
+}
+
 /**
  * Translate boundary edges that touch a collapsed group's synthetic sockets
  * back to their original child endpoints, so compilation/evaluation engines
@@ -162,17 +170,22 @@ export function unwrapCollapsedGroupEdges(nodes: AppNode[], edges: AppEdge[]): A
     }
   }
 
+  // A socket can name ANOTHER pill's socket: collapse an inner group, then
+  // the group around it, and the outer socket's original endpoint is the inner
+  // pill. Follow the chain to a real node — bounded by the number of groups,
+  // so a forged loop of sockets ends instead of spinning.
+  const hops = collapsedCount(nodes);
   const rewritten = edges.map((e) => {
     let { source, sourceHandle, target, targetHandle } = e;
-    const outKey = `${source}\0${sourceHandle ?? ''}`;
-    const outOrig = outMap.get(outKey);
-    if (outOrig) {
+    for (let i = 0; i <= hops; i++) {
+      const outOrig = outMap.get(`${source}\0${sourceHandle ?? ''}`);
+      if (!outOrig) break;
       source = outOrig.nodeId;
       sourceHandle = outOrig.handleId;
     }
-    const inKey = `${target}\0${targetHandle ?? ''}`;
-    const inOrig = inMap.get(inKey);
-    if (inOrig) {
+    for (let i = 0; i <= hops; i++) {
+      const inOrig = inMap.get(`${target}\0${targetHandle ?? ''}`);
+      if (!inOrig) break;
       target = inOrig.nodeId;
       targetHandle = inOrig.handleId;
     }
@@ -208,9 +221,11 @@ export function restoreCollapsedEdges(
 ): AppEdge[] {
   const groupId = groupNode.id;
   const groupData = groupNode.data as GroupNodeData;
-  const memberIds = new Set(
-    nodes.filter((n) => n.parentId === groupId).map((n) => n.id),
-  );
+  // Every descendant, not just direct children: a nested group's members
+  // were hidden by this group's collapse too (groupDescendantIds). A wire
+  // inside a nested group that is STILL collapsed keeps its hide class.
+  const memberIds = groupDescendantIds(nodes, groupId);
+  const stillHidden = hiddenByInnerCollapse(nodes, groupId);
 
   const inputSocketLookup = new Map<string, BoundarySocket>();
   const outputSocketLookup = new Map<string, BoundarySocket>();
@@ -249,7 +264,8 @@ export function restoreCollapsedEdges(
       };
     }
     // Internal edges (both endpoints in members) get their hide-class stripped.
-    if (memberIds.has(e.source) && memberIds.has(e.target)) {
+    if (memberIds.has(e.source) && memberIds.has(e.target)
+      && !stillHidden.has(e.source) && !stillHidden.has(e.target)) {
       const { className: _c, ...rest } = e as AppEdge & { className?: string };
       void _c;
       return rest as AppEdge;

@@ -557,7 +557,7 @@ describe('preview mode wiring (source pins)', () => {
     expect(engine).toContain("setCode(result.code, 'graph', previewText, { emitted, names: result.varNames, nodeSpans: result.nodeSpans })");
     expect(engine).toMatch(/previewGraph\(nodes, edges, live\)/);
     // The derived text is the connected-only panel's too (engine/panelCode.ts).
-    expect(engine).toContain('panelCodegen(derived.nodes, derived.edges, isEvalMode()).result.code');
+    expect(engine).toContain('panelCodegen(derived.nodes, derived.edges, false).result.code');
     const sync = engine.slice(engine.indexOf('const doCodeSync'), engine.indexOf('isDirectAssignmentCode(codeStr)'));
     expect(sync).toContain('setNodePreview(null)');
   });

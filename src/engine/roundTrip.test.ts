@@ -342,6 +342,45 @@ describe('round-trip: noise range flag', () => {
   });
 });
 
+describe('round-trip: Sine / Cosine "Map to 0…1"', () => {
+  const rt = (type: string, values: Record<string, unknown>) => {
+    const t = makeNode('t', 'time');
+    const n = makeNode('n', type, values as never);
+    return roundTrip(
+      [t, n, makeNode('out', 'output')],
+      [makeEdge('t', 'out', 'n', 'x'), makeEdge('n', 'out', 'out', 'color')],
+    );
+  };
+
+  it('emits the remap around the finished call and survives graph → code → graph', () => {
+    for (const type of ['sin', 'cos']) {
+      const { code1, code2 } = rt(type, { unit: 1 });
+      expect(code1).toContain(`${type}(`);
+      expect(code1).toContain('.mul(0.5).add(0.5);');
+      expect(code2).toBe(code1);
+    }
+  });
+
+  it('an absent or off flag emits the bare call (older graphs stay byte-identical)', () => {
+    for (const values of [{}, { unit: 0 }, { unit: null }, { unit: true }]) {
+      const { code1, code2 } = rt('sin', values as Record<string, unknown>);
+      expect(code1).not.toContain('.mul(0.5).add(0.5)');
+      expect(code2).toBe(code1);
+    }
+  });
+
+  it('re-imports as ONE node carrying the flag, not sin + Multiply + Add', () => {
+    const code = graphToCode(
+      [makeNode('t', 'time'), makeNode('n', 'cos', { unit: 1 } as never), makeNode('out', 'output')],
+      [makeEdge('t', 'out', 'n', 'x'), makeEdge('n', 'out', 'out', 'color')],
+    ).code;
+    const parsed = codeToGraph(code);
+    expect(parsed.nodes.map((n) => n.data.registryType).sort()).toEqual(['cos', 'output', 'time']);
+    const wave = parsed.nodes.find((n) => n.data.registryType === 'cos')!;
+    expect(getNodeValues(wave).unit).toBe(1);
+  });
+});
+
 describe('round-trip: Output node stored channel values', () => {
   it('mixed wired + stored channels re-emit byte-identically', () => {
     const c = makeNode('c', 'color', { hex: '#ff8800' });

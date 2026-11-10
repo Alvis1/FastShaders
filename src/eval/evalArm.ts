@@ -13,6 +13,8 @@
 export const EVAL_ARM_KEY = 'fs:evalArm';
 /** The raw query string the /eval, /evalp and /evalpro redirectors capture at launch. */
 export const EVAL_TASK_KEY = 'fs:evalTaskQuery';
+/** The participant code a redirector read off the link's fragment (`/evalpro#P0101`). */
+export const EVAL_PARTICIPANT_KEY = 'fs:evalParticipant';
 
 const armed = (() => {
   try {

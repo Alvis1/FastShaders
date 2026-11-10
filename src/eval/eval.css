@@ -49,6 +49,12 @@
   border-radius: var(--border-radius-sm);
 }
 
+/* A code the study link gave: shown, not editable (ConsentModal, SusModal). */
+.eval-consent__code-fixed {
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
 .eval-consent__age-row {
   display: flex;
   align-items: center;

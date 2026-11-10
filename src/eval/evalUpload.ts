@@ -1,28 +1,29 @@
 /**
- * Delivery option B — automatic upload of the study package to the
- * researcher's own server (see EVAL_MODE_PLAN.md §4 Phase 5 and §7).
+ * Delivery option B — automatic upload of the study package to ViA's server
+ * (see EVAL_MODE_PLAN.md §4 Phase 5 and §7).
  *
- * The endpoint exists ONLY on alvismisjuns.lv (a PHP container; live since
- * 2026-08-29): `/fastshaders-eval/upload.php`, collected at
- * `/fastshaders-eval/list.php` (password-protected). It is deployed by
- * `scripts/deploy-eval-endpoint.sh`, which renders `scripts/eval-endpoint/*.php` with the
- * secrets from the gitignored `.vscode/eval-endpoint.json` — this repo is
- * public, so the listing password never enters it. Set `EVAL_UPLOAD_URL` to
- * '' to disable.
+ * The endpoint is `https://imgame.va.lv/fastshaders-eval/upload.php`, on the
+ * server of Vidzeme University of Applied Sciences — the data controller the
+ * consent names, which since consent-16 (2026-11-09) also HOLDS the data.
+ * Packages are collected at `…/fastshaders-eval/list.php` (password-protected).
+ * It is deployed by `scripts/deploy-eval-endpoint.sh`, which renders
+ * `scripts/eval-endpoint/*.php` with the secrets from the gitignored
+ * `.vscode/eval-endpoint.json` — this repo is public, so the listing password
+ * never enters it. Until 2026-11-09 the endpoint was the researcher's own
+ * alvismisjuns.lv, reached by a RELATIVE path that only that host served, so
+ * the study host fs.sferas.lv had to name it absolutely and GitHub Pages could
+ * not upload at all (405).
  *
- * WHICH URL is decided per BUILD. The default is RELATIVE, so it resolves
- * against whichever host served the app and stays CSP-legal ('self'):
- *   - alvismisjuns.lv/fastshaders/ (and www.) → the endpoint → 'ok';
- *   - GitHub Pages → the POST reaches GitHub's edge → 405 → 'failed'.
- * fs.sferas.lv, the STUDY host participants are sent to, is a static nginx
- * container with no endpoint, so the relative URL 404ed there and every study
- * package read "Upload failed." (reported 2026-10-02). Its build therefore
- * names alvismisjuns's endpoint ABSOLUTELY — `FS_EVAL_UPLOAD_URL` in
- * scripts/deploy-sferas.sh, which vite.config.ts also adds to that build's
- * connect-src — and upload.php answers the CORS preflight AND the POST for
- * exactly that origin. Without the POST's Allow-Origin the browser would hide
- * the response, and a package the server STORED would still read 'failed'.
- * deploy-sferas.sh fails its verification if the preflight is not answered.
+ * Now EVERY build posts to the ViA URL — DEFAULT_EVAL_UPLOAD_URL in
+ * vite.config.ts, handed over as the `__FS_EVAL_UPLOAD_URL__` define, whose
+ * origin vite also adds to the build's connect-src — always CROSS-origin: no
+ * app host (fs.sferas.lv, alvismisjuns.lv, GitHub Pages) has an endpoint of
+ * its own. upload.php answers the CORS preflight AND the POST for exactly
+ * those origins (`$ALLOWED_ORIGINS`); without the POST's Allow-Origin the
+ * browser would hide the response, and a package the server STORED would still
+ * read 'failed'. Both host deploys check the live preflight and the inbox
+ * before they build (scripts/check-eval-upload.sh). The consent names the host
+ * (`EVAL_UPLOAD_HOST`), and evalDisclosure.test.ts ties it to this URL.
  *
  * The upload is ALWAYS in addition to the download, never instead of it —
  * the downloaded zip on the study machine is the in-person safety net, and a
@@ -35,13 +36,13 @@
  */
 
 /**
- * The build's FS_EVAL_UPLOAD_URL override when there is one (the fs.sferas.lv
- * build's absolute alvismisjuns URL), else the RELATIVE default, which only
- * alvismisjuns serves (see the header). Empty = disabled. The `typeof` guard
- * keeps the module importable in bare node, where no Vite define exists.
+ * The build's upload URL (vite.config.ts: FS_EVAL_UPLOAD_URL, else
+ * DEFAULT_EVAL_UPLOAD_URL — ViA's endpoint). The literal after `||` is the same
+ * URL, for bare node, where no Vite define exists; evalUpload.test.ts pins the
+ * two copies equal. Passing '' to uploadEvalPackage disables the upload.
  */
 export const EVAL_UPLOAD_URL: string =
-  (typeof __FS_EVAL_UPLOAD_URL__ === 'string' && __FS_EVAL_UPLOAD_URL__) || '/fastshaders-eval/upload.php';
+  (typeof __FS_EVAL_UPLOAD_URL__ === 'string' && __FS_EVAL_UPLOAD_URL__) || 'https://imgame.va.lv/fastshaders-eval/upload.php';
 /** Must match $SECRET in scripts/eval-endpoint/fastshaders-eval-upload.php. */
 export const EVAL_UPLOAD_KEY: string = 'fsx-ecec3b0ce84df95b09ca';
 
@@ -108,7 +109,13 @@ export async function uploadEvalPackage(
       },
       signal: ctrl.signal,
     });
-    return res.ok ? 'ok' : 'failed';
+    if (!res.ok) return 'failed';
+    // upload.php answers exactly "ok" only after a VERIFIED write. A 2xx alone
+    // is not proof: on a PHP without display_errors off, a warning printed
+    // before a refusal's http_response_code() sends the headers as 200 — the
+    // package lost while the participant reads "uploaded". The body is
+    // readable cross-origin because every answer carries Allow-Origin.
+    return (await res.text()).trim() === 'ok' ? 'ok' : 'failed';
   } catch {
     return 'failed';
   } finally {

@@ -19,6 +19,7 @@
  */
 
 import type { AppNode, AppEdge, MaterialSettings, OutputMaterial } from '@/types';
+import { UNLIT_IGNORED_CHANNELS, isUnlitSettings } from './unlitMaterial';
 import { isUsableMeshName, MATERIAL_NAME_MAX, MAX_INVENTORY_MESHES } from './meshInventory';
 // Type-only: the facts' shape. The reader itself is never imported here.
 import type { GltfPreviewFacts } from './gltfReader';
@@ -864,7 +865,7 @@ function indexAwakeFor(out: AppNode, materials: readonly OutputMaterial[], previ
 
 /**
  * Does this EDGE land on a legitimately-absent Output handle — i.e. is its
- * target a dormant node, whose unmounted handles are the visibility rule's
+ * target a dormant node (or a channel its Unlit material hides), whose unmounted handles are the visibility rule's
  * steady state rather than a bug? THE question NodeEditor's scoped React Flow
  * 008 swallow asks.
  *
@@ -883,7 +884,11 @@ export function outputEdgeIsDormant(state: DormancyState, edgeId: string): boole
   const out = state.nodes.find((n) => n.id === edge.target);
   if (!out || !isOutputNode(out)) return false;
   const dormant = dormantIndicesForPreview(outputMaterials(out), dormancyOptsFor(state, out));
-  return dormant.has(parseChannelHandle(edge.targetHandle).index);
+  const { index, channel } = parseChannelHandle(edge.targetHandle);
+  if (dormant.has(index)) return true;
+  // An UNLIT material does not draw the channels it ignores, so a wire into one
+  // lands on an unmounted handle on purpose (OutputNode `sectionPorts`).
+  return isUnlitSettings(outputMaterials(out)[index]?.materialSettings) && UNLIT_IGNORED_CHANNELS.has(channel);
 }
 
 /**

@@ -101,8 +101,8 @@ describe('Compare devices…', () => {
     expect(BAR).toContain('const COMPARE_URL = `${import.meta.env.BASE_URL}compare/`;');
   });
 
-  it('is never offered in a study session or the desktop build', () => {
-    expect(BAR).toContain('const OFFERS_COMPARE = !__FS_DESKTOP__ && !isEvalMode();');
+  it('is never offered in the desktop build (a study reaches it only where the cost bar is drawn)', () => {
+    expect(BAR).toContain('const OFFERS_COMPARE = !__FS_DESKTOP__;');
     expect(BAR).toContain("{OFFERS_COMPARE && <option value={COMPARE_OPTION}>{t('Compare devices…', language)}</option>}");
     // Exactly one row: the option is the only place the sentinel is rendered.
     expect(BAR.match(/value=\{COMPARE_OPTION\}/g)).toHaveLength(1);

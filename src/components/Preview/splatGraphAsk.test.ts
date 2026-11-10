@@ -163,11 +163,9 @@ describe('ShaderPreview wiring', () => {
     expect(apply).toContain('showDropNotice(t(GLB_IMPORT_KEYS.busy, language))');
   });
 
-  it('a paired model never asks; a study session never reaches the ask (splats refused first)', () => {
+  it('a paired model never asks; a study session asks like any other (since 2026-11-10)', () => {
     expect(load).toContain('applyModelBytes(file.name, bytes, opts?.offerBuild !== false);');
-    const refusal = load.indexOf('if (isEvalMode() && isSplatKind(kind))');
-    expect(refusal).toBeGreaterThan(-1);
-    expect(refusal).toBeLessThan(load.indexOf('applyModelBytes('));
+    expect(load).not.toMatch(/isEvalMode/);
   });
 
   it('the GLB dialog\'s "Only Mesh" answer calls the two-argument form, so it never asks', () => {

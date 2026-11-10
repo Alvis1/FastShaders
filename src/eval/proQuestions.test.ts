@@ -87,7 +87,7 @@ describe('the professional question block (pro-5)', () => {
     }
     expect((by('pointsCredible') as ProAgreeItem).cantJudge).toBe(true);
     expect((by('shaderPerfBarrier') as ProChoiceItem).options.map((o) => o.id)).toEqual(['notAProblem', 'minor', 'moderate', 'major', 'cantJudge']);
-    expect((by('pointsChangedBuild') as ProChoiceItem).options.map((o) => o.id)).toEqual(['ignored', 'looked', 'chose', 'replaced']);
+    expect((by('pointsChangedBuild') as ProChoiceItem).options.map((o) => o.id)).toEqual(['ignored', 'looked', 'chose']);
     expect((by('costToday') as ProChoiceItem).options.map((o) => o.id)).toContain('notNeeded');
     expect((by('costToday') as ProChoiceItem).otherId).toBe('other');
     expect((by('suitedFor') as ProGridItem).columns.map((c) => c.id)).toEqual(['yes', 'partly', 'no', 'cantJudge']);

@@ -20,7 +20,7 @@
  *          impact (`cost`, design principle P1) — identical to the first item
  *          of `proQuestions.ts`, serving as both a P1 measure and a
  *          manipulation check between `/eval` and `/evalp`;
- *        - `pointsChangedBuild`: four behavioural feedforward rungs (identical
+ *        - `pointsChangedBuild`: three behavioural feedforward rungs (identical
  *          to `proQuestions.ts`; telemetry's `budgetCrossings` splits `looked`
  *          into within-budget vs. over-budget), asked only when
  *          `pointsVisible === true` so `/evalp` participants are never asked
@@ -101,8 +101,7 @@ export const TASK_ITEMS: readonly QItem[] = [
     options: [
       { id: 'ignored', en: 'No — I did not pay attention to them', lv: 'Nē — nepievērsu tiem uzmanību' },
       { id: 'looked', en: 'No — I checked them, but changed nothing', lv: 'Nē — sekoju tiem līdzi, bet neko nemainīju' },
-      { id: 'chose', en: 'Yes — I picked cheaper nodes when adding', lv: 'Jā — pievienojot izvēlējos lētākus mezglus' },
-      { id: 'replaced', en: 'Yes — I replaced or removed expensive nodes', lv: 'Jā — aizstāju vai noņēmu dārgus mezglus' },
+      { id: 'chose', en: 'Yes — I made more efficient node combinations', lv: 'Jā — būvēju efektīvākas mezgla kombinācijas' },
     ],
   },
 ];

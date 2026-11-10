@@ -1,9 +1,9 @@
 /**
  * The code panel shows only the nodes that FEED AN OUTPUT (owner, 2026-10-27):
  * a chain wired to nothing stays on the canvas but is not in the TSL text, the
- * 3D preview or the module a save writes. The study keeps the whole panel
- * (`whole`, `isEvalMode()` at the one caller), so a running study measures
- * the editor it started with.
+ * 3D preview or the module a save writes — in a study session too since
+ * 2026-11-10 (the first study round kept the whole panel). `whole` remains for
+ * EXPORT's regenerate check (engine/exportGraph.ts).
  *
  * The prune is an EMISSION scope (`graphToCode`'s `emitOnly`), never a pruned
  * graph: names are still claimed over the whole graph, so wiring or unwiring

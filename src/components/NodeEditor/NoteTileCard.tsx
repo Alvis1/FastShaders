@@ -2,8 +2,7 @@ import { memo, useCallback, type ReactNode } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { getContrastColor } from '@/utils/colorUtils';
 import {
-  NOTE_BODY_COLOR,
-  NOTE_HEADER_COLOR,
+  noteDrawnColors,
   NOTE_MIN_HEIGHT,
   NOTE_MIN_WIDTH,
   NOTE_TILE_TYPE,
@@ -82,17 +81,19 @@ export function NoteFace({ width, height, text = '', typing, language }: {
   typing?: ReactNode;
   language: Language;
 }) {
+  const darkCanvas = useAppStore((s) => getContrastColor(s.nodeEditorBgColor) === '#ffffff');
+  const { body: bodyColor, header: headerColor } = noteDrawnColors(undefined, undefined, darkCanvas);
   return (
-    <div className="note-node" style={{ background: NOTE_BODY_COLOR, width, height }}>
+    <div className="note-node" style={{ background: bodyColor, width, height }}>
       <div
         className="note-node__header"
-        style={{ background: NOTE_HEADER_COLOR, color: getContrastColor(NOTE_HEADER_COLOR), fontSize: '12px' }}
+        style={{ background: headerColor, color: getContrastColor(headerColor), fontSize: '12px' }}
       >
         {t('Note', language)}
       </div>
       <div
         className="note-node__body"
-        style={{ color: getContrastColor(NOTE_BODY_COLOR), fontSize: '11px', ...(text ? null : { opacity: 0.5 }) }}
+        style={{ color: getContrastColor(bodyColor), fontSize: '11px', ...(text ? null : { opacity: 0.5 }) }}
       >
         {text || (typing ? '' : t('Note…', language))}
         {typing}

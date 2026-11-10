@@ -85,7 +85,7 @@
   height: calc(var(--handle-size) * 2);
   padding: 0;
   transform: translateY(-50%);
-  border: var(--handle-border) solid white;
+  border: var(--handle-border) solid var(--handle-ring);
   border-radius: 50%;
   background: rgb(var(--node-ink-rgb));
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);

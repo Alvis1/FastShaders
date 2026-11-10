@@ -322,10 +322,11 @@ export function CodeEditor() {
   // (`<kind>|<file>`, or ''; the kind is one of three bare words, so the
   // first `|` splits it), rebuilt into the pair once per change below.
   const bundledModelKey = useAppStore((s) => {
-    // A study session keeps the page it always had — a primitive: what the
-    // study host shows participants must not move under a running study.
-    if (isEvalMode()) return '';
-    const choice = exportModelChoice(s, false, 'primary');
+    // A study session asks the same decision with its own export rule (the
+    // package's shader follows the document: the loaded model, never a
+    // built-in shape) — since 2026-11-10; through the first study round the
+    // page stayed a primitive there.
+    const choice = exportModelChoice(s, isEvalMode(), 'primary');
     const m = choice && bundledModelForPage(exportModelFile(choice), choice.kind === 'builtin' ? choice.shape : null);
     return m ? `${m.kind}|${m.file}` : '';
   });
@@ -336,10 +337,10 @@ export function CodeEditor() {
       : { kind: bundledModelKey.slice(0, bar) as AFrameBundledModel['kind'], file: bundledModelKey.slice(bar + 1) };
   }, [bundledModelKey]);
   // What the 3D pane RENDERS (ShaderPreview reports it to the store), so the
-  // page follows the Model dropdown live. Before the pane has reported, and in
-  // a study session, the persisted choice is read instead — the march window
-  // while a Raymarch Output drives, the same rule the preview applies.
-  const shownGeometry = useAppStore((s) => (isEvalMode() ? null : (s.previewShape?.geometry ?? null)));
+  // page follows the Model dropdown live. Before the pane has reported, the
+  // persisted choice is read instead — the march window while a Raymarch
+  // Output drives, the same rule the preview applies.
+  const shownGeometry = useAppStore((s) => s.previewShape?.geometry ?? null);
   const fallbackGeometry = useMemo(
     () => (marchWindow !== null ? MARCH_WINDOW_GEOMETRY : readPreviewGeometry()),
     // embedStamp is the deliberate re-read trigger (the tab being opened).
@@ -467,11 +468,9 @@ export function CodeEditor() {
     }
     // The dropped-shader dialog owns the import and every message about it
     // from here; the tab still switches, but only once something landed.
-    // False = a study session, which keeps the direct path below.
-    if (
-      opts?.fromDrop &&
-      requestShaderImport(file, 'dom', (outcome) => { if (outcome === 'imported') setActiveTab('tsl'); })
-    ) {
+    // "Load Script…" (not a drop) is already an explicit open: the path below.
+    if (opts?.fromDrop) {
+      requestShaderImport(file, 'dom', (outcome) => { if (outcome === 'imported') setActiveTab('tsl'); });
       return;
     }
     if (isZipFile(file)) {

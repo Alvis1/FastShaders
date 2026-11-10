@@ -422,9 +422,9 @@
    THE CANONICAL COPY. Every node component that anchors its sockets to
    something other than the whole card restates these three declarations
    against its own wrapper, because CSS has no way to compose a rule and each
-   anchor is a different selector. Seven anchors do, across five stylesheets:
+   anchor is a different selector. Six anchors do, across five stylesheets:
    `.clock-node__canvas-wrap` and `.clock-node__speed-row`,
-   `.math-preview-node__port-row` and `.math-preview-node`, `.preview-node`,
+   `.math-preview-node__canvas-wrap`, `.preview-node`,
    `.sound-node__body`, and `.output-node__row`.
 
    WHY THIS IS STILL COPIED, having twice been looked at: the obvious fix is

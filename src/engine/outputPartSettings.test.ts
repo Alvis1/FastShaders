@@ -153,9 +153,14 @@ describe('emission', () => {
       .toBe(absent);
   });
 
-  it('displacementMode / mergeVertices on an ADDED material emit nothing into its part', () => {
+  it('an ADDED material\'s own vertex settings ride its part — only where they differ from the owner\'s', () => {
+    // Owner 2026-11-10: every Output has the vertex settings. The default here
+    // set none, so offset and a torn mesh differ and are written; the values
+    // the owner already has are not, which keeps every older graph's bytes.
     const absent = codeOf(glassGraph());
-    expect(codeOf(glassGraph({ displacementMode: 'offset', mergeVertices: false }))).toBe(absent);
+    expect(codeOf(glassGraph({ displacementMode: 'normal', mergeVertices: true }))).toBe(absent);
+    expect(codeOf(glassGraph({ displacementMode: 'offset', mergeVertices: false })))
+      .toContain(`"Glass": { color: color2, displacementMode: 'offset', mergeVertices: false }`);
   });
 });
 
@@ -262,13 +267,16 @@ describe('hostile code-panel text', () => {
     const base = codeOf(glassGraph());
     const hostile = base.replace(
       '"Glass": { color: color2 }',
-      '"Glass": { color: color2, side: alert(1), alphaTest: 0.5, depthWrite: false, mergeVertices: false }',
+      '"Glass": { color: color2, side: alert(1), alphaTest: 0.5, depthWrite: false, mergeVertices: alert(2), displacementMode: alert(3) }',
     );
     expect(hostile).not.toBe(base);
     const mod = buildShaderModule(hostile, {});
-    // No side (not a side value), no depthWrite (not transparent), no
-    // mergeVertices (a module-level directive, never a part setting).
+    // No side (not a side value), no depthWrite (not transparent), and the
+    // two vertex keys read only their literals: anything else is nothing.
     expect(partBody(mod, 'Glass')).toBe('colorNode: color2, alphaTest: 0.5');
+    // The literals themselves pass, re-emitted canonically.
+    const legit = buildShaderModule(base.replace('"Glass": { color: color2 }', '"Glass": { color: color2, mergeVertices: false }'), {});
+    expect(partBody(legit, 'Glass')).toBe('colorNode: color2, mergeVertices: false');
     expect(mod).not.toContain('alert');
   });
 });
@@ -513,7 +521,9 @@ describe('materialSettingsCode', () => {
     // and the frozen 0.6 ignores (so an old loader renders such a shader
     // smooth rather than failing — perMeshMaterials.test.ts pins that split).
     expect([...PART_SETTING_KEYS].sort())
-      .toEqual(['alphaTest', 'depthWrite', 'flatShading', 'side', 'transparent']);
+      .toEqual(['alphaTest', 'depthWrite', 'flatShading', 'side', 'transparent', 'unlit']);
+    // …and `unlit` (the Unlit material), which 0.8 reads to pick the material
+    // CLASS and 0.6 ignores (the same channels, lit).
     // The two that are NOT per-material: `mergeVertices` is a module-level
     // geometry directive and `displacementMode` has no loader key at all.
     for (const k of ['__proto__', 'constructor', 'toString', 'mergeVertices', 'displacementMode', 'discard']) {

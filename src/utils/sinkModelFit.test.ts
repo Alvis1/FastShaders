@@ -161,7 +161,7 @@ describe('the words', () => {
 describe('the canvas note fires on a WIRE, not on a Model pick', () => {
   const PREVIEW = readFileSync(join(__dirname, '../components/Preview/ShaderPreview.tsx'), 'utf8');
 
-  it('posts only on a graph-caused change, never over a note or in a study session', () => {
+  it('posts only on a graph-caused change, never over a note (a study session too)', () => {
     const at = PREVIEW.indexOf('const lastFitRef = useRef(');
     const end = PREVIEW.indexOf('}, [sinkIssue, shownModelKey, litSplats]);', at);
     expect(end).toBeGreaterThan(at);
@@ -173,7 +173,7 @@ describe('the canvas note fires on a WIRE, not on a Model pick', () => {
     expect(PREVIEW).toContain('const litSplats = useAppStore((s) => litSplatCount(s.nodes));');
     expect(effect).toContain('litSplats !== prev.litSplats');
     expect(effect).toContain('sinkIssue === prev.issue');
-    expect(effect).toContain('isEvalMode()');
+    expect(effect).not.toContain('isEvalMode()');
     expect(effect).toContain('if (store.importNote) return;');
     expect(effect).toContain("store.showImportNote([{ kind: 'sink-model', issue: sinkIssue,");
   });

@@ -309,8 +309,8 @@ describe('useSyncEngine wiring (source pins)', () => {
   // A React hook in a node env: what CAN be pinned is where each piece sits.
   const src = readFileSync(resolve(__dirname, '../hooks/useSyncEngine.ts'), 'utf8');
 
-  it('the graph→code pass is the panel’s codegen, whole in a study, and writes the emitted set WITH the code', () => {
-    expect(src).toContain('const { result, emitted } = panelCodegen(nodes, edges, isEvalMode());');
+  it('the graph→code pass is the panel’s codegen, connected-only in a study too, and writes the emitted set WITH the code', () => {
+    expect(src).toContain('const { result, emitted } = panelCodegen(nodes, edges, false);');
     expect(src).toContain("setCode(result.code, 'graph', previewText, { emitted, names: result.varNames, nodeSpans: result.nodeSpans })");
     expect(src).not.toMatch(/\bgraphToCode\(/);
   });
@@ -343,7 +343,7 @@ describe('useSyncEngine wiring (source pins)', () => {
     expect(sync.indexOf('const oldGroups =')).toBeGreaterThan(order);
   });
 
-  it('a paired node keeps its selection — outside a study', () => {
-    expect(src).toContain('...(match.selected === true && !isEvalMode() ? { selected: true } : {}),');
+  it('a paired node keeps its selection — in every session', () => {
+    expect(src).toContain('...(match.selected === true ? { selected: true } : {}),');
   });
 });

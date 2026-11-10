@@ -1260,7 +1260,7 @@ describe.skipIf(!canExecute)('Splat Output — the emitted module RUNS (the flat
       expect(spec, name).toBeTypeOf('object');
       expect(buildOnSplat(spec).warns, name).toEqual([]);
     }
-  });
+  }, 30_000); // ~0.7 s alone; the whole suite's parallel workers pushed it past vitest's 5 s default (2026-11-09).
 
   it('a flat copy with an in-scope ancestor runs: noise → remap → Cut + remap → dangling / Feather / a plain Output; a root chain at depth 2', () => {
     const plainOutput: Graph = {

@@ -6,7 +6,6 @@ import { downloadBlob } from '@/utils/downloadBlob';
 import { POINT_BUDGET, formatPoints } from '@/utils/budgetPoints';
 import { useBudgetPoints } from '@/hooks/useDeviceBudget';
 import { Points } from '@/components/Points/Points';
-import { isEvalMode } from '@/eval/evalMode';
 import {
   parseCostFile, parseCostProfileBundle, buildMergedComplexity, mergedComplexityFileName,
   buildProfileFile, buildProfileBundle, profileFileName, profileBundleFileName, editedCostCount,
@@ -43,15 +42,13 @@ const ACTION_OPTIONS = new Set([IMPORT_OPTION, NEW_OPTION, EDIT_OPTION, EXPORT_O
 /**
  * The device comparison page — every device's price for every node, side by
  * side (compare/index.html, its own Vite entry). A NEW TAB, so the shader on
- * the canvas stays where it is. Not offered in a study session (what the
- * editor offers is part of the condition every participant must meet alike,
- * the DesktopAppNote rule) nor in the desktop build, whose webview has no
- * browser tab to open it in (Toolbar.tsx's Podest note: `_blank` is inert
- * there). Both are fixed for the page's lifetime: `isEvalMode()` is sampled
- * once at module init, `__FS_DESKTOP__` at build time.
+ * the canvas stays where it is. Offered in a study session too since
+ * 2026-11-10 (it lives on the cost bar, which `/evalp` never draws), but not
+ * in the desktop build, whose webview has no browser tab to open it in
+ * (Toolbar.tsx's Podest note: `_blank` is inert there) — fixed at build time.
  */
 const COMPARE_URL = `${import.meta.env.BASE_URL}compare/`;
-const OFFERS_COMPARE = !__FS_DESKTOP__ && !isEvalMode();
+const OFFERS_COMPARE = !__FS_DESKTOP__;
 
 /** How long a one-line notice stays up — the image-convert notice's 12 s. */
 const NOTICE_TIMEOUT_MS = 12000;

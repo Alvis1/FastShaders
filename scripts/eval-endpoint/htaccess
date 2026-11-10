@@ -1,0 +1,25 @@
+# FastShaders study endpoint — uploaded as .htaccess beside upload.php and
+# list.php by scripts/deploy-eval-endpoint.sh. Needs AllowOverride (the ViA
+# container, php:8-apache, has `AllowOverride All` on /var/www/).
+
+# A package is the raw request body (php://input), so post_max_size is the
+# limit that applies: the image's default 8M refused anything bigger before
+# upload.php ran. 72M leaves room above upload.php's own 64 MiB $MAX_BYTES,
+# which stays the real cap. The deploy script POSTs a 16 MB package to prove it.
+# display_errors: the image has no php.ini, so PHP's built-in default (on)
+# applies, and a warning printed before a refusal's status line turns it into a
+# 200. Both scripts also switch it off themselves.
+<IfModule php_module>
+  php_value post_max_size 72M
+  php_value memory_limit 256M
+  php_flag display_errors off
+  php_flag log_errors on
+</IfModule>
+
+# Only the two scripts are served from this folder. The inbox below it has its
+# own deny-all .htaccess as well (written by the deploy script, checked from
+# outside after every deploy).
+Options -Indexes
+<FilesMatch "^(?!(upload|list)\.php$)">
+  Require all denied
+</FilesMatch>

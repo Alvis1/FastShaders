@@ -6,7 +6,6 @@ import { appendGrowthExhausted } from '@/utils/appendCapacity';
 import { useAppStore } from '@/store/useAppStore';
 // After the store on purpose: the store's own chain (telemetry) already loads
 // evalMode, so this import adds no new module-initialisation order.
-import { isEvalMode } from '@/eval/evalMode';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 import { portLabel, t } from '@/i18n';
 import { CAT_HEX } from '@/utils/colorUtils';
@@ -337,19 +336,11 @@ export function outputRowLabel(
  * node — dropping a file on the canvas makes a NEW node, so the hint does not
  * suggest it. The row's label is the same `'Texture'` key, so the two read as
  * one thing in either language (imagePicker.test.ts pins that).
- *
- * In a study session the picker is hidden (`isEvalMode`), and a hint naming a
- * control the participant cannot see would be false, so there the slot keeps
- * the plain statement (`IMAGE_EMPTY_HINT_EVAL`).
+ * A study session shows the same hint (since 2026-11-10 it has the picker too).
  */
 export const IMAGE_EMPTY_HINT = 'No image yet. Right-click the node and choose one under “Texture”.';
-export const IMAGE_EMPTY_HINT_EVAL = 'No image in this node.';
-
-/** Which of the two hints applies. `study` defaults to the page's eval flag,
- *  sampled once at module init, so every slot on a page agrees. */
-export function imageEmptyHint(study: boolean = isEvalMode()): string {
-  return study ? IMAGE_EMPTY_HINT_EVAL : IMAGE_EMPTY_HINT;
-}
+/** The plain statement, for a surface with no settings menu to name. */
+export const IMAGE_EMPTY_HINT_PLAIN = 'No image in this node.';
 
 /**
  * THE one element drawn where an Image node's thumbnail goes when it has no
@@ -361,13 +352,13 @@ export function imageEmptyHint(study: boolean = isEvalMode()): string {
  * its host through elementFromPoint).
  *
  * `hint` overrides the text for a surface that has no settings menu to name:
- * NodeVisual passes IMAGE_EMPTY_HINT_EVAL, because the Node Designer stage
+ * NodeVisual passes IMAGE_EMPTY_HINT_PLAIN, because the Node Designer stage
  * draws the replica hit-testable and a right-click there opens only the
  * browser's own menu.
  */
 export function ImageThumbEmpty({
   language,
-  hint = imageEmptyHint(),
+  hint = IMAGE_EMPTY_HINT,
 }: {
   language: Parameters<typeof t>[1];
   hint?: string;

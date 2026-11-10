@@ -8,6 +8,26 @@ import {
   buildIncoming, closure,
 } from '@/utils/sdfPartition';
 import { contributingOutputs } from '@/utils/outputMaterials';
+import { displacedNormalChain, displacedNormalOverhead } from '@/utils/displacedNormalCost';
+import { UNLIT_IGNORED_CHANNELS, isUnlitSettings } from '@/utils/unlitMaterial';
+
+/**
+ * The edges the price walks: all of them, except a wire into a channel an
+ * UNLIT Output does not read (utils/unlitMaterial.ts) — the loader never
+ * applies that channel, so what feeds only it never runs. By IDENTITY when no
+ * Output is unlit, so every lit graph prices exactly as before.
+ */
+function pricedEdges(nodes: readonly AppNode[], edges: AppEdge[]): AppEdge[] {
+  let unlit: Set<string> | null = null;
+  for (const n of nodes) {
+    if (n.data.registryType === 'output' && isUnlitSettings((n.data as { materialSettings?: unknown }).materialSettings)) {
+      (unlit ??= new Set()).add(n.id);
+    }
+  }
+  if (!unlit) return edges;
+  const off = unlit;
+  return edges.filter((e) => !(off.has(e.target) && UNLIT_IGNORED_CHANNELS.has(e.targetHandle ?? '')));
+}
 
 /**
  * GPU cost READERS that need the node graph — the per-instance price, a
@@ -234,6 +254,9 @@ export function computeReachableCost(
   sinks?: ReadonlySet<string>,
   wired?: ReadonlyMap<string, readonly string[]>,
 ): number {
+  // `sinkCosts` hands in maps built from already-priced edges; filtering again
+  // is an identity there (nothing left to drop), and keeps one rule.
+  edges = pricedEdges(nodes, edges);
   const seeds: readonly AppNode[] = seed === undefined
     ? costSeeds(nodes, edges)
     : seed === null
@@ -292,6 +315,24 @@ export function computeReachableCost(
     }
     total += getCost(march.data.registryType);
   }
+
+  // Normals that follow a displacement (utils/displacedNormalCost.ts): each
+  // SMOOTH plain Output whose Position chain reads the position runs that
+  // chain twice more per vertex, plus the fixed recompute maths. Per seed —
+  // every material rebuilds its own normal — and full price under the
+  // per-pixel table (owner, 2026-11-10).
+  let byId: Map<string, AppNode> | null = null;
+  for (const out of seeds) {
+    byId ??= new Map(nodes.map((n) => [n.id, n]));
+    const chain = displacedNormalChain(out, edges, sources, byId);
+    if (!chain) continue;
+    let body = 0;
+    for (const id of chain) {
+      const n = byId.get(id);
+      if (n && !sinkIds.has(id)) body += points(n);
+    }
+    total += 2 * body + displacedNormalOverhead();
+  }
   return total;
 }
 
@@ -326,6 +367,7 @@ export function computeGraphCost(nodes: AppNode[], edges: AppEdge[]): number {
  */
 export function sinkCosts(nodes: AppNode[], edges: AppEdge[]): Map<string, number> {
   const out = new Map<string, number>();
+  edges = pricedEdges(nodes, edges);
   // ONE adjacency, ONE sink set and ONE handle index for every sink's walk.
   const incoming = buildIncoming(edges);
   const sinks = new Set(nodes.filter(isSinkNode).map((n) => n.id));

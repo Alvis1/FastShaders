@@ -158,12 +158,13 @@ describe('useGlbImport', () => {
 describe('ShaderPreview.loadMeshFile', () => {
   const load = callbackBody(PREVIEW, 'loadMeshFile');
 
-  it('decides the offer before the read, with isEvalMode in the expression', () => {
+  it('decides the offer before the read — the same in a study session (no study term)', () => {
     const offer = load.indexOf('const offer =');
     const read = load.indexOf('file.arrayBuffer()');
     expect(offer).toBeGreaterThan(-1);
     expect(read).toBeGreaterThan(offer);
-    expect(load.slice(offer, load.indexOf(';', offer))).toContain('!isEvalMode()');
+    expect(load.slice(offer, load.indexOf(';', offer))).toBe("const offer = opts?.offerBuild !== false && (kind === 'glb' || kind === 'gltf')");
+    expect(load).not.toMatch(/isEvalMode/);
   });
 
   it('passes the offer predicate to the ONE gate, so a paired or study drop keeps the 64 MiB cap', () => {
@@ -190,8 +191,10 @@ describe('ShaderPreview.loadMeshFile', () => {
     expect(guard).toBeGreaterThan(-1);
     expect(drop.slice(guard, guard + 160)).toContain('showDropNotice(t(GLB_IMPORT_KEYS.busy, language))');
     expect(guard).toBeLessThan(drop.indexOf('window.confirm('));
-    expect(guard).toBeLessThan(drop.indexOf('importShaderZip('));
-    expect(guard).toBeLessThan(drop.indexOf('importShaderText('));
+    expect(guard).toBeLessThan(drop.indexOf('requestShaderImport('));
+    // The dialog is the only import path: no direct import is left behind it.
+    expect(drop).not.toContain('importShaderZip(');
+    expect(drop).not.toContain('importShaderText(');
   });
 
   it('the combined shader+model drop and the paired canvas drop are never offered', () => {
@@ -226,10 +229,11 @@ describe('NodeEditor', () => {
 describe('Toolbar', () => {
   const code = codeOnly(TOOLBAR);
 
-  it('the allow-many row sits inside !isEvalMode() and drives the store setter', () => {
+  it('the allow-many row is drawn in every session and drives the store setter', () => {
     const at = code.indexOf("fillTemplate(t('Allow more than {limit} materials'");
     expect(at).toBeGreaterThan(-1);
-    const before = code.slice(code.lastIndexOf('{!isEvalMode() && (', at), at);
+    const before = code.slice(code.lastIndexOf('className="toolbar__prefs-row"', at), at);
+    expect(before).not.toContain('isEvalMode');
     expect(before).toContain('setAllowManyMaterials(e.target.checked)');
     expect(before).toContain('checked={allowManyMaterials}');
   });
@@ -239,7 +243,7 @@ describe('Toolbar', () => {
     expect(block).not.toContain('materials');
     expect(code).toContain('const ALLOW_MANY_MATERIALS_HINT =');
     expect(code).toContain('prefsHeight(prefsRows)');
-    expect(code).toContain("(isEvalMode() ? 0 : 1)");
+    expect(code).toContain('const prefsRows = 1 + OPTIONAL_CATEGORIES.length + 1;');
     expect(code).not.toContain('PREFS_H ');
   });
 });

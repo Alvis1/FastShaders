@@ -204,7 +204,9 @@ describe.skipIf(!loaderAvailable(V))('shaderloader 0.8 — apply()', () => {
     // so a key applied to the wrong one, or not at all, moves an assertion.
     const dflt = { transparent: true, side: 2, alphaTest: 0.5, depthWrite: false, flatShading: true };
     const part = { transparent: true, side: 1, alphaTest: 0.25, depthWrite: false, flatShading: false };
-    expect([...PART_SETTING_KEYS].sort()).toEqual(Object.keys(dflt).sort());
+    // `unlit` picks the material CLASS rather than setting a property — its
+    // own test below.
+    expect([...PART_SETTING_KEYS].filter((k) => k !== 'unlit').sort()).toEqual(Object.keys(dflt).sort());
     const body = named('Body');
     const other = named('Other');
     const group = new THREE.Group();
@@ -215,8 +217,53 @@ describe.skipIf(!loaderAvailable(V))('shaderloader 0.8 — apply()', () => {
       parts: { Body: { colorNode: TSL.color(2), ...part } },
     }));
     for (const key of PART_SETTING_KEYS) {
+      if (key === 'unlit') continue;
       expect(mat(other)[key], `default ${key}`).toBe((dflt as Any)[key]);
       expect(mat(body)[key], `part ${key}`).toBe((part as Any)[key]);
+    }
+  });
+
+  it('unlit (delta 13): a basic material, lit-only channels left off, emissive shown once', () => {
+    const { FS } = fresh();
+    const body = named('Body');
+    const other = named('Other');
+    const group = new THREE.Group();
+    group.add(body, other);
+    const c = TSL.color(1);
+    const r = TSL.float(0.3);
+    FS.apply(group, () => ({
+      colorNode: c,
+      roughnessNode: r,
+      envNode: TSL.color(2),
+      normalNode: TSL.vec3(0, 0, 1),
+      transparent: true,
+      unlit: true,
+      parts: { Body: { colorNode: c, roughnessNode: r } },
+    }));
+    // The default is unlit; the part, without the key, stays lit.
+    expect(mat(other).isMeshBasicNodeMaterial).toBe(true);
+    expect(mat(other).colorNode).toBe(c);
+    expect(mat(other).transparent).toBe(true);
+    for (const k of ['roughnessNode', 'metalnessNode', 'envNode', 'normalNode']) {
+      expect((mat(other) as Any)[k] ?? null, k).toBeNull();
+    }
+    expect(mat(body).isMeshPhysicalNodeMaterial).toBe(true);
+    expect(mat(body).roughnessNode).toBe(r);
+
+    const solo = named('Solo');
+    const e = TSL.color(3);
+    FS.apply(solo, () => ({ emissiveNode: e, unlit: true }));
+    expect(mat(solo).isMeshBasicNodeMaterial).toBe(true);
+    expect(mat(solo).colorNode).toBe(e);
+    expect(mat(solo).emissiveNode ?? null).toBeNull();
+  });
+
+  it('absent or non-true unlit keeps the physical material', () => {
+    const { FS } = fresh();
+    for (const unlit of [undefined, false, 1, 'true']) {
+      const m = named('M');
+      FS.apply(m, () => ({ colorNode: TSL.color(1), ...(unlit === undefined ? {} : { unlit }) }));
+      expect(mat(m).isMeshPhysicalNodeMaterial, String(unlit)).toBe(true);
     }
   });
 

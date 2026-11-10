@@ -336,7 +336,7 @@ export function MathCardContent(props: ContentProps & { xWired?: boolean; dynami
   // node's OWN renderer (WaveformSvg) at phase 0 — the tile used to repaint
   // a private canvas copy of the same picture.
   return (
-    <CardShell {...props} nodeClassName="math-preview-node">
+    <CardShell {...props} nodeClassName="math-preview-node" hideOutput>
       <div className="math-preview-node__canvas-wrap">
         <WaveformSvg
           func={def.type === 'cos' ? Math.cos : Math.sin}
@@ -345,16 +345,18 @@ export function MathCardContent(props: ContentProps & { xWired?: boolean; dynami
           showReadout
           dynamicRefs={dynamicRefs}
         />
+        {/* Both sockets on the plot's zero line, as MathPreviewNode places
+            them (hideOutput above drops the generic centre dot). */}
+        {def.inputs[0] && <CardSocket side="left" dataType={def.inputs[0].dataType} port={def.inputs[0]} />}
+        {def.outputs[0] && <CardSocket side="right" dataType={def.outputs[0].dataType} port={def.outputs[0]} />}
       </div>
 
-      {/* The canvas node's bottom port row: socket AND the editable X value
-          beside it (MathPreviewNode renders the number whenever `x` is
-          unconnected — which is always true on a palette tile). The tile used
-          to draw only a floating dot, so it was both missing the widget and
+      {/* The canvas node's bottom row: the editable X value (MathPreviewNode
+          renders the number whenever `x` is unconnected — which is always
+          true on a palette tile). The tile used to lack the widget and was
           shorter than the node by the row's height. */}
       <div className="math-preview-node__port-row">
         <div className="math-preview-node__left">
-          {def.inputs[0] && <CardSocket side="left" dataType={def.inputs[0].dataType} port={def.inputs[0]} />}
           {!xWired && <DragNumberInput compact value={0} onChange={() => {}} />}
         </div>
       </div>

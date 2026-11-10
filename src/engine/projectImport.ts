@@ -43,14 +43,11 @@ import {
 import {
   createPreviewMesh,
   detectMeshKind,
-  isSplatKind,
   sanitizeMeshFileName,
-  splatEvalRefusal,
   type MeshRefusal,
   type MeshRejectReason,
   type PreviewMesh,
 } from '@/utils/previewMesh';
-import { isEvalMode } from '@/eval/evalMode';
 import { assetLiteralText, readGlbFsExtras } from '@/utils/glbShaderExtras';
 import { readGltfModel } from '@/utils/gltfReader';
 import { planTextureStrip, stripGltfTextures } from '@/utils/gltfStrip';
@@ -288,7 +285,7 @@ export function commitGlbImport(
   if (name) useAppStore.getState().setShaderName(name);
 
   showCustomMesh();
-  announceGraphMerged();
+  announceGraphMerged('model');
   opts?.onCommitted?.();
 }
 
@@ -310,20 +307,26 @@ export function startSplatGraph(): void {
     syncSource: 'graph',
     isUndoRedo: false,
   });
-  announceGraphMerged();
+  announceGraphMerged('splat');
 }
 
 /**
  * "The graph was replaced, but the DOCUMENT was not." The canvas frames the
- * result and ends Preview mode; the Work folder and the study telemetry,
- * which answer `fs:graph-imported`, deliberately do not hear this one.
+ * result and ends Preview mode; the Work folder, which answers
+ * `fs:graph-imported`, deliberately does not hear this one. The study
+ * telemetry logs it as `import {how}` — `how` is the `detail` below, so a
+ * lesson takeover (the store's own detail-less dispatch, already logged as
+ * `tutorial-start`) is not counted twice.
  */
 export const GRAPH_MERGED_EVENT = 'fs:graph-merged';
 
+/** What a `GRAPH_MERGED_EVENT` with a `detail` merged: a shader's Add, Mesh with Materials, a splat's Clear graph. */
+export type GraphMergeHow = 'add' | 'model' | 'splat';
+
 /** Announce `GRAPH_MERGED_EVENT`: `commitGlbImport`, `startSplatGraph` and `addDroppedShader`. */
-function announceGraphMerged(): void {
+function announceGraphMerged(how: GraphMergeHow): void {
   if (typeof window === 'undefined') return;
-  window.dispatchEvent(new CustomEvent(GRAPH_MERGED_EVENT));
+  window.dispatchEvent(new CustomEvent(GRAPH_MERGED_EVENT, { detail: { how } }));
 }
 
 /**
@@ -489,24 +492,19 @@ const SKIP_REASON_TABLE: Readonly<Record<MeshRejectReason, true>> = {
   'ply-compressed': true,
   'spz-version': true,
   'gltf-splat': true,
-  'splat-eval': true,
 };
 const SKIP_REASONS: ReadonlySet<unknown> = new Set(Object.keys(SKIP_REASON_TABLE));
 
 /**
  * The zip's model entry as a preview mesh, or the refusal a drop of the same
- * file would get. `study` is the study-session switch (`isEvalMode()` at the
- * one caller), a parameter so a node test can hold it: a study session takes
- * no Gaussian splat (D10), refused on the KIND alone — before the sniff, the
- * way the preview drop refuses one before its pre-read gate.
+ * file would get — in a study session too (since 2026-11-10; through the
+ * first study round a study refused every splat kind here).
  */
 export function zipModelOutcome(
   entryName: string,
   data: Uint8Array,
-  study: boolean,
 ): { mesh: PreviewMesh } | { refusal: MeshRefusal } {
   const fileName = entryName.split('/').pop() ?? entryName;
-  if (study && isSplatKind(detectMeshKind(fileName))) return { refusal: splatEvalRefusal() };
   const result = createPreviewMesh(fileName, data);
   return 'mesh' in result ? { mesh: result.mesh } : { refusal: result.refusal };
 }
@@ -628,10 +626,9 @@ export async function importShaderZip(
   // entry was picked BY its extension), so it is not reported.
   let skipped: { refusal: MeshRefusal; bytes: number } | null = null;
   if (modelEntry) {
-    // A splat in a study session is skipped like any refused model — beside a
-    // script the shader loads and the import note says why; alone, the zip
-    // is refused with that reason.
-    const outcome = zipModelOutcome(modelEntry.name, modelEntry.data, isEvalMode());
+    // A refused model is skipped — beside a script the shader loads and the
+    // import note says why; alone, the zip is refused with that reason.
+    const outcome = zipModelOutcome(modelEntry.name, modelEntry.data);
     if ('mesh' in outcome) mesh = outcome.mesh;
     else if (outcome.refusal.reason !== 'unsupported') {
       skipped = { refusal: outcome.refusal, bytes: modelEntry.data.length };
@@ -819,7 +816,7 @@ export async function addDroppedShader(
     syncSource: 'graph' as const,
     isUndoRedo: false,
   }));
-  announceGraphMerged();
+  announceGraphMerged('add');
   return {
     ok: true,
     added: plan.members.length,

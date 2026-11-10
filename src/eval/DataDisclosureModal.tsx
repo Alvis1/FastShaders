@@ -176,7 +176,7 @@ export function DataDisclosureModal({ onClose }: Props) {
         <div className="eval-consent__section">
           <strong>{t('Where it goes', language)}</strong>
           <div className="eval-disclosure__body">
-            {t('Saved to your Downloads folder and uploaded to the study server alvismisjuns.lv (fs.sferas.lv), operated by the researcher. Sending by email is optional and reveals your email address.', language)}
+            {t('Saved to your Downloads folder and uploaded to ViA\'s study server imgame.va.lv. Sending by email is optional and reveals your email address.', language)}
           </div>
         </div>
 

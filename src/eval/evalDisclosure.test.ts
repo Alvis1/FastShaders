@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { CONSENT_TEXT_VERSION, EVAL_SERVER_HOSTS } from './evalMode';
+import { CONSENT_TEXT_VERSION, EVAL_UPLOAD_HOST } from './evalMode';
+import { EVAL_UPLOAD_URL } from './evalUpload';
 import { BACKGROUND_ITEMS } from './background';
 import { PRO_ITEMS } from './proQuestions';
 import { TASK_ITEMS } from './taskQuestions';
@@ -54,9 +55,10 @@ describe('the consent text matches what the package actually contains', () => {
     // key up any more (t() keys are the English prose itself) — and the prose it
     // froze is FALSE twice over: it promises "nothing else is recorded" for a
     // package that carries a 14-field device block, a rendered preview.png, a
-    // free-text comment and dropped file names, and it calls alvismisjuns.lv
-    // "the university's server", which the very next test forbids because the
-    // host is the researcher's personal one. A pin that keeps a false
+    // free-text comment and dropped file names, and it called alvismisjuns.lv,
+    // the researcher's personal host, "the university's server" (since
+    // consent-16 the package does go to ViA's server, imgame.va.lv, and the next
+    // test names THAT host — never this sentence). A pin that keeps a false
     // translation alive is a hazard, not a guard: the key is one prose edit away
     // from being looked up again, and it blocked the dead-key sweep besides.
     // What survives is the assertion with teeth — the sentence must appear on
@@ -66,15 +68,33 @@ describe('the consent text matches what the package actually contains', () => {
     expect(disclosure).not.toContain('Nothing else is recorded');
   });
 
-  it('does not call the researcher’s own host "the university’s server", and names both addresses', () => {
-    // The contrast "not by the university" was dropped on 2026-09-10 (owner
-    // decision) — the positive claim is what has to stay.
-    expect(consent).not.toMatch(/university.s server/);
-    for (const host of EVAL_SERVER_HOSTS) {
-      expect(consent, `${host} is not named in the consent text`).toContain(host);
+  it('names the server the package is really uploaded to: ViA’s imgame.va.lv, in both languages', () => {
+    // consent-16 (2026-11-09) moved the upload from the researcher's own
+    // alvismisjuns.lv to ViA's server, so the data controller the consent names
+    // also holds the data. The text spells the host literally (the English
+    // sentence is the i18n key), so it is held here to the host of the URL the
+    // build ACTUALLY posts to: moving the endpoint without rewording the consent
+    // fails this test, and so does rewording it without moving the endpoint.
+    expect(new URL(EVAL_UPLOAD_URL).host).toBe(EVAL_UPLOAD_HOST);
+    const sentence = (src: string) => {
+      const m = src.match(/t\('((?:[^'\\]|\\.)*study server(?:[^'\\]|\\.)*)', language\)/);
+      expect(m, 'the "study server" sentence').not.toBeNull();
+      return m![1].replace(/\\'/g, "'");
+    };
+    for (const [screen, src] of [['consent', consent], ['disclosure', disclosure]] as const) {
+      const en = sentence(src);
+      expect(en, `${screen}: host`).toContain(EVAL_UPLOAD_HOST);
+      expect(en, `${screen}: whose server`).toMatch(/\bViA\b/);
+      expect(ui[en], `${screen}: Latvian`).toContain(EVAL_UPLOAD_HOST);
+      expect(ui[en], `${screen}: Latvian names ViA`).toContain('Vidzemes Augstskolas');
     }
-    expect(consent).toMatch(/operated by the researcher/);
-    expect(disclosure).toMatch(/operated by the researcher/);
+    // The retired claim must not come back on either screen: since consent-16
+    // no package goes to the researcher's own host. (consent-3..15 said
+    // "…alvismisjuns.lv (fs.sferas.lv), operated by the researcher".)
+    for (const src of [consent, disclosure]) {
+      expect(src).not.toContain('alvismisjuns.lv');
+      expect(src).not.toMatch(/operated by the researcher/);
+    }
   });
 
   it('promises a DPO route only when one is configured', () => {

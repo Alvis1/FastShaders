@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
-import { EVAL_DPO_CONTACT, EVAL_RETENTION_PERIOD, warnIfConsentIncomplete } from './evalMode';
+import { EVAL_DPO_CONTACT, EVAL_RETENTION_PERIOD, linkParticipantCode, warnIfConsentIncomplete } from './evalMode';
 import { asksAge, evalTask } from './evalTask';
 import { DataDisclosureModal } from './DataDisclosureModal';
 import { LangSwitch } from './LangSwitch';
@@ -21,7 +21,9 @@ import './eval.css';
  * The participant field asks for a CODE, not a name (GDPR data minimisation;
  * pseudonymisation is the Horizon Europe default) — the researcher assigns
  * P01, P02, … and keeps the code→name key on the paper consent form, apart
- * from the data.
+ * from the data. A link may carry the code in its fragment
+ * (`…/evalpro#P0101`): the dialog then shows it as "Your code: P0101" and
+ * offers no field — the researcher assigned it, so it cannot be changed.
  */
 
 /*
@@ -57,7 +59,10 @@ interface Props {
 
 export function ConsentModal({ onAgree, onDecline }: Props) {
   const language = useAppStore((s) => s.language);
-  const [participant, setParticipant] = useState('');
+  // From the link's fragment (`/evalpro#P0101`, stored by the redirector):
+  // FIXED when present — shown, never editable, and what Agree records.
+  const [linkCode] = useState(linkParticipantCode);
+  const [participant, setParticipant] = useState(linkCode);
   const [adult, setAdult] = useState(false);
   const [showDisclosure, setShowDisclosure] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -127,7 +132,7 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
         </div>
 
         <div className="eval-consent__section">
-          {t('Nothing is sent while you work. On submit, one ZIP file is saved locally and uploaded to the study server alvismisjuns.lv (fs.sferas.lv), operated by the researcher.', language)}
+          {t('Nothing is sent while you work. On submit, one ZIP file is saved locally and uploaded to ViA\'s study server imgame.va.lv.', language)}
         </div>
 
         <div className="eval-consent__section">
@@ -149,18 +154,25 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
           </label>
         )}
 
-        <div className="eval-consent__code-row">
-          <label htmlFor="eval-participant">{t('Participant code (from the researcher):', language)}</label>
-          <input
-            id="eval-participant"
-            type="text"
-            value={participant}
-            maxLength={40}
-            placeholder="P01"
-            onChange={(e) => setParticipant(e.target.value)}
-            autoFocus
-          />
-        </div>
+        {linkCode ? (
+          <div className="eval-consent__code-row">
+            <span>{t('Your code:', language)}</span>
+            <strong className="eval-consent__code-fixed">{linkCode}</strong>
+          </div>
+        ) : (
+          <div className="eval-consent__code-row">
+            <label htmlFor="eval-participant">{t('Participant code (from the researcher):', language)}</label>
+            <input
+              id="eval-participant"
+              type="text"
+              value={participant}
+              maxLength={40}
+              placeholder="P01"
+              onChange={(e) => setParticipant(e.target.value)}
+              autoFocus
+            />
+          </div>
+        )}
 
         <div className="csv-import-modal__buttons">
           <button type="button" className="csv-import-modal__button" onClick={onDecline}>
@@ -172,7 +184,7 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
             disabled={ASKS_AGE && !adult}
             onClick={() => {
               if (ASKS_AGE && !adult) return;
-              onAgree(participant.trim(), ASKS_AGE && adult);
+              onAgree(linkCode || participant.trim(), ASKS_AGE && adult);
             }}
           >
             {t('I agree — start the session', language)}

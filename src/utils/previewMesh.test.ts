@@ -12,11 +12,9 @@ import {
   isSplatKind,
   isTextKind,
   splatCountRefusal,
-  splatEvalRefusal,
   MESH_EXTENSIONS,
   MESH_DROP_HINT_KEY,
   MESH_GLTF_SPLAT_KEY,
-  MESH_SPLAT_EVAL_KEY,
   MESH_BAD_SPLAT_KEY,
   MESH_SPLAT_COUNT_KEY,
   MESH_PLY_SH_KEY,
@@ -884,11 +882,6 @@ describe('previewMesh: splat refusal wording', () => {
     expect(formatSplatCount(SPLAT_MAX_COUNT, 'en')).toBe('1,000,000');
     expect(formatSplatCount(0, 'en')).toBe('0');
     for (const bad of [Number.NaN, -1, Number.POSITIVE_INFINITY, '5' as unknown as number]) expect(formatSplatCount(bad, 'en')).toBe('');
-  });
-
-  it('the study-session refusal is its own reason and key, a fresh object per call', () => {
-    expect(splatEvalRefusal()).toEqual({ reason: 'splat-eval', key: MESH_SPLAT_EVAL_KEY });
-    expect(splatEvalRefusal()).not.toBe(splatEvalRefusal());
   });
 
   it('the .ply SH sentence names the conversion', () => {

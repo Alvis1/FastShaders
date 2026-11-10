@@ -384,9 +384,8 @@ export function Toolbar() {
   const setOptionalCategory = useAppStore((s) => s.setOptionalCategory);
   const allowManyMaterials = useAppStore((s) => s.allowManyMaterials);
   const setAllowManyMaterials = useAppStore((s) => s.setAllowManyMaterials);
-  // One row per setting; the GLB row is absent in a study session (the dialog
-  // is never offered there, and a control that does nothing is not offered).
-  const prefsRows = 1 + OPTIONAL_CATEGORIES.length + (isEvalMode() ? 0 : 1);
+  // One row per setting: the wheel mode, the optional categories, the GLB row.
+  const prefsRows = 1 + OPTIONAL_CATEGORIES.length + 1;
   const closePrefs = useCallback(() => setPrefsAt(null), []);
   useDismiss(prefsAt != null, closePrefs, [prefsRef]);
 
@@ -1295,22 +1294,20 @@ export function Toolbar() {
             );
           })}
           {/* The GLB import's "Allow more than 10 materials" override (N11).
-              Hidden in a study session: the dialog is never offered there. */}
-          {!isEvalMode() && (
-            <label
-              className="toolbar__prefs-row"
-              title={fillTemplate(t(ALLOW_MANY_MATERIALS_HINT, language), { limit: GLB_IMPORT_MATERIAL_LIMIT })}
-            >
-              <input
-                type="checkbox"
-                checked={allowManyMaterials}
-                onChange={(e) => setAllowManyMaterials(e.target.checked)}
-              />
-              <span className="toolbar__prefs-label">
-                {fillTemplate(t('Allow more than {limit} materials', language), { limit: GLB_IMPORT_MATERIAL_LIMIT })}
-              </span>
-            </label>
-          )}
+              The study's clean slate resets it (EvalGate). */}
+          <label
+            className="toolbar__prefs-row"
+            title={fillTemplate(t(ALLOW_MANY_MATERIALS_HINT, language), { limit: GLB_IMPORT_MATERIAL_LIMIT })}
+          >
+            <input
+              type="checkbox"
+              checked={allowManyMaterials}
+              onChange={(e) => setAllowManyMaterials(e.target.checked)}
+            />
+            <span className="toolbar__prefs-label">
+              {fillTemplate(t('Allow more than {limit} materials', language), { limit: GLB_IMPORT_MATERIAL_LIMIT })}
+            </span>
+          </label>
         </div>
       )}
     </div>

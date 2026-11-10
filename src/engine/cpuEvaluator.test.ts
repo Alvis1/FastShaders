@@ -145,6 +145,19 @@ describe('evaluateNodeOutput — unary math', () => {
     expect(unary('sin', Math.PI / 2)).toBeCloseTo(1, 10);
   });
 
+  it('"Map to 0…1" evaluates ½ + ½·wave, and only for sin/cos with unit === 1', () => {
+    const at = (type: string, value: number, values: Record<string, unknown>) => {
+      const x = makeNode('x', 'float', { value });
+      const op = makeNode('op', type, values as never);
+      return evaluateNodeOutput('op', [x, op], [makeEdge('x', 'out', 'op', 'x')], 0)![0];
+    };
+    expect(at('sin', 0, { unit: 1 })).toBeCloseTo(0.5, 10);
+    expect(at('sin', Math.PI / 2, { unit: 1 })).toBeCloseTo(1, 10);
+    expect(at('cos', Math.PI, { unit: 1 })).toBeCloseTo(0, 10);
+    expect(at('cos', 0, { unit: 0 })).toBe(1);
+    expect(at('cos', 0, { unit: null })).toBe(1);
+  });
+
   it('abs is component-wise', () => {
     expect(unary('abs', -7)).toBe(7);
     expect(unary('abs', 7)).toBe(7);

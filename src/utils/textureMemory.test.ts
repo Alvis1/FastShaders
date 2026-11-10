@@ -465,8 +465,8 @@ describe('the surface and the import rule', () => {
     expect(body).toContain('unwrapCollapsedGroupEdges(');
   });
 
-  it('the line is hidden in every study arm and when nothing is counted', () => {
-    expect(menu).toContain('const showTextureMemory = !isEvalMode();');
+  it('the line follows the points (absent on /evalp) and is hidden when nothing is counted', () => {
+    expect(menu).toContain('const showTextureMemory = evalTask().pointsVisible;');
     expect(menu).toContain('showTextureMemory && texCount > 0 && (');
     expect(menu).toContain('title={t(TEXTURE_MEMORY_HINT_KEY, language)}');
     expect(menu).toContain('textureMemoryLine(texBytes, texCount, language)');

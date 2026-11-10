@@ -297,15 +297,15 @@ describe('the code panel follows the EXPORT button', () => {
     // .zip ships under models/, when it ships one (tslToAFrameHTML `bundledModel`).
     expect(src).toContain("...(exportFormat === 'glb' ? { modelFile: glbFileName } : { bundledModel })");
     // The bundle's model is named from the SAME decision the button builds from…
-    expect(src).toContain("const choice = exportModelChoice(s, false, 'primary');");
-    // …and a study session keeps the primitive page it always had.
+    // — a study session's own rule included (its package follows the document).
+    expect(src).toContain("const choice = exportModelChoice(s, isEvalMode(), 'primary');");
     const key = src.slice(src.indexOf('const bundledModelKey = useAppStore((s) => {'));
-    expect(key.slice(0, key.indexOf('});'))).toContain("if (isEvalMode()) return '';");
+    expect(key.slice(0, key.indexOf('});'))).not.toContain("return '';");
   });
 
   it('both embed tabs follow the SHOWN geometry live, with the snapshot only as the fallback', () => {
     const src = read('components/CodeEditor/CodeEditor.tsx');
-    expect(src).toContain('const shownGeometry = useAppStore((s) => (isEvalMode() ? null : (s.previewShape?.geometry ?? null)));');
+    expect(src).toContain('const shownGeometry = useAppStore((s) => s.previewShape?.geometry ?? null);');
     expect(src).toContain('const pageGeometry = shownGeometry ?? fallbackGeometry;');
     expect(src).toContain('[marchWindow, embedStamp],');
     expect(src.split('geometry: pageGeometry,').length - 1).toBe(2);

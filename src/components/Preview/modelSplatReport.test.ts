@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { useAppStore } from '@/store/useAppStore';
 import { sanitizeSplatReport } from '@/utils/meshInventory';
-import { createPreviewMesh, MESH_EXTENSIONS, MESH_SPLAT_EVAL_KEY } from '@/utils/previewMesh';
+import { createPreviewMesh, MESH_EXTENSIONS } from '@/utils/previewMesh';
 import { SPLAT_MAX_COUNT } from '@/utils/splatLimits';
 import { t } from '@/i18n';
 import { SINK_MODEL_ISSUE_KEY } from '@/utils/sinkModelCopy';
@@ -146,22 +146,11 @@ describe('previewSplatFacts in the store', () => {
   });
 });
 
-describe('the study session takes no splat (D10)', () => {
-  it('a dropped splat is refused on its kind, BEFORE the pre-read gate and the read', () => {
-    const load = callbackBody(PREVIEW, 'loadMeshFile');
-    const refusal = load.indexOf('if (isEvalMode() && isSplatKind(kind)) {');
-    expect(refusal).toBeGreaterThan(-1);
-    expect(refusal).toBeLessThan(load.indexOf('preReadModelGate('));
-    expect(refusal).toBeLessThan(load.indexOf('file.arrayBuffer()'));
-    expect(load.slice(refusal, load.indexOf('return;', refusal))).toContain('meshRefusalMessage(splatEvalRefusal(), language)');
-  });
-
-  it('a splat cached by an earlier visit is not restored into a study session', () => {
+describe('a study session takes splats like any session (since 2026-11-10)', () => {
+  it('no study branch in the drop or the cache restore', () => {
+    expect(callbackBody(PREVIEW, 'loadMeshFile')).not.toMatch(/isEvalMode/);
     const at = PREVIEW.indexOf('void loadPreviewMeshFromCache()');
-    const restore = PREVIEW.slice(at, PREVIEW.indexOf('.finally(', at));
-    const drop = restore.indexOf('if (isEvalMode() && isSplatKind(mesh.kind)) return;');
-    expect(drop).toBeGreaterThan(-1);
-    expect(drop).toBeLessThan(restore.indexOf('setPreviewMesh(mesh, { persist: false })'));
+    expect(PREVIEW.slice(at, PREVIEW.indexOf('.finally(', at))).not.toMatch(/isEvalMode/);
   });
 });
 
@@ -190,20 +179,14 @@ describe('the Splat Output pane notice (now one of the sink/model fit notices)',
     for (const key of [
       SINK_MODEL_ISSUE_KEY['splat-needs-splat'],
       SINK_MODEL_ISSUE_KEY['splat-pick-splat'],
-      MESH_SPLAT_EVAL_KEY,
     ]) {
       expect(t(key, 'lv'), key).not.toBe(key);
     }
     expect(t(SINK_MODEL_ISSUE_KEY['splat-pick-splat'], 'lv')).toContain(t('Model', 'lv'));
   });
 
-  it('in a study session: the refusal for the Splat Output’s two, and no new notice', () => {
-    const at = PREVIEW.indexOf('const modelNotice = sinkIssue === null');
-    const decl = PREVIEW.slice(at, PREVIEW.indexOf(';', PREVIEW.indexOf('sinkModelIssueText(', at)));
-    const evalAt = decl.indexOf('isEvalMode()');
-    expect(evalAt).toBeGreaterThan(-1);
-    expect(decl.indexOf('sinkModelIssueText(')).toBeGreaterThan(evalAt);
-    expect(decl).toContain("(sinkIssue === 'splat-needs-splat' || sinkIssue === 'splat-pick-splat' ? t(MESH_SPLAT_EVAL_KEY, language) : null)");
+  it('one notice for every session: the fit check’s own sentence', () => {
+    expect(PREVIEW).toContain("const modelNotice = sinkIssue === null ? null : sinkModelIssueText(sinkIssue, previewMesh?.name ?? '', language);");
   });
 
   it('yields the corner to a transient notice', () => {

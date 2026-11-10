@@ -715,7 +715,7 @@ export default shader;
     ['a different offset', '  const n1 = mx_noise_float(positionGeometry).mul(0.5).add(0.4);', 'mx_noise_float, positionGeometry'],
     ['the operations swapped', '  const n1 = mx_noise_float(positionGeometry).add(0.5).mul(0.5);', 'mx_noise_float, positionGeometry'],
     ['a noise type that was already [0,1]', '  const n1 = mx_cell_noise_float(positionGeometry).mul(0.5).add(0.5);', 'mx_cell_noise_float, positionGeometry'],
-    ['a non-noise receiver', '  const n1 = sin(positionGeometry.x).mul(0.5).add(0.5);', 'sin, positionGeometry'],
+    ['a receiver with no range flag', '  const n1 = abs(positionGeometry.x).mul(0.5).add(0.5);', 'abs, positionGeometry'],
     ['extra noise arguments', '  const n1 = mx_noise_float(positionGeometry, 2).mul(0.5).add(0.5);', 'mx_noise_float, positionGeometry'],
   ])('refuses to collapse %s', (_label, body, imports) => {
     const r = codeToGraph(wrap(body, imports));

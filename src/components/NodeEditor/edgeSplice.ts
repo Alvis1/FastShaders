@@ -6,8 +6,9 @@
  * port's existing edge whenever an already-wired node was dragged onto a new
  * wire — dropping a half-built Multiply (A already fed by a noise node) onto an
  * edge threw the noise connection away and looked like the splice had eaten it.
- * The rule is now "first FREE input socket": what the node already has stays,
- * and the edge's source goes to the next empty slot.
+ * The rule is now "the main input if free, else the first FREE input socket":
+ * what the node already has stays, and the edge's source goes to the next empty
+ * slot.
  *
  * Two node families need the INSTANCE's state, not just the registry def:
  *
@@ -33,6 +34,7 @@
 
 import type { NodeDefinition } from '@/types';
 import { effectiveInputs } from '@/registry/nodeRegistry';
+import { primaryInputId } from '@/utils/primaryInput';
 
 /**
  * The input port a drop-on-edge splice should wire the edge's source into.
@@ -54,5 +56,11 @@ export function pickSpliceInputPort(
   const taken = new Set(connectedHandles);
   const ports = effectiveInputs(def, taken, true, valuedHandles);
   if (ports.length === 0) return null;
-  return (ports.find((p) => !taken.has(p.id)) ?? ports[0]).id;
+  // The MAIN input first (utils/primaryInput.ts — Mix's Factor, Smoothstep's X,
+  // else the top one) when it is free, then the first other free socket, and
+  // the main input again — replaced — only when every socket is taken.
+  const main = primaryInputId(def);
+  const free = ports.filter((p) => !taken.has(p.id));
+  const pick = free.find((p) => p.id === main) ?? free[0] ?? ports.find((p) => p.id === main) ?? ports[0];
+  return pick.id;
 }

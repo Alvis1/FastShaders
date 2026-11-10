@@ -2,14 +2,13 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { panelCodegen } from '@/engine/panelCode';
-import { isEvalMode } from '@/eval/evalMode';
 import { onUnknownExpressionValidated, loadUnknownExpressionValidator } from '@/engine/unknownExpression';
 // NB codeToGraph is deliberately NOT imported here — see doCodeSync, which
 // pulls it in on demand so the Babel front end stays off the boot wave.
 import { autoLayout } from '@/engine/layoutEngine';
 import { computeReachableCost, sinkCosts, sinkBadgesStale, stampSinkCosts } from '@/utils/nodeCost';
 import { activeSink, isSinkNode, hasActiveFlag, normalizeActiveOutput } from '@/utils/sdfPartition';
-import { carryModelMeshes, isOutputNode } from '@/utils/outputMaterials';
+import { carryModelMeshes, isOutputNode, moduleSettingsOutput } from '@/utils/outputMaterials';
 import { carryMaterialSettings, pairResyncNodes, placeParsedOutputs } from '@/utils/resyncPairing';
 import { carryInactiveSinks } from '@/utils/sinkCarry';
 import { carryPanelHidden, inOldOrder, panelCarryIds, panelFeederResolver } from '@/utils/panelCarry';
@@ -130,9 +129,9 @@ export function useSyncEngine() {
       // — and so does the preview, which runs the same text: a dead chain is
       // dead code, so a Time node in one no longer keeps the preview drawing
       // and an unwired Image no longer crosses into it. Names are still the
-      // whole graph's (`result.varNames`). A study session keeps the whole
-      // panel, the editor its participants started with.
-      const { result, emitted } = panelCodegen(nodes, edges, isEvalMode());
+      // whole graph's (`result.varNames`). A study session gets the same panel
+      // (2026-11-10; it kept the whole one through the first study round).
+      const { result, emitted } = panelCodegen(nodes, edges, false);
       // PREVIEW MODE: the 3D view renders the DERIVED graph — the previewed
       // socket routed to the Output's Color, every other sink input dropped
       // (utils/nodePreview.ts) — while `code` stays the real graph's, so the
@@ -147,7 +146,7 @@ export function useSyncEngine() {
       let previewText: string | undefined;
       if (live) {
         const derived = previewGraph(nodes, edges, live);
-        previewText = panelCodegen(derived.nodes, derived.edges, isEvalMode()).result.code;
+        previewText = panelCodegen(derived.nodes, derived.edges, false).result.code;
       }
       // `nodeSpans` rides the same write: the panel's node → code highlight
       // (CodeEditor/useNodeCodeHighlight.ts) pairs it with THIS text only.
@@ -286,6 +285,11 @@ export function useSyncEngine() {
           // carried wires follow them. Null with the scope.
           const textNames = scope !== null ? useAppStore.getState().codeNames : null;
 
+          // The parsed graph's module-settings Output: its vertex settings are
+          // the module's own and never in the code, so they are carried; every
+          // OTHER targeted Output's are in its part body (partVertexProps).
+          const parsedOwnerId = moduleSettingsOutput(result.nodes)?.id ?? null;
+
           // Merge a matched old node with a new node: preserve position + UI-only data
           const mergeMatch = (newNode: AppNode, match: AppNode): AppNode => {
             const merged = {
@@ -293,9 +297,8 @@ export function useSyncEngine() {
               id: match.id,
               position: { ...match.position },
               // The id is kept, so the selection is too: a selected node is
-              // still selected (and its code still marked) after an Apply. Not
-              // in a study, whose Apply is the one its sessions always met.
-              ...(match.selected === true && !isEvalMode() ? { selected: true } : {}),
+              // still selected (and its code still marked) after an Apply.
+              ...(match.selected === true ? { selected: true } : {}),
             };
             // The active flag is not in the code, so it can only come from
             // the old node — and only if it was really there: an implicit
@@ -397,7 +400,7 @@ export function useSyncEngine() {
             // adopts these settings — though the user set them for the one mesh
             // material 0 used to name. It is visible, and editable, in that
             // node's settings menu.
-            carryMaterialSettings(merged, match);
+            carryMaterialSettings(merged, match, newNode.id === parsedOwnerId);
             // The index sections' loader-0.6 mirror source (`modelMeshes`) is
             // MODULE-ONLY (materialPartsContract R7) and never in the code, so
             // the parse cannot re-create it. It is carried while the PARSED

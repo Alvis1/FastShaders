@@ -158,7 +158,8 @@ describe('every string this package added is translated', () => {
 describe('every import surface says why a zip was refused', () => {
   const NODE_EDITOR = read('components/NodeEditor/NodeEditor.tsx');
   const CODE_EDITOR = read('components/CodeEditor/CodeEditor.tsx');
-  const PREVIEW = read('components/Preview/ShaderPreview.tsx');
+  // The preview's shader drops all go through the Open/Add dialog now.
+  const SHADER_DIALOG = read('components/Modals/ShaderImportModal.tsx');
   const WORK_FOLDER = read('components/Layout/WorkFolder.tsx');
   const STORE = read('store/useAppStore.ts');
 
@@ -166,7 +167,7 @@ describe('every import surface says why a zip was refused', () => {
     for (const [name, src] of [
       ['NodeEditor', NODE_EDITOR],
       ['CodeEditor', CODE_EDITOR],
-      ['ShaderPreview', PREVIEW],
+      ['ShaderImportModal', SHADER_DIALOG],
       ['WorkFolder', WORK_FOLDER],
     ] as const) {
       expect(src, name).toContain('reportZipImportError(');

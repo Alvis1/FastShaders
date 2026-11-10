@@ -20,6 +20,17 @@
     try {
       sessionStorage.setItem('fs:evalArm', '1');
       sessionStorage.removeItem('fs:evalSession');
+      // The participant code may ride the link's FRAGMENT (…/evalpro#P0101), so
+      // the consent opens with it filled in and nobody has to type it. A
+      // fragment never reaches the server (no access log holds the code) and
+      // `location.replace` below drops it, so the app URL stays clean. Removed
+      // FIRST, so a link without one never inherits the previous participant's
+      // code in this tab; the app re-validates what is stored
+      // (evalMode.ts `linkParticipantCode`, the same pattern).
+      sessionStorage.removeItem('fs:evalParticipant');
+      var code = '';
+      try { code = decodeURIComponent((location.hash || '').slice(1)).trim(); } catch (e2) { code = ''; }
+      if (/^[A-Za-z0-9._-]{1,40}$/.test(code)) sessionStorage.setItem('fs:evalParticipant', code);
       // SET, never appended (see /evalp: the FIRST occurrence wins, so
       // `?pro=off&pro=on` dropped the professional block). `arm` names this
       // entry the same way (evalTask.ts).

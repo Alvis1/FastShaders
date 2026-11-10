@@ -4,6 +4,7 @@ import type { AppEdge, AppNode, GroupFlowNode } from '@/types';
 import { useAppStore, MIN_GROUP_W, MIN_GROUP_H } from '@/store/useAppStore';
 import { getGroupFrameColors } from '@/utils/colorUtils';
 import { nodeCostPoints } from '@/utils/nodeCost';
+import { groupDescendantIds } from '@/utils/groupFrame';
 import { getUnwrappedEdges } from '@/engine/cpuEvaluator';
 import { useBudgetPoints } from '@/hooks/useDeviceBudget';
 import { Points } from '@/components/Points/Points';
@@ -14,9 +15,10 @@ import './GroupNode.css';
 /**
  * What a collapsed pill's badge sums, in TABLE points: the LIVE price
  * (`nodeCostPoints`, under the selected device's table) of every node the
- * group holds directly — `parentId === groupId`, the member set
- * `toggleGroupCollapsed` collapses. A nested group is one member and prices 0
- * (it has no registry type), exactly as in the store's collapse-time sum.
+ * group holds at ANY depth — `groupDescendantIds`, the member set
+ * `toggleGroupCollapsed` collapses. A nested group's own node prices 0 (it
+ * has no registry type) and its members are counted once, as themselves,
+ * exactly as in the store's collapse-time sum.
  * Informational, never the budget: `computeReachableCost` walks the members
  * themselves, reached or not.
  *
@@ -26,8 +28,9 @@ import './GroupNode.css';
  * outside and price below what the collapse charged it.
  */
 export function groupMemberCost(nodes: readonly AppNode[], edges: AppEdge[], groupId: string): number {
+  const inside = groupDescendantIds(nodes, groupId);
   let total = 0;
-  for (const n of nodes) if (n.parentId === groupId) total += nodeCostPoints(n, edges);
+  for (const n of nodes) if (inside.has(n.id)) total += nodeCostPoints(n, edges);
   return total;
 }
 
@@ -51,9 +54,10 @@ interface MemberCostMemo {
 
 /** Same members, holding the same `data` objects, in the same order. */
 function sameMembers(nodes: readonly AppNode[], groupId: string, m: MemberCostMemo): boolean {
+  const inside = groupDescendantIds(nodes, groupId);
   let k = 0;
   for (const n of nodes) {
-    if (n.parentId !== groupId) continue;
+    if (!inside.has(n.id)) continue;
     if (k >= m.ids.length || m.ids[k] !== n.id || m.data[k] !== n.data) return false;
     k++;
   }
@@ -85,8 +89,9 @@ export function makeGroupMemberCostSelector(groupId: string): (s: GroupCostInput
     }
     const ids: string[] = [];
     const data: unknown[] = [];
+    const inside = groupDescendantIds(s.nodes, groupId);
     for (const n of s.nodes) {
-      if (n.parentId !== groupId) continue;
+      if (!inside.has(n.id)) continue;
       ids.push(n.id);
       data.push(n.data);
     }

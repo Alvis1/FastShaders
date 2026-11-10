@@ -121,6 +121,16 @@ export function canvasInkColor(bgHex: string): string {
   return getContrastColor(bgHex) === '#000000' ? '#000000' : '#d9dce0';
 }
 
+/**
+ * The colour of a ONE-channel wire (and a still wire's chevrons) against the
+ * canvas backdrop. Black on a light backdrop; on a dark one a light grey a
+ * little under pure white, so a wire reads as a line and not a glare. Kept
+ * apart from `canvasInkColor`, which also inks the cost badges and the grid.
+ */
+export function canvasWireColor(bgHex: string): string {
+  return getContrastColor(bgHex) === '#000000' ? '#000000' : '#c4c8ce';
+}
+
 /** The shadow under canvas ink text (`--node-cost-text-shadow`): the
  *  OPPOSITE of the ink `canvasInkColor` resolved to. */
 export function canvasInkShadow(ink: string): string {

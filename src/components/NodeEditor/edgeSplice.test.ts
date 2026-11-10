@@ -11,24 +11,33 @@ const def = (type: string): NodeDefinition => {
 
 describe('pickSpliceInputPort', () => {
   it('picks the first port on a node with nothing wired', () => {
-    expect(pickSpliceInputPort(def('mix'), [])).toBe('a');
+    expect(pickSpliceInputPort(def('clamp'), [])).toBe('x');
+  });
+
+  it('picks the MAIN input when it is not the first: Mix\'s factor, Smoothstep\'s x', () => {
+    expect(pickSpliceInputPort(def('mix'), [])).toBe('t');
+    expect(pickSpliceInputPort(def('smoothstep'), [])).toBe('x');
   });
 
   it('skips a wired input and takes the next free one', () => {
     // The whole point: dragging a half-built node onto an edge must KEEP the
     // connection it already has instead of overwriting it.
-    expect(pickSpliceInputPort(def('mix'), ['a'])).toBe('b');
-    expect(pickSpliceInputPort(def('mix'), ['a', 'b'])).toBe('t');
+    expect(pickSpliceInputPort(def('clamp'), ['x'])).toBe('min');
+    expect(pickSpliceInputPort(def('clamp'), ['x', 'min'])).toBe('max');
+    // A fed main input (Mix's factor) yields to the first free one in order.
+    expect(pickSpliceInputPort(def('mix'), ['t'])).toBe('a');
+    expect(pickSpliceInputPort(def('mix'), ['t', 'a'])).toBe('b');
   });
 
   it('skips a wired port even when the free one sits above it', () => {
-    expect(pickSpliceInputPort(def('mix'), ['b'])).toBe('a');
+    expect(pickSpliceInputPort(def('clamp'), ['min'])).toBe('x');
   });
 
-  it('falls back to the first port when every socket is taken (splice still splices)', () => {
+  it('falls back to the main port when every socket is taken (splice still splices)', () => {
     // The caller's single-input filter then replaces that port's edge, which
     // is the behaviour every splice had before free-socket selection existed.
-    expect(pickSpliceInputPort(def('mix'), ['a', 'b', 't'])).toBe('a');
+    expect(pickSpliceInputPort(def('clamp'), ['x', 'min', 'max'])).toBe('x');
+    expect(pickSpliceInputPort(def('mix'), ['a', 'b', 't'])).toBe('t');
   });
 
   it('grows a variadic fold rather than declaring it full', () => {

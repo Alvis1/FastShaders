@@ -70,7 +70,62 @@ export const PART_SETTING_KEYS: ReadonlySet<string> = new Set([
   'alphaTest',
   'depthWrite',
   'flatShading',
+  'unlit',
 ]);
+
+/**
+ * The VERTEX settings a TARGETED material's part body carries in the code
+ * panel (owner, 2026-11-10: every Output gets the vertex settings). Not in
+ * PART_SETTING_KEYS — buildMaterial applies neither: `displacementMode` only
+ * chooses the form buildShaderModule writes that part's positionNode in, and
+ * `mergeVertices` reaches loader 0.8 as the part's own key (header delta 14,
+ * the per-mesh model weld). Written only where the material DIFFERS from the
+ * module-settings Output's (`partVertexProps`), so a graph that never set one
+ * emits byte-identically; absent in a part means "as the module".
+ */
+export const PART_VERTEX_KEYS: ReadonlySet<string> = new Set(['displacementMode', 'mergeVertices']);
+
+/** Every settings key a part body may carry: the loader's four-plus and the vertex two. */
+export const PART_BODY_SETTING_KEYS: ReadonlySet<string> = new Set([...PART_SETTING_KEYS, ...PART_VERTEX_KEYS]);
+
+/** A material's effective vertex settings: its own, else the module owner's, else the defaults. */
+export function effectiveVertexSettings(
+  own: MaterialSettings | undefined,
+  owner: MaterialSettings | undefined,
+): { displacementMode: 'normal' | 'offset'; mergeVertices: boolean } {
+  const mode = (s: MaterialSettings | undefined): 'normal' | 'offset' | undefined =>
+    s?.displacementMode === 'offset' ? 'offset' : s?.displacementMode === 'normal' ? 'normal' : undefined;
+  const merge = (s: MaterialSettings | undefined): boolean | undefined =>
+    s?.mergeVertices === false ? false : s?.mergeVertices === true ? true : undefined;
+  return {
+    displacementMode: mode(own) ?? mode(owner) ?? 'normal',
+    mergeVertices: merge(own) ?? merge(owner) ?? true,
+  };
+}
+
+/**
+ * A targeted part body's vertex entries: each one ONLY where this material's
+ * effective value differs from the module owner's. Literals only — nothing
+ * from the (adversarial) settings object is interpolated.
+ */
+export function partVertexProps(own: MaterialSettings | undefined, owner: MaterialSettings | undefined): string[] {
+  const mine = effectiveVertexSettings(own, owner);
+  const base = effectiveVertexSettings(owner, undefined);
+  const out: string[] = [];
+  if (mine.displacementMode !== base.displacementMode) out.push(`displacementMode: '${mine.displacementMode === 'offset' ? 'offset' : 'normal'}'`);
+  if (mine.mergeVertices !== base.mergeVertices) out.push(`mergeVertices: ${mine.mergeVertices ? 'true' : 'false'}`);
+  return out;
+}
+
+/**
+ * A PART body's `mergeVertices`: `false` tears that material, `true` closes it
+ * under a module-wide `false` (partVertexProps writes both). Only here — at
+ * the top level an explicit `true` is the default and is read as nothing.
+ */
+export function partMergeFromSource(text: string | undefined): boolean | undefined {
+  const v = settingValueText(text);
+  return v === 'false' ? false : v === 'true' ? true : undefined;
+}
 
 /**
  * Loader-form object-literal entries for one material, in the fixed order
@@ -113,6 +168,9 @@ export function materialSettingProps(s: MaterialSettings | undefined): string[] 
   // smooth is three's default, and an explicit `flatShading: false` would say
   // nothing while changing the bytes of every export.
   if (s?.flatShading) out.push('flatShading: true');
+  // The Unlit material (loader 0.8 delta 13), last for the same reason. Strict:
+  // a truthy non-boolean read from a file must not switch the lighting off.
+  if (s?.unlit === true) out.push('unlit: true');
   return out;
 }
 
@@ -207,8 +265,14 @@ export function materialSettingsFromSource(
   // "NOT recoverable from the module text" note in projectImport no longer
   // applies to it.
   if (settingValueText(raw.mergeVertices) === 'false') out.mergeVertices = false;
+  // A part's own displacement form (partVertexProps); the top level's is read
+  // off the positionNode instead (`displacementOffset`).
+  const mode = settingValueText(raw.displacementMode);
+  if (mode === "'offset'" || mode === '"offset"') out.displacementMode = 'offset';
+  else if (mode === "'normal'" || mode === '"normal"') out.displacementMode = 'normal';
   // Only an explicit `true`: absent is smooth, which is what a module that
   // never carried the key means.
   if (settingValueText(raw.flatShading) === 'true') out.flatShading = true;
+  if (settingValueText(raw.unlit) === 'true') out.unlit = true;
   return Object.keys(out).length > 0 ? out : undefined;
 }

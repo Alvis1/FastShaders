@@ -26,7 +26,6 @@ import type { ModelTextureSource } from '@/utils/modelTextureSources';
 import { readGltfModel, gltfImageFileName, slotColorSpace } from '@/utils/gltfReader';
 import { encodeGltfImages } from '@/utils/gltfTextureEncode';
 import { fillTemplate } from '@/utils/fillTemplate';
-import { isEvalMode } from '@/eval/evalMode';
 import { TexturePicker } from './TexturePicker';
 import { loadImageOrigin, stashImageOrigin, canStashPayload, type ImageOriginPayload } from '@/utils/imageOriginCache';
 import { deriveOriginView, type LoadedOrigin } from './imageOriginView';
@@ -335,7 +334,7 @@ async function materialiseModelTextureInner(targetId: string, src: ModelTextureS
 /** Image-node section of the right-click settings menu. Its own component
  *  because it needs hooks: the origin read is PREFETCHED (keyed by originId,
  *  see imageOriginView.ts) so Revert and Data-map each write ONE updateNodeData.
- *  Outside a study session it also draws the node's Tile/Offset rows — the
+ *  It also draws the node's Tile/Offset rows — the
  *  generic ParamRow, which NodeSettingsMenu then skips (`imageOwnsParamRows`). */
 export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
   const updateNodeData = useAppStore((s) => s.updateNodeData);
@@ -459,8 +458,6 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
   // and payload size (base64 chars → ~3/4 bytes). Reflects what's actually
   // stored/emitted, so it also shows the effect of the device downscale.
   const url = typeof vals.imageB64 === 'string' ? vals.imageB64 : '';
-  /** Study session (eval): sampled once per page, so every render agrees. */
-  const study = isEvalMode();
   const fmt = (u: string) => {
     const m = /^data:image\/(png|jpeg|webp);base64,/.exec(u);
     return m ? (m[1] === 'jpeg' ? 'JPEG' : m[1].toUpperCase()) : '—';
@@ -835,21 +832,18 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
           the duplicate visible in the first place. */}
       <div className="context-menu__divider" />
       {/* The texture picker: every image the project already holds, plus
-          "From file…". Study sessions keep today's Image node (research §7),
-          so it is hidden there — the gate is UI-only. Keyed by the node so a
+          "From file…" (in a study session too, since 2026-11-10). Keyed by the node so a
           menu MOVED to another node starts with the grid closed and no
           half-answered file question carried over. */}
-      {!study && (
-        <TexturePicker
-          key={nodeId}
-          currentUrl={url}
-          currentName={vals.fileName}
-          disabled={busy}
-          loading={importing}
-          onPick={pickTexture}
-          onFile={pickFile}
-        />
-      )}
+      <TexturePicker
+        key={nodeId}
+        currentUrl={url}
+        currentName={vals.fileName}
+        disabled={busy}
+        loading={importing}
+        onPick={pickTexture}
+        onFile={pickFile}
+      />
       {infoRow(t('Format', language), format)}
       {/* Resolution is a CHOICE when the original is still on this device —
           the one lever that turns "this shader is too expensive" into
@@ -911,39 +905,36 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
           expose-as-socket box — the registry defaults, drawn by the generic
           ParamRow under their socket names), the turn, and — only on a node a
           restore could not fold — the legacy transform, with the one way to
-          drop it. A study session keeps today's menu (research §7): the
-          generic loop draws Tile/Offset there under their raw keys, and there
-          is no turn to set; stored values still emit, the gate is UI-only. */}
-      {!study && (
-        <>
-          {Object.keys(def?.defaultValues ?? {}).map((key) => {
-            const input = def?.inputs.find((i) => i.id === key);
-            return (
-              <ParamRow key={key} nodeId={nodeId} paramKey={key} label={input ? portLabel(input.label, language) : key} />
-            );
-          })}
-          <div style={rowStyle}>
-            <span
-              style={labelStyle}
-              title={t('Turns the picture about its own centre. A positive angle turns it counter-clockwise on the Sphere, Plane, Cube, Utah Teapot, Stanford Bunny and OBJ models, and clockwise on glTF/GLB models with their own UVs — the sign three.js and glTF use (with positive Tile X and Tile Y). With different Tile X and Tile Y the turned picture is stretched along the surface, as in glTF.', language)}
-            >
-              {t('Rotation (°)', language)}
-            </span>
-            <DragNumberInput value={rotationDeg} step={1} onChange={setRotation} />
+          drop it. A study session draws the same rows (2026-11-10; it kept
+          the older raw-key menu through the first study round). */}
+      <>
+        {Object.keys(def?.defaultValues ?? {}).map((key) => {
+          const input = def?.inputs.find((i) => i.id === key);
+          return (
+            <ParamRow key={key} nodeId={nodeId} paramKey={key} label={input ? portLabel(input.label, language) : key} />
+          );
+        })}
+        <div style={rowStyle}>
+          <span
+            style={labelStyle}
+            title={t('Turns the picture about its own centre. A positive angle turns it counter-clockwise on the Sphere, Plane, Cube, Utah Teapot, Stanford Bunny and OBJ models, and clockwise on glTF/GLB models with their own UVs — the sign three.js and glTF use (with positive Tile X and Tile Y). With different Tile X and Tile Y the turned picture is stretched along the surface, as in glTF.', language)}
+          >
+            {t('Rotation (°)', language)}
+          </span>
+          <DragNumberInput value={rotationDeg} step={1} onChange={setRotation} />
+        </div>
+        {placement.xf && (
+          <div
+            style={rowStyle}
+            title={t('A transform saved by an earlier FastShaders that Tile, Offset and Rotation cannot express. It still applies. Clearing it changes the picture.', language)}
+          >
+            <span style={labelStyle}>{t('Older transform', language)}</span>
+            <button type="button" style={rowButtonStyle} onClick={clearLegacyTransform}>
+              {t('Clear', language)}
+            </button>
           </div>
-          {placement.xf && (
-            <div
-              style={rowStyle}
-              title={t('A transform saved by an earlier FastShaders that Tile, Offset and Rotation cannot express. It still applies. Clearing it changes the picture.', language)}
-            >
-              <span style={labelStyle}>{t('Older transform', language)}</span>
-              <button type="button" style={rowButtonStyle} onClick={clearLegacyTransform}>
-                {t('Clear', language)}
-              </button>
-            </div>
-          )}
-        </>
-      )}
+        )}
+      </>
       {checkboxRow(t('Repeat (tile the image)', language), 'repeat', true,
         t('On: the image wraps/tiles. Off: edge pixels clamp beyond 0–1 UV.', language))}
       {checkboxRow(t('Flip X', language), 'flipX', false, t('Mirror the image left–right', language))}
@@ -991,46 +982,43 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
           moved with them (withImagePayload), that sets Texture.flipY and
           nothing else — the Flips mirror the picture as stored in either
           orientation, so toggling Flip Y (Offset Y reflected) draws what the
-          other orientation draws. Hidden in a study session, like the
-          placement rows above. */}
-      {!study && (
-        <>
-          <div style={rowStyle}>
-            <span
-              style={labelStyle}
-              title={t("Which of the model's texture-coordinate sets to sample (glTF TEXCOORD_0–3). A model without that set shows one flat colour. A wired UV input replaces this.", language)}
-            >
-              {t('UV set', language)}
-            </span>
-            <select
-              style={wideFieldStyle}
-              value={String(mapping.uvSet)}
-              onChange={(e) => {
-                // A closed table, never Number(): only these four strings map.
-                const next: ImageUvSet = e.target.value === '1' ? 1 : e.target.value === '2' ? 2 : e.target.value === '3' ? 3 : 0;
-                writeMapping({ uvSet: next });
-              }}
-            >
-              <option value="0">{t('UV 0 (default)', language)}</option>
-              <option value="1">UV 1</option>
-              <option value="2">UV 2</option>
-              <option value="3">UV 3</option>
-            </select>
-          </div>
-          <div style={rowStyle}>
-            <label style={checkLabelStyle}>
-              <input
-                type="checkbox"
-                checked={mapping.normalGreenFlip}
-                onChange={() => writeMapping({ normalGreenFlip: !mapping.normalGreenFlip })}
-                title={t("For a normal map on a model without tangent data (Blender's default glTF export): inverts the green channel the way three.js does for glTF. Only matters while this image is wired into the Output's Normal.", language)}
-                style={checkStyle}
-              />
-              {t('Flip normal green (Y)', language)}
-            </label>
-          </div>
-        </>
-      )}
+          other orientation draws. */}
+      <>
+        <div style={rowStyle}>
+          <span
+            style={labelStyle}
+            title={t("Which of the model's texture-coordinate sets to sample (glTF TEXCOORD_0–3). A model without that set shows one flat colour. A wired UV input replaces this.", language)}
+          >
+            {t('UV set', language)}
+          </span>
+          <select
+            style={wideFieldStyle}
+            value={String(mapping.uvSet)}
+            onChange={(e) => {
+              // A closed table, never Number(): only these four strings map.
+              const next: ImageUvSet = e.target.value === '1' ? 1 : e.target.value === '2' ? 2 : e.target.value === '3' ? 3 : 0;
+              writeMapping({ uvSet: next });
+            }}
+          >
+            <option value="0">{t('UV 0 (default)', language)}</option>
+            <option value="1">UV 1</option>
+            <option value="2">UV 2</option>
+            <option value="3">UV 3</option>
+          </select>
+        </div>
+        <div style={rowStyle}>
+          <label style={checkLabelStyle}>
+            <input
+              type="checkbox"
+              checked={mapping.normalGreenFlip}
+              onChange={() => writeMapping({ normalGreenFlip: !mapping.normalGreenFlip })}
+              title={t("For a normal map on a model without tangent data (Blender's default glTF export): inverts the green channel the way three.js does for glTF. Only matters while this image is wired into the Output's Normal.", language)}
+              style={checkStyle}
+            />
+            {t('Flip normal green (Y)', language)}
+          </label>
+        </div>
+      </>
 
       {/* The drop-time optimization preference, surfaced HERE because it is
           otherwise a one-way door: "Don't ask again" on the import dialog

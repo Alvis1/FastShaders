@@ -4,10 +4,11 @@
  */
 
 import { displacementReadsUv } from './displacementUv';
+import { planDisplacedNormal } from './displacedNormals';
 import type { MaterialSettings } from '@/types';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
 import { HEX6 } from '@/utils/colorUtils';
-import { PART_SETTING_KEYS, materialSettingProps, materialSettingsFromSource } from './materialSettingsCode';
+import { PART_SETTING_KEYS, PART_VERTEX_KEYS, materialSettingProps, materialSettingsFromSource, partMergeFromSource } from './materialSettingsCode';
 import { THREE_REVISION } from './threeRevision';
 import { TSL_EXPORT_NAMES } from './tslExportNames';
 import {
@@ -745,8 +746,31 @@ export function buildShaderModule(
     if (displacementMode === 'normal') need('normalLocal');
   }
   /** A displaced position: along the normal, or the raw offset. */
-  const displaced = (ref: string): string =>
-    `positionLocal.add(${displacementMode === 'normal' ? `normalLocal.mul(${ref})` : ref})`;
+  const displaced = (ref: string, mode: 'normal' | 'offset' = displacementMode): string =>
+    `positionLocal.add(${mode === 'normal' ? `normalLocal.mul(${ref})` : ref})`;
+  /**
+   * The positionNode for one material: `displaced(ref)`, or — on a SMOOTH,
+   * LIT material (not flat-shaded, not the Unlit material) whose displacement
+   * reads the position — the
+   * self-invoked Fn that also rewrites the normal to follow the displaced
+   * surface (engine/displacedNormals.ts). Flat shading takes its normal from
+   * the pixel derivatives and never reads the vertex normal, so it gets none.
+   */
+  const normalFnLines: string[] = [];
+  let normalFnCount = 0;
+  const positionNodeOf = (ref: string, flat: boolean, mode: 'normal' | 'offset' = displacementMode): string => {
+    if (flat) return displaced(ref, mode);
+    const plan = planDisplacedNormal(ref, nonDiscardLines, mode, normalFnCount, displaced(ref, mode));
+    if (!plan) return displaced(ref, mode);
+    normalFnLines.push(...plan.lines);
+    normalFnCount++;
+    for (const name of ['Fn', 'normalLocal', 'positionLocal', 'cross', 'select', 'abs', 'vec3']) need(name);
+    const text = plan.lines.join('\n');
+    if (/\bmodelWorldMatrix\b/.test(text)) need('modelWorldMatrix');
+    if (/\bmodelViewMatrix\b/.test(text)) need('modelViewMatrix');
+    if (/\bvec4\(/.test(text)) need('vec4');
+    return plan.expr;
+  };
 
   // --- Property uniforms → params + schema --------------------------------
   // `const X = uniform(N)` becomes `const X = params.X` plus a `schema` entry,
@@ -845,7 +869,7 @@ export function buildShaderModule(
     const prop = CHANNEL_TO_PROP.get(ch);
     if (!prop) continue;
     if (ch === 'position') {
-      returnProps.push(`${prop}: ${displaced(ref)}`);
+      returnProps.push(`${prop}: ${positionNodeOf(ref, !!materialSettings?.flatShading || materialSettings?.unlit === true)}`);
     } else if (ch === 'color' && hasDiscard) {
       returnProps.push(`${prop}: __pixel(${pixelCallArgs.join(', ')})`);
       colorEmitted = true;
@@ -881,7 +905,27 @@ export function buildShaderModule(
     let partDiscard: string | null = null;
     /** Raw source text of this part's settings keys (last occurrence wins, as in the JS literal). */
     const partSettingText: Record<string, string> = {};
-    for (const partProp of splitTopLevelArgs(bodySrc.replace(/^\{/, '').replace(/\}$/, ''))) {
+    /** The part's own vertex keys (materialSettingsCode `partVertexProps`). */
+    const partVertexText: Record<string, string> = {};
+    const partProps = splitTopLevelArgs(bodySrc.replace(/^\{/, '').replace(/\}$/, ''));
+    // The part's own Faces and Unlit material settings decide its positionNode
+    // (neither reads a vertex normal), so read them first.
+    let partFlat = false;
+    let partMode: 'normal' | 'offset' = displacementMode;
+    for (const partProp of partProps) {
+      const c = partProp.indexOf(':');
+      const k = c === -1 ? '' : partProp.slice(0, c).trim().replace(/^(['"])(.*)\1$/, '$2');
+      if (k === 'flatShading' || k === 'unlit') {
+        const parsed = materialSettingsFromSource({ [k]: partProp.slice(c + 1).trim() });
+        if (parsed?.flatShading === true || parsed?.unlit === true) partFlat = true;
+      }
+      // The part's own displacement form; absent follows the module's.
+      if (k === 'displacementMode') {
+        const m = materialSettingsFromSource({ displacementMode: partProp.slice(c + 1).trim() })?.displacementMode;
+        if (m === 'offset' || m === 'normal') partMode = m;
+      }
+    }
+    for (const partProp of partProps) {
       const c = partProp.indexOf(':');
       if (c === -1) continue;
       // Unquoted, because codeToGraph's `propKeyName` reads a string-literal
@@ -893,9 +937,10 @@ export function buildShaderModule(
       if (!key || !val) continue;
       if (key === 'discard') { partDiscard = val; continue; }
       if (PART_SETTING_KEYS.has(key)) { partSettingText[key] = val; continue; }
+      if (PART_VERTEX_KEYS.has(key)) { partVertexText[key] = val; continue; }
       const partPropName = CHANNEL_TO_PROP.get(key);
       if (!partPropName) continue;
-      props.push(`${partPropName}: ${key === 'position' ? displaced(val) : val}`);
+      props.push(`${partPropName}: ${key === 'position' ? positionNodeOf(val, partFlat, partMode) : val}`);
     }
     if (partDiscard) {
       const wrapper = `__partPixel${partWrappers.length}`;
@@ -918,7 +963,11 @@ export function buildShaderModule(
     // still dropped, mirroring the loader's own `hasChannels(spec)` skip.
     if (props.length === 0) return null;
     const partSettings = materialSettingsFromSource(partSettingText);
-    return [...props, ...materialSettingProps(partSettings)].join(', ');
+    // The part's own weld choice reaches loader 0.8 (header delta 14, the
+    // per-mesh model weld); `displacementMode` was spent on the positionNode.
+    const partMerge = partMergeFromSource(partVertexText.mergeVertices);
+    const mergeProp = partMerge === false ? ['mergeVertices: false'] : partMerge === true ? ['mergeVertices: true'] : [];
+    return [...props, ...materialSettingProps(partSettings), ...mergeProp].join(', ');
   };
 
   // Imports for what a parts table itself emitted. `hasDiscard` describes the
@@ -1130,6 +1179,8 @@ export function buildShaderModule(
     `export default function(${hasParams ? 'params' : ''}) {`,
     ...nonDiscardLines.map((l) => '  ' + l.trimStart()),
     ...pixelFnLines,
+    // The displaced-normal Fns (positionNodeOf), one pair per material.
+    ...normalFnLines.map((l) => '  ' + l),
     // One tiny Fn per part that culls, declared beside the default's __pixel
     // for the same reason: Discard() needs an active TSL stack, so it only
     // works inside an Fn body.

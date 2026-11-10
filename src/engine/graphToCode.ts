@@ -1,4 +1,4 @@
-import type { AppNode, AppEdge, NodeDefinition, GeneratedCode, ShaderNodeData, OutputMaterial } from '@/types';
+import type { AppNode, AppEdge, NodeDefinition, GeneratedCode, ShaderNodeData, OutputMaterial, MaterialSettings } from '@/types';
 import { valueNum, valueStr } from '@/utils/valueCoerce';
 import { HEX6, storedHex6 } from '@/utils/colorUtils';
 import { getNodeValues } from '@/types';
@@ -12,6 +12,7 @@ import {
   planNamedPartsAcross,
   planIndexPartsAcross,
   moduleSignatureOf,
+  moduleSettingsOutput,
 } from '@/utils/outputMaterials';
 import { moduleStringLiteral } from './partKeyLiteral';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
@@ -38,6 +39,7 @@ import { isSplatReplaceColor, splatStoredColor } from '@/utils/splatColor';
 import { hasTrueFlag } from '@/utils/trueFlag';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
 import { isUnsignedNoise } from '@/utils/noiseRange';
+import { isUnitRange } from '@/utils/unitRange';
 import { isWireframeEdges } from '@/utils/wireframeMode';
 import { decodeDataNode, columnForHandle } from '@/utils/dataNode';
 import { readSoundSettings } from '@/utils/soundSettings';
@@ -52,7 +54,7 @@ import {
 } from '@/utils/soundAnalysis';
 import type { SoundChannel } from '@/utils/soundAnalysis';
 import { createImageTexturePlanner, imageElementSetupLines, imageTextureSetupLines } from './imageTexturePlan';
-import { materialSettingProps } from './materialSettingsCode';
+import { materialSettingProps, partVertexProps } from './materialSettingsCode';
 // The `unknown`-node expression validator. Its own module because it is the
 // only thing in codegen that needs @babel/parser, which is loaded on demand
 // there rather than pinned into the boot payload — see that file.
@@ -1019,17 +1021,35 @@ export function graphToCode(
         addImport('three/tsl', 'vec2');
         bodyLines.push(`  const ${varName} = mul(${baseExpr}, vec2(${tilingU}, ${tilingV}));`);
       } else {
-        // Rotation (with optional tiling)
+        // Rotation (with optional tiling). Rotation is in DEGREES and turns the
+        // PICTURE counter-clockwise (the Image node's and three.js's sign: u
+        // right, v up), about the CENTRE of the tiled projection — so 90 is a
+        // quarter turn of whatever the UV feeds, with tiling or without:
+        //   c = (uv − ½)·(U, V),  out = R(−θ)·c + ½·(U, V)
+        // R(−θ) on the coordinates is R(+θ) on the picture. At θ = 0 this is
+        // exactly the tiling branch's `uv·(U, V)`, so dialling a turn in from
+        // 0 never jumps. (Until 2026-11-09 the angle was RADIANS — 90 read as
+        // ~14 turns plus 33°, — the turn was clockwise, and the pivot was
+        // (½, ½) of the TILED space, a tile corner away from the centre.)
         addImport('three/tsl', 'vec2');
         addImport('three/tsl', 'sub');
         addImport('three/tsl', 'add');
         addImport('three/tsl', 'mul');
         addImport('three/tsl', 'cos');
         addImport('three/tsl', 'sin');
-        const scaledExpr = hasTiling ? `mul(${baseExpr}, vec2(${tilingU}, ${tilingV}))` : baseExpr;
+        const centred = `sub(${baseExpr}, vec2(0.5, 0.5))`;
+        const cExpr = hasTiling ? `mul(${centred}, vec2(${tilingU}, ${tilingV}))` : centred;
+        const pivot = hasTiling ? `mul(vec2(${tilingU}, ${tilingV}), 0.5)` : 'vec2(0.5, 0.5)';
         const cVar = `_${varName}`;
-        bodyLines.push(`  const ${cVar} = sub(${scaledExpr}, vec2(0.5, 0.5));`);
-        bodyLines.push(`  const ${varName} = add(vec2(sub(mul(${cVar}.x, cos(${rotationExpr})), mul(${cVar}.y, sin(${rotationExpr}))), add(mul(${cVar}.x, sin(${rotationExpr})), mul(${cVar}.y, cos(${rotationExpr})))), vec2(0.5, 0.5));`);
+        // Degrees → radians: a stored angle is folded here (90 → 1.5708…), a
+        // wired one is multiplied by π/180 in the shader. Never `radians(…)`:
+        // it is no registry node, so an Apply would grow magenta unknowns.
+        const deg = Number(rotationExpr);
+        const th = /^-?\d/.test(rotationExpr) && Number.isFinite(deg)
+          ? String((deg * Math.PI) / 180)
+          : `mul(${rotationExpr}, ${Math.PI / 180})`;
+        bodyLines.push(`  const ${cVar} = ${cExpr};`);
+        bodyLines.push(`  const ${varName} = add(vec2(add(mul(${cVar}.x, cos(${th})), mul(${cVar}.y, sin(${th}))), sub(mul(${cVar}.y, cos(${th})), mul(${cVar}.x, sin(${th})))), ${pivot});`);
       }
     } else if (def.type === 'dataNode') {
       // Data node: one float DataTexture per *consumed* column (FloatType +
@@ -1799,7 +1819,10 @@ export function graphToCode(
         addImport('three/tsl', 'vec3');
         callArgs = args.map((arg) => `vec3(${arg})`);
       }
-      bodyLines.push(`  const ${varName} = ${def.tslFunction}(${callArgs.join(', ')});`);
+      // Sine / Cosine "Map to 0…1" (utils/unitRange.ts): the remap wraps the
+      // FINISHED call, like the noise range. An absent key emits the bare call.
+      const waveCall = `${def.tslFunction}(${callArgs.join(', ')})`;
+      bodyLines.push(`  const ${varName} = ${isUnitRange(def.type, getNodeValues(node)) ? `${waveCall}.mul(0.5).add(0.5)` : waveCall};`);
     }
   }
   closeMark();
@@ -2459,6 +2482,16 @@ export function graphToCode(
     ? `  Discard(${defaultResolved.discardRef});`
     : null;
 
+  // A part body's settings: the loader's render keys, then the VERTEX keys
+  // where this material differs from the module-settings Output's (the owner
+  // writes the module's own, top-level, out of band). See
+  // engine/materialSettingsCode.ts `partVertexProps`.
+  const ownerSettings = (moduleSettingsOutput(nodes)?.data as { materialSettings?: MaterialSettings } | undefined)?.materialSettings;
+  const partSettingsOf = (node: AppNode, section: number): string[] => {
+    const own = materialsFor(node)[section].materialSettings;
+    return [...materialSettingProps(own), ...partVertexProps(own, ownerSettings)];
+  };
+
   // Every TARGETED material becomes a `parts` entry, re-validated here because
   // emission is the gate that decides what becomes CODE. FIRST CLAIM WINS for a
   // duplicate mesh name, decided by the ONE cross-node plan the node's shadowed
@@ -2492,7 +2525,7 @@ export function graphToCode(
       if (!resolved) {
         resolved = {
           ...resolveOutputChannels(node, section),
-          settings: materialSettingProps(materialsFor(node)[section].materialSettings),
+          settings: partSettingsOf(node, section),
         };
         byNode.set(section, resolved);
       }
@@ -2522,7 +2555,7 @@ export function graphToCode(
         index: gltfIndex,
         nodeId,
         ...resolveOutputChannels(node, section),
-        settings: materialSettingProps(materialsFor(node)[section].materialSettings),
+        settings: partSettingsOf(node, section),
       });
     }
   }

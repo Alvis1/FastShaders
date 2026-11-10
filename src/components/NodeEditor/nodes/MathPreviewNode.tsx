@@ -4,6 +4,7 @@ import { makeConnectionRevealSelector } from './connectionReveal';
 import type { MathPreviewFlowNode, NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { valueNum } from '@/utils/valueCoerce';
+import { isUnitRange, unitWave } from '@/utils/unitRange';
 import { useAppStore } from '@/store/useAppStore';
 import { CAT_HEX } from '@/utils/colorUtils';
 import { Points } from '@/components/Points/Points';
@@ -57,7 +58,12 @@ export const MathPreviewNode = memo(function MathPreviewNode({
     useMemo(() => makeConnectionRevealSelector(id, true), [id]),
   );
 
-  const func = MATH_FUNCTIONS[data.registryType] ?? Math.sin;
+  // The "Map to 0…1" mode draws (and reads out) ½ + ½·wave, as the shader computes it.
+  const unit = isUnitRange(data.registryType, data.values);
+  const func = useMemo(
+    () => unitWave(MATH_FUNCTIONS[data.registryType] ?? Math.sin, unit),
+    [data.registryType, unit],
+  );
   const catHex = CAT_HEX[def.category as NodeCategory] ?? CAT_HEX.unknown;
   // Priced LIVE under the selected device's table, never the creation-time
   // `data.cost` snapshot (useLiveNodeCost says why).
@@ -210,21 +216,34 @@ export const MathPreviewNode = memo(function MathPreviewNode({
           showReadout={showReadout}
           dynamicRefs={dynamicRefs}
         />
+        {/* Both sockets live IN the plot's wrapper, on the curve's zero line
+            (the plot's vertical centre): X in on the left, the value out on
+            the right, one straight line through the sin x axis
+            (MathPreviewNode.css). */}
+        {def.inputs[0] && (
+          <TypedHandle
+            type="target"
+            position={Position.Left}
+            id={def.inputs[0].id}
+            dataType={def.inputs[0].dataType}
+            label={def.inputs[0].label}
+            reveal={near}
+          />
+        )}
+        {def.outputs[0] && (
+          <TypedHandle
+            type="source"
+            position={Position.Right}
+            id={def.outputs[0].id}
+            dataType={def.outputs[0].dataType}
+            label={def.outputs[0].label}
+          />
+        )}
       </div>
 
-      {/* Input port row at bottom */}
+      {/* X's number box, below the plot (its socket rides the axis above) */}
       <div className="math-preview-node__port-row">
         <div className="math-preview-node__left">
-          {def.inputs[0] && (
-            <TypedHandle
-              type="target"
-              position={Position.Left}
-              id={def.inputs[0].id}
-              dataType={def.inputs[0].dataType}
-              label={def.inputs[0].label}
-              reveal={near}
-            />
-          )}
           {!hasConnection && (
             <DragNumberInput
               compact
@@ -235,17 +254,6 @@ export const MathPreviewNode = memo(function MathPreviewNode({
         </div>
       </div>
 
-      {/* Output handle — vertically centered on node */}
-      {def.outputs[0] && (
-        <TypedHandle
-          type="source"
-          position={Position.Right}
-          id={def.outputs[0].id}
-          dataType={def.outputs[0].dataType}
-          label={def.outputs[0].label}
-          style={{ top: '50%' }}
-        />
-      )}
     </div>
   );
 });

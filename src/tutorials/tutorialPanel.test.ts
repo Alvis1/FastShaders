@@ -10,7 +10,8 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { tutorialsOffered } from './tutorialsTab';
+import { tutorialsOffered, offeredLessons } from './tutorialsTab';
+import { TUTORIALS } from './tutorialDefs';
 
 const HERE = fileURLToPath(new URL('./', import.meta.url));
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -52,20 +53,28 @@ describe('nothing in src/tutorials scrolls, logs telemetry or reaches the parser
 });
 
 describe('tutorialsOffered: the study entries', () => {
-  it('outside a study always; in one, on the /evalpro entry only', () => {
+  it('outside a study always; in one, on every entry', () => {
     expect(tutorialsOffered(false, null)).toBe(true);
     expect(tutorialsOffered(true, 'evalpro')).toBe(true);
-    expect(tutorialsOffered(true, 'eval')).toBe(false);
-    expect(tutorialsOffered(true, 'evalp')).toBe(false);
+    expect(tutorialsOffered(true, 'eval')).toBe(true);
+    expect(tutorialsOffered(true, 'evalp')).toBe(true);
     // An older redirector recorded no entry: no tab.
     expect(tutorialsOffered(true, null)).toBe(false);
+  });
+  it('leaves out the cost lesson where the budget is not shown, and only it', () => {
+    expect(offeredLessons(TUTORIALS, true)).toBe(TUTORIALS);
+    const noBudget = offeredLessons(TUTORIALS, false);
+    expect(TUTORIALS.filter((d) => !noBudget.includes(d)).map((d) => d.id)).toEqual(['tut-costs']);
+    // Every other lesson's text names no cost: the /evalp condition shows none.
+    for (const d of noBudget) expect(JSON.stringify(d), d.id).not.toMatch(/cost bar|\bpoints? (budget|cost)/i);
   });
 });
 
 describe('ContentBrowser carries the tab through the pure helpers', () => {
   const src = codeOnly(read(ROOT + 'components/NodeEditor/ContentBrowser.tsx'));
-  it('offers the tab outside a study and on /evalpro, via tutorialsOffered(isEvalMode(), evalTask().arm)', () => {
+  it('offers the tab via tutorialsOffered(isEvalMode(), evalTask().arm), its lessons via offeredLessons', () => {
     expect(src).toMatch(/const OFFER_TUTORIALS = tutorialsOffered\(isEvalMode\(\), evalTask\(\)\.arm\);/);
+    expect(src).toMatch(/const LESSONS = offeredLessons\(TUTORIALS, introShowsBudget\(evalTask\(\)\)\);/);
     expect(src).toMatch(/effectiveBrowserTab\(effectiveTab\(\w+, \w+\), OFFER_TUTORIALS\)/);
   });
   it('keeps a stored tutorials tab valid, and draws its button right after All', () => {

@@ -24,6 +24,7 @@ import { SOUND_CHANNELS, soundChannelForHandle } from '@/utils/soundAnalysis';
 import { readSoundSettings } from '@/utils/soundSettings';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { hasNoiseRangeFlag, isUnsignedNoise } from '@/utils/noiseRange';
+import { isUnitRange, unitWave } from '@/utils/unitRange';
 import { sameGraphSemantics } from '@/utils/graphSemantics';
 import { buildTimeUpstreamSet, buildDownstreamClosure } from '@/utils/graphTraversal';
 import { IMAGE_CHANNEL_INDEX } from '@/utils/imageChannels';
@@ -998,19 +999,12 @@ function evaluate(
       result = [0.5, 0.5]; // center of screen as default
       break;
     case 'uv': {
-      // Channel doesn't affect CPU evaluation (always UV center)
-      let u = 0.5, v = 0.5;
-      // Apply tiling
-      u *= scalarInput('tilingU', 1);
-      v *= scalarInput('tilingV', 1);
-      // Apply rotation around (0.5, 0.5)
-      const rot = scalarInput('rotation', 0);
-      if (rot !== 0) {
-        const cu = u - 0.5, cv = v - 0.5;
-        const cosR = Math.cos(rot), sinR = Math.sin(rot);
-        u = cu * cosR - cv * sinR + 0.5;
-        v = cu * sinR + cv * cosR + 0.5;
-      }
+      // Channel doesn't affect CPU evaluation (always UV center). graphToCode's
+      // map is c = (uv − ½)·(U, V), out = R(−θ°)·c + ½·(U, V) — so at the
+      // centre c = 0 and the TURN (any θ) leaves the point at ½·(U, V), which
+      // is also the tiling-only `uv·(U, V)` there. The range (uvRange) is
+      // where the rotation shows.
+      const u = 0.5 * scalarInput('tilingU', 1), v = 0.5 * scalarInput('tilingV', 1);
       result = [u, v];
       break;
     }
@@ -1068,8 +1062,8 @@ function evaluate(
     // Unary math (component-wise). Outside its domain the GPU has no number
     // (NaN; GLSL undefined, WGSL indeterminate, log2(0) is −∞), so neither does
     // the card: sqrt(−1) is '…', never the clamped 0 or log2's floored −33.22.
-    case 'sin': result = unaryOp('x', 0, Math.sin); break;
-    case 'cos': result = unaryOp('x', 0, Math.cos); break;
+    case 'sin': result = unaryOp('x', 0, unitWave(Math.sin, isUnitRange(type, values))); break;
+    case 'cos': result = unaryOp('x', 0, unitWave(Math.cos, isUnitRange(type, values))); break;
     case 'abs': result = unaryOp('x', 0, Math.abs); break;
     case 'sqrt': result = unaryOp('x', 0, Math.sqrt); break;
     case 'exp': result = unaryOp('x', 0, Math.exp); break;
@@ -2095,7 +2089,7 @@ function computeRange(
   }
 
   // UV carries its own tiling and turn (graphToCode: `mul(uv(), vec2(U, V))`,
-  // then a rotation about (½, ½)), so its interval is analyticalRange's [0, 1]²
+  // or with a turn R(−θ°)·(uv − ½)·(U, V) + ½·(U, V)), so its interval is analyticalRange's [0, 1]²
   // pushed through that same map, each parameter read as a RANGE (a wired
   // Slider or Time sweeps it). The table entry alone read "0…1" for U = 10
   // while the preview tiled ten times. Here, not in the table: the table sees
@@ -2186,7 +2180,11 @@ function computeRange(
       // Exact per channel (sinInterval): sin(uv·π) is the 0…1 arch it draws,
       // not the signed −1…1 a fixed bound read.
       const x = portRange('x', 0);
-      result = unaryRange(x, (lo, hi) => (type === 'sin' ? sinInterval(lo, hi) : cosInterval(lo, hi)));
+      const unit = isUnitRange(type, values);
+      result = unaryRange(x, (lo, hi) => {
+        const [a, b] = type === 'sin' ? sinInterval(lo, hi) : cosInterval(lo, hi);
+        return unit ? [0.5 + 0.5 * a, 0.5 + 0.5 * b] : [a, b];
+      });
       break;
     }
     case 'fract': {
@@ -2911,23 +2909,28 @@ function cosInterval(a: number, b: number): [number, number] {
 
 /**
  * The UV node's interval, through the emitted map: s = uv·(U, V) with uv in
- * [0, 1]² — so u·U spans the corners 0·U and 1·U — and, with a turn θ, the
- * centred box (s − ½) rotated, + ½. The turn is linear in that box, so interval
- * products give the exact axis-aligned bound for a constant θ (45° on the unit
- * square: −0.207…1.207) and a sound one for a swept θ. Rotation 0 skips the turn,
- * as codegen does, so an untouched UV stays exactly 0…1.
+ * [0, 1]² — so u·U spans the corners 0·U and 1·U — and, with a turn of θ
+ * DEGREES, the centred box c = (uv − ½)·(U, V) turned by R(−θ), + ½·(U, V).
+ * The turn is linear in that box, so interval products give the exact
+ * axis-aligned bound for a constant θ and tiling (45° on the unit square:
+ * −0.207…1.207) and a sound one for a swept θ or tiling. Rotation 0 skips the
+ * turn, as codegen does, so an untouched UV stays exactly 0…1.
  */
 function uvRange(tu: RangeResult, tv: RangeResult, rot: RangeResult): RangeResult {
   const su: [number, number] = [Math.min(0, tu.min[0]), Math.max(0, tu.max[0])];
   const sv: [number, number] = [Math.min(0, tv.min[0]), Math.max(0, tv.max[0])];
   if (rot.min[0] === 0 && rot.max[0] === 0) return { min: [su[0], sv[0]], max: [su[1], sv[1]] };
-  const cu: [number, number] = [su[0] - 0.5, su[1] - 0.5];
-  const cv: [number, number] = [sv[0] - 0.5, sv[1] - 0.5];
-  const c = cosInterval(rot.min[0], rot.max[0]), s = sinInterval(rot.min[0], rot.max[0]);
+  // c = (uv − ½)·(U, V): the centred unit box scaled by each tiling range.
+  const half: [number, number] = [-0.5, 0.5];
+  const cu = mulInterval(half, [tu.min[0], tu.max[0]]);
+  const cv = mulInterval(half, [tv.min[0], tv.max[0]]);
+  const d2r = Math.PI / 180;
+  const c = cosInterval(rot.min[0] * d2r, rot.max[0] * d2r), s = sinInterval(rot.min[0] * d2r, rot.max[0] * d2r);
   const ucos = mulInterval(cu, c), vsin = mulInterval(cv, s), usin = mulInterval(cu, s), vcos = mulInterval(cv, c);
+  // out = (cu·cos + cv·sin, cv·cos − cu·sin) + ½·(U, V)
   return {
-    min: [ucos[0] - vsin[1] + 0.5, usin[0] + vcos[0] + 0.5],
-    max: [ucos[1] - vsin[0] + 0.5, usin[1] + vcos[1] + 0.5],
+    min: [ucos[0] + vsin[0] + 0.5 * tu.min[0], vcos[0] - usin[1] + 0.5 * tv.min[0]],
+    max: [ucos[1] + vsin[1] + 0.5 * tu.max[0], vcos[1] - usin[0] + 0.5 * tv.max[0]],
   };
 }
 

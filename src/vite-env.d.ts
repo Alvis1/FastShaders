@@ -6,7 +6,7 @@ declare const __APP_VERSION__: string;
 /** True in the desktop (Tauri) build profile — FS_DESKTOP=1 (see vite.config.ts `define`). */
 declare const __FS_DESKTOP__: boolean;
 
-/** The study-package endpoint override, FS_EVAL_UPLOAD_URL ('' = none; see vite.config.ts `define`). */
+/** The URL every build posts a finished study package to: FS_EVAL_UPLOAD_URL, else DEFAULT_EVAL_UPLOAD_URL — ViA's endpoint (see vite.config.ts `define`). */
 declare const __FS_EVAL_UPLOAD_URL__: string;
 
 /**

@@ -17,12 +17,12 @@
 
 import { safeJsonReviver } from '@/utils/safeJson';
 import { FEEDBACK_EMAIL } from '@/utils/feedbackReport';
-import { EVAL_ARM_KEY, EVAL_TASK_KEY } from './evalArm';
+import { EVAL_ARM_KEY, EVAL_PARTICIPANT_KEY, EVAL_TASK_KEY } from './evalArm';
 
 // The flag, its reader and the task query key live in the leaf `evalArm.ts`
 // (the registry and layoutEngine read them at module init); re-exported so
 // every other consumer keeps this one import.
-export { EVAL_ARM_KEY, EVAL_TASK_KEY, isEvalMode } from './evalArm';
+export { EVAL_ARM_KEY, EVAL_PARTICIPANT_KEY, EVAL_TASK_KEY, isEvalMode } from './evalArm';
 export const EVAL_SESSION_KEY = 'fs:evalSession';
 export const EVAL_JOURNAL_KEY = 'fs:evalJournal';
 
@@ -38,18 +38,19 @@ export const EVAL_SCHEMA = 'fs-eval-1';
  * package says which wording its participant agreed to. BUMP IT whenever the
  * text changes materially; the per-version history is in docs/dev/eval-mode.md.
  */
-export const CONSENT_TEXT_VERSION = 'consent-15';
+export const CONSENT_TEXT_VERSION = 'consent-16';
 
 /**
- * The two addresses the study app is served from. Only alvismisjuns.lv has
- * the upload endpoint: its build posts there by a RELATIVE path, while the
- * fs.sferas.lv build names it absolutely and the endpoint admits that origin
- * by CORS (see evalUpload.ts's header). They are named here for the reader; the consent text
- * spells them literally,
- * because in this codebase the English sentence IS the i18n key and an
- * interpolated constant would never match an entry in lv.json.
+ * The host every build uploads the study package to: imgame.va.lv, the server
+ * of Vidzeme University of Applied Sciences — so the data controller the
+ * consent names also holds the data (consent-16, 2026-11-09; until then the
+ * researcher's own alvismisjuns.lv). The consent text and the disclosure spell
+ * it literally, because in this codebase the English sentence IS the i18n key
+ * and an interpolated constant would never match an entry in lv.json; named
+ * here so evalDisclosure.test.ts can hold the text, its Latvian AND the host of
+ * EVAL_UPLOAD_URL to this one value.
  */
-export const EVAL_SERVER_HOSTS = ['alvismisjuns.lv', 'fs.sferas.lv'] as const;
+export const EVAL_UPLOAD_HOST = 'imgame.va.lv';
 
 /**
  * Data-protection officer contact, from the institution's data-management plan.
@@ -172,8 +173,40 @@ export function clearEvalMode(): void {
     sessionStorage.removeItem(EVAL_ARM_KEY);
     sessionStorage.removeItem(EVAL_SESSION_KEY);
     sessionStorage.removeItem(EVAL_TASK_KEY);
+    sessionStorage.removeItem(EVAL_PARTICIPANT_KEY);
   } catch {
     /* nothing to clear */
+  }
+}
+
+/**
+ * A participant code as a study LINK may carry it: what the redirectors accept
+ * from `location.hash` (`/evalpro#P0101`) — the same pattern, kept in lockstep
+ * with the three study redirectors under `public/` (evalTask.test.ts runs them). Researcher-assigned codes
+ * are short ASCII labels; anything else is not a code and is dropped, never
+ * coerced, so the consent field just opens empty as it always did.
+ */
+export const LINK_PARTICIPANT_RE = /^[A-Za-z0-9._-]{1,40}$/;
+
+export function cleanLinkParticipant(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  const code = raw.trim();
+  return LINK_PARTICIPANT_RE.test(code) ? code : '';
+}
+
+/**
+ * The code the study LINK gave — '' when it carried none. sessionStorage is
+ * the same trust level as localStorage, so it is validated again here.
+ * A link's code is FIXED (owner, 2026-11-09): the consent dialog and the
+ * questionnaire show it as "Your code: P0101" with no field to change it, and
+ * it is the code the session is agreed and submitted under. Without one, both
+ * keep their editable "Participant code (from the researcher)" field.
+ */
+export function linkParticipantCode(): string {
+  try {
+    return cleanLinkParticipant(sessionStorage.getItem(EVAL_PARTICIPANT_KEY));
+  } catch {
+    return '';
   }
 }
 

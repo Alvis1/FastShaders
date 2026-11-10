@@ -109,13 +109,14 @@ import { canvasInkColor, canvasInkShadow, canvasGridColor } from '@/utils/colorU
 import { imageNodeCost, getCost, getBaseCosts, freshNodeCost } from '@/utils/nodeCost';
 import { COST_SCALED_TYPES, drawnCostScale } from '@/engine/layoutEngine';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
-import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
+import { NODE_REGISTRY, getFlowNodeType, growsOperands } from '@/registry/nodeRegistry';
+import { primaryInputId } from '@/utils/primaryInput';
 import { findSingletonNode } from './singletonNodes';
 import { pastedSpots, PASTE_STEP } from './pastePlacement';
 import { axisLockChanges, type DragStarts } from './axisLock';
 import { NOTE_TILE_TYPE } from '@/utils/noteDefaults';
 import { nodeEl, handleEl } from './nodeElement';
-import { absoluteNodePosition, groupFrameSize, isCollapsedMember } from '@/utils/groupFrame';
+import { absoluteNodePosition, groupFrameSize, isCollapsedMember, raisedGroupStack } from '@/utils/groupFrame';
 import { LIBRARY_WIRE_GAP, libraryWireOutput, revealCornerViewport } from '@/utils/libraryAutoWire';
 import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
@@ -143,7 +144,7 @@ import {
   type ImageDropReport,
 } from '@/utils/imageImportNote';
 import { encodeImageFile, isImageFile, isSvgFile, type ImageConvertMode } from '@/utils/imageImport';
-import { GRAPH_MERGED_EVENT, importShaderZip, importShaderText, isZipFile, openDroppedShader, reportZipImportError } from '@/engine/projectImport';
+import { GRAPH_MERGED_EVENT, isZipFile, openDroppedShader, reportZipImportError } from '@/engine/projectImport';
 import { detectMeshKind } from '@/utils/previewMesh';
 import { requestPreviewModelLoad } from '@/utils/previewModelDrop';
 import { requestShaderImport } from '@/utils/shaderDropRequest';
@@ -364,6 +365,13 @@ function mountedHandles(
 ): ConnectHandle[] {
   const pos = node.internals.positionAbsolute;
   const bounds = node.internals.handleBounds?.[kind] ?? [];
+  // The node's MAIN input (utils/primaryInput.ts), flagged for the planner. A
+  // group or other def-less node has none, and the planner then takes the first.
+  const def = kind === 'target'
+    ? NODE_REGISTRY.get((node.data as { registryType?: string }).registryType ?? '')
+    : undefined;
+  const mainId = primaryInputId(def);
+  const operands = growsOperands(def);
   const handles: ConnectHandle[] = [];
   for (const b of bounds) {
     if (b.id == null) continue;
@@ -377,6 +385,8 @@ function mountedHandles(
               (e) =>
                 e.target === node.id && e.targetHandle === b.id && e.source !== ignoreSourceId,
             ),
+            ...(b.id === mainId ? { primary: true } : {}),
+            ...(operands ? { spare: true } : {}),
           }
         : {}),
     });
@@ -1017,6 +1027,20 @@ export function NodeEditor() {
         return;
       }
       storeOnNodesChange(changes);
+      // The group the user just touched — clicked, selected, dragged (a
+      // member or the frame) or resized — comes to the top of the stack and
+      // STAYS there (`raisedGroupStack`). A marquee raises nothing: sweeping
+      // a band across frames is not choosing one.
+      const touched: string[] = [];
+      for (const c of changes) {
+        if ((c.type === 'select' && c.selected)
+          || (c.type === 'position' && c.dragging)
+          || (c.type === 'dimensions' && c.resizing)) touched.push(c.id);
+      }
+      if (touched.length > 0) {
+        const raised = raisedGroupStack(useAppStore.getState().nodes, touched);
+        if (raised) useAppStore.getState().setNodes(raised);
+      }
     },
     [flowStore, storeOnNodesChange],
   );
@@ -1669,16 +1693,21 @@ export function NodeEditor() {
         return true;
       }
       const logicalEdges = unwrapCollapsedGroupEdges(store.nodes, store.edges);
+      const phantomMain = primaryInputId(def);
+      const phantomOperands = growsOperands(def);
       const phantomPorts = (ports: { id: string }[]): ConnectHandle[] =>
-        ports.map((p) => ({ id: p.id, cx: pos.x, cy: pos.y }));
+        ports.map((p) => ({
+          id: p.id,
+          cx: pos.x,
+          cy: pos.y,
+          ...(p.id === phantomMain ? { primary: true } : {}),
+          ...(phantomOperands ? { spare: true } : {}),
+        }));
       const endpoints: DragConnectEndpoints = {
         draggedId: TILE_PHANTOM_ID,
         hoverId: hoverBox.id,
         draggedCenterX: pos.x,
         hoverCenterX: hoverBox.x + hoverBox.w / 2,
-        draggedCenterY: pos.y,
-        hoverTop: hoverBox.y,
-        hoverHeight: hoverBox.h,
         draggedInputs: phantomPorts(def.inputs),
         draggedOutputs: phantomPorts(def.outputs),
         hoverInputs: mountedHandles(hi, 'target', logicalEdges),
@@ -1878,9 +1907,6 @@ export function NodeEditor() {
                   hoverId,
                   draggedCenterX: cx,
                   hoverCenterX: hoverBox.x + hoverBox.w / 2,
-                  draggedCenterY: cy,
-                  hoverTop: hoverBox.y,
-                  hoverHeight: hoverBox.h,
                   draggedInputs: mountedHandles(di, 'target', logicalEdges, hoverId),
                   draggedOutputs: mountedHandles(di, 'source', logicalEdges),
                   hoverInputs: mountedHandles(hi, 'target', logicalEdges, draggedNode.id),
@@ -2999,51 +3025,10 @@ export function NodeEditor() {
           // A dropped shader ASKS first — Open or Add (utils/shaderDropRequest.ts).
           // The dialog owns the import and every message about it from here, and
           // calls back when it settles so the rest of the drop can follow; a
-          // CANCELLED drop is dropped whole, model included. False = a study
-          // session, which keeps today's replace-the-document path below.
-          if (requestShaderImport(proj, 'dom', (outcome) => {
+          // CANCELLED drop is dropped whole, model included.
+          requestShaderImport(proj, 'dom', (outcome) => {
             if (outcome !== 'cancelled') finishDrop(outcome === 'imported');
-          })) return;
-          const done = isZipFile(proj)
-            ? importShaderZip(proj).then((result) => {
-                if (result === null) {
-                  window.alert(
-                    t('{name} does not contain a shader script (.js / .mjs / .tsl).', lang)
-                      .replace('{name}', () => `“${proj.name}”`),
-                  );
-                  return false;
-                }
-                return true;
-              })
-            : proj.text().then((text) => {
-                importShaderText(text);
-                return true;
-              });
-          void done
-            .catch((e) => {
-              // A zip the reader refused (or a model-only zip whose model was
-              // skipped) is announced by the shared mapping, and says why.
-              if (reportZipImportError(e, proj.name)) return false;
-              // Imported files are adversarial input — a crash inside the
-              // import must surface, not silently no-op the drop. `{reason}`
-              // is the engine's own English message.
-              window.alert(
-                fillTemplate(t('Could not import {name}: {reason}', lang), {
-                  name: `“${proj.name}”`,
-                  reason: e instanceof Error ? e.message : String(e),
-                }),
-              );
-              return false;
-            })
-            // A model dropped WITH the project follows the import, as on the
-            // preview (ShaderPreview.handleDroppedFiles): the import clears or
-            // overwrites the mesh first, so the dropped model deterministically
-            // wins. Routed, not ignored — hence not counted in `ignored`. The
-            // "ignored companions" notice may only follow an import that
-            // actually succeeded — alerting 'Loaded "x"' before (or despite) a
-            // failure gave contradictory feedback. Both are `finishDrop`,
-            // shared with the dialog's callback above.
-            .then(finishDrop);
+          });
           return;
         }
 
