@@ -22,7 +22,7 @@ import {
   clearEvalJournal,
   isEvalSessionActive,
 } from './telemetry';
-import { deriveSummary, runQualityChecks, type QualityCheck } from './telemetryModel';
+import { deriveSummary, runQualityChecks } from './telemetryModel';
 import { evalTask } from './evalTask';
 import {
   BACKGROUND_GROUP_HEADINGS,
@@ -108,7 +108,6 @@ interface DoneState {
    *  participant's line is added at render, in the current language. */
   mailSubject: string;
   mailSummary: string[];
-  failedChecks: QualityCheck[];
   /** Delivery option B: 'pending' while in flight; 'disabled' = not configured; 'too-large' = over MAX_UPLOAD_BYTES, never sent (the size shown is zipBytes.length). */
   upload: EvalUploadResult | 'pending';
 }
@@ -418,7 +417,6 @@ export function SusModal({ open, onClose }: Props) {
       zipBytes,
       mailSubject,
       mailSummary,
-      failedChecks: quality.filter((q) => !q.ok),
       upload: precheck ?? 'pending',
     });
     // The thank-you screen is up (same render), so Escape closes it again.
@@ -469,12 +467,8 @@ export function SusModal({ open, onClose }: Props) {
             {t('Your answers, your shader and the session data are packed into one file, saved in your Downloads folder:', language)}
           </div>
           <div className="eval-done__file">{done.fileName}</div>
-          {done.failedChecks.length > 0 && (
-            <div className="eval-done__warn">
-              {t('Some data-quality checks failed. Tell the researcher before you leave:', language)}{' '}
-              {done.failedChecks.map((q) => q.id).join(', ')}
-            </div>
-          )}
+          {/* The quality checks travel in the package only (owner, 2026-11-11):
+              shown here, a flag such as response-pattern judged the participant. */}
           {done.upload === 'ok' ? (
             <div className="csv-import-modal__message">
               {t('The file was uploaded to the study server.', language)}{' '}

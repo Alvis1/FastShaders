@@ -4,6 +4,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { useModalKeys } from '@/components/Modals/useModalKeys';
+import { SearchScene } from './SearchScene';
 import { ConnectScene } from './ConnectScene';
 import { ValuesScene } from './ValuesScene';
 import { LabelsScene } from './LabelsScene';
@@ -18,6 +19,7 @@ import { OrganizeScene } from './OrganizeScene';
 import { PreviewScene } from './PreviewScene';
 import { UniformScene } from './UniformScene';
 import { ModelScene } from './ModelScene';
+import { MeshesScene } from './MeshesScene';
 import { introHidden, setIntroHidden, type IntroVia } from './introGate';
 import { LangSwitch } from '@/eval/LangSwitch';
 import { evalLog } from '@/eval/telemetry';
@@ -28,6 +30,11 @@ import './IntroWindow.css';
 /** The slides, in order: a live scene and the line under it. `id` names the
  *  slide in a study session's log (`intro-slide`), stable across reorders. */
 const SLIDES: ReadonlyArray<{ id: string; Scene: ComponentType; caption: string }> = [
+  {
+    id: 'search',
+    Scene: SearchScene,
+    caption: 'Press Space, or right-click empty canvas, to open the node search. Type a name such as noise and click a result to add the node.',
+  },
   {
     id: 'connect',
     Scene: ConnectScene,
@@ -97,6 +104,11 @@ const SLIDES: ReadonlyArray<{ id: string; Scene: ComponentType; caption: string 
     id: 'draw',
     Scene: DrawScene,
     caption: 'Turn on Draw to mark up the canvas, and right-click to add a note.',
+  },
+  {
+    id: 'meshes',
+    Scene: MeshesScene,
+    caption: 'A model made of several meshes can wear several shaders. Add another Output, open its mesh list and tick meshes: they take that Output’s shader, and the rest keep the first one’s.',
   },
 ];
 

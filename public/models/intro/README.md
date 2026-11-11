@@ -1,7 +1,9 @@
 # Intro models
 
 The two models the intro window's models slide drops onto its 3D view
-(`src/intro/ModelScene.tsx`). Fetched only when that slide first shows.
+(`src/intro/ModelScene.tsx`); the figure is also the multi-mesh slide's model
+(`src/intro/MeshesScene.tsx` — its 15 meshes). Fetched only when a slide that
+uses them first shows.
 
 | File | What | Source |
 | --- | --- | --- |

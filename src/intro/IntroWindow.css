@@ -410,3 +410,11 @@
   pointer-events: none;
   z-index: 5;
 }
+
+/* The Output's mesh list (MeshTargetPicker's popover), placed on the stage
+   rather than fixed to the viewport. */
+.mesh-picker__pop.fs-intro__mesh-list {
+  position: absolute;
+  z-index: 10000;
+  pointer-events: none;
+}
