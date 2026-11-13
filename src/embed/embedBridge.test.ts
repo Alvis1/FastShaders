@@ -10,7 +10,11 @@
  *     walks the static graph; this pins the reason the edge is dynamic);
  *   - the bridge answers the PARENT window at the page's own origin only;
  *   - exportShader.ts hands EXPORT's bytes to the host at that origin instead
- *     of the download folder, and only when embedded.
+ *     of the download folder, and only when embedded;
+ *   - every message names its document (embedDocument.ts has the rules and
+ *     their own suite), and the id moves only where the document does;
+ *   - embedded, the stored document — graph, name, viewport, model — is
+ *     neither read nor written: the host's copy is the only one.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -56,9 +60,60 @@ describe('embed mode', () => {
     // A second "last opened" slot suppressed X after open X → edit to Y → undo
     // to X, leaving the host on Y.
     expect(bridge).not.toMatch(/lastOpened/);
-    expect(bridge).toMatch(/if \(text === lastPosted\) return;/);
+    expect(bridge).toMatch(/const key = embedModuleKey\(text\);\s*if \(key === lastPosted\) return;\s*lastPosted = key;/);
     const onMessage = bridge.match(/const onMessage = [\s\S]*?\n {4}\};/)![0];
-    expect(onMessage).toMatch(/lastPosted = text;/);
+    expect(onMessage).toMatch(/lastPosted = embedModuleKey\(text\);/);
+  });
+
+  it('every message names its document, and says which protocol it speaks', () => {
+    const bridge = read('./EmbedBridge.tsx');
+    expect(bridge).toMatch(/post\(\{ type: 'superwxr:ready', protocol: EMBED_PROTOCOL \}\)/);
+    expect(bridge).toMatch(/type: 'superwxr:module', module: text, name: [^}]*\.\.\.embedDocumentFields\(\) \}/);
+    expect(read('../engine/exportShader.ts')).toMatch(/type: 'superwxr:export',[^}]*id: embedDocument\(\)\.id \}/);
+  });
+
+  it('the graph becomes the host\'s document only once its import succeeded', () => {
+    const bridge = read('./EmbedBridge.tsx');
+    const onMessage = bridge.match(/const onMessage = [\s\S]*?\n {4}\};/)![0];
+    // A throwing open (a corrupt project block) leaves the OLD document in the
+    // editor: taking the new id first would send that document's edits to the
+    // shader the host asked for.
+    expect(onMessage).toMatch(/try \{\s*importShaderText\([^;]*;[\s\S]*?embedDocumentOpened\(id\);\s*lastPosted = /);
+    expect(onMessage).not.toMatch(/embedDocumentOpened\(id\)[\s\S]*importShaderText\(/);
+    expect(onMessage).toMatch(/const id = hostDocumentId\(data\.id\);/);
+  });
+
+  it('a document replaced inside the editor stops being the host\'s, but the bridge\'s own open does not count', () => {
+    const bridge = read('./EmbedBridge.tsx');
+    expect(bridge).toMatch(/const onReplaced = \(\) => \{\s*if \(opening\) return;\s*embedDocumentReplaced\(\);\s*schedule\(\);\s*\};/);
+    for (const event of ['fs:graph-imported', 'fs:graph-new']) {
+      expect(bridge).toContain(`window.addEventListener('${event}', onReplaced);`);
+      expect(bridge).toContain(`window.removeEventListener('${event}', onReplaced);`);
+    }
+    // The flag brackets the import and is dropped even when it throws.
+    expect(bridge).toMatch(/opening = true;\s*try \{[\s\S]*?\} finally \{\s*opening = false;\s*\}/);
+    // Both events are still what the paths that REPLACE a document dispatch.
+    expect(read('../engine/projectImport.ts')).toMatch(/new CustomEvent\('fs:graph-imported'\)/);
+    expect(read('../store/useAppStore.ts')).toMatch(/new CustomEvent\('fs:graph-new'\)/);
+  });
+
+  it('embedded, the stored document is neither read nor written', () => {
+    const store = read('../store/useAppStore.ts');
+    // The graph autosave starts OFF, with no call for an entry to forget.
+    expect(store).toMatch(/const DOCUMENT_STORED = !isEmbedMode\(\);\s*let graphPersistence = DOCUMENT_STORED;/);
+    // Its name: read once at init, written by NEW and by a rename.
+    expect(store).toMatch(/shaderName: DOCUMENT_STORED \? loadString\('fs:shaderName', DEFAULT_SHADER_NAME\) : DEFAULT_SHADER_NAME,/);
+    expect(store.match(/saveString\('fs:shaderName'/g)).toHaveLength(2);
+    expect(store.match(/if \(DOCUMENT_STORED\) saveString\('fs:shaderName'/g)).toHaveLength(2);
+    // Its model: every `superwxr:open` clears the session mesh, and that clear
+    // must not reach the mirror a full FastShaders tab restores from.
+    expect(store).toMatch(/if \(opts\?\.persist !== false && DOCUMENT_STORED\) \{\s*void savePreviewMeshToCache\(/);
+    expect(store.match(/savePreviewMeshToCache\(/g)).toHaveLength(1);
+    // The boot graph, and the viewport that belongs to the stored one.
+    expect(read('../App.tsx')).toMatch(/const saved = isEmbedMode\(\) \? null : loadGraph\(\);/);
+    const viewport = read('../utils/viewportMemory.ts');
+    expect(viewport).toMatch(/export function readStoredViewport\(\)[^{]*\{[^}]*?if \(isEmbedMode\(\)\) return null;/);
+    expect(viewport).toMatch(/export function writeStoredViewport\([^{]*\{[^}]*?if \(isEmbedMode\(\)\) return;\s*try \{\s*localStorage\.setItem\(VIEWPORT_KEY/);
   });
 
   it('EXPORT posts its bytes to the host instead of downloading, only when embedded', () => {

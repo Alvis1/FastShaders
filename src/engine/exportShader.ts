@@ -37,6 +37,7 @@ import type { ImportNoteLine } from '@/utils/importNote';
 import { safeJsonReviver } from '@/utils/safeJson';
 import { downloadBlob } from '@/utils/downloadBlob';
 import { embedTargetOrigin, isEmbedMode } from '@/embed/embedMode';
+import { embedDocument } from '@/embed/embedDocument';
 
 /**
  * Shared "Download Shader" path. Lives outside any component so the toolbar
@@ -546,7 +547,7 @@ export function downloadShader(bundle: ShaderExport): void {
     // Embedded (embed/EmbedBridge.tsx): the host page takes delivery instead of
     // the browser's download folder — the same bytes, the same name.
     window.parent.postMessage(
-      { type: 'superwxr:export', kind: bundle.kind, fileName: bundle.fileName, mime: bundle.mime, bytes: bundle.bytes },
+      { type: 'superwxr:export', kind: bundle.kind, fileName: bundle.fileName, mime: bundle.mime, bytes: bundle.bytes, id: embedDocument().id },
       embedTargetOrigin(),
     );
   } else {

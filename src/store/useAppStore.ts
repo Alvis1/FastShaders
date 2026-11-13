@@ -25,6 +25,7 @@ import type { ImportNote, ImportNoteLine } from '@/utils/importNote';
 import type { ZipLimitKind } from '@/utils/zipReader';
 import { t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
+import { isEmbedMode } from '@/embed/embedMode';
 import type { NodePreviewTarget } from '@/utils/nodePreview';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { randomGroupColor, nextGroupLabel } from '@/utils/newNodeValues';
@@ -1061,8 +1062,18 @@ const STORAGE_KEY = 'fs:graph';
  *
  * Any entry point that mounts this store WITHOUT owning the user's graph must
  * call `setGraphPersistence(false)` before its first store write.
+ *
+ * The embedded editor (`?embed=1`, embed/embedMode.ts) is such a page, and it
+ * needs no call: its graph is the HOST's document (SuperWXR's shader asset),
+ * sent in by `superwxr:open` and handed back on every edit. A second copy in
+ * `fs:graph` belonged to nobody after a reload, and it overwrote the work of a
+ * full FastShaders tab at the same origin. So it starts off here, and
+ * `DOCUMENT_STORED` below keeps the rest of the stored document — its name,
+ * its model — out of the embed's reach on the same terms; App.tsx reads no
+ * stored graph and utils/viewportMemory.ts no stored viewport.
  */
-let graphPersistence = true;
+const DOCUMENT_STORED = !isEmbedMode();
+let graphPersistence = DOCUMENT_STORED;
 
 export function setGraphPersistence(enabled: boolean): void {
   graphPersistence = enabled;
@@ -2065,7 +2076,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   importNote: null,
   splitRatio: loadNumber('fs:splitRatio', 0.6),
   rightSplitRatio: loadRightSplitRatio(),
-  shaderName: loadString('fs:shaderName', DEFAULT_SHADER_NAME),
+  shaderName: DOCUMENT_STORED ? loadString('fs:shaderName', DEFAULT_SHADER_NAME) : DEFAULT_SHADER_NAME,
   selectedHeadsetId: bootSelectedId,
   // NULL-PROTOTYPE, for the reason useSyncEngine's builder documents: node ids
   // arrive verbatim from `.fastshader` files and the `fs:graph` autosave, and
@@ -2316,7 +2327,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // participant code instead (`evalShaderName`), which names the package's
     // shader file.
     const shaderName = evalShaderName() ?? DEFAULT_SHADER_NAME;
-    saveString('fs:shaderName', shaderName);
+    if (DOCUMENT_STORED) saveString('fs:shaderName', shaderName);
     set((state) => ({
       shaderName,
       // recordHistory, which does NOT honour `isUndoRedo`: a stale flag would
@@ -3016,7 +3027,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   setShaderName: (name) => {
-    saveString('fs:shaderName', name);
+    if (DOCUMENT_STORED) saveString('fs:shaderName', name);
     set({ shaderName: name });
   },
 
@@ -3035,8 +3046,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // on the mesh still on screen is announced (the preview says it will not
     // come back after a reload) — the identity check drops a slow write a
     // later drop has superseded. Restores (`persist: false`) and clears (null)
-    // never announce.
-    if (opts?.persist !== false) {
+    // never announce. Embedded, the mirror is not this page's to touch: every
+    // `superwxr:open` clears the session mesh, and writing that through would
+    // delete the model a full FastShaders tab at this origin had dropped.
+    if (opts?.persist !== false && DOCUMENT_STORED) {
       void savePreviewMeshToCache(mesh).then((r) => {
         if (r === 'storage-full' && mesh && get().previewMesh === mesh) announceMeshCacheFull(mesh.id);
       });

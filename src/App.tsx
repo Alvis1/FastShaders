@@ -360,7 +360,10 @@ export default function App() {
     }
 
     const groupsReport = loadSavedGroupsReport();
-    const saved = loadGraph();
+    // Embedded, the graph is the host's document and arrives by `superwxr:open`:
+    // the stored one is a full FastShaders tab's, or a shader the host has
+    // since closed, so the editor starts from the built-in graph every time.
+    const saved = isEmbedMode() ? null : loadGraph();
     seedFromStored(saved, groupsReport);
   }, []);
 

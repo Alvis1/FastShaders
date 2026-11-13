@@ -4,18 +4,29 @@
  * Messages, all with `type: 'superwxr:*'`, posted to and accepted from the
  * PARENT window at the page's own origin only:
  *
- *   in   { type: 'superwxr:open', module: string, name?: string }
+ *   in   { type: 'superwxr:open', module: string, name?: string, id?: string }
  *        — open a shader .js export (a FASTSHADERS_PROJECT_V1 block restores the
  *          graph; a bare module is parsed back), the "Load Script…" path: no
- *          Open/Add dialog.
- *   out  { type: 'superwxr:ready' }
+ *          Open/Add dialog. `id` is the host's own name for that document.
+ *   out  { type: 'superwxr:ready', protocol: 2 }
  *        — posted once the bridge listens.
- *   out  { type: 'superwxr:module', module: string, name: string }
+ *   out  { type: 'superwxr:module', module: string, name: string, id, replaced? }
  *        — the settled EXPORT module (images inlined, project block appended):
  *          what the EXPORT button would write, whenever the graph, the module
  *          settings or the name changed, trailing-debounced like the preview.
- *   out  { type: 'superwxr:export', kind, fileName, mime, bytes }
+ *   out  { type: 'superwxr:export', kind, fileName, mime, bytes, id }
  *        — what downloadShader would have downloaded (exportShader.ts).
+ *
+ * Every outgoing message names the document it is about (embedDocument.ts):
+ * `id` is the id of the open the graph came from; for a file opened INSIDE the
+ * editor it is an id minted here, with `replaced` naming the document it took
+ * the place of; for the graph the editor started with it is null. A host files
+ * a module by that id, never by what is selected when the message arrives.
+ *
+ * The host's document is the ONLY copy: embedded, the editor neither reads nor
+ * writes its own stored graph, name, viewport or model (store/useAppStore.ts,
+ * utils/viewportMemory.ts), so it starts from the built-in graph every time
+ * and a full FastShaders tab at the same origin keeps its own work.
  *
  * Never in a study session: the bridge is a second way to change the graph.
  */
@@ -27,6 +38,14 @@ import { importShaderText, preloadShaderImport } from '@/engine/projectImport';
 import { moduleSettingsOutput } from '@/utils/outputMaterials';
 import type { AppNode, OutputNodeData } from '@/types';
 import { embedTargetOrigin } from './embedMode';
+import {
+  EMBED_PROTOCOL,
+  embedDocumentFields,
+  embedDocumentOpened,
+  embedDocumentReplaced,
+  embedModuleKey,
+  hostDocumentId,
+} from './embedDocument';
 
 /** The preview's own settle delay (PREVIEW_REBUILD_DEBOUNCE_MS) plus a margin. */
 const SETTLE_MS = 300;
@@ -35,6 +54,7 @@ interface OpenMessage {
   type: 'superwxr:open';
   module?: unknown;
   name?: unknown;
+  id?: unknown;
 }
 
 function post(message: Record<string, unknown>): void {
@@ -49,19 +69,28 @@ function nameOf(raw: unknown): string {
 
 export function EmbedBridge() {
   useEffect(() => {
-    // The text the host holds: what was last posted OR last opened. One slot,
-    // so an edit away from an opened module and back to it is posted again.
+    // What the host holds: the document and text last posted OR last opened
+    // (embedModuleKey). One slot, so an edit away from an opened module and
+    // back to it is posted again.
     let lastPosted = '';
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // True only inside this bridge's own import: its `fs:graph-imported` is the
+    // host's document arriving, not one replacing it.
+    let opening = false;
 
     const broadcast = () => {
       timer = null;
       const module = buildExportModule({ inlineImages: true });
       if (module.startsWith(EXPORT_ERROR_PREFIX)) return;
       const text = embedProjectState(module, buildProjectState());
-      if (text === lastPosted) return;
-      lastPosted = text;
-      post({ type: 'superwxr:module', module: text, name: useAppStore.getState().shaderName });
+      const key = embedModuleKey(text);
+      if (key === lastPosted) return;
+      lastPosted = key;
+      post({ type: 'superwxr:module', module: text, name: useAppStore.getState().shaderName, ...embedDocumentFields() });
+    };
+    const schedule = () => {
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(broadcast, SETTLE_MS);
     };
 
     // The store notifies once per drag frame, so the question "did anything the
@@ -79,9 +108,22 @@ export function EmbedBridge() {
       const changed = state.previewCode !== last.previewCode || state.shaderName !== last.shaderName || settings !== last.settings;
       last = { previewCode: state.previewCode, shaderName: state.shaderName, nodes: state.nodes, settings };
       if (!changed) return;
-      if (timer !== null) clearTimeout(timer);
-      timer = setTimeout(broadcast, SETTLE_MS);
+      schedule();
     });
+
+    // A file opened inside the editor (a dropped shader's Open, a shader stored
+    // in a dropped model) or NEW: another document, no longer the one the host
+    // opened. Both events are dispatched synchronously by the path that
+    // replaces the graph. The boot seed's own `fs:graph-imported` (App.tsx)
+    // never reaches this listener: it fires in the first commit's mount
+    // effect, and this chunk is lazy, so it mounts in a later one.
+    const onReplaced = () => {
+      if (opening) return;
+      embedDocumentReplaced();
+      schedule();
+    };
+    window.addEventListener('fs:graph-imported', onReplaced);
+    window.addEventListener('fs:graph-new', onReplaced);
 
     const onMessage = (e: MessageEvent) => {
       if (e.source !== window.parent || e.origin !== embedTargetOrigin()) return;
@@ -90,28 +132,37 @@ export function EmbedBridge() {
       if (typeof data.module !== 'string' || data.module.length === 0) return;
       const text = data.module;
       const nameFallback = nameOf(data.name);
-      lastPosted = text;
+      const id = hostDocumentId(data.id);
       // An open supersedes the mount-time broadcast below: the import's own settle broadcasts.
       if (timer !== null) {
         clearTimeout(timer);
         timer = null;
       }
       void preloadShaderImport().then(() => {
+        opening = true;
         try {
           importShaderText(text, { nameFallback, parsed: extractProjectState(text) });
+          // Only now, and only on success: an open that threw leaves the graph
+          // the document it was, and its edits must keep saying so.
+          embedDocumentOpened(id);
+          lastPosted = embedModuleKey(text);
         } catch (err) {
           console.error('[FastShaders embed] open failed', err);
+        } finally {
+          opening = false;
         }
       });
     };
     window.addEventListener('message', onMessage);
-    post({ type: 'superwxr:ready' });
+    post({ type: 'superwxr:ready', protocol: EMBED_PROTOCOL });
     // A lazy chunk comes up AFTER the first settle, so nothing would change the
     // store again on a host that just shows what the editor holds: tell it, at
     // the same trailing delay — unless an open arrives first (above).
     timer = setTimeout(broadcast, SETTLE_MS);
     return () => {
       window.removeEventListener('message', onMessage);
+      window.removeEventListener('fs:graph-imported', onReplaced);
+      window.removeEventListener('fs:graph-new', onReplaced);
       unsubscribe();
       if (timer !== null) clearTimeout(timer);
     };
