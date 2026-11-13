@@ -105,8 +105,15 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
+      # PINNED, never @stable: cargo 1.100 (2026-11-12) moved build-script
+      # output to build/<pkg>/<hash>/out, and tauri-build 2.6.3 finds the
+      # target dir as OUT_DIR's third parent — so its resource copy landed in
+      # target/release/build/ShaderCarousel and the Windows portable zip step
+      # failed (v0.3.49, twice). Bump only together with a tauri-build that
+      # handles the new layout (docs/dev/platform-and-release.md).
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.99.1
           targets: ${{ matrix.rust-targets }}
       - uses: swatinem/rust-cache@v2
         with:

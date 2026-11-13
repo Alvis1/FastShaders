@@ -47,7 +47,7 @@ The **rules** are here; the **reasoning, measurements and negative results** beh
 - `npm test` — run the vitest suite once (CI-friendly)
 - `npm run test:watch` — run vitest in watch mode
 - `npm run tauri dev` / `npm run tauri build` — desktop (Tauri v2) shell; needs a local Rust toolchain. Releases are built in CI (no local Rust required)
-- `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`, run inside `src-tauri/` — the Rust gate for any change to the desktop shell. The crate is fmt- and clippy-clean, so a failure is always the change under test. CI runs only `cargo test` (release.yml's desktop job, after the build), never clippy, so a new toolchain's lint cannot block a release. Two traps: `generate_context!` needs `../dist` and `../package.json` (a placeholder `dist/index.html` does), and tauri-build writes `src-tauri/gen/`, so a throwaway check is best run in a copy of `src-tauri/`
+- `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`, run inside `src-tauri/` — the Rust gate for any change to the desktop shell. The crate is fmt- and clippy-clean, so a failure is always the change under test. CI runs only `cargo test` (release.yml's desktop job, after the build), never clippy, so a new toolchain's lint cannot block a release — and on a PINNED Rust (1.99.1, never `@stable`): cargo 1.100's build-dir layout sends tauri-build 2.6.3's resource copy to the wrong folder (`docs/dev/platform-and-release.md`). Two traps: `generate_context!` needs `../dist` and `../package.json` (a placeholder `dist/index.html` does), and tauri-build writes `src-tauri/gen/`, so a throwaway check is best run in a copy of `src-tauri/`
 
 ## Deployment
 

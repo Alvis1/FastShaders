@@ -15,6 +15,7 @@
 - Centralized vendoring (single source + sync)
 - Push the `a-frame-shaderloader` submodule BEFORE the release tag, and PURGE jsdelivr when the pushed file is n…
 - Every release is archived on Zenodo, and a release is never deleted or re-tagged
+- CI builds the desktop app on a PINNED Rust toolchain
 
 ---
 
@@ -58,3 +59,9 @@
 - **This is the study's reproducibility record, which is why the release rules are absolute**: never delete a GitHub release, never force-push or reuse a tag (the fix is a fresh `npm version patch`), never edit a published release's assets. `release.yml`'s `--clobber` replaces assets only inside the SAME tag's draft, before it is published (which is what fires the webhook), so it cannot rewrite an archived version. Each release keeps its macOS/Windows binaries on GitHub, offline-capable, so an old version still RUNS after every host has moved on (the desktop build has no `/eval` entries).
 - **Known gap: the archive does not contain the loader.** Zenodo stores GitHub's source zip, which OMITS submodules, and `a-frame-shaderloader` has no Zenodo hook and no releases (checked 2026-10-26). The tag records the submodule COMMIT, so the loader is recoverable from git, but not from the DOI alone. Closing it needs the owner to enable that repository in Zenodo's GitHub settings and then a release of it.
 - **There is no per-version WEB copy.** Each host serves only the latest build. A frozen one must get its OWN origin (a subdomain): every `fs:*` localStorage key is per origin, so an old build in a sub-path of a live host would read and write the live app's autosave. It must also not post study packages to the live inbox.
+
+### CI builds the desktop app on a PINNED Rust toolchain
+
+- **`release.yml`'s desktop job installs Rust 1.99.1, never `@stable`** (2026-11-13). Cargo 1.100 (released 2026-11-12) moved a build script's output from `target/<profile>/build/<pkg>-<hash>/out` to `target/<profile>/build/<pkg>/<hash>/out`, and tauri-build 2.6.3 finds the target directory as `OUT_DIR`'s THIRD parent (its own source calls it "far from ideal", cargo issue 5457). On 1.100 its `bundle.resources` copy therefore lands in `target/release/build/ShaderCarousel`, not beside the exe; the `.dmg` and the NSIS installer read the resources from `src-tauri/carousel-dist/` and were unaffected, but the Windows portable zip copies `target/release/ShaderCarousel` and the job failed — v0.3.49 twice, a deterministic failure, with no repo change behind it (v0.3.47 passed on 1.99.1 two days earlier). Measured with a one-file probe crate: 1.97.1 and 1.99.1 resolve the third parent to `target/release`, 1.100.0 to `target/release/build`.
+- **v0.3.49 is a tag with an unpublished DRAFT release** (the `.dmg` only); it never reached Zenodo, Pages or either host, and v0.3.50 is the same app built on the pinned toolchain. It stays as it is — the release rules above.
+- **Bump the pin only together with a tauri-build that handles the new layout** (no 2.x release did as of 2026-11-13; the next published line was 3.0.0-alpha). Locally the same trap applies to `npm run tauri dev` on Rust ≥ 1.100: the LAN bench server's `resource_dir()` is the target dir, so it should find no ShaderCarousel (inferred from the same copy, not run).
