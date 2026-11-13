@@ -16,16 +16,20 @@ import { useAppStore } from '@/store/useAppStore';
 import { connectNodes } from '@/components/NodeEditor/edgeInsert';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import { generateId } from '@/utils/idGenerator';
-import { freshNodeCost } from '@/utils/nodeCost';
+import { freshNodeCost, imageNodeCost } from '@/utils/nodeCost';
 import { initialNodeValues } from '@/utils/newNodeValues';
 import { effectiveExposedPorts } from '@/utils/exposedPorts';
 import { makeOpacityReadable } from '@/utils/libraryAutoWire';
 import { getNodeValues, outputNodeValues } from '@/types';
+import { exceedsImageBudgetAdding, makeImageNodeFromEncode } from '@/utils/imageNode';
+import { withImagePayload } from '@/utils/textureSources';
+import { filePictureOrientation, replacementPictureOrientation } from '@/utils/pictureOrientation';
 import { evalAutomated, evalLog } from '@/eval/telemetry';
-import type { AppNode, OutputNodeData, ShaderNodeData, MaterialSettings } from '@/types';
+import type { AppNode, MaterialSettings, NodeDefinition, OutputNodeData, ShaderNodeData } from '@/types';
 import { findTutorial } from './tutorialDefs';
-import { planAddPosition } from './tutorialRun';
-import type { TutorialRun } from './tutorialTypes';
+import { PICTURE_TYPE, holdsPicture, planAddPosition } from './tutorialRun';
+import { tutorialPicture } from './tutorialPicture';
+import type { AddStep, TutorialRun } from './tutorialTypes';
 
 export interface AutoStepResult {
   /** The node an `add` step created — the panel glides to it. */
@@ -60,6 +64,7 @@ function performStep(run: TutorialRun, rand: () => number): AutoStepResult {
     case 'add': {
       const nodeDef = NODE_REGISTRY.get(step.type);
       if (!nodeDef) return {};
+      if (step.type === PICTURE_TYPE) return addPicture(run, step, nodeDef);
       const position = planAddPosition(nodeDef, run.step, def.steps, bindings, nodes);
       const id = generateId();
       // The AddNodeMenu's node, byte for byte (menus/AddNodeMenu.tsx): the
@@ -79,12 +84,7 @@ function performStep(run: TutorialRun, rand: () => number): AutoStepResult {
       } as AppNode;
       store.addNode(node);
       store.tutorialBind(step.role, id);
-      let feedsId: string | undefined;
-      for (let i = run.step + 1; i < def.steps.length; i++) {
-        const s = def.steps[i];
-        if (s.kind === 'wire' && s.from[0] === step.role) { feedsId = bindings[s.to[0]]; break; }
-      }
-      return { addedId: id, feedsId };
+      return { addedId: id, feedsId: feedsOf(run, step.role) };
     }
     case 'wire': {
       const src = nodeOf(step.from[0]);
@@ -132,4 +132,75 @@ function performStep(run: TutorialRun, rand: () => number): AutoStepResult {
       return {};
     }
   }
+}
+
+/** The node `role` will feed next in the lesson, for the panel's glide. */
+function feedsOf(run: TutorialRun, role: string): string | undefined {
+  const steps = findTutorial(run.id)?.steps ?? [];
+  for (let i = run.step + 1; i < steps.length; i++) {
+    const s = steps[i];
+    if (s.kind === 'wire' && s.from[0] === role) return run.bindings[s.to[0]];
+  }
+  return undefined;
+}
+
+/**
+ * An Image step: the painted sky (`tutorialPicture.ts`) — into the EMPTY Image
+ * node the reader already added from the palette, if there is one (newest
+ * first, as `evaluateStep` binds), else as a new node where the lesson's
+ * layout puts it. Nothing before the picture is ready: the panel keeps the
+ * button off until then. A payload ADDED is checked against the project's
+ * image budget like every other path that adds one, and an over-budget add
+ * asks first, through the same notice ("Add anyway" places it).
+ */
+function addPicture(run: TutorialRun, step: AddStep, nodeDef: NodeDefinition): AutoStepResult {
+  const picture = tutorialPicture();
+  if (!picture) return {};
+  const store = useAppStore.getState();
+  const taken = new Set(Object.values(run.bindings));
+  const empty = [...store.nodes].reverse().find(
+    (n) => !taken.has(n.id) && n.type !== 'group' && n.type !== 'note' &&
+      (n.data as { registryType?: unknown }).registryType === PICTURE_TYPE && !holdsPicture(n),
+  );
+  const cost = imageNodeCost(freshNodeCost(PICTURE_TYPE) ?? 0, picture.width, picture.height);
+  const place = (): AutoStepResult => {
+    const s = useAppStore.getState();
+    if (empty && s.nodes.some((n) => n.id === empty.id)) {
+      const current = getNodeValues(s.nodes.find((n) => n.id === empty.id)!);
+      // "From file…"'s write into an existing node, orientation rule included.
+      const orientation = replacementPictureOrientation(s, current);
+      s.updateNodeData(empty.id, { values: withImagePayload(current, { ...picture, orientation }), cost } as Partial<ShaderNodeData>);
+      s.tutorialBind(step.role, empty.id);
+      return { addedId: empty.id, feedsId: feedsOf(run, step.role) };
+    }
+    const tut = s.tutorial;
+    const lesson = findTutorial(run.id);
+    if (!lesson) return {};
+    const bindings = tut?.id === run.id ? tut.bindings : run.bindings;
+    const id = generateId();
+    // The drop's node (makeImageNodeFromEncode, the ONE construction path, and
+    // the drop's orientation rule: the glTF way over a glTF model's own UVs —
+    // moot while it is only a sky, not once the reader wires it into Color)
+    // over the palette's fresh values. No stash: the picture is painted, never
+    // downscaled, so there is nothing to revert to.
+    const data = makeImageNodeFromEncode(picture, cost, picture.fileName, undefined, filePictureOrientation(s));
+    s.addNode({
+      id,
+      type: getFlowNodeType(nodeDef),
+      position: planAddPosition(nodeDef, run.step, lesson.steps, bindings, s.nodes),
+      data: { ...data, values: { ...initialNodeValues(nodeDef, [...s.nodes]), ...data.values } },
+    } as AppNode);
+    s.tutorialBind(step.role, id);
+    return { addedId: id, feedsId: feedsOf(run, step.role) };
+  };
+  if (exceedsImageBudgetAdding(store.nodes, [picture.dataUrl], store.ignoreImageLimits)) {
+    store.enqueueLimitNotice({
+      id: generateId(),
+      kind: 'image-total-cap',
+      fileName: picture.fileName,
+      proceed: () => { evalAutomated(place); },
+    });
+    return {};
+  }
+  return place();
 }

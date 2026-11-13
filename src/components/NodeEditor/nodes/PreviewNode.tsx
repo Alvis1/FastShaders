@@ -8,14 +8,15 @@ import { CAT_HEX } from '@/utils/colorUtils';
 import { Points } from '@/components/Points/Points';
 import { useCostChrome, useLiveNodeCost, useRemeasureOnScale } from './useCostChrome';
 import { useFrameLoop } from '@/hooks/useFrameLoop';
-import { evaluateEdgeSource, getTargetEdges, getTimeUpstreamSet } from '@/engine/cpuEvaluator';
+import { evaluateEdgeSource, evaluateNodeOutput, getSurfaceFieldUpstreamSet, getTargetEdges, getTimeUpstreamSet } from '@/engine/cpuEvaluator';
 import { TypedHandle } from '../handles/TypedHandle';
-import { renderNoisePreview, type NoiseType, type TimeInputs } from '@/utils/noisePreview';
+import { flatNoiseDisplay, renderFlatNoisePreview, renderNoisePreview, type NoiseType, type TimeInputs } from '@/utils/noisePreview';
 import './PreviewNode.css';
 import { hasNoiseRangeFlag, isUnsignedNoise } from '@/utils/noiseRange';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
 import { NodeTitle } from './NodeTitle';
 import { useHeaderTip } from './headerTip';
+import { lessonRevealNode } from '@/tutorials/tutorialRun';
 
 const PREVIEW_SIZE = 96;
 /*
@@ -107,9 +108,15 @@ export const PreviewNode = memo(function PreviewNode({
   // An approaching wire reveals ALL param sockets (names on their tooltips)
   // so any parameter can be wired without a menu round-trip; landing the
   // connection makes the exposure permanent (onConnect auto-expose).
-  const revealHidden = useStore(
+  const wireNear = useStore(
     useMemo(() => makeConnectionRevealSelector(id, true), [id]),
   );
+  // A running lesson whose step wires INTO this node shows them too, for as
+  // long as the step is on screen: its caption names a socket ("the noise's
+  // pos input") that otherwise exists only mid-drag, so there was nothing to
+  // look for and nothing for the lesson's socket ring to land on.
+  const lessonTarget = useAppStore((s) => lessonRevealNode(s.tutorial) === id);
+  const revealHidden = wireNear || lessonTarget;
   // Param sockets = permanently exposed ports, plus (while revealing) every
   // exposable param from the registry defaults. Temporary ones render dimmed.
   //
@@ -182,6 +189,19 @@ export const PreviewNode = memo(function PreviewNode({
   const timeInputs = useMemo(() => timeInputsRaw, [timeInputsKey]);
   const hasAnyTime = Object.values(timeInputs).some(Boolean);
 
+  // ONE value per frame for the whole surface — `pos` wired to the camera
+  // position, Sound, Time alone or a constant (getSurfaceFieldUpstreamSet) —
+  // and the shader paints the whole mesh one tone, so the card shows one flat
+  // grey instead of a pattern the model never shows. A boolean selector: the
+  // set is cached per graph in the evaluator's ctx, and Object.is bails. It
+  // asks for a WIRED `pos` first: an unwired noise always reads the surface,
+  // and a card drawn for a node the store does not hold (GraphModal fills the
+  // store only after its first render) must keep its pattern.
+  const flat = useAppStore((s) =>
+    NOISE_TYPES.has(data.registryType)
+    && getTargetEdges(s.nodes, s.edges, id).some((e) => e.targetHandle === 'pos')
+    && !getSurfaceFieldUpstreamSet(s.nodes, s.edges).has(id));
+
   const catHex = CAT_HEX[def.category as NodeCategory] ?? CAT_HEX.unknown;
   // Priced LIVE under the selected device's table, as ShaderNode is — never
   // the creation-time `data.cost` snapshot (useLiveNodeCost says why).
@@ -217,6 +237,21 @@ export const PreviewNode = memo(function PreviewNode({
     return resolved;
   };
 
+  /** The flat thumbnail's grey at `time`: the evaluator's value, or the middle
+   *  grey while any wired input is unknown (the camera position). */
+  const flatDisplay = (currentNodes: AppNode[], currentEdges: AppEdge[], time: number): number => {
+    const seen = new Set<string>();
+    let unknown = false;
+    for (const edge of getTargetEdges(currentNodes, currentEdges, id)) {
+      const handle = edge.targetHandle;
+      if (!handle || seen.has(handle)) continue;
+      seen.add(handle);
+      if (evaluateEdgeSource(edge, currentNodes, currentEdges, time) === null) unknown = true;
+    }
+    const v = unknown ? null : evaluateNodeOutput(id, currentNodes, currentEdges, time)?.[0] ?? null;
+    return flatNoiseDisplay(data.registryType as NoiseType, v, isUnsignedNoise(data.registryType, data.values));
+  };
+
   // Static (non-time-driven) noise preview: one-shot render. Keyed on the
   // folded inputsKey (not nodes/edges identity) so the thumbnail refreshes
   // when an upstream value changes but NOT on every drag frame; the arrays are
@@ -230,14 +265,15 @@ export const PreviewNode = memo(function PreviewNode({
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return;
     const { nodes, edges } = useAppStore.getState();
-    const resolved = resolveValues(nodes, edges, 0);
-    const imageData = renderNoisePreview(
-      data.registryType as NoiseType, PREVIEW_SIZE, resolved, 0, {}, noiseBufRef.current,
-    );
+    const imageData = flat
+      ? renderFlatNoisePreview(PREVIEW_SIZE, flatDisplay(nodes, edges, 0), noiseBufRef.current)
+      : renderNoisePreview(
+        data.registryType as NoiseType, PREVIEW_SIZE, resolveValues(nodes, edges, 0), 0, {}, noiseBufRef.current,
+      );
     noiseBufRef.current = imageData;
     ctx.putImageData(imageData, 0, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.registryType, data.values, inputsKey, hasAnyTime]);
+  }, [data.registryType, data.values, inputsKey, hasAnyTime, flat]);
 
   // Animated (time-driven) noise preview, on the shared frame ticker
   // (utils/frameTicker — see the FRAME RATE note at the top of this file).
@@ -269,22 +305,24 @@ export const PreviewNode = memo(function PreviewNode({
         // epoch also lets cpuEvaluator's per-time cache buckets be shared
         // across surfaces within a tick.
         const { nodes, edges } = useAppStore.getState();
-        const resolved = resolveValues(nodes, edges, t);
-        const imageData = renderNoisePreview(
-          data.registryType as NoiseType,
-          PREVIEW_SIZE,
-          resolved,
-          t,
-          timeInputs,
-          noiseBufRef.current,
-        );
+        // Time alone into `pos` is one value per frame too: the grey flickers.
+        const imageData = flat
+          ? renderFlatNoisePreview(PREVIEW_SIZE, flatDisplay(nodes, edges, t), noiseBufRef.current)
+          : renderNoisePreview(
+            data.registryType as NoiseType,
+            PREVIEW_SIZE,
+            resolveValues(nodes, edges, t),
+            t,
+            timeInputs,
+            noiseBufRef.current,
+          );
         // Keep whatever came back: the first call (or one after PREVIEW_SIZE
         // ever changed) allocates, every later one hands the same buffer back.
         noiseBufRef.current = imageData;
         ctx.putImageData(imageData, 0, 0);
       };
     },
-    [data.registryType, data.values, hasAnyTime, timeInputs],
+    [data.registryType, data.values, hasAnyTime, timeInputs, flat],
   );
 
   return (

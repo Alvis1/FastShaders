@@ -358,3 +358,70 @@ describe('noise prices track the measured Quest 3 run', () => {
     });
   }
 });
+
+describe('the Environment chain is priced at the two evaluations three builds', () => {
+  // three's EnvironmentNode builds `envNode` twice (radiance + irradiance), each
+  // in its own isolate that reuses only what the material's main build holds.
+  // Measured 2026-11-12 in the WGSL three r184 built (nodeCost.ts envOnlyChain).
+  const cam = () => makeNode('cam', 'cameraPosition');
+  const noise = () => makeNode('n', 'perlin', { pos: 'positionGeometry', scale: 1, signed: 0 });
+  const IMG = { imageB64: 'data:image/webp;base64,YWJj', width: 2048, height: 2048, fileName: 'x.webp', colorSpace: 'color' };
+
+  it('a chain that feeds ONLY Environment is counted twice', () => {
+    const out = makeNode('o1', 'output');
+    const edges = [makeEdge('cam', 'out', 'n', 'pos'), makeEdge('n', 'out', 'o1', 'env')];
+    expect(computeReachableCost([out, cam(), noise()], edges)).toBe(2 * (BASE.perlin + BASE.cameraPosition));
+  });
+
+  it('a node another pixel channel also reads is built once', () => {
+    for (const channel of ['color', 'emissive', 'roughness', 'metalness', 'opacity', 'discard', 'normal']) {
+      const out = makeNode('o1', 'output');
+      const edges = [makeEdge('n', 'out', 'o1', 'env'), makeEdge('n', 'out', 'o1', channel)];
+      expect(computeReachableCost([out, noise()], edges), channel).toBe(BASE.perlin);
+    }
+  });
+
+  it('Position runs in the vertex stage and shares nothing', () => {
+    const out = makeNode('o1', 'output');
+    const edges = [makeEdge('n', 'out', 'o1', 'env'), makeEdge('n', 'out', 'o1', 'position')];
+    // The displaced-normal recompute is priced on top (a noise reads the
+    // position); only the env term is under test, so compare with the Flat twin.
+    const flat = { ...out, data: { ...out.data, materialSettings: { flatShading: true } } } as AppNode;
+    expect(computeReachableCost([flat, noise()], edges)).toBe(2 * BASE.perlin);
+  });
+
+  it('only the env-only part of a deeper chain is counted again', () => {
+    const out = makeNode('o1', 'output');
+    const m = makeNode('m', 'mul');
+    const a = makeNode('a', 'add');
+    const edges = [
+      makeEdge('n', 'out', 'm', 'a'),
+      makeEdge('m', 'out', 'a', 'a'),
+      makeEdge('a', 'out', 'o1', 'env'),
+      makeEdge('m', 'out', 'o1', 'color'),
+    ];
+    expect(computeReachableCost([out, noise(), m, a], edges)).toBe(BASE.perlin + BASE.mul + 2 * BASE.add);
+  });
+
+  it('an Image from its Color socket is a texture to PMREM — not the node twice', () => {
+    const out = makeNode('o1', 'output');
+    const img = makeNode('i1', 'imageNode', IMG);
+    expect(computeReachableCost([out, img], [makeEdge('i1', 'out', 'o1', 'env')])).toBe(10);
+    // A channel socket is the sampled scalar, built twice like any other node.
+    expect(computeReachableCost([out, img], [makeEdge('i1', 'r', 'o1', 'env')])).toBe(20);
+  });
+
+  it('an Unlit Output reads no Environment, so its chain costs nothing', () => {
+    const out = makeNode('o1', 'output');
+    const unlit = { ...out, data: { ...out.data, materialSettings: { unlit: true } } } as AppNode;
+    expect(computeReachableCost([unlit, noise()], [makeEdge('n', 'out', 'o1', 'env')])).toBe(0);
+  });
+
+  it('per material: a feeder another material reads is still built twice for this one', () => {
+    const a = makeNode('o1', 'output');
+    const b = makeNode('o2', 'output');
+    (b.data as Record<string, unknown>).meshTarget = { name: 'Glass' };
+    const edges = [makeEdge('n', 'out', 'o1', 'color'), makeEdge('n', 'out', 'o2', 'env')];
+    expect(computeReachableCost([a, b, noise()], edges, [a, b])).toBe(2 * BASE.perlin);
+  });
+});

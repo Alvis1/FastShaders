@@ -20,6 +20,7 @@ import { PreviewScene } from './PreviewScene';
 import { UniformScene } from './UniformScene';
 import { ModelScene } from './ModelScene';
 import { MeshesScene } from './MeshesScene';
+import { KeysTab } from './KeysTab';
 import { introHidden, setIntroHidden, type IntroVia } from './introGate';
 import { LangSwitch } from '@/eval/LangSwitch';
 import { evalLog } from '@/eval/telemetry';
@@ -33,7 +34,7 @@ const SLIDES: ReadonlyArray<{ id: string; Scene: ComponentType; caption: string 
   {
     id: 'search',
     Scene: SearchScene,
-    caption: 'Press Space, or right-click empty canvas, to open the node search. Type a name such as noise and click a result to add the node.',
+    caption: 'Press Space, or right-click an empty spot, to open the node search. Type a name such as noise and click a result to add the node.',
   },
   {
     id: 'connect',
@@ -48,7 +49,7 @@ const SLIDES: ReadonlyArray<{ id: string; Scene: ComponentType; caption: string 
   {
     id: 'labels',
     Scene: LabelsScene,
-    caption: 'Double-click a node, or double-tap it on a touch screen, to see the names of all its sockets. Click empty canvas to hide them.',
+    caption: 'Double-click a node, or double-tap it on a touch screen, to see the names of all its sockets. Click an empty spot to hide them.',
   },
   {
     id: 'insert',
@@ -103,7 +104,7 @@ const SLIDES: ReadonlyArray<{ id: string; Scene: ComponentType; caption: string 
   {
     id: 'draw',
     Scene: DrawScene,
-    caption: 'Turn on Draw to mark up the canvas, and right-click to add a note.',
+    caption: 'Turn on Draw to draw by hand, and right-click to add a note.',
   },
   {
     id: 'meshes',
@@ -114,17 +115,23 @@ const SLIDES: ReadonlyArray<{ id: string; Scene: ComponentType; caption: string 
 
 /**
  * The window FastShaders opens with (`introGate.ts` decides; App.tsx mounts it
- * lazily; in a study session only after Agree): slides of live scenes drawn with the real
- * node cards, stepped with the arrows beside the stage, the boxes under it, or
- * ← / →. Only the shown slide is mounted, so only its animation runs.
+ * lazily; in a study session only after Agree). Two tabs, Intro first and
+ * always the one it opens on:
+ *  - INTRO: slides of live scenes drawn with the real node cards, stepped with
+ *    the arrows beside the stage, the boxes under it, or ← / →. Only the shown
+ *    slide is mounted, so only its animation runs — and none while Keys shows.
+ *  - KEYS ("Taustiņi"): every shortcut, as a static table (`KeysTab`, data in
+ *    `introKeys.ts`). It keeps the Intro page's height, measured as the tab
+ *    switches, so the window does not jump; the table scrolls inside it.
  *
  * The shared dialog chrome (CsvImportModal.css), laid out on one centre line:
- * the title with the language switch beside it (the study dialogs' own
- * `LangSwitch` — the toolbar's is behind the backdrop), the stage, Start and
- * "Don't show this again" under it. There is no ✕: Escape, the backdrop and
- * Start close it, and closing writes "Don't show this again" whichever way it
- * went. `aria-modal` is what stands the canvas's shortcuts down behind it. The
- * backdrop swallows a dropped file, so it never navigates away.
+ * the tabs (in the title's place and size) with the language switch beside
+ * them (the study dialogs' own `LangSwitch` — the toolbar's is behind the
+ * backdrop), the page, Start and "Don't show this again" under it. There is no
+ * ✕: Escape, the backdrop and Start close it, and closing writes "Don't show
+ * this again" whichever way it went. `aria-modal` is what stands the canvas's
+ * shortcuts down behind it. The backdrop swallows a dropped file, so it never
+ * navigates away.
  */
 /**
  * The slides a STUDY session shows (every entry — `introInStudy`): all of
@@ -137,18 +144,33 @@ function studySlides(): typeof SLIDES {
   return SLIDES.filter((s) => s.id !== 'folder' && (budget || s.id !== 'budget'));
 }
 
+type IntroTab = 'intro' | 'keys';
+const TABS: ReadonlyArray<{ id: IntroTab; label: string }> = [
+  { id: 'intro', label: 'Intro' },
+  { id: 'keys', label: 'Keys' },
+];
+const tabId = (tab: IntroTab) => `fs-intro-tab-${tab}`;
+
 /**
  * In a study session (`study`) the window is part of what is measured: its
  * opening (`via`: Agree or the toolbar's "i"), every slide shown and its close
  * are logged, and it writes nothing — "Don't show this again" is not offered,
- * as no study session ever opens it at boot.
+ * as no study session ever opens it at boot. A tab switch rides `intro-slide`
+ * (the disclosure's "intro slides used"): `{tab: 'keys'}` carries no `slide`,
+ * so the summary's `introSlidesSeen` still counts slides only, and the way
+ * back names the slide shown again; a close on Keys adds `tab: 'keys'`.
  */
 export function IntroWindow({ onClose, via = 'boot', study = false }: { onClose: () => void; via?: IntroVia; study?: boolean }) {
   const language = useAppStore((s) => s.language);
   const startRef = useRef<HTMLButtonElement>(null);
   const [slides] = useState(() => (study ? studySlides() : SLIDES));
   const [index, setIndex] = useState(0);
+  const [tab, setTab] = useState<IntroTab>('intro');
   const [dontShow, setDontShow] = useState(introHidden);
+  // The Intro page's height, read as Keys opens, so the window keeps its size.
+  const pageRef = useRef<HTMLDivElement>(null);
+  const [pageHeight, setPageHeight] = useState<number | null>(null);
+  const tabRefs = useRef<Partial<Record<IntroTab, HTMLButtonElement | null>>>({});
   const last = slides.length - 1;
   const seen = useRef(new Set<number>([0]));
   const go = (i: number) => {
@@ -159,9 +181,21 @@ export function IntroWindow({ onClose, via = 'boot', study = false }: { onClose:
     setIndex(to);
   };
 
+  const showTab = (to: IntroTab) => {
+    if (to === tab) return;
+    if (to === 'keys' && pageRef.current) setPageHeight(pageRef.current.offsetHeight);
+    if (study) evalLog('intro-slide', to === 'keys' ? { tab: to } : { tab: to, slide: slides[index].id, n: index + 1 });
+    setTab(to);
+  };
+
   const close = () => {
     if (study) {
-      evalLog('intro-close', { slide: slides[index].id, seen: seen.current.size, of: slides.length });
+      evalLog('intro-close', {
+        slide: slides[index].id,
+        seen: seen.current.size,
+        of: slides.length,
+        ...(tab === 'keys' ? { tab } : {}),
+      });
     } else {
       setIntroHidden(dontShow);
     }
@@ -184,9 +218,20 @@ export function IntroWindow({ onClose, via = 'boot', study = false }: { onClose:
       e.stopPropagation();
       close();
     } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const left = e.key === 'ArrowLeft';
+      // On a focused tab the arrows move between the tabs (the ARIA tabs
+      // pattern); elsewhere they page the slides, on the Intro tab only.
+      const onTab = (e.target as Element | null)?.closest?.('[role="tab"]');
+      if (!onTab && tab !== 'intro') return;
       e.stopPropagation();
       e.preventDefault();
-      go(index + (e.key === 'ArrowLeft' ? -1 : 1));
+      if (onTab) {
+        const to = TABS[(TABS.findIndex((x) => x.id === tab) + (left ? TABS.length - 1 : 1)) % TABS.length].id;
+        showTab(to);
+        tabRefs.current[to]?.focus();
+      } else {
+        go(index + (left ? -1 : 1));
+      }
     }
   }, true);
 
@@ -207,58 +252,90 @@ export function IntroWindow({ onClose, via = 'boot', study = false }: { onClose:
         className="csv-import-modal__panel fs-intro__panel"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="fs-intro-title"
-        aria-describedby="fs-intro-caption"
+        aria-labelledby={tabId(tab)}
+        aria-describedby={tab === 'intro' ? 'fs-intro-caption' : undefined}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="fs-intro__head">
-          <div className="csv-import-modal__title fs-intro__title" id="fs-intro-title">
-            {t('Intro', language)}
+          <div className="fs-intro__tabs" role="tablist">
+            {TABS.map(({ id, label }) => (
+              <button
+                key={id}
+                ref={(el) => {
+                  tabRefs.current[id] = el;
+                }}
+                type="button"
+                role="tab"
+                id={tabId(id)}
+                aria-selected={tab === id}
+                aria-controls="fs-intro-page"
+                tabIndex={tab === id ? 0 : -1}
+                className={`csv-import-modal__title fs-intro__title fs-intro__tab${tab === id ? ' fs-intro__tab--on' : ''}`}
+                onClick={() => showTab(id)}
+              >
+                {t(label, language)}
+              </button>
+            ))}
           </div>
           <LangSwitch />
         </div>
 
-        <div className="fs-intro__body">
-          {/* Each arrow keeps its column when it has nowhere to go, so the
-              stage never shifts between slides. */}
-          <button
-            className="fs-intro__arrow"
-            style={{ visibility: index > 0 ? 'visible' : 'hidden' }}
-            title={t('Previous hint', language)}
-            aria-label={t('Previous hint', language)}
-            onClick={() => go(index - 1)}
-          >
-            ‹
-          </button>
-          <div className="fs-intro__slide">
-            <Scene key={index} />
-          </div>
-          <button
-            className="fs-intro__arrow"
-            style={{ visibility: index < last ? 'visible' : 'hidden' }}
-            title={t('Next hint', language)}
-            aria-label={t('Next hint', language)}
-            onClick={() => go(index + 1)}
-          >
-            ›
-          </button>
-        </div>
+        <div
+          ref={pageRef}
+          className={`fs-intro__page${tab === 'keys' ? ' fs-intro__page--keys' : ''}`}
+          id="fs-intro-page"
+          role="tabpanel"
+          aria-labelledby={tabId(tab)}
+          style={tab === 'keys' && pageHeight ? { height: pageHeight } : undefined}
+        >
+          {tab === 'keys' ? (
+            <KeysTab language={language} />
+          ) : (
+            <>
+              <div className="fs-intro__body">
+                {/* Each arrow keeps its column when it has nowhere to go, so the
+                    stage never shifts between slides. */}
+                <button
+                  className="fs-intro__arrow"
+                  style={{ visibility: index > 0 ? 'visible' : 'hidden' }}
+                  title={t('Previous hint', language)}
+                  aria-label={t('Previous hint', language)}
+                  onClick={() => go(index - 1)}
+                >
+                  ‹
+                </button>
+                <div className="fs-intro__slide">
+                  <Scene key={index} />
+                </div>
+                <button
+                  className="fs-intro__arrow"
+                  style={{ visibility: index < last ? 'visible' : 'hidden' }}
+                  title={t('Next hint', language)}
+                  aria-label={t('Next hint', language)}
+                  onClick={() => go(index + 1)}
+                >
+                  ›
+                </button>
+              </div>
 
-        <div className="fs-intro__dots" role="group" aria-label={slideName(index)}>
-          {slides.map((_, i) => (
-            <button
-              key={i}
-              className={`fs-intro__dot${i === index ? ' fs-intro__dot--on' : ''}`}
-              title={slideName(i)}
-              aria-label={slideName(i)}
-              aria-current={i === index ? 'step' : undefined}
-              onClick={() => go(i)}
-            />
-          ))}
-        </div>
+              <div className="fs-intro__dots" role="group" aria-label={slideName(index)}>
+                {slides.map((_, i) => (
+                  <button
+                    key={i}
+                    className={`fs-intro__dot${i === index ? ' fs-intro__dot--on' : ''}`}
+                    title={slideName(i)}
+                    aria-label={slideName(i)}
+                    aria-current={i === index ? 'step' : undefined}
+                    onClick={() => go(i)}
+                  />
+                ))}
+              </div>
 
-        <div className="csv-import-modal__message fs-intro__caption" id="fs-intro-caption">
-          {t(caption, language)}
+              <div className="csv-import-modal__message fs-intro__caption" id="fs-intro-caption">
+                {t(caption, language)}
+              </div>
+            </>
+          )}
         </div>
 
         <div className="fs-intro__actions">

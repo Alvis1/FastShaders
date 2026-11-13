@@ -17,6 +17,7 @@ import { NODE_REGISTRY, getEditorDefinitions } from '@/registry/nodeRegistry';
 import { DEFAULT_OPTIONAL_CATEGORIES, hiddenOptionalCategories } from '@/registry/optionalCategories';
 import { OUTPUT_DEFAULT_EXPOSED, usesExposedPorts } from '@/utils/exposedPorts';
 import { formatRampStops, isRampInterp, parseRampStops } from '@/utils/colorRamp';
+import { CURVE_KEYS, formatCurve, parseCurve } from '@/utils/rgbCurves';
 import { hasTutorialShade } from './tutorialShades';
 
 const SRC = fileURLToPath(new URL('./', import.meta.url));
@@ -29,7 +30,9 @@ const STORED_KEYS: Record<string, readonly string[]> = {
   color: ['hex'], property_color: ['hex'],
 };
 
-const NEVER_ADDED = new Set(['output', 'imageNode', 'soundNode', 'dataNode', 'raymarchOutput', 'splatOutput']);
+// The Image node is not here: its step counts only once it holds a picture (the
+// reader's own, or the sky "Do it for me" paints, tutorialPicture.ts).
+const NEVER_ADDED = new Set(['output', 'soundNode', 'dataNode', 'raymarchOutput', 'splatOutput']);
 const PRINTABLE_ASCII = /^[\x20-\x7E]+$/;
 const outputDef = NODE_REGISTRY.get('output')!;
 const offered = new Set(getEditorDefinitions(hiddenOptionalCategories(DEFAULT_OPTIONAL_CATEGORIES)).map((d) => d.type));
@@ -90,7 +93,7 @@ describe('each lesson', () => {
   each('%s: every role is introduced before it is used', (_id, def) => {
     const live = new Set<string>([OUT_ROLE]);
     for (const s of def.steps) {
-      const used = s.kind === 'add' ? [] : s.kind === 'wire' ? [s.from[0], s.to[0]] : s.kind === 'look' ? [] : [s.role];
+      const used = s.kind === 'add' ? [] : s.kind === 'wire' ? [s.from[0], s.to[0]] : s.kind === 'look' ? [...(s.show ?? [])] : [s.role];
       for (const r of used) expect(live.has(r), `${def.id}/${s.id}: role ${r}`).toBe(true);
       if (s.kind === 'add') live.add(s.role);
     }
@@ -156,8 +159,47 @@ describe('each lesson', () => {
         if (k === 'hex') expect(v).toMatch(/^#[0-9a-f]{6}$/);
         if (k === 'stops') expect(formatRampStops(parseRampStops(v)!)).toBe(v);
         if (k === 'interp') expect(isRampInterp(v)).toBe(true);
+        // A curve is stored in its canonical spelling: the code panel prints the string as stored.
+        if ((Object.values(CURVE_KEYS) as string[]).includes(k)) expect(formatCurve(parseCurve(v)!.points)).toBe(v);
       }
     }
+  });
+
+  each('%s: names a socket with its node, and never shorthands a multi-node change', (_id, def) => {
+    // Each pattern is a caption a reader got wrong (see the header of tutorialDefs.ts).
+    for (const s of def.steps) {
+      // "Wire Fract into A." — whose A? The cards print no socket names.
+      expect(s.caption, `${def.id}/${s.id}`).not.toMatch(/\binto [AB]\b/);
+      expect(s.caption, `${def.id}/${s.id}`).not.toMatch(/^Set [AB] to\b/);
+      // "put an Add of Time between Split and Fract", "swap Multiply for Add", "a Mix with two Colors after Mod".
+      expect(s.caption, `${def.id}/${s.id}`).not.toMatch(/\ban? \w+ of Time\b|\bswap \w+ for\b|\bput an? \w+ (between|after|before)\b/i);
+      // The noise card's and the Time node's parameters read as raw lowercase keys in the menu and on the socket.
+      expect(s.caption, `${def.id}/${s.id}`).not.toMatch(/\b(set|tick|its|hidden|noise's) (Scale|Pos|Speed)\b/);
+      if (s.hint) expect(s.hint, `${def.id}/${s.id} hint`).not.toMatch(/(> |tick )(Scale|Pos|Speed)\b/);
+    }
+  });
+
+  each('%s: a look step shows labels only for nodes that have unprinted socket names', (_id, def) => {
+    for (const s of def.steps) {
+      if (s.kind !== 'look') continue;
+      if (s.show) {
+        expect(s.show.length, `${def.id}/${s.id}`).toBeGreaterThan(0);
+        expect(new Set(s.show).size, `${def.id}/${s.id}`).toBe(s.show.length);
+        // The Output prints its channel names; `stepTargets` would drop the role anyway.
+        expect(s.show, `${def.id}/${s.id}`).not.toContain(OUT_ROLE);
+      }
+    }
+  });
+
+  each('%s: an Image step brings no values and is wired on, so "Do it for me" has a picture to place', (_id, def) => {
+    def.steps.forEach((s, i) => {
+      if (s.kind !== 'add' || s.type !== 'imageNode') return;
+      // The payload is the reader's own file or the painted sky — never lesson data.
+      expect(s.values, `${def.id}/${s.id}`).toBeUndefined();
+      expect(s.caption, `${def.id}/${s.id}: the caption says what the button brings`).toMatch(/Do it for me/);
+      const next = def.steps[i + 1];
+      expect(next?.kind === 'wire' && next.from[0] === s.role, `${def.id}/${s.id}: the next step wires the picture`).toBe(true);
+    });
   });
 
   each('%s: feeds the Output at least once', (_id, def) => {

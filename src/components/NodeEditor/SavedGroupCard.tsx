@@ -76,7 +76,7 @@ export function SavedGroupCard({ group }: SavedGroupCardProps) {
   // still a built-in preset/texture name (a dropped preset, saved as-is).
   const name = assetText(group.name, language);
   const { tooltip, tooltipHandlers } = useAssetTooltip(
-    fillTemplate(t('Saved group “{name}” ({count}) — click, or drag onto the canvas, to add a copy.', language), {
+    fillTemplate(t('Saved group “{name}” ({count}) — click or drag to add a copy.', language), {
       name,
       count: countLabel,
     }),

@@ -24,6 +24,116 @@
   gap: var(--space-3);
 }
 
+/* The tabs stand in the title's place and size (owner, 2026-11-13: Intro
+   first, then Keys). The shown one in the title's ink over a focus-coloured
+   underline; the other in secondary ink. */
+.fs-intro__tabs {
+  display: flex;
+  gap: var(--space-4);
+}
+
+.fs-intro__tabs .fs-intro__tab {
+  padding: 0 0 2px;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+}
+
+.fs-intro__tabs .fs-intro__tab:hover {
+  color: var(--text-primary);
+}
+
+.fs-intro__tabs .fs-intro__tab.fs-intro__tab--on {
+  color: var(--text-primary);
+  border-bottom-color: var(--border-focus);
+}
+
+/* One tab's page: the Intro's stage, boxes and caption, or the key table.
+   The panel's own gap, kept between the Intro's three parts. */
+.fs-intro__page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+}
+
+/* Keys keeps the Intro page's height (set inline as the tab opens) and
+   scrolls inside it. The columns sit in an auto-height child: a multi-column
+   box with a fixed height overflows SIDEWAYS into extra columns. */
+.fs-intro__page--keys {
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  padding: var(--space-2) var(--space-3);
+}
+
+.fs-intro__keys {
+  margin: 0;
+  columns: 2 280px;
+  column-gap: var(--space-4);
+}
+
+/* Keys left, what they do right; a long combo wraps inside its column. A
+   row never splits across the two columns. Compact (owner, 2026-11-13). */
+.fs-intro__keys-row {
+  display: grid;
+  grid-template-columns: minmax(0, 10em) minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: 1px 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.35;
+  break-inside: avoid;
+}
+
+.fs-intro__keys-combos {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 1px 3px;
+}
+
+.fs-intro__keys-combo {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.fs-intro__keys-plus,
+.fs-intro__keys-or {
+  color: var(--text-muted);
+}
+
+.fs-intro__keys-does {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+/* A key cap: the stage's own key (.fs-intro__key) at text size. */
+.fs-intro__kbd {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 0 3px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--border-radius-sm);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  line-height: 1.3;
+  text-align: center;
+}
+
+/* A mouse gesture is a word, not a key — and may wrap inside its column
+   ("Vilkšana ar vidējo pogu"), where a key cap never breaks. */
+.fs-intro__gesture {
+  color: var(--text-primary);
+  font-style: italic;
+  white-space: normal;
+}
+
 .fs-intro__actions {
   display: flex;
   flex-direction: column;

@@ -10,14 +10,21 @@ import {
 import { contributingOutputs } from '@/utils/outputMaterials';
 import { displacedNormalChain, displacedNormalOverhead } from '@/utils/displacedNormalCost';
 import { UNLIT_IGNORED_CHANNELS, isUnlitSettings } from '@/utils/unlitMaterial';
+import { isImageChannelHandle } from '@/utils/imageChannels';
+import { bypassMutedEdges } from '@/utils/nodeMute';
 
 /**
  * The edges the price walks: all of them, except a wire into a channel an
  * UNLIT Output does not read (utils/unlitMaterial.ts) — the loader never
  * applies that channel, so what feeds only it never runs. By IDENTITY when no
  * Output is unlit, so every lit graph prices exactly as before.
+ *
+ * And as the SHADER reads them: a MUTED node is bypassed (utils/nodeMute.ts),
+ * so the walk never reaches it — nor what feeds only it — and it is priced at
+ * nothing, like any node the module does not hold. Identity when none is.
  */
 function pricedEdges(nodes: readonly AppNode[], edges: AppEdge[]): AppEdge[] {
+  edges = bypassMutedEdges(nodes, edges);
   let unlit: Set<string> | null = null;
   for (const n of nodes) {
     if (n.data.registryType === 'output' && isUnlitSettings((n.data as { materialSettings?: unknown }).materialSettings)) {
@@ -333,7 +340,60 @@ export function computeReachableCost(
     }
     total += 2 * body + displacedNormalOverhead();
   }
+
+  // The Environment channel runs its chain TWICE per pixel (`envOnlyChain`):
+  // the walk counted it once, so add what nothing else on that material
+  // already builds. Per seed — every material is its own shader.
+  for (const out of seeds) {
+    byId ??= new Map(nodes.map((n) => [n.id, n]));
+    const only = envOnlyChain(out, edges, sources, byId);
+    if (!only) continue;
+    for (const id of only) {
+      const n = byId.get(id);
+      if (n && !sinkIds.has(id)) total += points(n);
+    }
+  }
   return total;
+}
+
+/**
+ * The nodes `output`'s Environment chain evaluates a SECOND time per pixel,
+ * else null. three's EnvironmentNode builds `envNode` twice — once as the
+ * reflected radiance, once as the irradiance (× π) — each inside its own
+ * `isolate()`, so a chain it does not sample as a texture is emitted twice.
+ * An isolate reuses what the material's main build already holds, so a node
+ * any OTHER pixel channel of the same Output reads (Color, Emissive,
+ * Roughness, Metalness, Opacity, Discard, Normal) is built once; Position runs
+ * in the vertex stage and shares nothing. Measured in the WGSL three r184
+ * built (2026-11-12): Noise → Environment alone called the noise twice, Noise
+ * also wired to any of those seven once, Noise also wired to Position twice.
+ *
+ * An Image wired from its Color socket is sampled as a TEXTURE (graphToCode
+ * emits `texture(_imageN_tex)`, prefiltered by PMREM), so its two lookups are
+ * not the graph's node — that case prices nothing extra. Hand in PRICED edges:
+ * an Unlit Output's Environment wire is already gone there.
+ */
+export function envOnlyChain(
+  output: AppNode,
+  edges: readonly AppEdge[],
+  incoming: ReadonlyMap<string, string[]>,
+  nodesById: ReadonlyMap<string, AppNode>,
+): Set<string> | null {
+  if (output.data.registryType !== 'output') return null;
+  const env = edges.find((e) => e.target === output.id && e.targetHandle === 'env');
+  if (!env) return null;
+  const src = nodesById.get(env.source);
+  if (!src) return null;
+  if (src.data.registryType === 'imageNode' && !isImageChannelHandle(env.sourceHandle)) return null;
+  const others = edges
+    .filter((e) => e.target === output.id && e.targetHandle !== 'env' && e.targetHandle !== 'position')
+    .map((e) => e.source);
+  const shared = closure(others, (id) => incoming.get(id) ?? []);
+  const only = new Set<string>();
+  for (const id of closure([env.source], (id) => incoming.get(id) ?? [])) {
+    if (!shared.has(id)) only.add(id);
+  }
+  return only.size > 0 ? only : null;
 }
 
 /**

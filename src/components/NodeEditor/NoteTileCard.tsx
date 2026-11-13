@@ -15,7 +15,7 @@ import './nodes/NoteNode.css';
 const PAYLOAD: TilePayload = { kind: 'node', nodeType: NOTE_TILE_TYPE };
 
 /** The tile's hover text — also the `lv.json` key. */
-export const NOTE_TILE_TIP = 'A sticky note for writing on the canvas. It does not change the shader.';
+export const NOTE_TILE_TIP = 'A sticky note to write on. It does not change the shader.';
 
 /**
  * The asset bar's Note tile: a fresh note drawn with the canvas note's OWN

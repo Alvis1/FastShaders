@@ -919,7 +919,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
       : filteredTutorials.map((d) => <TutorialCard key={d.id} def={d} index={LESSONS.indexOf(d) + 1} />);
   } else if (activeCategory === 'saved') {
     items = savedGroups.length === 0
-      ? empty(t('Right-click a group on the canvas → Save to Library to store it here.', language))
+      ? empty(t('Right-click a group → Save to Library to store it here.', language))
       : filteredSavedGroups.length === 0
         ? noMatch('No saved groups match “{query}”.')
         : filteredSavedGroups.map((g) => <SavedGroupCard key={g.id} group={g} />);

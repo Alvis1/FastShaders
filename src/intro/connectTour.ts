@@ -87,7 +87,9 @@ const REST: Point = { x: -36, y: 84 };
 const LEAVE: Point = { x: 56, y: 72 };
 
 /** The planner's answer for the dragged node offset by (dx, dy) — null while
- *  its centre is outside the target, exactly as the canvas gates it. */
+ *  its centre is outside the target, exactly as the canvas gates it. No previous
+ *  plan is handed in, so every sample is a hover's FIRST frame (the main input);
+ *  the canvas's vertical stepping is not part of this tour. */
 export function planAt(geo: TourGeometry, dx: number, dy: number): DragConnectPlan | null {
   const cx = geo.dragged.x + geo.dragged.w / 2 + dx;
   const cy = geo.dragged.y + geo.dragged.h / 2 + dy;
@@ -98,6 +100,9 @@ export function planAt(geo: TourGeometry, dx: number, dy: number): DragConnectPl
       hoverId: geo.target.id,
       draggedCenterX: cx,
       hoverCenterX: geo.target.x + geo.target.w / 2,
+      draggedCenterY: cy,
+      hoverCenterY: geo.target.y + geo.target.h / 2,
+      hoverHeight: geo.target.h,
       draggedInputs: [],
       draggedOutputs: [{ ...geo.draggedOutput, cx: geo.draggedOutput.cx + dx, cy: geo.draggedOutput.cy + dy }],
       hoverInputs: geo.targetInputs,

@@ -21,6 +21,9 @@ export interface NumberFieldProps extends InputProps {
   integer?: boolean;
   onEnter?: (e: KeyboardEvent<HTMLInputElement>) => void;
   onEscape?: (e: KeyboardEvent<HTMLInputElement>) => void;
+  /** Tab / Shift+Tab, when the caller moves focus itself (a node's number
+   *  boxes open the next one). Absent, Tab is the browser's. */
+  onTab?: (e: KeyboardEvent<HTMLInputElement>) => void;
 }
 
 /**
@@ -45,7 +48,7 @@ export interface NumberFieldProps extends InputProps {
  * here, never decided.
  */
 export const NumberField = forwardRef<HTMLInputElement, NumberFieldProps>(function NumberField(
-  { text, onText, value, step, min, max, integer = false, onEnter, onEscape, onFocus, onBlur, ...rest },
+  { text, onText, value, step, min, max, integer = false, onEnter, onEscape, onTab, onFocus, onBlur, ...rest },
   ref,
 ) {
   const [focused, setFocused] = useState<HTMLInputElement | null>(null);
@@ -90,6 +93,10 @@ export const NumberField = forwardRef<HTMLInputElement, NumberFieldProps>(functi
       value={text}
       onChange={(e) => onText(e.target.value)}
       onKeyDown={(e) => {
+        if (onTab && e.key === 'Tab' && !e.altKey && !e.ctrlKey && !e.metaKey && !e.nativeEvent.isComposing) {
+          onTab(e);
+          return;
+        }
         const action = fieldKeyAction(
           { key: e.key, shiftKey: e.shiftKey, altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, isComposing: e.nativeEvent.isComposing },
           text,

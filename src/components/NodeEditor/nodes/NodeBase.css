@@ -102,6 +102,15 @@
   opacity: 0.25;
 }
 
+/* A MUTED node (M — utils/nodeMute.ts; the attribute is MutedMarks.tsx's) is
+   in the graph but out of the shader: its wires pass straight through it.
+   Faded on the WRAPPER for Preview mode's reason — a multi-channel stack
+   fades as one object — and by opacity alone: no filter, which would put a
+   zoomed card on its own compositing layer. */
+.react-flow__node[data-fs-muted] {
+  opacity: 0.4;
+}
+
 /* While a WIRE is being dragged, nothing highlights on hover. Pulling a
    connection sweeps the pointer across every node between the socket and the
    target, and lifting each one in turn is noise on top of a gesture that

@@ -52,6 +52,51 @@ describe('nothing in src/tutorials scrolls, logs telemetry or reaches the parser
   });
 });
 
+describe('a step shows the socket labels of the nodes it is about', () => {
+  const css = read(ROOT + 'components/NodeEditor/handles/TypedHandle.css');
+  const rule = (selector: string) => {
+    // The comma-separated selector list `selector` belongs to, and that rule's body.
+    const at = css.indexOf(selector);
+    expect(at, selector).toBeGreaterThan(-1);
+    const open = css.indexOf('{', at);
+    const start = css.lastIndexOf('}', at) + 1;
+    return { selectors: css.slice(start, open), body: css.slice(open, css.indexOf('}', open)) };
+  };
+  it('through the label peek\'s OWN rule — one look, a second attribute', () => {
+    const sockets = rule('.react-flow__node[data-fs-tutorial-labels] .typed-handle[data-tooltip]::after');
+    expect(sockets.selectors).toContain('.react-flow__node[data-fs-labels-shown] .typed-handle[data-tooltip]::after');
+    expect(sockets.body).toMatch(/opacity:\s*1/);
+    // …and the Latvian name above the header, which the peek pins too.
+    const header = rule('.react-flow__node[data-fs-tutorial-labels] [data-header-tip]::after');
+    expect(header.selectors).toContain('.react-flow__node[data-fs-labels-shown] [data-header-tip]::after');
+  });
+  it('the highlighter marks wrappers with its own attribute, never the user\'s peek', () => {
+    const src = codeOnly(read(HERE + 'tutorialHighlights.ts'));
+    expect(src).toMatch(/TUTORIAL_LABELS_ATTR = 'data-fs-tutorial-labels'/);
+    expect(src).toMatch(/for \(const id of targets\.labels\) mark\(nodeEl\(id\), TUTORIAL_LABELS_ATTR, ''\)/);
+    // NodeEditor owns data-fs-labels-shown and removes it when the user's peek ends.
+    expect(src).not.toMatch(/data-fs-labels-shown/);
+  });
+  it('a noise card shows its hidden sockets while a step wires into it', () => {
+    const src = codeOnly(read(ROOT + 'components/NodeEditor/nodes/PreviewNode.tsx'));
+    expect(src).toMatch(/const lessonTarget = useAppStore\(\(s\) => lessonRevealNode\(s\.tutorial\) === id\);/);
+    expect(src).toMatch(/const revealHidden = wireNear \|\| lessonTarget;/);
+  });
+});
+
+describe('a node added by hand during an add step is the lesson\'s node', () => {
+  it('both add surfaces lay wantedNodeValues over the fresh values', () => {
+    for (const f of ['components/NodeEditor/NodeEditor.tsx', 'components/NodeEditor/menus/AddNodeMenu.tsx']) {
+      const src = codeOnly(read(ROOT + f));
+      expect(src, f).toMatch(
+        /\.\.\.initialNodeValues\(def, \w+\),\s*\.\.\.wantedNodeValues\(useAppStore\.getState\(\)\.tutorial, def\.type\),/,
+      );
+      // Never a bare fresh node on these two paths again.
+      expect(src, f).not.toMatch(/const values = initialNodeValues\(/);
+    }
+  });
+});
+
 describe('tutorialsOffered: the study entries', () => {
   it('outside a study always; in one, on every entry', () => {
     expect(tutorialsOffered(false, null)).toBe(true);

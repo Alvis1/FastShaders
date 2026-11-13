@@ -7,6 +7,7 @@ import {
   pickMainInput,
   type ConnectHandle,
   type DragConnectEndpoints,
+  type DragConnectPlan,
 } from './dragConnect';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { primaryInputId } from '@/utils/primaryInput';
@@ -26,6 +27,9 @@ function ep(overrides: Partial<DragConnectEndpoints> = {}): DragConnectEndpoints
     hoverId: 't',
     draggedCenterX: 0,
     hoverCenterX: 100,
+    draggedCenterY: 10,
+    hoverCenterY: 10,
+    hoverHeight: 40,
     draggedInputs: [h('in', 10)],
     draggedOutputs: [h('out', 10)],
     hoverInputs: [h('a', 0), h('b', 20)],
@@ -147,10 +151,10 @@ describe('planDragConnect', () => {
     });
   });
 
-  it('vertical position does NOT change the chosen input', () => {
-    // The whole dragged node moves, level with b, with a, below, above.
+  it('where a hover BEGINS does not change the chosen input — its first frame is the main input', () => {
+    // The whole dragged node enters level with b, with a, below, above.
     for (const y of [-40, -5, 0, 10, 20, 25, 90]) {
-      const plan = planDragConnect(ep({ draggedOutputs: [h('out', y)] }), []);
+      const plan = planDragConnect(ep({ draggedCenterY: y, draggedOutputs: [h('out', y)] }), []);
       expect(plan?.targetHandle, `y=${y}`).toBe('a');
     }
   });
@@ -262,6 +266,146 @@ describe('planDragConnect', () => {
     const edges = [{ source: 'd', target: 't' }];
     const plan = planDragConnect(ep(), edges);
     expect(plan).toMatchObject({ mode: 'feed-hover', source: 'd', target: 't' });
+  });
+});
+
+/** Drive one hover frame by frame: the dragged centre visits each Y in turn,
+ *  every frame handed the previous frame's plan, as NodeEditor does. Returns
+ *  the input ringed at each Y. */
+function drive(base: Partial<DragConnectEndpoints>, ys: number[]): Array<string | undefined> {
+  let prev: DragConnectPlan | null = null;
+  return ys.map((y) => {
+    prev = planDragConnect(ep({ ...base, draggedCenterY: y }), [], prev);
+    return prev?.targetHandle;
+  });
+}
+
+/** Every integer Y from `a` to `b` inclusive, either direction. */
+const path = (...stops: number[]): number[] => {
+  const ys: number[] = [];
+  for (let k = 0; k + 1 < stops.length; k++) {
+    const [a, b] = [stops[k], stops[k + 1]];
+    const s = Math.sign(b - a);
+    for (let y = a; y !== b; y += s) ys.push(y);
+  }
+  ys.push(stops[stops.length - 1]);
+  return ys;
+};
+
+describe('vertical travel steps the input (owner, 2026-11-13)', () => {
+  // A three-input hover node 120 tall, centred on 60, inputs 24 apart.
+  const three = {
+    hoverCenterY: 60,
+    hoverHeight: 120,
+    hoverInputs: [h('a', 36), h('b', 60), h('c', 84)],
+  };
+
+  it('starts on the main input and steps one socket per socket pitch of travel, downwards', () => {
+    // Entered level with b (the old alignment rule's pick); main is a. Half a
+    // pitch (12px) is the switch point, plus the hysteresis on either side.
+    const seen = drive(three, [60, 70, 73, 85, 97, 101, 109]);
+    expect(seen).toEqual(['a', 'a', 'a', 'b', 'b', 'c', 'c']);
+  });
+
+  it('steps back up the same way', () => {
+    expect(drive(three, [60, 108, 100, 80, 60, 50, 30])).toEqual(['a', 'c', 'c', 'b', 'a', 'a', 'a']);
+  });
+
+  it('clamps at an end and steps back at once on reversal (the anchor slides with the overshoot)', () => {
+    // Up from a overshoots by 50px; coming back down 24px reaches b, not a.
+    const seen = drive(three, [60, 10, 22, 36]);
+    expect(seen).toEqual(['a', 'a', 'a', 'b']);
+  });
+
+  it('a pointer resting between two sockets does not flicker the ring', () => {
+    // Jitter around the a/b midpoint (12px of travel from the a anchor).
+    const seen = drive(three, [60, 72, 73, 71, 72, 74, 72, 70]);
+    expect(new Set(seen.slice(1))).toEqual(new Set(['a']));
+  });
+
+  it('starts from a Mix-like MAIN input that is not the top one, and travels both ways from it', () => {
+    const mix = { ...three, hoverInputs: [h('a', 36), h('b', 60), h('t', 84, false, true)] };
+    expect(drive(mix, [10])).toEqual(['t']);
+    // Entered low (y 100), then up: t → b → a.
+    expect(drive(mix, [100, 90, 74, 50])).toEqual(['t', 't', 'b', 'a']);
+  });
+
+  it('the dragged node\'s OWN inputs step the physical way: moving it UP rings a lower socket', () => {
+    // Right approach: the hover output feeds the dragged node's input. Its
+    // inputs travel with it, 24px apart around its centre.
+    const base = { draggedCenterX: 200, hoverCenterY: 60, hoverHeight: 120 };
+    let prev: DragConnectPlan | null = null;
+    const seen: string[] = [];
+    for (const y of [60, 40, 12, 84]) {
+      prev = planDragConnect(
+        ep({ ...base, draggedCenterY: y, draggedInputs: [h('x', y - 24), h('y', y), h('z', y + 24)] }),
+        [],
+        prev,
+      );
+      seen.push(prev!.targetHandle);
+    }
+    expect(seen).toEqual(['x', 'y', 'z', 'x']);
+  });
+
+  it('a new hover node, or the other side, starts over on the main input', () => {
+    const first = planDragConnect(ep({ ...three, draggedCenterY: 60 }), []);
+    const moved = planDragConnect(ep({ ...three, draggedCenterY: 85 }), [], first);
+    expect(moved?.targetHandle).toBe('b');
+    const elsewhere = planDragConnect(ep({ ...three, hoverId: 'u', draggedCenterY: 85 }), [], moved);
+    expect(elsewhere?.targetHandle).toBe('a');
+  });
+
+  it('every input is reachable inside the hover box, however tall the input span', () => {
+    // Enter anywhere, sweep to one edge of the hover box, then the other, then
+    // back — the dragged centre never leaves the box. Covers a dragged node
+    // whose own inputs span far more than the hover is tall (an Output dropped
+    // on a Float), from both sides.
+    for (const n of [1, 2, 3, 5, 9, 14]) {
+      for (const hoverHeight of [30, 60, 120, 400]) {
+        const top = 0;
+        const bottom = hoverHeight;
+        const centre = hoverHeight / 2;
+        const ids = Array.from({ length: n }, (_, i) => `i${i}`);
+        for (const entry of [top, centre, bottom]) {
+          for (const main of [0, n - 1]) {
+            // Left approach: the hover's own inputs, inside its box.
+            const pitch = hoverHeight / (n + 1);
+            const hoverInputs = ids.map((id, i) => h(id, top + pitch * (i + 1), false, i === main));
+            const left = new Set(drive({ hoverCenterY: centre, hoverHeight, hoverInputs }, path(entry, top, bottom, top)));
+            expect([...left].sort(), `left n=${n} h=${hoverHeight} entry=${entry} main=${main}`).toEqual([...ids].sort());
+            // Right approach: the dragged node's inputs, 28px apart, riding with it.
+            let prev: DragConnectPlan | null = null;
+            const right = new Set<string>();
+            for (const y of path(entry, top, bottom, top)) {
+              const draggedInputs = ids.map((id, i) => h(id, y + 28 * (i - (n - 1) / 2), false, i === main));
+              prev = planDragConnect(
+                ep({ draggedCenterX: 200, draggedCenterY: y, hoverCenterY: centre, hoverHeight, draggedInputs }),
+                [],
+                prev,
+              );
+              if (prev) right.add(prev.targetHandle);
+            }
+            expect([...right].sort(), `right n=${n} h=${hoverHeight} entry=${entry} main=${main}`).toEqual([...ids].sort());
+          }
+        }
+      }
+    }
+  });
+
+  it('phantom tile ports (all at one Y) never step off the main input', () => {
+    let prev: DragConnectPlan | null = null;
+    for (const y of [0, 20, 40, -20]) {
+      prev = planDragConnect(
+        ep({
+          draggedCenterX: 200,
+          draggedCenterY: y,
+          draggedInputs: [h('a', y), h('b', y), h('t', y, false, true)],
+        }),
+        [],
+        prev,
+      );
+      expect(prev?.targetHandle, `y=${y}`).toBe('t');
+    }
   });
 });
 

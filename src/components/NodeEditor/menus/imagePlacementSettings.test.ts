@@ -290,8 +290,9 @@ describe('the turn: degrees shown, radians stored, one entry per act', () => {
 describe('a click in and out of an imported Offset writes nothing', () => {
   // An import's placement now lives in the plain Tile/Offset rows, and the
   // turn's pivot term makes its Offset a long fraction. DragNumberInput's edit
-  // field shows the value to 4 places and commits that text on Enter or blur
-  // whether or not anything was typed, so without the guard a click in and out
+  // field shows the value to 4 places and committed that text on Enter or blur
+  // whether or not anything was typed (an untouched box commits nothing since
+  // 2026-11-13; the guard still covers an edit back to the rounding), so without the guard a click in and out
   // rounded the import, pushed an undo entry and broke its exact export.
   const DRAG = read('../inputs/DragNumberInput.tsx');
   const KHR = { rotation: Math.PI / 6, scale: [2, 1], offset: [0.1, 0.2] };

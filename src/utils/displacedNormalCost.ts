@@ -13,12 +13,17 @@
  * position (a number, a uniform, a uv()-only height) cost nothing extra.
  *
  * The module pass decides on TEXT, this on the GRAPH; they agree through the
- * root set below — the four position reads the pass re-binds (`REBOUND`) —
- * and through `implicitRootOf`, the one rule for which root an unwired noise
+ * root set below — the four position reads the pass decides on
+ * (`POSITION_ROOTS`; the vertex-safe wrapper it puts around a chain reading a
+ * normal or the view position recomputes nothing and costs nothing) — and
+ * through `implicitRootOf`, the one rule for which root an unwired noise
  * reads. They can still differ on a chain the text pass cannot trace (one
  * reaching a multi-line imperative block): there this prices a recompute that
- * the module falls back from. Fresnel reads the world position INSIDE its
- * module helper, where the text pass cannot re-bind it, so it is not a reader.
+ * the module falls back from. Fresnel is not a reader here, on the ground
+ * that it reads the world position inside its module helper — but graphToCode
+ * passes `positionWorld` INTO `fsFresnel` as an argument, so the text pass
+ * re-binds it and DOES recompute a smooth Fresnel → Position chain: the price
+ * undercounts it (open, found 2026-11-12; docs/dev/preview-and-runtime.md).
  */
 import type { AppEdge, AppNode, MaterialSettings } from '@/types';
 import { getNodeValues } from '@/types';
@@ -29,7 +34,7 @@ import { closure, implicitRootOf } from '@/utils/sdfPartition';
 export const FACES_HINT_KEY =
   "Smooth: the light blends across neighbouring faces. While Position is wired, the normals follow the displaced shape, which runs the displacement three times per vertex and is counted in the points. Flat: every triangle is lit on its own, which follows any displacement at no extra cost.";
 
-/** The position reads engine/displacedNormals.ts re-evaluates. */
+/** The position reads that decide engine/displacedNormals.ts's recompute (its `POSITION_ROOTS`, held equal by displacedNormals.test.ts). */
 export const DISPLACED_NORMAL_ROOTS: ReadonlySet<string> = new Set([
   'positionGeometry', 'positionLocal', 'positionWorld', 'positionView',
 ]);

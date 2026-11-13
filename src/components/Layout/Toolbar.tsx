@@ -1260,8 +1260,8 @@ export function Toolbar() {
             className="toolbar__prefs-row"
             title={
               trackpadScroll
-                ? t('Two fingers pan the node canvas; pinch to zoom.', language)
-                : t('The mouse wheel zooms the node canvas. Turn this on for a trackpad, where two fingers should pan instead.', language)
+                ? t('Two fingers pan; pinch to zoom.', language)
+                : t('The mouse wheel zooms. Turn this on for a trackpad, where two fingers should pan instead.', language)
             }
           >
             <input

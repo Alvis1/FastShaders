@@ -23,6 +23,7 @@ import { intLiteral, isIntSource, type IntGraph } from './intPromotion';
 import { SOUND_CHANNELS, soundChannelForHandle } from '@/utils/soundAnalysis';
 import { readSoundSettings } from '@/utils/soundSettings';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { bypassMutedEdges, mutedNodeIds, passSources, type PassSource } from '@/utils/nodeMute';
 import { hasNoiseRangeFlag, isUnsignedNoise } from '@/utils/noiseRange';
 import { isUnitRange, unitWave } from '@/utils/unitRange';
 import { sameGraphSemantics } from '@/utils/graphSemantics';
@@ -144,7 +145,15 @@ interface EvalCtx {
   edges: AppEdge[];
   nodeIndex: Map<string, AppNode>;
   edgeIndex: Map<string, AppEdge[]>;
-  /** `edgeIndex` minus the wires codegen resolves to NOTHING (`deadSplitWire`),
+  /** `edgeIndex` as the SHADER reads it: every wire leaving a MUTED node
+   *  re-sourced onto its pass-through (utils/nodeMute.ts). The same map as
+   *  `edgeIndex` when nothing is muted. */
+  logicalIndex: Map<string, AppEdge[]>;
+  /** Each muted node → where its wires really read from (null: nothing), or
+   *  null when nothing is muted. The edge-level reads below follow it, so a
+   *  wire drawn out of a muted node shows what the shader holds on it. */
+  mutedPass: Map<string, PassSource | null> | null;
+  /** `logicalIndex` minus the wires codegen resolves to NOTHING (`deadSplitWire`),
    *  which the shader reads as unwired, and every wire after a socket's FIRST —
    *  what `evaluate`/`computeRange` walk. `getTargetEdges` keeps the full index:
    *  such a socket is still drawn wired. */
@@ -222,23 +231,30 @@ function getCtx(nodes: AppNode[], edges: AppEdge[]): EvalCtx {
     const unwrapped = unwrapCollapsedGroupEdges(nodes, edges);
     const nodeIndex = buildNodeIndex(nodes);
     const edgeIndex = buildEdgeIndex(unwrapped);
+    // MUTED nodes are bypassed for everything the shader computes; the drawn
+    // wires (`edges`, `edgeIndex`, getTargetEdges) stay the real ones.
+    const muted = mutedNodeIds(nodes);
+    const logical = muted ? bypassMutedEdges(nodes, unwrapped, muted) : unwrapped;
+    const logicalIndex = logical === unwrapped ? edgeIndex : buildEdgeIndex(logical);
     // A socket reads its FIRST wire, as graphToCode's `inEdge` does — and when
     // that one is dead the socket is unwired, never the next wire in the array.
     const firstIntoSocket = new Set<string>();
-    const live = unwrapped.filter((e) => {
+    const live = logical.filter((e) => {
       if (typeof e.targetHandle === 'string') {
         const socket = `${e.target}\u0000${e.targetHandle}`;
         if (firstIntoSocket.has(socket)) return false;
         firstIntoSocket.add(socket);
       }
-      return !deadSplitWire(e, nodeIndex, edgeIndex);
+      return !deadSplitWire(e, nodeIndex, logicalIndex);
     });
-    const evalEdgeIndex = live.length === unwrapped.length ? edgeIndex : buildEdgeIndex(live);
-    if (evalEdgeIndex !== edgeIndex) FULL_EDGE_INDEX.set(evalEdgeIndex, edgeIndex);
+    const evalEdgeIndex = live.length === logical.length ? logicalIndex : buildEdgeIndex(live);
+    if (evalEdgeIndex !== logicalIndex) FULL_EDGE_INDEX.set(evalEdgeIndex, logicalIndex);
     ctx = {
       edges: unwrapped,
       nodeIndex,
       edgeIndex,
+      logicalIndex,
+      mutedPass: muted ? passSources(nodes, unwrapped, muted) : null,
       evalEdgeIndex,
       evalEdges: live,
       evalCache0: new Map(),
@@ -355,13 +371,26 @@ const UNIFORM_FIELD_TYPES: ReadonlySet<string> = new Set([
  * getFieldUpstreamSet without the uniform seeds: every node whose value VARIES
  * OVER THE SURFACE. The question an Image's UV hand-off asks (imageUvHandoff) —
  * a vec2 built from Sound or camera values is one point, and sampling a picture
- * there painted the whole mesh one flickering colour.
+ * there painted the whole mesh one flickering colour — and the one the noise
+ * card's thumbnail asks before drawing a pattern (PreviewNode).
+ *
+ * A noise is a seed only while its `pos` is UNWIRED: then it reads the surface
+ * position (positionGeometry, or the splat centre inside a splat Fn). Wired, it
+ * samples wherever that wire points, so it varies over the surface exactly
+ * when its inputs do — the closure decides — and a noise of the camera
+ * position or of Sound is one value per frame.
  */
 export function getSurfaceFieldUpstreamSet(nodes: AppNode[], edges: AppEdge[]): ReadonlySet<string> {
   const ctx = getCtx(nodes, edges);
   if (!ctx.surfaceFieldUpstream) {
+    const posWired = new Set<string>();
+    for (const e of ctx.evalEdges) {
+      if (e.targetHandle === 'pos' && ctx.nodeIndex.has(e.source)) posWired.add(e.target);
+    }
     ctx.surfaceFieldUpstream = buildDownstreamClosure(nodes, ctx.evalEdges, (n) =>
-      !UNIFORM_FIELD_TYPES.has(n.data.registryType) && analyticalRange(n) !== null);
+      !UNIFORM_FIELD_TYPES.has(n.data.registryType)
+      && !(posWired.has(n.id) && NODE_REGISTRY.get(n.data.registryType)?.category === 'noise')
+      && analyticalRange(n) !== null);
   }
   return ctx.surfaceFieldUpstream;
 }
@@ -416,7 +445,7 @@ export function getNodeOutputShape(
   const ctx = getCtx(nodes, edges);
   const hit = ctx.shapeCache.get(nodeId);
   if (hit !== undefined) return hit;
-  const result = computeShape(nodeId, new Set(), ctx.nodeIndex, ctx.edgeIndex);
+  const result = computeShape(nodeId, new Set(), ctx.nodeIndex, ctx.logicalIndex);
   ctx.shapeCache.set(nodeId, result);
   return result;
 }
@@ -669,6 +698,22 @@ function sliceRange(r: RangeResult | null, s: HandleChannels): RangeResult | nul
     : null;
 }
 
+/**
+ * The wire the SHADER reads in place of `edge`: itself, unless it leaves a
+ * MUTED node — then its pass-through's source (utils/nodeMute.ts), or null
+ * when the muted node passes nothing (the consumer reads its own unwired
+ * value, so the wire carries none).
+ */
+function throughMuted(
+  ctx: EvalCtx,
+  edge: Pick<AppEdge, 'source' | 'sourceHandle'>,
+): Pick<AppEdge, 'source' | 'sourceHandle'> | null {
+  if (!ctx.mutedPass) return edge;
+  const via = ctx.mutedPass.get(edge.source);
+  if (via === undefined) return edge;
+  return via ? { source: via.source, sourceHandle: via.sourceHandle } : null;
+}
+
 /** The value arriving along `edge` — the source node evaluated, then projected
  *  onto the socket the edge actually leaves from. */
 export function evaluateEdgeSource(
@@ -680,7 +725,10 @@ export function evaluateEdgeSource(
   // A wire codegen resolves to nothing carries nothing — a tampered Split
   // handle ('out', null) would otherwise read the whole padded vector.
   const ctx = getCtx(nodes, edges);
-  if (deadSplitWire(edge, ctx.nodeIndex, ctx.edgeIndex)) return null;
+  const via = throughMuted(ctx, edge);
+  if (!via) return null;
+  edge = via;
+  if (deadSplitWire(edge, ctx.nodeIndex, ctx.logicalIndex)) return null;
   const res = evaluateNodeOutput(edge.source, nodes, edges, time);
   return sliceEval(res, handleChannels(ctx.nodeIndex.get(edge.source), edge.sourceHandle));
 }
@@ -693,7 +741,10 @@ export function evaluateEdgeRange(
   time: number,
 ): RangeResult | null {
   const ctx = getCtx(nodes, edges);
-  if (deadSplitWire(edge, ctx.nodeIndex, ctx.edgeIndex)) return null;
+  const via = throughMuted(ctx, edge);
+  if (!via) return null;
+  edge = via;
+  if (deadSplitWire(edge, ctx.nodeIndex, ctx.logicalIndex)) return null;
   const r = evaluateNodeRange(edge.source, nodes, edges, time);
   return sliceRange(r, handleChannels(ctx.nodeIndex.get(edge.source), edge.sourceHandle));
 }
@@ -710,7 +761,11 @@ export function getEdgeOutputShape(
   nodes: AppNode[],
   edges: AppEdge[],
 ): number {
-  const node = getCtx(nodes, edges).nodeIndex.get(edge.source);
+  const ctx = getCtx(nodes, edges);
+  // A muted node's wire carries its pass-through's width; one passing nothing
+  // keeps its own socket's, so the wire still draws as what it is.
+  edge = throughMuted(ctx, edge) ?? edge;
+  const node = ctx.nodeIndex.get(edge.source);
   if (node && edge.sourceHandle) {
     const shape = portShapeForHandle(node, edge.sourceHandle);
     if (shape > 0) return shape;

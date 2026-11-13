@@ -553,15 +553,17 @@ describe('every path that brings a FILE’s picture into an Image node asks the 
       'intro/ImageScene.tsx',
       'store/useAppStore.ts',
     ]);
-    // `makeImageNodeFromEncode(`: the drop, its "Add anyway", and the GLB
-    // import — a model's own texture, which writes 'gltf' itself.
+    // `makeImageNodeFromEncode(`: the drop, its "Add anyway", the GLB
+    // import — a model's own texture, which writes 'gltf' itself — and a
+    // lesson's "Do it for me", which places a painted picture as a drop would.
     expect(callers(/(?<!function )\bmakeImageNodeFromEncode\(/).filter((f) => f !== 'utils/imageNode.ts')).toEqual([
       'components/NodeEditor/NodeEditor.tsx',
       'engine/gltfSectionBuilder.ts',
       'intro/ImageScene.tsx',
       'store/useAppStore.ts',
+      'tutorials/tutorialAutoStep.ts',
     ]);
-    for (const f of ['components/NodeEditor/NodeEditor.tsx', 'components/NodeEditor/menus/ImageNodeSettings.tsx', 'intro/ImageScene.tsx', 'store/useAppStore.ts']) {
+    for (const f of ['components/NodeEditor/NodeEditor.tsx', 'components/NodeEditor/menus/ImageNodeSettings.tsx', 'intro/ImageScene.tsx', 'store/useAppStore.ts', 'tutorials/tutorialAutoStep.ts']) {
       expect(code(read(f)), f).toMatch(/\b(?:file|replacement)PictureOrientation\(/);
     }
     const builder = code(read('engine/gltfSectionBuilder.ts'));

@@ -251,7 +251,7 @@ export function TexturePicker({ currentUrl, currentName, disabled, loading, onPi
             type="button"
             className="context-menu__item"
             disabled={disabled || askFile !== null}
-            title={t('Load an image file into this node. It goes through the same conversion and size limits as dropping the file on the canvas, but fills this node instead of adding a new one.', language)}
+            title={t('Load an image file into this node. It goes through the same conversion and size limits as a dropped file, but fills this node instead of adding a new one.', language)}
             onClick={() => fileRef.current?.click()}
           >
             {t('From file…', language)}

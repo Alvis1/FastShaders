@@ -17,6 +17,7 @@ import {
 import { moduleStringLiteral } from './partKeyLiteral';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { bypassMutedEdges, mutedNodeIds } from '@/utils/nodeMute';
 import { MODULE_HELPERS, MODULE_HELPER_NAMES, HELPER_OWNER_TYPES, UV_CHANNEL_HELPER, helperNameFor, helperCallPorts } from './moduleHelpers';
 import {
   marchPartition,
@@ -412,6 +413,15 @@ export function graphToCode(
 
   let gidx = buildGraphIndex(sorted, edges);
 
+  // MUTED nodes (utils/nodeMute.ts): the module reads every wire leaving one
+  // from its pass-through instead (`liveEdges`), and the node itself is left
+  // out at the emission scope below. The sort and every NAME stay on the real
+  // edges — a bypass re-sources a wire onto a node the real order already puts
+  // earlier, so that order still holds, and muting renames nothing (a canvas
+  // header, a tuned uniform's key). Nothing muted: identity, byte for byte.
+  const muted = mutedNodeIds(nodes);
+  const liveEdges = muted ? bypassMutedEdges(nodes, edges, muted) : edges;
+
   /**
    * A property feeding NOTHING is not emitted: no uniform line, no import, no
    * schema entry. "Has an outgoing edge", not "reaches an Output": presets,
@@ -503,7 +513,7 @@ export function graphToCode(
   // The custom sink that DRIVES — resolved here, before any name is claimed,
   // because it decides which names are free (below), and used again when the
   // body is planned. It depends only on the nodes and the unwrapped edges.
-  const customNode = drivingCustomSink(sorted, edges);
+  const customNode = drivingCustomSink(sorted, liveEdges);
 
   // A Splat Output's Fns are `Fn(([p, pw, n, c]) => …)`: a PROPERTY named `c`
   // (the only way a node gets a bare, unnumbered name) would be shadowed by the
@@ -646,11 +656,21 @@ export function graphToCode(
   // Data columns and Sound channels a consumer reads, the march partition),
   // and each of those SHOULD forget a hidden consumer. The `some()` makes a
   // set that hides nothing a no-op, which keeps that case byte-identical.
-  if (opts.emitOnly && sorted.some((n) => !opts.emitOnly!.has(n.id))) {
-    const keep = opts.emitOnly;
+  //
+  // A MUTED node is out of every scope, whole or connected-only, and from
+  // here on the pass reads the bypassed wires. Still upstream-closed: no
+  // bypassed wire leaves a muted node, so dropping one strands no consumer.
+  const scope = muted
+    ? new Set([...(opts.emitOnly ?? nodes.map((n) => n.id))].filter((id) => !muted.has(id)))
+    : opts.emitOnly;
+  if (muted) edges = liveEdges;
+  if (scope && sorted.some((n) => !scope.has(n.id))) {
+    const keep = scope;
     nodes = nodes.filter((n) => keep.has(n.id));
     edges = edges.filter((e) => keep.has(e.source) && keep.has(e.target));
     sorted = sorted.filter((n) => keep.has(n.id));
+    gidx = buildGraphIndex(sorted, edges);
+  } else if (muted) {
     gidx = buildGraphIndex(sorted, edges);
   }
 

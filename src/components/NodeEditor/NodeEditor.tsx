@@ -35,6 +35,7 @@ import {
 } from './labelPeek';
 import { useLongPress } from '@/hooks/useLongPress';
 import { PreviewRoute } from './PreviewRoute';
+import { MutedMarks } from './MutedMarks';
 import { previewableOutputs, PREVIEW_KEEP_SELECTOR } from '@/utils/nodePreview';
 import { nodeTypes, edgeTypes } from './flowTypes';
 import { CONNECTION_RADIUS } from './nodes/connectionReveal';
@@ -53,6 +54,7 @@ import {
 import { ContextMenu } from './menus/ContextMenu';
 import { ContentBrowser } from './ContentBrowser';
 import { TutorialPanel } from '@/tutorials/TutorialPanel';
+import { wantedNodeValues } from '@/tutorials/tutorialRun';
 import { useKeyboardNav } from './useKeyboardNav';
 import { ColorPickerPopover } from '@/components/inputs/PaletteColorPicker';
 import { NewShaderModal } from '@/components/Modals/NewShaderModal';
@@ -120,6 +122,7 @@ import { absoluteNodePosition, groupFrameSize, isCollapsedMember, raisedGroupSta
 import { LIBRARY_WIRE_GAP, libraryWireOutput, revealCornerViewport } from '@/utils/libraryAutoWire';
 import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
+import { canMuteNode, detachEdges, isMutedNode } from '@/utils/nodeMute';
 import { isTypingTarget } from '@/utils/isTypingTarget';
 import { beginDragChrome } from '@/utils/dragChrome';
 import { bridgeEdgesAcrossDeletedNodes, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
@@ -1571,6 +1574,24 @@ export function NodeEditor() {
           store.setEdges(afterBridge.filter((e) => !selectedEdgeIds.has(e.id)));
         });
       }
+
+      // M — mute / unmute the selected nodes (Blender's M; utils/nodeMute.ts).
+      // Each node flips on its own, as in Blender. Guarded like X: plain M
+      // only, and the typing / open-dialog guards above. A sink, a frame and a
+      // note cannot be muted, so they are left out. One node goes through
+      // updateNodeData as it is (one undo entry, the study's `node-edit`
+      // chokepoint); several share ONE undo entry.
+      if (key === 'm' && !mod && !e.altKey && !e.shiftKey) {
+        const store = useAppStore.getState();
+        const targets = store.nodes.filter((n) => n.selected && canMuteNode(n));
+        if (targets.length === 0) return;
+        e.preventDefault();
+        const flip = () => {
+          for (const n of targets) store.updateNodeData(n.id, { muted: isMutedNode(n) ? undefined : true });
+        };
+        if (targets.length === 1) flip();
+        else asOneHistoryEntry(flip);
+      }
     };
 
     window.addEventListener('keydown', handler);
@@ -1592,13 +1613,31 @@ export function NodeEditor() {
     }
   }, []);
 
+  /**
+   * ALT/⌥+DRAG pulls the dragged nodes OUT of their chains (Blender's "move
+   * and detach links"; utils/nodeMute.ts `detachEdges`): every wire between a
+   * dragged node and one that stays goes, and the chain closes up behind it
+   * through the node's pass-through input — the wire a mute would read. Armed
+   * at drag start, DONE once the node has really moved (an Alt+click is
+   * Preview mode, and a jittery one must not cut wires), in ONE undo entry
+   * with whatever the drop then does (drag-connect, a splice onto another
+   * wire). Frames and notes are never pulled: they sit in no chain.
+   */
+  const altDetachRef = useRef<{ ids: Set<string>; done: boolean; pushed: boolean } | null>(null);
+
   // Capture the start position; defer the history push to onNodeDragStop
   // (so click-only "drags" don't pollute the undo buffer with no-op snapshots).
-  const onNodeDragStart = useCallback((_event: React.MouseEvent, node: AppNode) => {
+  const onNodeDragStart = useCallback((event: React.MouseEvent, node: AppNode, dragged: AppNode[]) => {
     // The drag can wander over the 3D preview; see setCanvasBusy.
     setCanvasBusy(true);
     dragStartPosRef.current = { x: node.position.x, y: node.position.y };
     dragStartsRef.current.clear();
+    const pulled = event.altKey
+      ? (dragged.length > 0 ? dragged : [node]).filter((n) => n.type !== 'group' && n.type !== 'note')
+      : [];
+    altDetachRef.current = pulled.length > 0
+      ? { ids: new Set(pulled.map((n) => n.id)), done: false, pushed: false }
+      : null;
     // A drag-connect preview forces tooltips of its own; a leftover tap-shown
     // label next to them would muddy which socket the drop will commit to.
     clearSocketTapTooltip();
@@ -1658,11 +1697,13 @@ export function NodeEditor() {
   /**
    * Drag-connect preview for a palette tile in flight (HTML5 dragover or the
    * touch tileDrag move stream). The node doesn't exist yet, so it plans as a
-   * PHANTOM: def-derived handle ids all sitting at the cursor — vertical tile
-   * movement therefore picks the hover node's socket by cursor alignment,
-   * while the tile side always offers its first port (which for a
-   * not-yet-created node IS its first free one, matching what a drop-on-edge
-   * splice of the same tile would pick — see edgeSplice.ts). Returns whether
+   * PHANTOM: def-derived handle ids all sitting at the cursor — the hover
+   * starts on the hovered node's main input and vertical tile movement steps
+   * through its inputs exactly as a node drag does (dragConnect.ts), while the
+   * tile side always offers its MAIN port (its sockets have no geometry to
+   * step through; for a not-yet-created node that is its first free one,
+   * matching what a drop-on-edge splice of the same tile would pick — see
+   * edgeSplice.ts). Returns whether
    * the cursor is over a node body at all, so the caller can suppress the
    * drop-on-edge preview (never-both rule, same as node drags).
    */
@@ -1708,12 +1749,16 @@ export function NodeEditor() {
         hoverId: hoverBox.id,
         draggedCenterX: pos.x,
         hoverCenterX: hoverBox.x + hoverBox.w / 2,
+        draggedCenterY: pos.y,
+        hoverCenterY: hoverBox.y + hoverBox.h / 2,
+        hoverHeight: hoverBox.h,
         draggedInputs: phantomPorts(def.inputs),
         draggedOutputs: phantomPorts(def.outputs),
         hoverInputs: mountedHandles(hi, 'target', logicalEdges),
         hoverOutputs: mountedHandles(hi, 'source', logicalEdges),
       };
-      const plan = planDragConnect(endpoints, logicalEdges);
+      // The previous frame's plan carries the vertical step (dragConnect.ts).
+      const plan = planDragConnect(endpoints, logicalEdges, connectPreviewRef.current);
       if (!plan) {
         clearConnectPreview();
         return true;
@@ -1872,6 +1917,24 @@ export function NodeEditor() {
   // nearest-edge highlight.
   const onNodeDrag = useCallback(
     (_event: React.MouseEvent, rfDragged: AppNode, draggedNodes: AppNode[]) => {
+      // Alt+drag: pull the dragged nodes out of their chains, once, as soon as
+      // the drag is a real move (altDetachRef). The history entry is pushed
+      // BEFORE the cut so one undo restores the wires; the drop skips its own.
+      const detach = altDetachRef.current;
+      const start = dragStartPosRef.current;
+      if (detach && !detach.done && start) {
+        const moved = Math.hypot(rfDragged.position.x - start.x, rfDragged.position.y - start.y);
+        if (moved >= DRAG_HISTORY_THRESHOLD) {
+          detach.done = true;
+          const store = useAppStore.getState();
+          const next = detachEdges(store.nodes, store.edges, detach.ids);
+          if (next !== store.edges) {
+            store.pushHistory();
+            store.setEdges(next);
+            detach.pushed = true;
+          }
+        }
+      }
       if (rfDragged.type === 'group' || rfDragged.type === 'note') return;
 
       const store = useAppStore.getState();
@@ -1907,13 +1970,20 @@ export function NodeEditor() {
                   hoverId,
                   draggedCenterX: cx,
                   hoverCenterX: hoverBox.x + hoverBox.w / 2,
+                  draggedCenterY: cy,
+                  hoverCenterY: hoverBox.y + hoverBox.h / 2,
+                  hoverHeight: hoverBox.h,
                   draggedInputs: mountedHandles(di, 'target', logicalEdges, hoverId),
                   draggedOutputs: mountedHandles(di, 'source', logicalEdges),
                   hoverInputs: mountedHandles(hi, 'target', logicalEdges, draggedNode.id),
                   hoverOutputs: mountedHandles(hi, 'source', logicalEdges),
                 }
               : null;
-          const plan = endpoints ? planDragConnect(endpoints, logicalEdges) : null;
+          // The previous frame's plan carries the vertical step: travel since
+          // the hover began moves the ring from the main input (dragConnect.ts).
+          const plan = endpoints
+            ? planDragConnect(endpoints, logicalEdges, connectPreviewRef.current)
+            : null;
           if (plan && endpoints && hoverNode) {
             clearEdgeHighlight();
             showConnectPreview(plan);
@@ -1964,6 +2034,10 @@ export function NodeEditor() {
       // preview permanently unclickable.
       setCanvasBusy(false);
       const store = useAppStore.getState();
+      // An Alt+drag that pulled the node out already pushed this gesture's
+      // undo entry, before the cut (onNodeDrag).
+      const detachedEntry = altDetachRef.current?.pushed === true;
+      altDetachRef.current = null;
 
       clearEdgeHighlight();
       // Capture the drag-connect plan the preview promised, then tear the
@@ -2026,7 +2100,8 @@ export function NodeEditor() {
       // History snapshot covers the position change plus any drag-connect or
       // drop-on-edge mutation — one undo step for the whole gesture.
       // Pushed once here (not in onNodeDragStart) so click-only events don't add no-op entries.
-      store.pushHistory();
+      // An Alt+drag detach pushed it already, before cutting the wires.
+      if (!detachedEntry) store.pushHistory();
 
       // --- Drag-connect: commit the previewed connection ---
       if (connectPlan) {
@@ -2642,8 +2717,14 @@ export function NodeEditor() {
       } else {
         // Property auto-naming (one sequence shared with AddNodeMenu and the
         // convert-to-uniform action, so tile drops can't mint duplicates) plus
-        // a random colour for colour nodes.
-        const values = initialNodeValues(def, currentNodes);
+        // a random colour for colour nodes. A running lesson waiting for THIS
+        // type lays its own values on top (`wantedNodeValues`), so the node is
+        // the one "Do it for me" would have added — the ramp its caption
+        // describes, not a plain black→white one.
+        const values = {
+          ...initialNodeValues(def, currentNodes),
+          ...wantedNodeValues(useAppStore.getState().tutorial, def.type),
+        };
         const newNode = {
           id: generateId(),
           type: getFlowNodeType(def),
@@ -3929,6 +4010,8 @@ export function NodeEditor() {
           {/* Preview mode's straight route line — ABOVE the nodes (z 5, before
               the panels in DOM order so the canvas bar still wins). */}
           <PreviewRoute />
+          {/* Muted nodes' wrapper attribute (NodeBase.css dims them). */}
+          <MutedMarks />
           <DrawingLayer livePathRef={livePathRef} />
           {/* Bottom-LEFT canvas bar: undo/redo + draw tools + view controls
               in one pill (replaces the old toolbar history group, the RF
@@ -4033,8 +4116,8 @@ export function NodeEditor() {
                 onPointerUp={onPanBtnEnd}
                 onPointerCancel={onPanBtnEnd}
                 onLostPointerCapture={onPanBtnEnd}
-                title={t('Pan canvas — press and drag', language)}
-                aria-label={t('Pan canvas', language)}
+                title={t('Pan the view — press and drag', language)}
+                aria-label={t('Pan the view', language)}
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                   <path d="M12 2l3.5 3.5h-2.5v5.5h5.5v-2.5l3.5 3.5-3.5 3.5v-2.5h-5.5v5.5h2.5l-3.5 3.5-3.5-3.5h2.5v-5.5h-5.5v2.5l-3.5-3.5 3.5-3.5v2.5h5.5v-5.5h-2.5z" />

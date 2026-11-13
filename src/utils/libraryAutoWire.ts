@@ -56,16 +56,27 @@ export interface FlowBox {
  * drawn — a group by its frame (a collapsed one is its pill), anything else by
  * its measured box, both at ABSOLUTE positions. Members hidden in a collapsed
  * group are skipped; their pill stands for them.
+ *
+ * `drawnScale` is how much larger than its measured box a card is DRAWN: a
+ * cost-scaled card grows from its top-left corner by a transform React Flow
+ * never measures (up to 1.35×), so its box here is 18–40 px short on the
+ * right and at the bottom. The lesson planner passes the layout engine's
+ * `drawnCostScale` (this module may not import the engine); the default, 1,
+ * keeps every other caller where it was. A group is never scaled.
  */
-export function placementObstacles(nodes: readonly AppNode[]): FlowBox[] {
+export function placementObstacles(
+  nodes: readonly AppNode[],
+  drawnScale: (node: AppNode) => number = () => 1,
+): FlowBox[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const out: FlowBox[] = [];
   for (const n of nodes) {
     if (isCollapsedMember(n)) continue;
     const at = absoluteNodePosition(n, byId);
     const { w, h } = n.type === 'group' ? groupFrameSize(n) : measuredNodeSize(n);
-    if (![at.x, at.y, w, h].every(Number.isFinite)) continue;
-    out.push({ x: at.x, y: at.y, w, h });
+    const s = n.type === 'group' ? 1 : drawnScale(n);
+    if (![at.x, at.y, w, h, s].every(Number.isFinite)) continue;
+    out.push({ x: at.x, y: at.y, w: w * s, h: h * s });
   }
   return out;
 }

@@ -165,8 +165,15 @@
    and drowned the card in text (see the touch rule below). The difference is
    that this is asked for and put away — a deliberate gesture, on one node,
    cleared by Escape, a click on empty canvas, or the same gesture again — where
-   selection happens constantly and as a side effect of dragging. */
-.react-flow__node[data-fs-labels-shown] .typed-handle[data-tooltip]::after {
+   selection happens constantly and as a side effect of dragging.
+
+   A running LESSON holds the same labels open on the nodes its step is about
+   (src/tutorials/tutorialHighlights.ts) — a caption says "wire Fract into
+   Multiply's A", and a socket's name is printed nowhere but here. Its own
+   attribute, so the user's peek and the lesson's never put each other's
+   labels away; one rule, so the two can never look different. */
+.react-flow__node[data-fs-labels-shown] .typed-handle[data-tooltip]::after,
+.react-flow__node[data-fs-tutorial-labels] .typed-handle[data-tooltip]::after {
   opacity: 1;
 }
 
@@ -176,7 +183,8 @@
    label ABOVE the header: the socket label's look, and its triggers. Hover
    shows it at once, and the double-click that pins every socket label pins
    this one too, so one gesture answers both "what is this node?" and "what
-   are its ports?". Above, because below the header it would cover the node's
+   are its ports?" — as do a running lesson's labels, whose captions name the
+   node in Latvian while its header prints `mul1`. Above, because below the header it would cover the node's
    own sockets and values — the thing the pointer is travelling toward. It
    rides the header, so on a Color swatch (no header bar) it rides the swatch.
 
@@ -203,7 +211,8 @@
 }
 
 .react-flow__node:not(.dragging) [data-header-tip]:hover::after,
-.react-flow__node[data-fs-labels-shown] [data-header-tip]::after {
+.react-flow__node[data-fs-labels-shown] [data-header-tip]::after,
+.react-flow__node[data-fs-tutorial-labels] [data-header-tip]::after {
   opacity: 1;
 }
 

@@ -11,7 +11,7 @@ import { activeSink, isSinkNode, hasActiveFlag, normalizeActiveOutput } from '@/
 import { carryModelMeshes, isOutputNode, moduleSettingsOutput } from '@/utils/outputMaterials';
 import { carryMaterialSettings, pairResyncNodes, placeParsedOutputs } from '@/utils/resyncPairing';
 import { carryInactiveSinks } from '@/utils/sinkCarry';
-import { carryPanelHidden, inOldOrder, panelCarryIds, panelFeederResolver } from '@/utils/panelCarry';
+import { carryPanelHidden, inOldOrder, panelCarryIds, panelFeederResolver, restoreMutedOutWires } from '@/utils/panelCarry';
 import { carryDormantLightEdges, carrySplatLightValues } from '@/utils/splatLight';
 import { carrySplatReplaceColor, splatStoredColor } from '@/utils/splatColor';
 import { isDirectAssignmentCode } from '@/engine/evaluateTSLScript';
@@ -466,6 +466,14 @@ export function useSyncEngine() {
           const feederOf = panelFeederResolver(oldNodes, [...positioned, ...unpositioned], textNames);
           const hidden = carryPanelHidden(oldNodes, realOldEdges, carriedIds, feederOf, unpositioned.length > 0);
           remappedEdges.push(...hidden.edges);
+          // A carried MUTED node's wires OUT: its consumers' lines read its
+          // pass-through, so the parse wired them from there; each goes back
+          // to the muted node where the text still says so (panelCarry.ts).
+          const unmuted = restoreMutedOutWires(
+            oldNodes, realOldEdges, carriedIds, feederOf,
+            [...positioned, ...unpositioned], remappedEdges, unpositioned.length > 0,
+          );
+          if (unmuted !== remappedEdges) remappedEdges.splice(0, remappedEdges.length, ...unmuted);
 
           let finalNodes: AppNode[];
           if (unpositioned.length > 0) {

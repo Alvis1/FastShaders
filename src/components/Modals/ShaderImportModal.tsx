@@ -224,7 +224,7 @@ export function ShaderImportModal() {
         {liveNodes > 1 && (
           <div className="csv-import-modal__message">
             {fillTemplate(
-              t('Open replaces the {n} nodes on the canvas. Add keeps them.', language),
+              t('Open replaces the {n} nodes. Add keeps them.', language),
               { n: liveNodes },
             )}
           </div>
@@ -244,7 +244,7 @@ export function ShaderImportModal() {
           </button>
           <button
             className="csv-import-modal__button csv-import-modal__button--yes csv-import-modal__choice"
-            title={t('This file becomes the shader: the graph on the canvas is replaced, and the document takes the file’s name.', language)}
+            title={t('This file becomes the shader: the graph is replaced, and the document takes the file’s name.', language)}
             disabled={busy}
             onClick={() => answer('open')}
           >

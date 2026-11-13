@@ -150,7 +150,7 @@ export const GLB_IMPORT_KEYS = Object.freeze({
   /** The two button TOOLTIPS. The dialog says what the model HAS; what each
    *  answer DOES is on the answer itself, so the panel stays a header, two
    *  facts and a question. */
-  meshOnlyTitle: 'Imports the model on its own. Its materials and textures are discarded, and the shader on the canvas is left exactly as it is.',
+  meshOnlyTitle: 'Imports the model on its own. Its materials and textures are discarded, and the shader is left exactly as it is.',
   withMaterials: 'Mesh with Materials',
   /** The texture budget FOLDS INTO the button rather than adding a third one. */
   withMaterialsAt: 'Mesh with Materials ({res} px)',

@@ -10,7 +10,7 @@ import { activeSink } from './sdfPartition';
 import { unwrapCollapsedGroupEdges } from './edgeUtils';
 import { pairResyncNodes } from './resyncPairing';
 import { COLLAPSED_MEMBER_CLASS } from './groupFrame';
-import { carryPanelHidden, inOldOrder, panelCarryIds, panelFeederResolver } from './panelCarry';
+import { carryPanelHidden, inOldOrder, panelCarryIds, panelFeederResolver, restoreMutedOutWires } from './panelCarry';
 import { graphToCode } from '@/engine/graphToCode';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 
@@ -92,11 +92,15 @@ function apply(old: { nodes: AppNode[]; edges: AppEdge[] }, code: string, scope:
   const parseIds = new Set([...positioned, ...unpositioned].map((n) => n.id));
   const feederOf = panelFeederResolver(old.nodes, [...positioned, ...unpositioned], names);
   const hidden = carryPanelHidden(old.nodes, realOldEdges, carriedIds, feederOf, unpositioned.length > 0);
+  const restored = restoreMutedOutWires(
+    old.nodes, realOldEdges, carriedIds, feederOf,
+    [...positioned, ...unpositioned], [...edges, ...hidden.edges], unpositioned.length > 0,
+  );
   let nodes = [...positioned, ...unpositioned, ...hidden.nodes];
   if (scope.emitted !== null) nodes = inOldOrder(nodes, old.nodes);
   return {
     nodes,
-    edges: [...edges, ...hidden.edges],
+    edges: restored,
     relayout: unpositioned.length > 0,
     scope: scope.emitted === null
       ? { emitted: null, names: null }
@@ -345,5 +349,63 @@ describe('useSyncEngine wiring (source pins)', () => {
 
   it('a paired node keeps its selection — in every session', () => {
     expect(src).toContain('...(match.selected === true ? { selected: true } : {}),');
+  });
+});
+
+describe('restoreMutedOutWires — a MUTED node survives an Apply with its wires', () => {
+  const mute = (n: AppNode): AppNode => ({ ...n, data: { ...n.data, muted: true } }) as AppNode;
+  /** f1 → m.a, f2 → m.b, m (muted) → add1.a, add1 → out.color. */
+  function mutedBoard(): { nodes: AppNode[]; edges: AppEdge[] } {
+    return {
+      nodes: [
+        makeNode('f1', 'float', { value: 0.5 }),
+        makeNode('f2', 'float', { value: 0.3 }),
+        mute(makeNode('m', 'mul')),
+        makeNode('add1', 'add'),
+        makeNode('out', 'output'),
+      ],
+      edges: [
+        makeEdge('f1', 'out', 'm', 'a'),
+        makeEdge('f2', 'out', 'm', 'b'),
+        makeEdge('m', 'out', 'add1', 'a'),
+        makeEdge('add1', 'out', 'out', 'color'),
+      ],
+    };
+  }
+  const wires = (g: { edges: AppEdge[] }) => g.edges.map(tuple).sort();
+
+  it('an unchanged Apply changes nothing: the muted node, its feeders and every wire come back', () => {
+    const g = mutedBoard();
+    const p = panel(g);
+    expect(p.code).not.toMatch(/const mul1 =/);
+    const after = apply(g, p.code, p);
+    expect(after.nodes.map((n) => n.id).sort()).toEqual(['add1', 'f1', 'f2', 'm', 'out']);
+    expect(after.nodes.find((n) => n.id === 'm')?.data.muted).toBe(true);
+    expect(wires(after)).toEqual(wires(g));
+    // …and the next pass writes the same text.
+    expect(panel(after).code).toBe(p.code);
+  });
+
+  it('a muted node that passes nothing gets its wire back into the still-unwired socket', () => {
+    const g = {
+      nodes: [mute(makeNode('n', 'perlin')), makeNode('add1', 'add'), makeNode('out', 'output')],
+      edges: [makeEdge('n', 'out', 'add1', 'a'), makeEdge('add1', 'out', 'out', 'color')],
+    };
+    const p = panel(g);
+    const after = apply(g, p.code, p);
+    expect(wires(after)).toEqual(wires(g));
+  });
+
+  it('a socket the text rewired keeps the text’s wire', () => {
+    const g = mutedBoard();
+    const p = panel(g);
+    const add = p.names?.get('add1');
+    const f1 = p.names?.get('f1');
+    expect(add && f1).toBeTruthy();
+    // The line the bypass wrote reads f1 into add1's A; read a literal instead.
+    const edited = p.code.replace(new RegExp(`add\\(${f1}\\b`), 'add(float(2)');
+    expect(edited).not.toBe(p.code);
+    const after = apply(g, edited, p);
+    expect(after.edges.some((e) => e.source === 'm' && e.target === 'add1')).toBe(false);
   });
 });

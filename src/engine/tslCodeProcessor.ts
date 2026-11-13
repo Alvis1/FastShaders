@@ -756,26 +756,29 @@ export function buildShaderModule(
   const displaced = (ref: string, mode: 'normal' | 'offset' = displacementMode): string =>
     `positionLocal.add(${mode === 'normal' ? `normalLocal.mul(${ref})` : ref})`;
   /**
-   * The positionNode for one material: `displaced(ref)`, or — on a SMOOTH,
-   * LIT material (not flat-shaded, not the Unlit material) whose displacement
-   * reads the position — the
-   * self-invoked Fn that also rewrites the normal to follow the displaced
-   * surface (engine/displacedNormals.ts). Flat shading takes its normal from
-   * the pixel derivatives and never reads the vertex normal, so it gets none.
+   * The positionNode for one material: `displaced(ref)`, or the Fn pair of
+   * engine/displacedNormals.ts — on a SMOOTH, LIT material whose displacement
+   * reads the position, the one that also rewrites the normal to follow the
+   * displaced surface; on ANY material whose displacement reads an accessor
+   * three r184 cannot build in a positionNode (a normal, the view position),
+   * at least the one that spells those reads out. `flat` (Faces: Flat, or the
+   * Unlit material) gets no recompute: flat shading takes its normal from the
+   * pixel derivatives, and an unlit material reads none.
    */
   const normalFnLines: string[] = [];
   let normalFnCount = 0;
   const positionNodeOf = (ref: string, flat: boolean, mode: 'normal' | 'offset' = displacementMode): string => {
-    if (flat) return displaced(ref, mode);
-    const plan = planDisplacedNormal(ref, nonDiscardLines, mode, normalFnCount, displaced(ref, mode));
+    const plan = planDisplacedNormal(ref, nonDiscardLines, mode, normalFnCount, displaced(ref, mode), !flat);
     if (!plan) return displaced(ref, mode);
     normalFnLines.push(...plan.lines);
     normalFnCount++;
-    for (const name of ['Fn', 'normalLocal', 'positionLocal', 'cross', 'select', 'abs', 'vec3']) need(name);
     const text = plan.lines.join('\n');
-    if (/\bmodelWorldMatrix\b/.test(text)) need('modelWorldMatrix');
-    if (/\bmodelViewMatrix\b/.test(text)) need('modelViewMatrix');
-    if (/\bvec4\(/.test(text)) need('vec4');
+    for (const name of [
+      'Fn', 'normalLocal', 'positionLocal', 'cross', 'select', 'abs', 'vec3',
+      'modelWorldMatrix', 'modelViewMatrix', 'vec4', 'transformNormalToView', 'cameraViewMatrix', 'positionGeometry',
+    ]) {
+      if (new RegExp(`(?<![\\w$.])${name}(?![\\w$])`).test(text)) need(name);
+    }
     return plan.expr;
   };
 
@@ -1190,7 +1193,7 @@ export function buildShaderModule(
     `export default function(${hasParams ? 'params' : ''}) {`,
     ...nonDiscardLines.map((l) => '  ' + l.trimStart()),
     ...pixelFnLines,
-    // The displaced-normal Fns (positionNodeOf), one pair per material.
+    // The displaced-normal Fns (positionNodeOf), one pair per material that needs them.
     ...normalFnLines.map((l) => '  ' + l),
     // One tiny Fn per part that culls, declared beside the default's __pixel
     // for the same reason: Discard() needs an active TSL stack, so it only
