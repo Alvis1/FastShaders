@@ -10,7 +10,8 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { tutorialsOffered } from './tutorialsTab';
+import { tutorialsOffered, offeredLessons } from './tutorialsTab';
+import { TUTORIALS } from './tutorialDefs';
 
 const HERE = fileURLToPath(new URL('./', import.meta.url));
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -51,21 +52,74 @@ describe('nothing in src/tutorials scrolls, logs telemetry or reaches the parser
   });
 });
 
+describe('a step shows the socket labels of the nodes it is about', () => {
+  const css = read(ROOT + 'components/NodeEditor/handles/TypedHandle.css');
+  const rule = (selector: string) => {
+    // The comma-separated selector list `selector` belongs to, and that rule's body.
+    const at = css.indexOf(selector);
+    expect(at, selector).toBeGreaterThan(-1);
+    const open = css.indexOf('{', at);
+    const start = css.lastIndexOf('}', at) + 1;
+    return { selectors: css.slice(start, open), body: css.slice(open, css.indexOf('}', open)) };
+  };
+  it('through the label peek\'s OWN rule — one look, a second attribute', () => {
+    const sockets = rule('.react-flow__node[data-fs-tutorial-labels] .typed-handle[data-tooltip]::after');
+    expect(sockets.selectors).toContain('.react-flow__node[data-fs-labels-shown] .typed-handle[data-tooltip]::after');
+    expect(sockets.body).toMatch(/opacity:\s*1/);
+    // …and the Latvian name above the header, which the peek pins too.
+    const header = rule('.react-flow__node[data-fs-tutorial-labels] [data-header-tip]::after');
+    expect(header.selectors).toContain('.react-flow__node[data-fs-labels-shown] [data-header-tip]::after');
+  });
+  it('the highlighter marks wrappers with its own attribute, never the user\'s peek', () => {
+    const src = codeOnly(read(HERE + 'tutorialHighlights.ts'));
+    expect(src).toMatch(/TUTORIAL_LABELS_ATTR = 'data-fs-tutorial-labels'/);
+    expect(src).toMatch(/for \(const id of targets\.labels\) mark\(nodeEl\(id\), TUTORIAL_LABELS_ATTR, ''\)/);
+    // NodeEditor owns data-fs-labels-shown and removes it when the user's peek ends.
+    expect(src).not.toMatch(/data-fs-labels-shown/);
+  });
+  it('a noise card shows its hidden sockets while a step wires into it', () => {
+    const src = codeOnly(read(ROOT + 'components/NodeEditor/nodes/PreviewNode.tsx'));
+    expect(src).toMatch(/const lessonTarget = useAppStore\(\(s\) => lessonRevealNode\(s\.tutorial\) === id\);/);
+    expect(src).toMatch(/const revealHidden = wireNear \|\| lessonTarget;/);
+  });
+});
+
+describe('a node added by hand during an add step is the lesson\'s node', () => {
+  it('both add surfaces lay wantedNodeValues over the fresh values', () => {
+    for (const f of ['components/NodeEditor/NodeEditor.tsx', 'components/NodeEditor/menus/AddNodeMenu.tsx']) {
+      const src = codeOnly(read(ROOT + f));
+      expect(src, f).toMatch(
+        /\.\.\.initialNodeValues\(def, \w+\),\s*\.\.\.wantedNodeValues\(useAppStore\.getState\(\)\.tutorial, def\.type\),/,
+      );
+      // Never a bare fresh node on these two paths again.
+      expect(src, f).not.toMatch(/const values = initialNodeValues\(/);
+    }
+  });
+});
+
 describe('tutorialsOffered: the study entries', () => {
-  it('outside a study always; in one, on the /evalpro entry only', () => {
+  it('outside a study always; in one, on every entry', () => {
     expect(tutorialsOffered(false, null)).toBe(true);
     expect(tutorialsOffered(true, 'evalpro')).toBe(true);
-    expect(tutorialsOffered(true, 'eval')).toBe(false);
-    expect(tutorialsOffered(true, 'evalp')).toBe(false);
+    expect(tutorialsOffered(true, 'eval')).toBe(true);
+    expect(tutorialsOffered(true, 'evalp')).toBe(true);
     // An older redirector recorded no entry: no tab.
     expect(tutorialsOffered(true, null)).toBe(false);
+  });
+  it('leaves out the cost lesson where the budget is not shown, and only it', () => {
+    expect(offeredLessons(TUTORIALS, true)).toBe(TUTORIALS);
+    const noBudget = offeredLessons(TUTORIALS, false);
+    expect(TUTORIALS.filter((d) => !noBudget.includes(d)).map((d) => d.id)).toEqual(['tut-costs']);
+    // Every other lesson's text names no cost: the /evalp condition shows none.
+    for (const d of noBudget) expect(JSON.stringify(d), d.id).not.toMatch(/cost bar|\bpoints? (budget|cost)/i);
   });
 });
 
 describe('ContentBrowser carries the tab through the pure helpers', () => {
   const src = codeOnly(read(ROOT + 'components/NodeEditor/ContentBrowser.tsx'));
-  it('offers the tab outside a study and on /evalpro, via tutorialsOffered(isEvalMode(), evalTask().arm)', () => {
+  it('offers the tab via tutorialsOffered(isEvalMode(), evalTask().arm), its lessons via offeredLessons', () => {
     expect(src).toMatch(/const OFFER_TUTORIALS = tutorialsOffered\(isEvalMode\(\), evalTask\(\)\.arm\);/);
+    expect(src).toMatch(/const LESSONS = offeredLessons\(TUTORIALS, introShowsBudget\(evalTask\(\)\)\);/);
     expect(src).toMatch(/effectiveBrowserTab\(effectiveTab\(\w+, \w+\), OFFER_TUTORIALS\)/);
   });
   it('keeps a stored tutorials tab valid, and draws its button right after All', () => {

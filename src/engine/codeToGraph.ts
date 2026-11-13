@@ -9,7 +9,7 @@ import { MAX_PARTS, MAX_PART_ENTRIES, MAX_INDEX_MATERIALS, defaultOutput, output
 import { MATERIAL_PART_KEY_RE, emitRank, sanitizeModelSignature } from './materialPartsContract';
 import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF, getFlowNodeType, chainPortId, growsOperands, MAX_CHAIN_OPERANDS } from '@/registry/nodeRegistry';
 import { MODULE_HELPERS, MODULE_HELPER_NAMES, HELPER_ALIASES, UV_CHANNEL_HELPER } from './moduleHelpers';
-import { PART_SETTING_KEYS, materialSettingsFromSource } from './materialSettingsCode';
+import { PART_BODY_SETTING_KEYS, materialSettingsFromSource, partMergeFromSource } from './materialSettingsCode';
 import {
   ACTIVE_OUTPUT_KEY,
   MARCH_OUTPUT_TYPE,
@@ -23,6 +23,7 @@ import {
 import { SPLAT_LIGHT_COLOR_DEFAULTS, SPLAT_LIGHT_DIRECTION_EPSILON } from '@/utils/splatLight';
 import { generateId } from '@/utils/idGenerator';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
+import { hasUnitRangeFlag } from '@/utils/unitRange';
 import { makeTypedEdge } from '@/utils/edgeUtils';
 import { freshNodeCost, nodeCostPoints } from '@/utils/nodeCost';
 import { VALID_SWIZZLE, TOHSL_COMPONENT_TO_HANDLE, OWN_MEMBER_TO_HANDLE, VECTOR_ONLY_FNS } from './graphToCode';
@@ -490,10 +491,14 @@ export function codeToGraph(code: string): CodeToGraphResult {
     for (const p of obj.properties) {
       if (!t.isObjectProperty(p)) continue;
       const k = propKeyName(p);
-      if (k === null || !PART_SETTING_KEYS.has(k) || p.value.start == null || p.value.end == null) continue;
+      if (k === null || !PART_BODY_SETTING_KEYS.has(k) || p.value.start == null || p.value.end == null) continue;
       raw[k] = code.slice(p.value.start, p.value.end);
     }
-    return materialSettingsFromSource(raw);
+    const out = materialSettingsFromSource(raw);
+    // A part may also CLOSE itself under a module-wide `false`
+    // (partVertexProps), which the shared reader keeps as nothing.
+    if (partMergeFromSource(raw.mergeVertices) === true) return { ...(out ?? {}), mergeVertices: true };
+    return out;
   };
 
   /**
@@ -542,7 +547,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
         || channel === 'materialParts'
         || channel === 'modelSignature'
         || channel === 'materialPartsMirror'
-        || PART_SETTING_KEYS.has(channel)
+        || PART_BODY_SETTING_KEYS.has(channel)
       ) continue;
       // Same widening undo as the single-value form above — a multi-channel
       // return carries `{ color: vec3(noise1), opacity: … }`.
@@ -789,7 +794,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
       // byte-identical `{ transparent: true }` bodies, and merging them would
       // collapse exactly the pair the rule above protects.
       const hasChannel = value.properties.some(
-        (p) => !t.isObjectProperty(p) || !PART_SETTING_KEYS.has(propKeyName(p) ?? ''),
+        (p) => !t.isObjectProperty(p) || !PART_BODY_SETTING_KEYS.has(propKeyName(p) ?? ''),
       );
       const body = hasChannel && value.start != null && value.end != null
         ? code.slice(value.start, value.end)
@@ -2083,7 +2088,10 @@ function processCall(
         );
         const id = varToNodeId.get(varName);
         const created = id ? nodeById(nodes, id) : undefined;
-        if (created) setNodeValues(created, { signed: 0 });
+        if (created) {
+          // Noise reads back as its 0–1 range, Sine/Cosine as "Map to 0…1".
+          setNodeValues(created, hasUnitRangeFlag(created.data.registryType) ? { unit: 1 } : { signed: 0 });
+        }
         return;
       }
     }
@@ -2566,7 +2574,7 @@ function matchNoiseUnsignedRemap(callExpr: t.CallExpression): t.CallExpression |
   if (!noiseCall) return undefined;
   if (!t.isIdentifier(noiseCall.callee) || noiseCall.arguments.length !== 1) return undefined;
   const def = TSL_FUNCTION_TO_DEF.get(noiseCall.callee.name);
-  return def && hasNoiseRangeFlag(def.type) ? noiseCall : undefined;
+  return def && (hasNoiseRangeFlag(def.type) || hasUnitRangeFlag(def.type)) ? noiseCall : undefined;
 }
 
 /**

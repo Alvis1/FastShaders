@@ -168,7 +168,7 @@ describe.skipIf(!loaderAvailable(V))('materialParts — precedence', () => {
     expect(byName(scene, 'Hull').material).toBe(authored.get('Hull'));
     // Source: the index loop calls buildMaterial itself, not a copy of it.
     const apply = sliceBetween(loaderText(V), 'function applyResult(', 'function fnText(');
-    expect(apply).toContain('indexMaterials.set(index, buildMaterial(spec));');
+    expect(apply).toContain('indexMaterials.set(index, buildMaterial(spec, shaderResult));');
   });
 });
 

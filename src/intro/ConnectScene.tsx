@@ -39,8 +39,8 @@ const NOISE_ID = 'intro-noise';
 /** The Output as a user who exposed Emissive sees it (its menu does that) —
  *  a fresh node shows Color, Roughness and Displacement only. */
 const OUTPUT_EXPOSED = ['color', 'emissive', 'roughness', 'position'];
-/** The sockets the drag visits, bottom to top; the last one is the drop. */
-const ROUTE = ['roughness', 'emissive', 'color'];
+/** The socket the drop lands on: the Output's main input, as the planner picks it. */
+const ROUTE = ['color'];
 
 const OUTPUT_AT: Point = { x: 330, y: 44 };
 const NOISE_AT: Point = { x: 44, y: 118 };

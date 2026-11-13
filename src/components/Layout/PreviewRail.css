@@ -34,7 +34,7 @@
   /* `top` is set inline as a PERCENTAGE of the pane (previewRailGeometry), so
      the wire's end and the disc agree at every size; this centres the disc. */
   transform: translateY(-50%);
-  border: var(--handle-border) solid white;
+  border: var(--handle-border) solid var(--handle-ring);
   border-radius: 50%;
   background: var(--node-cost-text, #000);
   /* The same 1px ring the node's socket carries, not a contact shadow: the two

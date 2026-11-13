@@ -17,6 +17,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { readPersisted } from '@/hooks/usePersistedState';
 import { SHADER_SWAP_MESSAGE, tslToPreviewHTML, type LightingMode } from '@/engine/tslToPreviewHTML';
 import { storedHex6 } from '@/utils/colorUtils';
+import { sanitizeMeshInventory } from '@/utils/meshInventory';
 
 export interface IntroModel {
   /** The model's identity: a new id is a new document (the pane's cold key). */
@@ -33,6 +34,7 @@ export function IntroPreview({
   uniforms,
   spin = true,
   zoom = 1,
+  onMeshes,
 }: {
   /** The generated TSL — what the document's own module would be built from. */
   tslCode: string;
@@ -46,6 +48,10 @@ export function IntroPreview({
    *  starts this much closer than the pane's own 0 0 8 (a cold option, as it
    *  is in the pane — it rides the model's rebuild). */
   zoom?: number;
+  /** The named sub-meshes the document reports for the loaded model
+   *  (`fs:model-meshes`) — validated and key-checked as ShaderPreview does,
+   *  since the document runs a shader. */
+  onMeshes?: (names: string[]) => void;
 }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const loaded = useRef(false);
@@ -54,6 +60,8 @@ export function IntroPreview({
   const modelRef = useRef(model);
   const moduleRef = useRef(module);
   const uniformsRef = useRef(uniforms);
+  const onMeshesRef = useRef(onMeshes);
+  onMeshesRef.current = onMeshes;
   modelRef.current = model;
   moduleRef.current = module;
   uniformsRef.current = uniforms;
@@ -106,7 +114,13 @@ export function IntroPreview({
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       if (e.source !== win()) return;
-      if ((e.data as { type?: unknown } | null)?.type === 'fs:preview-ready') pushUniforms();
+      const data = e.data as { type?: unknown; geometry?: unknown; meshes?: unknown } | null;
+      if (data?.type === 'fs:preview-ready') pushUniforms();
+      if (data?.type === 'fs:model-meshes' && onMeshesRef.current) {
+        const m = modelRef.current;
+        const inv = sanitizeMeshInventory(data.geometry, data.meshes);
+        if (m && inv && inv.key === `custom:${m.id}`) onMeshesRef.current(inv.meshes.map((x) => x.name));
+      }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);

@@ -4,21 +4,22 @@
 #   npm run deploy:sferas
 #   npm run deploy:sferas -- --no-build     # re-upload the existing snapshot
 #
-# Same shape as deploy-alvismisjuns.sh, four differences:
+# Same shape as deploy-alvismisjuns.sh, two differences:
 #   • base is `/` — that host serves the app at its ROOT, not under a subpath;
-#   • FS_PREVIEW_ORIGIN names this host, so the sandboxed preview iframe (an
+#     FS_PREVIEW_ORIGIN names this host, so the sandboxed preview iframe (an
 #     opaque origin, hence never `'self'`) may fetch the built-in models;
-#   • FS_EVAL_UPLOAD_URL names alvismisjuns's study endpoint ABSOLUTELY (and
-#     vite.config.ts adds its origin to connect-src): this host is static nginx
-#     with no endpoint, so the app's relative default 404ed here and every
-#     participant's package read "Upload failed." until 2026-10-02. The LIVE
-#     endpoint must pass this origin's CORS preflight AND be able to store
-#     (list.php?health), and both are checked FIRST: if either fails, nothing
-#     is built or uploaded (deploy the endpoint with
-#     `bash scripts/deploy-eval-endpoint.sh`, then run this again);
 #   • the target is /var/www/fs/src, the docroot of the dedicated `fs`
 #     container (nginx). NB `/var/www/sferas/src` is a DIFFERENT, shared
 #     directory holding a dozen unrelated projects — never deploy there.
+# Like every build it posts study packages to ViA's endpoint on imgame.va.lv
+# (DEFAULT_EVAL_UPLOAD_URL in vite.config.ts, which also puts its origin in
+# connect-src). This host is static nginx with no endpoint of its own; until
+# 2026-11-09 its build named alvismisjuns's absolutely, since the relative
+# default 404ed here (every package read "Upload failed." until 2026-10-02).
+# The LIVE endpoint must pass this origin's CORS preflight AND be able to store
+# (list.php?health): scripts/check-eval-upload.sh checks both FIRST, and if
+# either fails nothing is built or uploaded (deploy the endpoint with
+# `bash scripts/deploy-eval-endpoint.sh`, then run this again).
 #
 # Credentials come from the same gitignored .vscode/sftp.json.
 set -euo pipefail
@@ -28,68 +29,23 @@ CONF="$ROOT/.vscode/sftp.json"
 DIST="$ROOT/dist-sferas"
 REMOTE="/var/www/fs/src"
 ORIGIN="https://fs.sferas.lv"
-UPLOAD_URL="https://alvismisjuns.lv/fastshaders-eval/upload.php"
-# The headers the app's upload sends, as the endpoint TEMPLATE allows them
-# (evalUpload.test.ts pins template ⊇ client). The preflight gate below asks
-# the LIVE endpoint for exactly these BEFORE anything is uploaded, so a header
-# added to the client stops this deploy while the live endpoint still lacks
-# it — the study host keeps its previous build — instead of every upload.
-REQ_HEADERS="$(sed -n "s/.*header('Access-Control-Allow-Headers: \([^']*\)').*/\1/p" "$ROOT/scripts/eval-endpoint/fastshaders-eval-upload.php" \
-  | head -1 | tr 'A-Z' 'a-z' | tr -d ' ')"
 
-[ -n "$REQ_HEADERS" ] || { echo "cannot read Access-Control-Allow-Headers from scripts/eval-endpoint/fastshaders-eval-upload.php"; exit 1; }
 [ -f "$CONF" ] || { echo "missing $CONF (SFTP credentials)"; exit 1; }
 command -v psftp >/dev/null || { echo "psftp not found — brew install putty"; exit 1; }
 
-# The study upload, judged BEFORE anything is built or uploaded, the way a
-# browser judges the preflight: a 2xx status, this exact origin echoed, and
-# every header the upload sends allowed. Allow-Origin alone is not enough (a
-# 405 that still carries it, or an Allow-Headers list one header short, fails
-# in the browser), and any one missing means every package reads "Upload
-# failed." with nothing else looking wrong.
+# The study upload, judged BEFORE anything is built or uploaded (the script's
+# header says why both checks are needed).
 echo "==> checking the study upload endpoint"
-PREFLIGHT="$(curl -sS -o /dev/null -D - -X OPTIONS "$UPLOAD_URL" \
-  -H "Origin: $ORIGIN" \
-  -H 'Access-Control-Request-Method: POST' \
-  -H "Access-Control-Request-Headers: $REQ_HEADERS" \
-  | tr -d '\r' || true)"
-header_of() { awk -v h="$1" 'tolower($0) ~ "^" h ":" { sub(/^[^:]*: */, ""); print tolower($0) }'; }
-PF_STATUS="$(printf '%s\n' "$PREFLIGHT" | awk 'NR == 1 { print $2 }')"
-CORS="$(printf '%s\n' "$PREFLIGHT" | header_of access-control-allow-origin)"
-PF_HEADERS="$(printf '%s\n' "$PREFLIGHT" | header_of access-control-allow-headers | tr -d ' ')"
-MISSING=""
-for h in $(printf '%s' "$REQ_HEADERS" | tr ',' ' '); do
-  case ",$PF_HEADERS," in *",$h,"*|*",*,"*) ;; *) MISSING="$MISSING $h" ;; esac
-done
-case "$PF_STATUS" in 2??) PF_OK=1 ;; *) PF_OK=0 ;; esac
-echo "  upload preflight: status ${PF_STATUS:-none}, origin ${CORS:-none}${MISSING:+, headers NOT allowed:$MISSING} (expected 2xx, $ORIGIN)"
-[ "$PF_OK" = 1 ] && [ "$CORS" = "$ORIGIN" ] && [ -z "$MISSING" ] \
-  || { echo "  → the live endpoint does not admit $ORIGIN's upload; nothing was uploaded. Run  bash scripts/deploy-eval-endpoint.sh  first." >&2; exit 1; }
-
-# ...and that it can STORE what it admits. The preflight is answered before any
-# write, so it stayed green from 2026-10-08 to 10-20 while the site's rebuilt
-# container had /app read-only and every real package answered 500.
-# list.php?health makes a real write in the inbox; it needs the inbox's private
-# login, from the endpoint's gitignored config.
-EVAL_CONF="$ROOT/.vscode/eval-endpoint.json"
-[ -f "$EVAL_CONF" ] || { echo "missing $EVAL_CONF (the inbox login for the store check)"; exit 1; }
-read -r VIEW_USER VIEW_PW <<< "$(node -e '
-  const c = require(process.argv[1]);
-  console.log(c.viewUser, c.viewPassword);
-' "$EVAL_CONF")"
-HEALTH="$(curl -sS -u "$VIEW_USER:$VIEW_PW" "${UPLOAD_URL%/upload.php}/list.php?health" | head -1 || true)"
-echo "  upload inbox: ${HEALTH:-no answer} (expected inbox ok)"
-[ "${HEALTH#inbox ok:}" != "$HEALTH" ] \
-  || { echo "  → the endpoint cannot store a package; nothing was uploaded. Fix the inbox (scripts/eval-endpoint/README.md), then run  bash scripts/deploy-eval-endpoint.sh." >&2; exit 1; }
+bash "$ROOT/scripts/check-eval-upload.sh" "$ORIGIN"
+UPLOAD_URL="$(bash "$ROOT/scripts/check-eval-upload.sh" --url)"
 
 if [ "${1:-}" != "--no-build" ]; then
   # public/js is generated from the submodule: build only from a committed pointer.
   bash "$ROOT/scripts/check-submodule.sh"
-  echo "==> building (base /, CSP for fs.sferas.lv, study uploads to alvismisjuns.lv)"
+  echo "==> building (base /, CSP for fs.sferas.lv, study uploads to $UPLOAD_URL)"
   cd "$ROOT"
   FS_BASE=/ \
   FS_PREVIEW_ORIGIN="$ORIGIN" \
-  FS_EVAL_UPLOAD_URL="$UPLOAD_URL" \
     npm run build
   rm -rf "$DIST"
   cp -R "$ROOT/dist" "$DIST"

@@ -4,7 +4,7 @@ import type { NoteFlowNode } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
 import { getContrastColor } from '@/utils/colorUtils';
 import { assetText, t } from '@/i18n';
-import { NOTE_BODY_COLOR, NOTE_HEADER_COLOR, NOTE_MIN_HEIGHT, NOTE_MIN_WIDTH } from '@/utils/noteDefaults';
+import { noteDrawnColors, NOTE_MIN_HEIGHT, NOTE_MIN_WIDTH } from '@/utils/noteDefaults';
 import './NoteNode.css';
 
 /**
@@ -28,8 +28,8 @@ export const NoteNode = memo(function NoteNode({
   data,
   selected,
 }: NodeProps<NoteFlowNode>) {
-  const bodyColor = data.color ?? NOTE_BODY_COLOR;
-  const headerColor = data.headerColor ?? NOTE_HEADER_COLOR;
+  const darkCanvas = useAppStore((s) => getContrastColor(s.nodeEditorBgColor) === '#ffffff');
+  const { body: bodyColor, header: headerColor } = noteDrawnColors(data.color, data.headerColor, darkCanvas);
   const scale = data.scale ?? 1;
   const bodyText = getContrastColor(bodyColor);
   const headText = getContrastColor(headerColor);

@@ -358,9 +358,9 @@ function attachListeners(): void {
     // Focus moving INTO one of the app's own iframes (the 3D preview) blurs
     // the window, but the participant has not left — record the distinction
     // so the presence model doesn't count shader-inspection as absence.
-    // (Input inside the sandboxed iframe is unobservable from here; the
-    // derivation treats the entry as an activity marker and the README
-    // documents the conservative counting.)
+    // (The preview stage also posts throttled `fs:activity` markers on
+    // pointer/wheel/key input, and `deriveSummary` treats the iframe focus
+    // entry itself as an activity marker too.)
     const toIframe = document.activeElement?.tagName === 'IFRAME';
     evalLog('focus', toIframe ? { focused: false, target: 'iframe' } : { focused: false });
   };
@@ -372,6 +372,14 @@ function attachListeners(): void {
     evalLog('activity');
   };
   const onImported = () => evalLog('import');
+  // A merge into the open document (engine/projectImport.ts GRAPH_MERGED_EVENT):
+  // a shader's Add, Mesh with Materials, a splat's Clear graph. Only a merge
+  // that names itself — the lesson takeover dispatches none (tutorial-start).
+  const onMerged = (e: Event) => {
+    const how = (e as CustomEvent<unknown>).detail;
+    const h = how && typeof how === 'object' ? (how as { how?: unknown }).how : undefined;
+    if (h === 'add' || h === 'model' || h === 'splat') evalLog('import', { how: h });
+  };
 
   document.addEventListener('visibilitychange', onVisibility);
   window.addEventListener('focus', onFocus);
@@ -381,6 +389,7 @@ function attachListeners(): void {
   window.addEventListener('keydown', onInput, { capture: true, passive: true });
   window.addEventListener('wheel', onInput, { capture: true, passive: true });
   window.addEventListener('fs:graph-imported', onImported);
+  window.addEventListener('fs:graph-merged', onMerged);
 
   const flushTimer = window.setInterval(flushJournal, FLUSH_INTERVAL_MS);
   const snapshotInterval = window.setInterval(() => {
@@ -400,6 +409,7 @@ function attachListeners(): void {
     window.removeEventListener('keydown', onInput, { capture: true });
     window.removeEventListener('wheel', onInput, { capture: true });
     window.removeEventListener('fs:graph-imported', onImported);
+    window.removeEventListener('fs:graph-merged', onMerged);
     window.clearInterval(flushTimer);
     window.clearInterval(snapshotInterval);
     unsubRebuild();

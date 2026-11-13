@@ -43,6 +43,8 @@ import {
   EST_NODE_W,
   EST_NODE_H,
   COLLAPSED_MEMBER_CLASS,
+  groupDescendantIds,
+  hiddenByInnerCollapse,
   groupFrameSize,
   measuredNodeSize,
 } from '@/utils/groupFrame';
@@ -3313,7 +3315,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         // hence its frame is unmoved. If the layout pushed the member's CENTRE
         // out of that frame, DETACH it — same guard the drag path applies via
         // reparentedNode. Leaving it parented-but-outside would hide it (no cue)
-        // the moment the group is collapsed (memberIds = parentId === groupId).
+        // the moment the group is collapsed (its members are its descendants).
         if (n.parentId) {
           const parent = byId.get(n.parentId);
           const pAbs = parent ? absOf(parent) : { x: 0, y: 0 };
@@ -3351,11 +3353,20 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const grandParentId = groupNode.parentId;
     const groupData = groupNode.data as GroupNodeData;
     const wasCollapsed = !!groupData.collapsed;
+    // A collapsed group also hid the members of the groups nested in it; the
+    // ones no still-collapsed inner group hides come back on screen.
+    const reveal = wasCollapsed ? groupDescendantIds(state.nodes, groupId) : new Set<string>();
+    if (wasCollapsed) for (const id of hiddenByInnerCollapse(state.nodes, groupId)) reveal.delete(id);
 
     const newNodes: AppNode[] = state.nodes
       .filter((n) => n.id !== groupId)
       .map((n) => {
-        if (n.parentId !== groupId) return n;
+        if (n.parentId !== groupId) {
+          if (!reveal.has(n.id)) return n;
+          const { className: _c, ...shown } = n as AppNode & { className?: string };
+          void _c;
+          return shown as AppNode;
+        }
         // Lift child back to grandparent's coordinate space.
         const { extent: _extent, parentId: _parentId, ...rest } = n as AppNode & { extent?: unknown; parentId?: string };
         void _extent; void _parentId;
@@ -3490,10 +3501,19 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const isCurrentlyCollapsed = !!groupData.collapsed;
     const willBeCollapsed = !isCurrentlyCollapsed;
 
-    // Members are nodes whose parentId points at this group.
-    const memberIds = new Set(
+    // Members are EVERY node inside this group, at any depth: a nested
+    // group's own members are hidden by this collapse too, and a wire from
+    // one of them to the outside must land on this pill
+    // (`groupDescendantIds` — `parentId === groupId` left an added file's
+    // inner groups' nodes standing outside the collapsed pill). The frame
+    // FIT on expand still reads only the direct children (`directIds`): a
+    // grandchild's position is relative to ITS frame, not this one.
+    const memberIds = groupDescendantIds(state.nodes, groupId);
+    const directIds = new Set(
       state.nodes.filter((n) => n.parentId === groupId).map((n) => n.id),
     );
+    // Inside a nested group that is itself collapsed: stays hidden on expand.
+    const stillHidden = hiddenByInnerCollapse(state.nodes, groupId);
     const nodeById = new Map(state.nodes.map((n) => [n.id, n]));
 
     /** The registry port behind a handle, or undefined (no node, def or port). */
@@ -3764,7 +3784,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       let h = 0;
       let exact = true;
       for (const m of state.nodes) {
-        if (!memberIds.has(m.id)) continue;
+        if (!directIds.has(m.id)) continue;
         const box = m as AppNode & {
           measured?: { width?: number; height?: number }; width?: number; height?: number;
         };
@@ -3876,9 +3896,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
             data,
           } as AppNode;
         }
-        if (memberIds.has(n.id)) {
+        if (memberIds.has(n.id) && !stillHidden.has(n.id)) {
           // Strip the hide-class. We don't re-attach `extent: 'parent'` —
           // letting members be dragged outside is what enables drag-out-to-detach.
+          // A member of a nested group that is still collapsed keeps it.
           const { className: _c, ...rest } = n as AppNode & { className?: string };
           void _c;
           return rest as AppNode;

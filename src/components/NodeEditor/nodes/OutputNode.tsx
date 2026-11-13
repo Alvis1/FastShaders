@@ -52,6 +52,7 @@ import { IndexSectionChip } from './IndexSectionChip';
 import { SECTION_SILENT_KEY, PARKED_KEY, formatSectionLabel, joinCapped } from './sectionLabelText';
 import './OutputNode.css';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
+import { UNLIT_IGNORED_CHANNELS, isUnlitSettings, unlitPortLabel } from '@/utils/unlitMaterial';
 
 /** Ports that belong to the pixel (fragment) shader section.
  *  Exported so the asset/overview card replica groups the channels the same
@@ -154,6 +155,8 @@ export const OutputNode = memo(function OutputNode({
   // its binding.
   const materials = useMemo(() => outputMaterials(selfNode), [selfNode]);
   const material = materials[SELF];
+  /** The Unlit material (utils/unlitMaterial.ts): its lit-only rows are not drawn at all. */
+  const unlit = isUnlitSettings(material?.materialSettings);
   // The mesh list, as a cheap STRING: the inventory object would re-render
   // every Output on any preview report, and this needs only the names. The
   // picker is shown at all only for a MODEL — a primitive is one unnamed mesh,
@@ -400,14 +403,23 @@ export const OutputNode = memo(function OutputNode({
   // the node stays undrawn until a reload. '~' cannot collide with a joined
   // port list (port ids are word characters).
   const updateNodeInternals = useUpdateNodeInternals();
+  // `unlit` is a dependency of its own: it unmounts the lit-only rows' handles
+  // (and unticking it mounts them again), and a handle nobody re-measured never
+  // draws its wire.
   const exposedKey = nodeDormant ? '~' : exposedPorts.join('|');
   useEffect(() => {
     updateNodeInternals(id);
-  }, [id, exposedKey, updateNodeInternals]);
+  }, [id, exposedKey, unlit, updateNodeInternals]);
 
   // Only permanently exposed channels render (as rows) — no drag reveal here.
+  // An UNLIT material draws none of the channels it ignores (roughness,
+  // metalness, normal, environment, and the separate emissive — its Color row
+  // reads "Emissive" instead, `unlitPortLabel`): row and socket are unmounted, but the
+  // stored values, the exposure and any WIRE stay exactly as they were — React
+  // Flow keeps an edge whose handle is absent and does not draw it — so
+  // unticking Unlit brings every one of them back, wired. Nothing here writes.
   const sectionPorts = (ids: string[]) =>
-    def.inputs.filter((p) => ids.includes(p.id) && exposedSet.has(p.id));
+    def.inputs.filter((p) => ids.includes(p.id) && exposedSet.has(p.id) && !(unlit && UNLIT_IGNORED_CHANNELS.has(p.id)));
   const pixel = sectionPorts(PIXEL_PORTS);
   const vertex = sectionPorts(VERTEX_PORTS);
 
@@ -495,10 +507,10 @@ export const OutputNode = memo(function OutputNode({
           position={Position.Left}
           id={handle}
           dataType={port.dataType}
-          label={port.label}
+          label={unlitPortLabel(port.id, port.label, unlit)}
         />
         {rowWidget(port.id)}
-        <span className="output-node__port-label">{portLabel(port.label, language)}</span>
+        <span className="output-node__port-label">{portLabel(unlitPortLabel(port.id, port.label, unlit), language)}</span>
       </div>
     );
   };

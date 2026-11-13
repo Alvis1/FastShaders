@@ -151,4 +151,17 @@ describe('…and hands over nothing when nothing is unambiguous', () => {
     const { nodes, edges: es } = useAppStore.getState();
     expect(inheritedImageUv(nodes, es, 'img', 'mx', 'a')).toBeNull();
   });
+
+  it('an Image does not inherit a camera-fed noise\'s F1/F2 as its UV', () => {
+    const nodes = [
+      makeNode('c', 'cameraPosition'),
+      makeNode('n', 'voronoiVec2', { pos: 'positionGeometry', scale: 1 }),
+      makeNode('mx', 'max'),
+      makeNode('img', 'imageNode'),
+    ];
+    const edges = [makeEdge('c', 'out', 'n', 'pos'), makeEdge('n', 'out', 'mx', 'a')];
+    expect(inheritedImageUv(nodes, edges, 'img', 'mx', 'a')).toBeNull();
+    // Unwired, the same noise IS a surface coordinate and is handed over.
+    expect(inheritedImageUv(nodes, edges.slice(1), 'img', 'mx', 'a')).toEqual({ source: 'n', sourceHandle: 'out' });
+  });
 });

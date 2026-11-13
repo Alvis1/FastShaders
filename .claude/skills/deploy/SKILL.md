@@ -79,8 +79,10 @@ gh run watch "$(gh run list --workflow release.yml -L 1 --json databaseId -q '.[
 npm run deploy:alvismisjuns
 ```
 Run it from the SAME tagged state: it deploys the working tree. Do not run `tauri build` between steps 3 and 4,
-because a desktop build overwrites `dist/` with the desktop profile. The script checks the served
-version meta with curl, then that `/fastshaders/compare/` serves the device-comparison page itself: 200, its own
+because a desktop build overwrites `dist/` with the desktop profile. BEFORE building it runs the study-upload
+gate (`scripts/check-eval-upload.sh`, described in step 5) for `https://alvismisjuns.lv` and
+`https://www.alvismisjuns.lv`. The script checks the served version meta with curl, that the served CSP names
+`https://imgame.va.lv`, then that `/fastshaders/compare/` serves the device-comparison page itself: 200, its own
 title ("Device comparison" — an `index.html` fallback would answer 200 at the right version too) and the version
 just built. Requires `psftp` (`brew install putty`) and the gitignored `.vscode/sftp.json`.
 
@@ -90,14 +92,15 @@ just built. Requires `psftp` (`brew install putty`) and the gitignored `.vscode/
 npm run deploy:sferas
 ```
 Base `/`, target `/var/www/fs/src`. NEVER use `/var/www/sferas/src`, which is shared with a dozen unrelated
-projects. BEFORE building, the script checks that the live upload endpoint passes this host's CORS preflight
+projects. Every build uploads study packages to ViA's endpoint, `https://imgame.va.lv/fastshaders-eval/upload.php`.
+BEFORE building, `scripts/check-eval-upload.sh` checks that the live endpoint passes this host's CORS preflight
 the way a browser judges it (2xx, the origin echoed, every upload header allowed) and stops with NOTHING
 uploaded if not — the endpoint is behind the template (no CORS block, or a header the client now sends): run
 `bash scripts/deploy-eval-endpoint.sh`, then `npm run deploy:sferas` again. It also stops when
-`list.php?health` does not answer `inbox ok` — the endpoint cannot STORE a package (the inbox must be under the
-site container's writable `/app/data`; see `scripts/eval-endpoint/README.md`). Fix the inbox, never the
-gate. After the upload it checks the
-version meta, that `/evalp/` returns 200, that the served CSP names `https://alvismisjuns.lv`, and that
+`list.php?health` does not answer `inbox ok` — the endpoint cannot STORE a package (the inbox is a `www-data`
+folder inside the ImGame site's docroot on imgame.va.lv; see `scripts/eval-endpoint/README.md`). Fix the
+inbox, never the gate. After the upload it checks the
+version meta, that `/evalp/` returns 200, that the served CSP names `https://imgame.va.lv`, and that
 `/compare/` serves the comparison page by its title at the version just built. If the user
 has said a study cohort is currently running, HOLD this step: a participant's preview would
 change loader mid-study. Say that you held it.

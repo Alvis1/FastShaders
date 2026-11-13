@@ -2,7 +2,7 @@
  * The picture on a lesson tile: what the finished lesson looks like. A lesson
  * that builds a recipe shows that recipe's own thumbnail (PresetCard's shade,
  * so the Tutorials tile and the Presets tile are visibly the same thing); the
- * two recipe-less lessons carry their own, written in the same vocabulary
+ * recipe-less lessons carry their own, written in the same vocabulary
  * (x/y span [-1, 1], y = -1 the top row, a sphere faked by nz = sqrt(1-x²-y²)).
  */
 
@@ -46,6 +46,53 @@ const OWN: Record<string, Shade> = {
   'tut-checker': (x, y) => {
     const c = Math.floor(((x + 1) / 2) * 8) + Math.floor(((1 - y) / 2) * 8);
     return c % 2 === 0 ? [0.08, 0.08, 0.08] : [0.95, 0.95, 0.95];
+  },
+  // Draw the Curve: the clouds after the lesson's S-curve — hard blobs — with
+  // the S itself drawn across them, since the line on the node IS the lesson.
+  // The line's half-width is measured across it, not straight down, or its
+  // steep middle would thin to a hair.
+  'tut-curve': (x, y) => {
+    const t = (x + 0.8) / 1.6;
+    if (t >= 0 && t <= 1) {
+      const lineY = 0.5 - smoothstep(0.25, 0.75, t);
+      const slope = (smoothstep(0.25, 0.75, t + 0.01) - smoothstep(0.25, 0.75, t - 0.01)) / (0.02 * 1.6);
+      if (Math.abs(y - lineY) < 0.04 * Math.hypot(1, slope)) return [1, 0.72, 0.2];
+    }
+    const n = sphere(x, y);
+    if (!n) return BACKDROP;
+    const g = smoothstep(0.4, 0.6, noise01(x, y, 3));
+    return shadeLit([g, g, g], n.nz);
+  },
+  // Terraces: the noise cut into five flat levels (floor(v * 5) / 5).
+  'tut-terraces': (x, y) => {
+    const n = sphere(x, y);
+    if (!n) return BACKDROP;
+    const g = Math.floor(noise01(x, y, 2) * 5) / 5;
+    return shadeLit([g, g, g], n.nz);
+  },
+  // Veins: |noise - 0.5| through the lesson's Smoothstep(0, 0.05) — thin black
+  // lines where the noise crosses 0.5, on white.
+  'tut-veins': (x, y) => {
+    const n = sphere(x, y);
+    if (!n) return BACKDROP;
+    const k = smoothstep(0, 0.05, Math.abs(noise01(x, y, 3) - 0.5));
+    return shadeLit([k, k, k], n.nz);
+  },
+  // Sharper Rim: Facing (1 - N·V) to the power of 4 — the rim pulled back to a thin line.
+  'tut-sharp-rim': (x, y) => {
+    const n = sphere(x, y);
+    if (!n) return BACKDROP;
+    const g = Math.pow(1 - n.nz, 4);
+    return [g, g, g];
+  },
+  // Grid: the UV square flat, 8 × 8 — white wherever EITHER repeating ramp is
+  // near its top (max(fract u, fract v)). The lesson's cut is 0.9; the tile
+  // draws the line a little thicker (0.85), or it is a hair at tile size.
+  'tut-grid': (x, y) => {
+    const u = ((x + 1) / 2) * 8;
+    const v = ((1 - y) / 2) * 8;
+    const m = Math.max(u - Math.floor(u), v - Math.floor(v));
+    return m > 0.85 ? [0.95, 0.95, 0.95] : [0.08, 0.08, 0.08];
   },
   // Detail Costs: Voronoi's F1 — the distance to the nearest scattered point.
   'tut-costs': (x, y) => {

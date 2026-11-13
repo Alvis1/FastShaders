@@ -34,7 +34,7 @@ function fullAnswers(): ProAnswers {
 
 const by = (id: string): ProQuestion => PRO_ITEMS.find((x) => x.id === id)!;
 
-describe('the professional question block (pro-4)', () => {
+describe('the professional question block (pro-5)', () => {
   it('has unique ids, never a retired one, a heading for every group, and is versioned', () => {
     const ids = PRO_ITEMS.map((q) => q.id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -42,20 +42,20 @@ describe('the professional question block (pro-4)', () => {
     // pool two questions under one column.
     for (const id of ids) expect(RETIRED_PRO_IDS, id).not.toContain(id);
     for (const q of PRO_ITEMS) expect(PRO_GROUP_HEADINGS[q.group as keyof typeof PRO_GROUP_HEADINGS], q.group).toBeDefined();
-    expect(PRO_ITEMS_VERSION).toMatch(/^pro-\d+$/);
+    expect(PRO_ITEMS_VERSION).toBe('pro-5');
   });
 
-  it('is short: nine questions, two agreement items, thirteen required answers, two optional texts', () => {
+  it('is short: eleven items, one agreement item, thirteen required answers, two optional texts', () => {
     // The owner found pro-2 repetitive — ten agreement items straight after
     // the ten SUS ones (2026-10-25). One item per sentence the thesis writes.
     expect(PRO_ITEMS).toHaveLength(11);
-    expect(PRO_ITEMS.filter((q) => q.kind === 'agree')).toHaveLength(2);
+    expect(PRO_ITEMS.filter((q) => q.kind === 'agree')).toHaveLength(1);
     expect(PRO_ITEMS.filter((q) => q.kind === 'text')).toHaveLength(2);
     expect(proRequiredKeys()).toHaveLength(13);
   });
 
   it('re-asks nothing the SUS measures: no pilot item, no SUS wording', () => {
-    for (const id of ['pilotQ5', 'pilotQ6', 'pilotQ7', 'pilotQ8', 'pilotQ9', 'pointsOff20', 'platforms12m', 'realtimeYears', 'pointsOff20PerNode', 'fitFor', 'proYears']) {
+    for (const id of ['pilotQ5', 'pilotQ6', 'pilotQ7', 'pilotQ8', 'pilotQ9', 'pointsOff20', 'platforms12m', 'realtimeYears', 'pointsOff20PerNode', 'fitFor', 'proYears', 'webxrConstraintsDeter']) {
       expect(RETIRED_PRO_IDS).toContain(id);
       expect(PRO_ITEMS.map((q) => q.id)).not.toContain(id);
     }
@@ -64,16 +64,15 @@ describe('the professional question block (pro-4)', () => {
     for (const sus of SUS_ITEMS_EN) expect(stems).not.toContain(sus.toLowerCase());
   });
 
-  it('puts each agreement item first in its group and apart from the other', () => {
-    // The renderer prints the 1–5 legend above the first agree item of a run;
-    // two strips three items apart never read as one more SUS page.
+  it('puts the agreement item first in its group and orders groups tool → points → fit → work', () => {
+    // The renderer prints the 1–5 legend above the first agree item of a run.
     const groups = new Map<string, ProQuestion[]>();
     for (const q of PRO_ITEMS) groups.set(q.group, [...(groups.get(q.group) ?? []), q]);
     for (const [group, items] of groups) {
       if (items.some((q) => q.kind === 'agree')) expect(items[0].kind, group).toBe('agree');
     }
     const at = PRO_ITEMS.flatMap((q, i) => (q.kind === 'agree' ? [i] : []));
-    expect(at[1] - at[0]).toBeGreaterThanOrEqual(3);
+    expect(at).toEqual([2]);
     // The groups run tool → points → fit → own work, demographics last.
     expect([...groups.keys()]).toEqual(['tool', 'points', 'fit', 'work']);
   });
@@ -87,11 +86,11 @@ describe('the professional question block (pro-4)', () => {
       }
     }
     expect((by('pointsCredible') as ProAgreeItem).cantJudge).toBe(true);
-    expect((by('webxrConstraintsDeter') as ProAgreeItem).cantJudge).toBe(true);
-    expect((by('pointsChangedBuild') as ProChoiceItem).options.map((o) => o.id)).toEqual(['ignored', 'lookedWithin', 'lookedOver', 'chose', 'replaced']);
+    expect((by('shaderPerfBarrier') as ProChoiceItem).options.map((o) => o.id)).toEqual(['notAProblem', 'minor', 'moderate', 'major', 'cantJudge']);
+    expect((by('pointsChangedBuild') as ProChoiceItem).options.map((o) => o.id)).toEqual(['ignored', 'looked', 'chose']);
     expect((by('costToday') as ProChoiceItem).options.map((o) => o.id)).toContain('notNeeded');
     expect((by('costToday') as ProChoiceItem).otherId).toBe('other');
-    expect((by('suitedFor') as ProGridItem).columns.map((c) => c.id)).toEqual(['yes', 'no', 'cantJudge']);
+    expect((by('suitedFor') as ProGridItem).columns.map((c) => c.id)).toEqual(['yes', 'partly', 'no', 'cantJudge']);
     expect((by('featuresHelped') as ProGridItem).columns.map((c) => c.id)).toEqual(['helped', 'neither', 'hindered', 'notUsed']);
     expect((by('nodeLookTold') as ProGridItem).columns.map((c) => c.id)).toEqual(['yes', 'partly', 'no']);
     expect((by('nodeLookTold') as ProGridItem).rows.map((r) => r.id)).toEqual(['does', 'cost']);
@@ -141,7 +140,8 @@ describe('the professional question block (pro-4)', () => {
     expect(proComplete({ ...all, pointsCredible: 6 })).toBe(false);
     expect(proComplete({ ...all, pointsChangedBuild: 'na' })).toBe(false);
     expect(proComplete({ ...all, mainWork: 'astronaut' })).toBe(false);
-    expect(proComplete({ ...all, 'suitedFor.teaching': 'partly' })).toBe(false);
+    expect(proComplete({ ...all, 'suitedFor.teaching': 'partly' })).toBe(true);
+    expect(proComplete({ ...all, 'suitedFor.teaching': 'maybe' })).toBe(false);
     expect(proComplete({ ...all, 'nodeLookTold.cost': 'partly' })).toBe(true);
   });
 
@@ -164,7 +164,7 @@ describe('the professional question block (pro-4)', () => {
     expect(rec.placement).toBe('after-sus');
     const item = (id: string) => rec.items.find((i) => i.id === id)!;
     expect(item('pointsCredible')).toMatchObject({ kind: 'agree', response: null, na: true, language: 'lv' });
-    expect(item('webxrConstraintsDeter')).toMatchObject({ response: 3, na: false });
+    expect(item('shaderPerfBarrier')).toMatchObject({ choice: 'notAProblem', label: 'Not a problem' });
     expect(item('mainWork')).toMatchObject({ choice: 'other', label: 'Other' });
     expect((item('mainWork').otherText as string).length).toBe(OTHER_CAP);
     expect(item('costToday')).toMatchObject({ choice: 'other', otherText: 'I ask a colleague' });

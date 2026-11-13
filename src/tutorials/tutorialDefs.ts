@@ -1,21 +1,33 @@
 /**
- * The twenty-two lessons of the Tutorials tab — a LEAF: this module imports
+ * The twenty-seven lessons of the Tutorials tab — a LEAF: this module imports
  * nothing but types (`bootWave.test.ts` holds it to that), so the asset
  * browser can import it statically. Everything executable lives in
  * `tutorialRun.ts` / `tutorialAutoStep.ts`.
  *
  * Thirteen lessons build the thirteen beginner recipes of the Presets tab by
  * hand (`recipeId`) — Presets shows the finished thing, this tab builds it —
- * plus nine concepts the recipes do not cover: Checkerboard (two axes at
+ * plus fourteen concepts the recipes do not cover: Checkerboard (two axes at
  * once), Circle (distance fields), Detail Costs (what noise costs), Which
  * Space? (object vs world), Toon Shading (N·L by hand), Shiny or Dull (the
- * material dials), Dissolve Edge (a band mask), Hologram (masks combine like
- * logic) and Exposed Parameter (a uniform as a knob). The order follows the
- * surveyed curricula (Book of Shaders, Catlike Coding, Unity Learn, Unreal's
- * Content Examples, Godot): colour → coordinates → repetition → shapes → time
- * → noise → blending → cells → cost → directions → spaces → lighting →
- * material dials → view → transparency → clipping → mask logic → vertices →
- * animated vertices → parameters. Three authoring rules from the same research:
+ * material dials, and the Environment a metal reflects), Dissolve Edge (a
+ * band mask), Hologram (masks combine like logic: Multiply is AND), Grid (its
+ * other half: Max is OR), Exposed Parameter (a uniform as a knob) and the four SHAPING
+ * FUNCTIONS (2026-11-12): Draw the Curve (RGB Curves — the function as a
+ * graph), Terraces (Floor as a staircase: multiply, floor, divide), Veins
+ * (Abs as a fold: the contour of a field) and Sharper Rim (Power as falloff).
+ * The order follows the surveyed curricula (Book of Shaders, Catlike Coding,
+ * Unity Learn, Unreal's Content Examples, Godot): colour → coordinates →
+ * repetition → shapes → time → noise → blending → cells → shaping (a drawn
+ * curve, a staircase, a fold) → cost → directions → spaces → lighting →
+ * material dials → view → falloff → transparency → clipping → mask logic →
+ * vertices → animated vertices → parameters. The three shaping lessons sit
+ * after the noise lessons because noise is the field they bend (a gradient
+ * hides a gentle curve under the sphere's lighting; clouds do not), and
+ * Sharper Rim right after Rim Light, whose Fresnel it bends. Each was picked
+ * from ten candidates built and rendered in the app: sine bands repeat Pulse
+ * and Wobble, an inverse-distance glow only reads on the Plane, and polar
+ * shapes need an atan2 node the registry does not have.
+ * Three authoring rules from the same research:
  * show the RAW field (a grey) before mapping it through Color Ramp; interleave
  * adds and wires so the 3D preview changes every step or two; every lesson
  * opens with the idea and closes with one "Try: …" change and a question.
@@ -23,13 +35,29 @@
  * Captions are English and printable ASCII, at most MAX_CAPTION_CHARS; every
  * one is a key in lv.json `ui` (`tutorialI18n.test.ts`). A node is named the
  * way its tile is ("Perlin Noise", "Color Ramp"); a socket the way its label
- * reads. Hex values are LOWERCASE: the colour node emits them verbatim and the
- * recipe parse stores them lowercase, which is what keeps `byteExact` honest.
+ * reads — and a noise card's `pos` / `scale`, like the Time node's `speed`,
+ * read as their raw lowercase keys in the menu and on the socket, in both
+ * languages, so the captions spell them that way. Hex values are LOWERCASE:
+ * the colour node emits them verbatim and the recipe parse stores them
+ * lowercase, which is what keeps `byteExact` honest.
+ *
+ * Four wording rules, each from a caption a reader got wrong (2026-11-12):
+ * - NEVER shorthand a multi-node change ("put an Add of Time between Split and
+ *   Fract", "swap Multiply for Add", "a Mix with two Colors after Mod"). Say
+ *   which node is added, which gesture, and which socket takes which wire.
+ * - A socket is named WITH its node ("into Multiply's A", never "into A"): the
+ *   cards print no socket names, and a step's two nodes both have an A.
+ * - Describe what the screen shows AFTER this step. A value set on a node that
+ *   feeds nothing yet changes nothing, so wire first and tune second (Circle),
+ *   and a claim about the picture is checked against the picture.
+ * - A `look` step that names sockets lists their roles (`show`), so their
+ *   labels are on screen while it is read (`stepTargets`).
  */
 
 import type { TutorialDef, TutorialStep } from './tutorialTypes';
 
-const look = (id: string, caption: string): TutorialStep => ({ id, kind: 'look', caption });
+const look = (id: string, caption: string, show?: readonly string[]): TutorialStep =>
+  ({ id, kind: 'look', caption, ...(show ? { show } : {}) });
 const add = (id: string, role: string, type: string, caption: string, hint?: string, values?: Readonly<Record<string, number | string>>): TutorialStep =>
   ({ id, kind: 'add', role, type, caption, ...(hint ? { hint } : {}), ...(values ? { values } : {}) });
 const wire = (id: string, from: readonly [string, string], to: readonly [string, string], caption: string, hint?: string): TutorialStep =>
@@ -44,7 +72,7 @@ const HINT_UV = 'Palette > Inputs > UV, or right-click the canvas and type uv';
 const HINT_SPLIT = 'Palette > Vector > Split, or right-click the canvas and type split';
 const HINT_RAMP = 'Palette > Types > Color Ramp, or right-click the canvas and type ramp';
 const HINT_PERLIN = 'Palette > Noise > Perlin Noise, or right-click the canvas and type perlin';
-const HINT_SCALE = 'Right-click the node > Scale';
+const HINT_SCALE = 'Right-click the node > scale';
 const HINT_INTERP = 'Right-click the node > Interpolation';
 const HINT_OUTPUT_MENU = 'Right-click the Output node';
 const HINT_FRESNEL = 'Palette > Inputs > Fresnel, or right-click the canvas and type fresnel';
@@ -67,7 +95,7 @@ export const TUTORIALS: readonly TutorialDef[] = [
       look('idea', 'A shader answers one question for every pixel of the model at once: what colour is this pixel? The Output node is where that answer goes.'),
       add('paint', 'paint', 'color', 'Add a Color node. A colour is three numbers - red, green and blue - each from 0 to 1.', HINT_COLOR, { hex: '#4fc3f7' }),
       wire('w1', ['paint', 'out'], ['out', 'color'], 'Wire the Color into the Output\'s Color socket. The whole model turns that colour: every pixel got the same answer.'),
-      look('try', 'Try: double-click the Color node and pick another colour. Blender, Unity and Unreal all call this socket Base Color.'),
+      look('try', 'Try: double-click the Color node and pick another colour. Blender, Unity and Unreal call the Output\'s Color socket Base Color.'),
     ],
   },
   {
@@ -85,7 +113,7 @@ export const TUTORIALS: readonly TutorialDef[] = [
       add('ramp', 'ramp', 'colorRamp', 'Add a Color Ramp. It turns a number from 0 to 1 into a colour read off a gradient bar.', HINT_RAMP, { stops: '0 #1565c0 1,1 #ff8a65 1' }),
       wire('w3', ['axes', 'y'], ['ramp', 'fac'], 'Wire Split\'s Y into the ramp\'s Factor. The number now picks a point along the bar instead of a grey.'),
       wire('w4', ['ramp', 'out'], ['out', 'color'], 'Wire the ramp\'s Color into the Output Color. The grey became a two-colour gradient: same numbers, new palette.'),
-      look('try', 'Try: wire X instead of Y. Which way does the gradient run? Set the preview Model to Plane to see the UV square flat.'),
+      look('try', 'Try: wire Split\'s X into the ramp\'s Factor instead of Y. Which way does the gradient run now? Set the preview Model to Plane to see the UV square flat.', ['axes', 'ramp']),
     ],
   },
   {
@@ -108,7 +136,7 @@ export const TUTORIALS: readonly TutorialDef[] = [
       wire('w5', ['rep', 'out'], ['ramp', 'fac'], 'Wire Fract into the ramp\'s Factor.'),
       wire('w6', ['ramp', 'out'], ['out', 'color'], 'Wire the ramp into the Output Color: eight soft ramps between two colours.'),
       set('hard', 'ramp', 'interp', 'constant', 'Right-click the Color Ramp and set Interpolation to Constant. No blending: a hard threshold at 0.5 turns soft ramps into crisp stripes.', HINT_INTERP),
-      look('try', 'Try: set U back to 1 and the stripes vanish - Fract on a 0 to 1 number changes nothing. Scale first, then repeat.'),
+      look('try', 'Try: set U back to 1 and the stripes vanish - Fract on a 0 to 1 number changes nothing. Scale first, then repeat.', ['coord']),
     ],
   },
   {
@@ -124,14 +152,14 @@ export const TUTORIALS: readonly TutorialDef[] = [
       wire('w1', ['coord', 'out'], ['cell', 'x'], 'Wire UV into Floor. Floor works on both coordinates at once.'),
       add('split', 'axes', 'split', 'Add a Split node.', HINT_SPLIT),
       wire('w2', ['cell', 'out'], ['axes', 'v'], 'Wire Floor into Split. X is now the column number, Y the row number.'),
-      add('sum', 'sum', 'add', 'Add an Add node.', HINT_ADD),
-      wire('w3', ['axes', 'x'], ['sum', 'a'], 'Wire Split\'s X into A.'),
-      wire('w4', ['axes', 'y'], ['sum', 'b'], 'Wire Split\'s Y into B. Column plus row: neighbouring cells always differ by exactly 1.'),
+      add('sum', 'sum', 'add', 'Add an Add node. It sums its two inputs, A and B.', HINT_ADD),
+      wire('w3', ['axes', 'x'], ['sum', 'a'], 'Wire Split\'s X into Add\'s A.'),
+      wire('w4', ['axes', 'y'], ['sum', 'b'], 'Wire Split\'s Y into Add\'s B. Column plus row: neighbouring cells always differ by exactly 1.'),
       add('mod', 'parity', 'mod', 'Add a Mod node. It gives the remainder of a division: X divided by Y, what is left over.', 'Palette > Math > Mod, or right-click the canvas and type mod'),
       wire('w5', ['sum', 'out'], ['parity', 'x'], 'Wire Add into Mod\'s X.'),
       wire('w6', ['parity', 'out'], ['out', 'color'], 'Wire Mod into the Output Color. All black: a whole number divided by 1 leaves nothing over.'),
       set('two', 'parity', 'y', 2, 'Set Mod\'s Y to 2. Even sums leave 0, odd sums leave 1: black and white checks.', 'The Y number box on the Mod node'),
-      look('try', 'Try: set U to 16 and V to 4 for long bricks, or put a Mix with two Colors after Mod. Where else could even/odd help?'),
+      look('try', 'Try: U 16 and V 4 make long bricks. To colour the checks, wire Mod into a Mix node\'s Factor and Color nodes into its A and B. Where else could even/odd help?', ['coord', 'parity']),
     ],
   },
   {
@@ -146,13 +174,13 @@ export const TUTORIALS: readonly TutorialDef[] = [
       set('half', 'centred', 'b', 0.5, 'Set B on Subtract to 0.5. A vector minus one number takes it off every component.', 'The B number box on the Subtract node'),
       add('len', 'dist', 'length', 'Add a Length node. It measures how far a vector reaches from 0,0: here, the pixel\'s distance from the centre.', 'Palette > Vector > Length, or right-click the canvas and type length'),
       wire('w2', ['centred', 'out'], ['dist', 'v'], 'Wire Subtract into Length.'),
-      wire('w3', ['dist', 'out'], ['out', 'color'], 'Wire Length into the Output Color. Dark at the centre, brighter outward: a distance field, 0 in the middle.'),
+      wire('w3', ['dist', 'out'], ['out', 'color'], 'Wire Length into the Output Color. One spot is darkest - the middle of the UV square, distance 0 - and it brightens away from there: a distance field.'),
       add('smooth', 'edge', 'smoothstep', 'Add a Smoothstep node. Below Edge 0 it gives 0, above Edge 1 it gives 1, with a soft blend between the two.', 'Palette > Interpolation > Smoothstep, or right-click the canvas and type smooth'),
       wire('w4', ['dist', 'out'], ['edge', 'x'], 'Wire Length into Smoothstep\'s X.'),
-      set('e0', 'edge', 'edge0', 0.3, 'Set Edge 0 to 0.3. Everything closer than 0.3 to the centre becomes 0: black.', 'The Edge 0 number box on the Smoothstep node'),
-      set('e1', 'edge', 'edge1', 0.32, 'Set Edge 1 to 0.32. The two edges are the disc\'s border, 0.02 wide: crisp but not jagged.', 'The Edge 1 number box on the Smoothstep node'),
-      wire('w5', ['edge', 'out'], ['out', 'color'], 'Wire Smoothstep into the Output Color: a black disc on white. Distance plus a threshold is how every shape starts.'),
-      look('try', 'Try: swap the edges (0.32 and 0.3) to invert the disc, or set Model to Plane to see it flat. Why is it stretched on the sphere?'),
+      wire('w5', ['edge', 'out'], ['out', 'color'], 'Wire Smoothstep into the Output Color. Its edges are still 0 and 1, so little changes: the soft blend spans the whole range.'),
+      set('e0', 'edge', 'edge0', 0.3, 'Set Smoothstep\'s Edge 0 to 0.3. Everything closer than 0.3 to the middle becomes 0: a black disc with a soft edge.', 'The Edge 0 number box on the Smoothstep node'),
+      set('e1', 'edge', 'edge1', 0.32, 'Set Edge 1 to 0.32. The two edges are now the disc\'s border, 0.02 wide: crisp but not jagged. Distance plus a threshold is how every shape starts.', 'The Edge 1 number box on the Smoothstep node'),
+      look('try', 'Try: swap the edges (0.32 and 0.3) to invert the disc, or set Model to Plane to see it flat. Why is it stretched on the sphere?', ['edge']),
     ],
   },
   {
@@ -170,13 +198,13 @@ export const TUTORIALS: readonly TutorialDef[] = [
       wire('w2', ['wave', 'out'], ['out', 'color'], 'Wire Sine into the Output Color. It flashes, but half of the time it is below 0, and a negative colour is just black.'),
       add('remap', 'range', 'remap', 'Add a Remap node. It maps one range onto another: here -1..1 onto 0..1.', 'Palette > Interpolation > Remap, or right-click the canvas and type remap'),
       wire('w3', ['wave', 'out'], ['range', 'x'], 'Wire Sine into Remap\'s Value.'),
-      set('lo', 'range', 'inLow', -1, 'Set In Low to -1. In Low and In High describe the range coming in; Out Low and Out High the range going out.', 'The In Low number box on the Remap node'),
+      set('lo', 'range', 'inLow', -1, 'Set Remap\'s In Low to -1. In Low and In High describe the range coming in; Out Low and Out High the range going out.', 'The In Low number box on the Remap node'),
       wire('w4', ['range', 'out'], ['out', 'color'], 'Wire Remap into the Output Color. The pulse now breathes between black and white with no dead half.'),
-      set('speed', 'clock', 'speed', 2, 'Set the Time node\'s Speed to 2. Time itself has no knob; multiplying it is how every editor changes tempo.', 'The Speed number box on the Time node, or right-click it > Speed'),
+      set('speed', 'clock', 'speed', 2, 'On the Time node set speed - the number under the clock - to 2. It multiplies time, which is how every editor changes tempo.', 'The number box under the clock on the Time node, or right-click it > speed'),
       add('ramp', 'ramp', 'colorRamp', 'Add a Color Ramp.', HINT_RAMP, { stops: '0 #311b92 1,1 #ffea00 1' }),
       wire('w5', ['range', 'out'], ['ramp', 'fac'], 'Wire Remap into the ramp\'s Factor.'),
       wire('w6', ['ramp', 'out'], ['out', 'color'], 'Wire the ramp into the Output Color: a pulse between two colours.'),
-      look('try', 'Try: wire Sine straight into the ramp\'s Factor. Why does the colour stick at one end half of the time? (The ramp clamps below 0.)'),
+      look('try', 'Try: wire Sine straight into the ramp\'s Factor. Why does the colour stick at one end half of the time? (The ramp clamps below 0.)', ['wave', 'ramp']),
     ],
   },
   {
@@ -188,13 +216,13 @@ export const TUTORIALS: readonly TutorialDef[] = [
     byteExact: true,
     steps: [
       look('idea', 'Noise is a smooth random number for every point in space: no two spots alike, no sharp jumps. Clouds, marble, wood and terrain start here.'),
-      add('perlin', 'noise', 'perlin', 'Add a Perlin Noise node. A new one outputs 0 to 1. Older graphs here, and MaterialX, are signed -1 to 1; Blender centres on 0.5.', HINT_PERLIN),
+      add('perlin', 'noise', 'perlin', 'Add a Perlin Noise node. It outputs a number from 0 to 1 at every point. (MaterialX, and older FastShaders graphs, use -1 to 1 instead.)', HINT_PERLIN),
       wire('w1', ['noise', 'out'], ['out', 'color'], 'Wire the noise into the Output Color: grey clouds. This is the raw field. Look at it before colouring it.'),
-      set('scale', 'noise', 'scale', 3, 'Right-click Perlin Noise and set Scale to 3. Scale multiplies the position the noise reads, so a bigger scale means smaller blobs.', HINT_SCALE),
+      set('scale', 'noise', 'scale', 3, 'Right-click Perlin Noise and set scale to 3. It multiplies the position the noise reads, so a bigger scale means smaller blobs.', HINT_SCALE),
       add('ramp', 'ramp', 'colorRamp', 'Add a Color Ramp. Its two stops sit at 0.4 and 0.6, so just the middle of the noise range spans the whole gradient.', HINT_RAMP, { stops: '0.4 #1b5e20 1,0.6 #fff9c4 1' }),
       wire('w2', ['noise', 'out'], ['ramp', 'fac'], 'Wire the noise into the ramp\'s Factor.'),
       wire('w3', ['ramp', 'out'], ['out', 'color'], 'Wire the ramp into the Output Color: green and cream patches with soft borders.'),
-      look('try', 'Try: wire the noise into Roughness as well. One field can drive any channel. Why do the shiny spots follow the cream ones?'),
+      look('try', 'Try: wire the noise into Roughness as well. One field can drive any channel. Why are the green patches now the shiny ones?', ['noise']),
     ],
   },
   {
@@ -207,7 +235,7 @@ export const TUTORIALS: readonly TutorialDef[] = [
       look('idea', 'Mix blends A and B by its Factor: 0 shows A, 1 shows B, 0.5 half of each. We will build the Factor from noise.'),
       add('perlin', 'noise', 'perlin', 'Add a Perlin Noise node. A new Perlin gives a smooth value from 0 to 1 at every point.', HINT_PERLIN),
       wire('w0', ['noise', 'out'], ['out', 'color'], 'Wire the noise into the Output Color socket. A single number shown as colour is grey: 0 black, 1 white.'),
-      set('scale', 'noise', 'scale', 3, 'Right-click Perlin Noise and set Scale to 3. Scale multiplies the position: bigger means smaller patches.', HINT_SCALE),
+      set('scale', 'noise', 'scale', 3, 'Right-click Perlin Noise and set scale to 3. It multiplies the position: bigger means smaller patches.', HINT_SCALE),
       add('round', 'pick', 'round', 'Add a Round node. It snaps every value to the nearest whole number - here to exactly 0 or 1.', 'Palette > Math > Round, or right-click the canvas and type round'),
       wire('w1', ['noise', 'out'], ['pick', 'x'], 'Wire Perlin Noise into Round: drag from the noise output onto the X socket, or drop the node onto Round.'),
       wire('w2', ['pick', 'out'], ['out', 'color'], 'Wire Round into the Output Color. The soft clouds become hard black and white patches: a mask.'),
@@ -218,7 +246,7 @@ export const TUTORIALS: readonly TutorialDef[] = [
       wire('w5', ['colorA', 'out'], ['blend', 'a'], 'Wire it into Mix\'s A. Every spot where the Factor is 0 takes this colour.'),
       add('colorB', 'colorB', 'color', 'Add a second Color node for side B.', HINT_COLOR, { hex: '#ffc107' }),
       wire('w6', ['colorB', 'out'], ['blend', 'b'], 'Wire it into Mix\'s B. Now every spot is pure A or pure B.'),
-      look('try', 'Try: delete Round. The wire heals itself and the blend turns soft. Why does a Factor between 0 and 1 blend the colours?'),
+      look('try', 'Try: delete Round. The wire heals itself and the blend turns soft. Why does a Factor between 0 and 1 blend the colours?', ['blend']),
     ],
   },
   {
@@ -232,12 +260,70 @@ export const TUTORIALS: readonly TutorialDef[] = [
       look('idea', 'Perlin is smooth. Cell Noise is the opposite: one random number per whole cell and nothing in between, so it costs almost nothing.'),
       add('cells', 'cells', 'cellNoise', 'Add a Cell Noise node.', 'Palette > Noise > Cell Noise, or right-click the canvas and type cell'),
       wire('w1', ['cells', 'out'], ['out', 'color'], 'Wire it into the Output Color: a grey mosaic. Every cell is one flat value.'),
-      set('scale', 'cells', 'scale', 4, 'Right-click Cell Noise and set Scale to 4: four cells per unit instead of one.', HINT_SCALE),
+      set('scale', 'cells', 'scale', 4, 'Right-click Cell Noise and set scale to 4: four cells per unit instead of one.', HINT_SCALE),
       add('ramp', 'ramp', 'colorRamp', 'Add a Color Ramp. This one has four stops; with Constant interpolation a ramp is a lookup table: one colour per quarter.', HINT_RAMP, { stops: '0 #0b3c5d 1,0.25 #328cc1 1,0.5 #f2c14e 1,0.75 #d9483b 1' }),
       wire('w2', ['cells', 'out'], ['ramp', 'fac'], 'Wire Cell Noise into the ramp\'s Factor.'),
       wire('w3', ['ramp', 'out'], ['out', 'color'], 'Wire the ramp into the Output Color.'),
       set('hard', 'ramp', 'interp', 'constant', 'Right-click the Color Ramp and set Interpolation to Constant. Now each cell takes exactly one of the four colours.', HINT_INTERP),
       look('try', 'Try: set the interpolation back to Linear. Why do cells now show colours that are in none of the four stops?'),
+    ],
+  },
+  {
+    id: 'tut-curve',
+    title: 'Draw the Curve',
+    summary: 'A shaping function bends one number into another, and RGB Curves lets you draw it. An S-shaped curve turns soft clouds into hard blobs.',
+    steps: [
+      look('idea', 'A shaping function turns one number into another. Its graph says it all: flat parts squash values together, steep parts pull them apart.'),
+      add('perlin', 'noise', 'perlin', 'Add a Perlin Noise node.', HINT_PERLIN, { scale: 3 }),
+      wire('w1', ['noise', 'out'], ['out', 'color'], 'Wire it into the Output Color: grey clouds.'),
+      add('curve', 'curve', 'rgbCurves', 'Add an RGB Curves node. The line on it is the function: input along the bottom, output up the side. This one is an S.', 'Palette > Types > RGB Curves, or right-click the canvas and type curves', { curveC: '0 0,0.4 0.05,0.6 0.95,1 1' }),
+      wire('w2', ['noise', 'out'], ['curve', 'color'], 'Wire the noise into the Color input of RGB Curves.'),
+      wire('w3', ['curve', 'out'], ['out', 'color'], 'Wire RGB Curves into the Output Color. The flat ends of the S crush the darks and the lights, its steep middle spreads the greys: hard blobs.'),
+      look('try', 'Try: right-click RGB Curves, then drag a point of the curve or tap the plot to add one. Which curve would turn the picture into its negative?', ['curve']),
+    ],
+  },
+  {
+    id: 'tut-terraces',
+    title: 'Terraces',
+    summary: 'Posterize: Multiply, Floor and Divide cut a smooth field into flat levels. A staircase is a shaping function too.',
+    steps: [
+      look('idea', 'Floor rounds down to a whole number, so a smooth slope becomes a staircase. Multiply first to choose how many stairs, divide after to get back to 0 to 1.'),
+      add('perlin', 'noise', 'perlin', 'Add a Perlin Noise node.', HINT_PERLIN, { scale: 2 }),
+      wire('w1', ['noise', 'out'], ['out', 'color'], 'Wire it into the Output Color: grey clouds.'),
+      add('mul', 'scale', 'mul', 'Add a Multiply node. It multiplies its two inputs, A and B.', HINT_MUL),
+      wire('w2', ['noise', 'out'], ['scale', 'a'], 'Wire the noise into Multiply\'s A.'),
+      wire('w3', ['scale', 'out'], ['out', 'color'], 'Wire Multiply into the Output Color. Nothing changes yet: B is 1, and a number times 1 is itself.'),
+      set('stairs', 'scale', 'b', 5, 'Set Multiply\'s B to 5. The noise now runs from 0 to 5, and everything past 1 shows as white.', 'The B number box on the Multiply node'),
+      add('floor', 'level', 'floor', 'Add a Floor node. It rounds down to a whole number: 3.7 becomes 3.', HINT_FLOOR),
+      wire('w4', ['scale', 'out'], ['level', 'x'], 'Wire Multiply into Floor.'),
+      wire('w5', ['level', 'out'], ['out', 'color'], 'Wire Floor into the Output Color. The soft clouds snap into flat patches: whole numbers 0 to 4. Still too bright.'),
+      add('div', 'back', 'div', 'Add a Divide node. It divides A by B.', 'Palette > Arithmetic > Divide, or right-click the canvas and type div'),
+      wire('w6', ['level', 'out'], ['back', 'a'], 'Wire Floor into Divide\'s A.'),
+      wire('w7', ['back', 'out'], ['out', 'color'], 'Wire Divide into the Output Color. Nothing changes yet: Divide\'s B is still 1.'),
+      set('levels', 'back', 'b', 5, 'Set Divide\'s B to 5. The levels become 0, 0.2, 0.4, 0.6 and 0.8: flat greys with hard borders, like the terraces of a contour map.', 'The B number box on the Divide node'),
+      look('try', 'Try: set Multiply\'s B and Divide\'s B both to 3 for three levels. What happens to the picture if the two numbers differ?', ['scale', 'back']),
+    ],
+  },
+  {
+    id: 'tut-veins',
+    title: 'Veins',
+    summary: 'Abs folds a number at zero. Take 0.5 off noise first and the fold becomes a thin line that follows the noise: marble veins.',
+    steps: [
+      look('idea', 'Abs drops the minus sign: -0.2 becomes 0.2. That folds a field at zero, and the fold is a line exactly where the field crossed zero.'),
+      add('perlin', 'noise', 'perlin', 'Add a Perlin Noise node.', HINT_PERLIN, { scale: 3 }),
+      wire('w1', ['noise', 'out'], ['out', 'color'], 'Wire it into the Output Color: grey clouds.'),
+      add('sub', 'shift', 'sub', 'Add a Subtract node. It takes B away from A.', 'Palette > Arithmetic > Subtract, or right-click the canvas and type sub'),
+      wire('w2', ['noise', 'out'], ['shift', 'a'], 'Wire the noise into Subtract\'s A.'),
+      wire('w3', ['shift', 'out'], ['out', 'color'], 'Wire Subtract into the Output Color. Nothing changes yet: B is 0.'),
+      set('half', 'shift', 'b', 0.5, 'Set Subtract\'s B to 0.5. The noise now runs from -0.5 to 0.5, and everything below zero shows as black.', 'The B number box on the Subtract node'),
+      add('abs', 'fold', 'abs', 'Add an Abs node. It makes every number positive: -0.2 becomes 0.2.', 'Palette > Math > Abs, or right-click the canvas and type abs'),
+      wire('w4', ['shift', 'out'], ['fold', 'x'], 'Wire Subtract into Abs.'),
+      wire('w5', ['fold', 'out'], ['out', 'color'], 'Wire Abs into the Output Color. The black half folds back up, and a dark crease is left where the noise crossed 0.5.'),
+      add('smooth', 'edge', 'smoothstep', 'Add a Smoothstep node. Below Edge 0 it gives 0, above Edge 1 it gives 1, with a soft blend between the two.', 'Palette > Interpolation > Smoothstep, or right-click the canvas and type smooth'),
+      wire('w6', ['fold', 'out'], ['edge', 'x'], 'Wire Abs into Smoothstep\'s X.'),
+      wire('w7', ['edge', 'out'], ['out', 'color'], 'Wire Smoothstep into the Output Color. With its edges still at 0 and 1 the picture only gets darker.'),
+      set('thin', 'edge', 'edge1', 0.05, 'Set Smoothstep\'s Edge 1 to 0.05. Everything further than 0.05 from the crease turns white: thin black veins, as in marble.', 'The Edge 1 number box on the Smoothstep node'),
+      look('try', 'Try: set Subtract\'s B to 0.3. The veins move: they now trace where the noise is 0.3. What would Smoothstep\'s Edge 1 at 0.2 do to them?', ['shift', 'edge']),
     ],
   },
   {
@@ -252,7 +338,7 @@ export const TUTORIALS: readonly TutorialDef[] = [
       wire('w2', ['fbm', 'out'], ['out', 'color'], 'Wire fBm into the Output Color instead. Finer detail, and the bar jumps: several noises cost several times one.'),
       add('voronoi', 'voronoi', 'voronoi', 'Add a Voronoi node. It measures the distance to the nearest of many scattered points: cells, cracks and scales.', 'Palette > Noise > Voronoi, or right-click the canvas and type voronoi'),
       wire('w3', ['voronoi', 'out'], ['out', 'color'], 'Wire Voronoi into the Output Color. One of the priciest nodes there is: the bar may turn red, past what a VR headset can draw each frame.'),
-      look('try', 'Try: raise each noise\'s Scale. The picture changes, the cost does not: the price is per node and per pixel, not per visible detail.'),
+      look('try', 'Try: raise each noise\'s scale. The picture changes, the cost does not: the price is per node and per pixel, not per visible detail.'),
     ],
   },
   {
@@ -268,11 +354,11 @@ export const TUTORIALS: readonly TutorialDef[] = [
       wire('w1', ['nrm', 'out'], ['out', 'color'], 'Wire it into the Output Color. The classic rainbow sphere: X, Y and Z shown as red, green and blue.'),
       add('split', 'axes', 'split', 'Add a Split node.', HINT_SPLIT),
       wire('w2', ['nrm', 'out'], ['axes', 'v'], 'Wire the normal into Split.'),
-      wire('w3', ['axes', 'y'], ['out', 'color'], 'Wire Y into the Output Color: white on top, black underneath. That number is "how much does this point face up".'),
+      wire('w3', ['axes', 'y'], ['out', 'color'], 'Wire Split\'s Y into the Output Color: white on top, black underneath. That number is "how much does this point face up".'),
       add('ramp', 'ramp', 'colorRamp', 'Add a Color Ramp. Its stops at 0.35 and 0.55 draw the snow line.', HINT_RAMP, { stops: '0.35 #5d4037 1,0.55 #fafafa 1' }),
-      wire('w4', ['axes', 'y'], ['ramp', 'fac'], 'Wire Y into the ramp\'s Factor.'),
+      wire('w4', ['axes', 'y'], ['ramp', 'fac'], 'Wire Split\'s Y into the ramp\'s Factor.'),
       wire('w5', ['ramp', 'out'], ['out', 'color'], 'Wire the ramp into the Output Color: snow on top, earth below.'),
-      look('try', 'Try: replace Normal (world) with Normal. Spin the preview: why does the snow now turn with the model?'),
+      look('try', 'Try: add a Normal node and wire it into Split in place of Normal (world). Press play in the 3D view: why does the snow now turn with the model?', ['axes']),
     ],
   },
   {
@@ -285,7 +371,7 @@ export const TUTORIALS: readonly TutorialDef[] = [
       add('split', 'axes', 'split', 'Add a Split node.', HINT_SPLIT),
       wire('w1', ['local', 'out'], ['axes', 'v'], 'Wire Position into Split.'),
       wire('w2', ['axes', 'x'], ['out', 'color'], 'Wire Split\'s X into the Output Color: dark on one side, bright on the other. Values below 0 show as black.'),
-      look('spin', 'Press the play button under the 3D view to spin the model. The bright side turns with it: object space is glued to the model.'),
+      look('spin', 'Press the play button at the bottom left of the 3D view to spin the model. The bright side turns with it: object space is glued to the model.'),
       add('world', 'world', 'positionWorld', 'Add a Position (world) node: the same points, measured in the scene instead.', 'Palette > Inputs > Position (world), or right-click the canvas and type world'),
       wire('w3', ['world', 'out'], ['axes', 'v'], 'Wire Position (world) into Split instead. Now the bright side stays put while the model spins.'),
       look('try', 'Try: which space suits snow on top, rain streaks or a water line? Which suits a logo printed on the model?'),
@@ -300,30 +386,33 @@ export const TUTORIALS: readonly TutorialDef[] = [
       add('nrm', 'nrm', 'normalWorld', 'Add a Normal (world) node: the direction each point of the surface faces.', HINT_NORMAL_WORLD),
       add('light', 'light', 'vec3', 'Add a Vec3 node. It will hold the direction the light comes from.', 'Palette > Types > Vec3, or right-click the canvas and type vec3'),
       set('ly', 'light', 'y', 0.6, 'Set the Vec3\'s Y to 0.6: the light comes from above.', 'The Y number box on the Vec3 node'),
-      set('lz', 'light', 'z', 0.8, 'Set Z to 0.8: and from the front. 0.6 and 0.8 make a direction of length 1, as a light direction should be.', 'The Z number box on the Vec3 node'),
+      set('lz', 'light', 'z', 0.8, 'Set the Vec3\'s Z to 0.8: and from the front. 0.6 and 0.8 make a direction of length 1, as a light direction should be.', 'The Z number box on the Vec3 node'),
       add('dot', 'lit', 'dot', 'Add a Dot Product node. For two directions it gives 1 when they agree, 0 at a right angle and below 0 when opposed.', 'Palette > Vector > Dot Product, or right-click the canvas and type dot'),
-      wire('w1', ['nrm', 'out'], ['lit', 'a'], 'Wire the normal into A.'),
-      wire('w2', ['light', 'out'], ['lit', 'b'], 'Wire the Vec3 into B.'),
+      wire('w1', ['nrm', 'out'], ['lit', 'a'], 'Wire the normal into Dot Product\'s A.'),
+      wire('w2', ['light', 'out'], ['lit', 'b'], 'Wire the Vec3 into Dot Product\'s B.'),
       wire('w3', ['lit', 'out'], ['out', 'color'], 'Wire Dot Product into the Output Color: bright where the surface faces the light, black behind. Lighting, made by hand.'),
       add('ramp', 'ramp', 'colorRamp', 'Add a Color Ramp. Its three stops are a dark, a mid and a light tone.', HINT_RAMP, { stops: '0 #1a237e 1,0.35 #3949ab 1,0.75 #c5cae9 1' }),
       wire('w4', ['lit', 'out'], ['ramp', 'fac'], 'Wire Dot Product into the ramp\'s Factor.'),
       wire('w5', ['ramp', 'out'], ['out', 'color'], 'Wire the ramp into the Output Color: a smooth blue shading.'),
-      set('bands', 'ramp', 'interp', 'constant', 'Set the ramp\'s Interpolation to Constant. The shading snaps into three flat bands: toon, or cel, shading.', HINT_INTERP),
-      look('try', 'Try: set the light\'s Y to -0.6 and the light comes from below. Every cartoon shader in every engine starts from this one Dot Product.'),
+      set('bands', 'ramp', 'interp', 'constant', 'Right-click the Color Ramp and set Interpolation to Constant. The shading snaps into three flat bands: toon, or cel, shading.', HINT_INTERP),
+      look('try', 'Try: set the Vec3\'s Y to -0.6 and the light comes from below. Every cartoon shader in every engine starts from this one Dot Product.', ['light']),
     ],
   },
   {
     id: 'tut-material',
     title: 'Shiny or Dull',
-    summary: 'Colour is one channel of a material. Roughness and Metalness are two more: 0 to 1 dials every physically based renderer understands.',
+    summary: 'Roughness and Metalness: the two 0 to 1 dials every physically based renderer understands. Then Environment, the picture a metal reflects.',
     steps: [
       look('idea', 'Colour is one channel of a material. Roughness and Metalness are two more: 0 to 1 dials that every physically based renderer understands.'),
       add('paint', 'paint', 'color', 'Add a Color node.', HINT_COLOR, { hex: '#b0bec5' }),
       wire('w1', ['paint', 'out'], ['out', 'color'], 'Wire it into the Output Color.'),
       set('rough', 'out', 'roughness', 0.1, 'On the Output node set Roughness to 0.1. Roughness 1 is chalk, 0 is a mirror: the highlight sharpens.', 'The number box beside the Output\'s Roughness socket'),
       expose('metal', 'metalness', 'Right-click the Output and tick Metalness. Channels you do not use stay hidden; ticking one gives it a socket and a number.', HINT_OUTPUT_MENU),
-      set('metal1', 'out', 'metalness', 1, 'Set Metalness to 1. Metal reflects in its own colour and loses its diffuse shading; most things are metal or not, 0 or 1.', 'The number box beside the Output\'s Metalness socket'),
-      look('try', 'Try: wire a Perlin Noise into Roughness. One field can drive any channel: smudges on a chrome ball.'),
+      set('metal1', 'out', 'metalness', 1, 'Set Metalness to 1. Metal drops its diffuse shading and only reflects: here just the lights, so the ball goes dark. Most things are metal or not, 0 or 1.', 'The number box beside the Output\'s Metalness socket'),
+      expose('env', 'env', 'Right-click the Output and tick Environment. That channel is the world the material reflects. It is empty for now: black.', HINT_OUTPUT_MENU),
+      add('picture', 'sky', 'imageNode', 'Drag a picture from your computer onto the canvas: a 360 (equirectangular) panorama works best. Do it for me brings a sky over a checkered floor.', 'A question about converting the picture may appear: either answer works.'),
+      wire('w2', ['sky', 'out'], ['out', 'env'], 'Wire the Image node\'s Color into Environment. The ball now mirrors the picture: a smooth metal shows the world around it.', 'Color is the top socket on the right side of the Image node.'),
+      look('try', 'Try: add a Perlin Noise node and wire it into Roughness, then right-click it and raise scale to 5 so the effect shows: smudges on a chrome ball.'),
     ],
   },
   {
@@ -342,7 +431,22 @@ export const TUTORIALS: readonly TutorialDef[] = [
       wire('w3', ['ramp', 'out'], ['out', 'color'], 'Wire the ramp into the Output Color. Black until 0.4, then cyan: only the rim is lit.'),
       expose('glow', 'emissive', 'Right-click the Output and tick Emissive. Emissive is light the surface gives off itself, untouched by the scene\'s lights.', HINT_OUTPUT_MENU),
       wire('w4', ['ramp', 'out'], ['out', 'emissive'], 'Wire the ramp into Emissive too. The rim now glows on the shadow side as well: a hologram outline.'),
-      look('try', 'Try: use the Fresnel output instead of Facing. It is the physically based curve: mirror-like at grazing angles, as water and glass are.'),
+      look('try', 'Try: wire the Fresnel node\'s other output, Fresnel, into the ramp\'s Factor instead of Facing. It is the physical curve: mirror-like at grazing angles.', ['fres', 'ramp']),
+    ],
+  },
+  {
+    id: 'tut-sharp-rim',
+    title: 'Sharper Rim',
+    summary: 'Power bends a 0 to 1 number without moving its ends. Its exponent is the falloff dial every engine puts on Fresnel.',
+    steps: [
+      look('idea', 'Raising a number between 0 and 1 to a power keeps 0 and 1 in place and bends everything in between. Engines call that bend falloff.'),
+      add('fres', 'fres', 'fresnel', 'Add a Fresnel node. Its Facing output is 0 where the surface faces you and 1 at the silhouette.', HINT_FRESNEL),
+      wire('w1', ['fres', 'facing'], ['out', 'color'], 'Wire Facing into the Output Color: a dark centre and a bright rim that follows the camera as you orbit.'),
+      add('pow', 'bend', 'pow', 'Add a Power node. It raises Base to the power of Exponent.', 'Palette > Math > Power, or right-click the canvas and type power'),
+      wire('w2', ['fres', 'facing'], ['bend', 'base'], 'Wire Fresnel\'s Facing output into Power\'s Base.'),
+      wire('w3', ['bend', 'out'], ['out', 'color'], 'Wire Power into the Output Color. Nothing changes yet: the Exponent is 1, and a number to the power of 1 is itself.'),
+      set('sharp', 'bend', 'exp', 4, 'Set Power\'s Exponent to 4. Small numbers shrink fast (0.5 becomes 0.06), so the brightness pulls back to a thin rim.', 'The Exponent number box on the Power node'),
+      look('try', 'Try: set Power\'s Exponent to 0.3 and the rim floods the whole ball: below 1 the bend goes the other way. Why do 0 and 1 never move?', ['bend']),
     ],
   },
   {
@@ -359,7 +463,7 @@ export const TUTORIALS: readonly TutorialDef[] = [
       add('fres', 'fres', 'fresnel', 'Add a Fresnel node.', HINT_FRESNEL),
       expose('clear', 'opacity', 'Right-click the Output and tick Transparent. That turns on blending AND reveals the Opacity socket: two things every engine couples.', HINT_OUTPUT_MENU),
       wire('w2', ['fres', 'facing'], ['out', 'opacity'], 'Wire Facing into Opacity. The middle (Facing 0) goes clear, the rim (1) stays solid: a ghost.'),
-      look('try', 'Try: wire Fresnel instead of Facing, or untick Transparent and watch the wire do nothing. Where else could a 0 to 1 mask go?'),
+      look('try', 'Try: wire the Fresnel output into Opacity instead of Facing, or untick Transparent and watch the wire do nothing. Where else could a 0 to 1 mask go?', ['fres']),
     ],
   },
   {
@@ -372,14 +476,14 @@ export const TUTORIALS: readonly TutorialDef[] = [
       look('idea', 'A mask is a number that is 0 or 1. Discard uses one to delete pixels outright: the dissolve effect every engine has.'),
       add('perlin', 'noise', 'perlin', 'Add a Perlin Noise node.', HINT_PERLIN, { scale: 4 }),
       add('gt', 'cut', 'greaterThan', 'Add a Greater Than node. It outputs 1 where A is greater than B, else 0: a threshold that makes a mask.', 'Palette > Logic > Greater Than, or right-click the canvas and type greater'),
-      wire('w1', ['noise', 'out'], ['cut', 'a'], 'Wire the noise into A.'),
-      set('cutoff', 'cut', 'b', 0.6, 'Set B to 0.6. Everywhere the noise is above 0.6 becomes 1, the rest 0.', 'The B number box on the Greater Than node'),
+      wire('w1', ['noise', 'out'], ['cut', 'a'], 'Wire the noise into Greater Than\'s A.'),
+      set('cutoff', 'cut', 'b', 0.6, 'Set Greater Than\'s B to 0.6. Everywhere the noise is above 0.6 becomes 1, the rest 0.', 'The B number box on the Greater Than node'),
       wire('w2', ['cut', 'out'], ['out', 'color'], 'Wire Greater Than into the Output Color to see the mask: white spots on black.'),
       expose('cut', 'discard', 'Right-click the Output and tick Discard. Discard is a yes/no per pixel, not a colour.', HINT_OUTPUT_MENU),
       wire('w3', ['cut', 'out'], ['out', 'discard'], 'Wire Greater Than into Discard. Every pixel where the mask is 1 is thrown away: holes right through the model.'),
       add('paint', 'paint', 'color', 'Add a Color node.', HINT_COLOR, { hex: '#ffb74d' }),
       wire('w4', ['paint', 'out'], ['out', 'color'], 'Wire the Color into the Output Color, so what is left of the surface has a colour again.'),
-      look('try', 'Try: scrub B from 0.6 toward 0 and the model dissolves. That is the dissolve slider. What would Less Than do?'),
+      look('try', 'Try: drag Greater Than\'s B from 0.6 down toward 0 and the model dissolves. That is the dissolve slider. What would a Less Than node do instead?', ['cut']),
     ],
   },
   {
@@ -392,16 +496,16 @@ export const TUTORIALS: readonly TutorialDef[] = [
       wire('w1', ['paint', 'out'], ['out', 'color'], 'Wire it into the Output Color.'),
       add('perlin', 'noise', 'perlin', 'Add a Perlin Noise node.', HINT_PERLIN, { scale: 4 }),
       add('gt', 'cut', 'greaterThan', 'Add a Greater Than node.', HINT_GREATER),
-      wire('w2', ['noise', 'out'], ['cut', 'a'], 'Wire the noise into A.'),
-      set('cutoff', 'cut', 'b', 0.6, 'Set B to 0.6: noise above 0.6 becomes 1, the rest 0.', 'The B number box on the Greater Than node'),
+      wire('w2', ['noise', 'out'], ['cut', 'a'], 'Wire the noise into Greater Than\'s A.'),
+      set('cutoff', 'cut', 'b', 0.6, 'Set Greater Than\'s B to 0.6: noise above 0.6 becomes 1, the rest 0.', 'The B number box on the Greater Than node'),
       expose('cut', 'discard', 'Right-click the Output and tick Discard.', HINT_OUTPUT_MENU),
       wire('w3', ['cut', 'out'], ['out', 'discard'], 'Wire Greater Than into Discard: holes, as in the Holes lesson.'),
       add('ramp', 'rim', 'colorRamp', 'Add a Color Ramp. Its stops paint orange only from 0.5 to 0.6: the band just below the cut.', HINT_RAMP, { stops: '0 #000000 1,0.5 #ff6d00 1,0.6 #000000 1' }),
       wire('w4', ['noise', 'out'], ['rim', 'fac'], 'Wire the noise into the ramp\'s Factor.'),
-      set('band', 'rim', 'interp', 'constant', 'Set the ramp\'s Interpolation to Constant: black, orange from 0.5, black again from 0.6. A band is just a range of values.', HINT_INTERP),
+      set('band', 'rim', 'interp', 'constant', 'Right-click the Color Ramp and set Interpolation to Constant: black, orange from 0.5, black again from 0.6. A band is just a range of values.', HINT_INTERP),
       expose('glow', 'emissive', 'Right-click the Output and tick Emissive.', HINT_OUTPUT_MENU),
       wire('w5', ['rim', 'out'], ['out', 'emissive'], 'Wire the ramp into Emissive. Every hole now has a glowing rim, lit even in shadow.'),
-      look('try', 'Try: lower B to 0.55 and the holes eat into the band, so the rim thins. How would you keep the rim\'s width as B moves?'),
+      look('try', 'Try: lower Greater Than\'s B to 0.55 and the holes eat into the band, so the rim thins. How would you keep the rim\'s width as B moves?', ['cut']),
     ],
   },
   {
@@ -418,13 +522,36 @@ export const TUTORIALS: readonly TutorialDef[] = [
       wire('w2', ['axes', 'y'], ['rep', 'x'], 'Wire Split\'s Y into Fract.'),
       wire('w3', ['rep', 'out'], ['out', 'color'], 'Wire Fract into the Output Color: thirty grey ramps around the model. That is the scan-line mask.'),
       add('fres', 'fres', 'fresnel', 'Add a Fresnel node. Its Facing output is the rim mask: 0 in the middle, 1 at the outline.', HINT_FRESNEL),
-      add('mul', 'both', 'mul', 'Add a Multiply node.', HINT_MUL),
-      wire('w4', ['rep', 'out'], ['both', 'a'], 'Wire Fract into A.'),
-      wire('w5', ['fres', 'facing'], ['both', 'b'], 'Wire Facing into B.'),
+      add('mul', 'both', 'mul', 'Add a Multiply node. It multiplies its two inputs, A and B.', HINT_MUL),
+      wire('w4', ['rep', 'out'], ['both', 'a'], 'Wire Fract into Multiply\'s A.'),
+      wire('w5', ['fres', 'facing'], ['both', 'b'], 'Wire Fresnel\'s Facing output into Multiply\'s B.'),
       wire('w6', ['both', 'out'], ['out', 'color'], 'Wire Multiply into the Output Color. The lines survive only near the outline, where both masks are bright: Multiply means AND.'),
       expose('clear', 'opacity', 'Right-click the Output and tick Transparent.', HINT_OUTPUT_MENU),
       wire('w7', ['both', 'out'], ['out', 'opacity'], 'Wire Multiply into Opacity too. Where the product is 0 the model turns clear: a hologram.'),
-      look('try', 'Try: put an Add of Time between Split and Fract and the lines scroll. Then swap Multiply for Add: what does Add mean for masks?'),
+      look('try', 'Try: to make the lines scroll, drop an Add node on the wire from Split to Fract and wire a Time node into its B. Multiply meant AND: what would Add mean?', ['axes', 'rep']),
+    ],
+  },
+  {
+    id: 'tut-grid',
+    title: 'Grid',
+    summary: 'Max means OR: two sets of repeating ramps, the larger of the two, and a threshold. Lines wherever EITHER coordinate nears its edge: a grid.',
+    steps: [
+      look('idea', 'A grid is two sets of lines, and a point is on the grid when it lies on EITHER set. Max keeps the larger of two numbers: for masks, Max means OR.'),
+      add('uv', 'coord', 'uv', 'Add a UV node. This one arrives tiled: its U and V are both 8, so each coordinate runs from 0 to 8.', HINT_UV, { tilingU: 8, tilingV: 8 }),
+      add('fract', 'rep', 'fract', 'Add a Fract node.', 'Palette > Math > Fract, or right-click the canvas and type fract'),
+      wire('w1', ['coord', 'out'], ['rep', 'x'], 'Wire UV into Fract. Fract works on both coordinates at once: each now repeats from 0 to 1 eight times.'),
+      add('split', 'axes', 'split', 'Add a Split node.', HINT_SPLIT),
+      wire('w2', ['rep', 'out'], ['axes', 'v'], 'Wire Fract into Split.'),
+      wire('w3', ['axes', 'x'], ['out', 'color'], 'Wire Split\'s X into the Output Color: eight grey ramps side by side, each brightest at one edge.'),
+      add('max', 'either', 'max', 'Add a Max node. It compares its two inputs, A and B, and keeps the larger.', 'Palette > Math > Max, or right-click the canvas and type max'),
+      wire('w4', ['axes', 'x'], ['either', 'a'], 'Wire Split\'s X into Max\'s A.'),
+      wire('w5', ['axes', 'y'], ['either', 'b'], 'Wire Split\'s Y into Max\'s B.'),
+      wire('w6', ['either', 'out'], ['out', 'color'], 'Wire Max into the Output Color. Each cell now brightens toward two of its edges: wherever EITHER ramp is high.'),
+      add('gt', 'line', 'greaterThan', 'Add a Greater Than node.', HINT_GREATER),
+      wire('w7', ['either', 'out'], ['line', 'a'], 'Wire Max into Greater Than\'s A.'),
+      wire('w8', ['line', 'out'], ['out', 'color'], 'Wire Greater Than into the Output Color. All white: B is 0, and every number here is greater than 0.'),
+      set('lines', 'line', 'b', 0.9, 'Set Greater Than\'s B to 0.9. Only the last tenth of each ramp stays white: thin lines along two edges of every cell. A grid.', 'The B number box on the Greater Than node'),
+      look('try', 'Try: add a Min node, wire Split\'s X into its A and Split\'s Y into its B, then wire Min into Greater Than\'s A. Min keeps the smaller: what is left of the grid?', ['axes', 'line']),
     ],
   },
   {
@@ -437,13 +564,13 @@ export const TUTORIALS: readonly TutorialDef[] = [
     steps: [
       look('idea', 'So far every number coloured a pixel. The same number can also MOVE a point of the mesh: that is the vertex side of a shader.'),
       add('perlin', 'noise', 'perlin', 'Add a Perlin Noise node.', HINT_PERLIN),
-      set('scale', 'noise', 'scale', 2, 'Right-click Perlin Noise and set Scale to 2.', HINT_SCALE),
+      set('scale', 'noise', 'scale', 2, 'Right-click Perlin Noise and set scale to 2.', HINT_SCALE),
       wire('w1', ['noise', 'out'], ['out', 'position'], 'Wire the noise into Displacement. Each point moves out along its normal by the noise amount, 0 to 1 model units: huge.'),
       add('mul', 'amount', 'mul', 'Add a Multiply node. Multiplying by a small number scales the push down.', 'Palette > Arithmetic > Multiply, or right-click the canvas and type mul'),
-      wire('w2', ['noise', 'out'], ['amount', 'a'], 'Wire the noise into A.'),
-      set('k', 'amount', 'b', 0.2, 'Set B to 0.2. The lumps are now at most 0.2 units high.', 'The B number box on the Multiply node'),
+      wire('w2', ['noise', 'out'], ['amount', 'a'], 'Wire the noise into Multiply\'s A.'),
+      set('k', 'amount', 'b', 0.2, 'Set Multiply\'s B to 0.2. The lumps will be at most 0.2 units high.', 'The B number box on the Multiply node'),
       wire('w3', ['amount', 'out'], ['out', 'position'], 'Wire Multiply into Displacement: soft bumps. Blender calls this Displacement, Unreal World Position Offset.'),
-      look('try', 'Try: wire the noise into Color as well, so colour follows height. Why does the silhouette change while the shading looks flat?'),
+      look('try', 'Try: wire the noise into Color as well, so colour follows height. Then set Multiply\'s B to -0.2: what happens to the bumps?', ['noise', 'amount']),
     ],
   },
   {
@@ -457,17 +584,17 @@ export const TUTORIALS: readonly TutorialDef[] = [
       look('idea', 'A pattern moves when the coordinates it reads move. Add Time to the position and the noise slides through the mesh.'),
       add('pos', 'pos', 'positionGeometry', 'Add a Position node: each point\'s own location in the model, three numbers.', 'Palette > Inputs > Position, or right-click the canvas and type position'),
       add('time', 'clock', 'time', 'Add a Time node.', HINT_TIME),
-      add('add', 'moved', 'add', 'Add an Add node.', 'Palette > Arithmetic > Add, or right-click the canvas and type add'),
-      wire('w1', ['pos', 'out'], ['moved', 'a'], 'Wire Position into A.'),
-      wire('w2', ['clock', 'out'], ['moved', 'b'], 'Wire Time into B. A number added to a vector shifts all three axes, so the whole field drifts diagonally.'),
+      add('add', 'moved', 'add', 'Add an Add node. It sums its two inputs, A and B.', 'Palette > Arithmetic > Add, or right-click the canvas and type add'),
+      wire('w1', ['pos', 'out'], ['moved', 'a'], 'Wire Position into Add\'s A.'),
+      wire('w2', ['clock', 'out'], ['moved', 'b'], 'Wire Time into Add\'s B. A number added to a vector shifts all three axes, so the whole field drifts diagonally.'),
       add('perlin', 'noise', 'perlin', 'Add a Perlin Noise node.', HINT_PERLIN, { scale: 2 }),
-      wire('w3', ['moved', 'out'], ['noise', 'pos'], 'Wire Add into the noise\'s Pos input: drag the wire onto the node and its hidden Pos socket appears. The noise reads the moving coordinate.', 'Hidden inputs show while a wire is dragged near a node; or right-click it and tick Pos'),
+      wire('w3', ['moved', 'out'], ['noise', 'pos'], 'Wire Add into the noise\'s pos input: the dimmed socket on its left edge, hidden until a wire needs it. The noise now reads the moving coordinate.', 'Hidden inputs show while a wire is dragged near a node; or right-click it and tick pos'),
       wire('w4', ['noise', 'out'], ['out', 'position'], 'Wire the noise into Displacement. The surface heaves by up to a full unit, and keeps moving.'),
-      add('mul', 'amount', 'mul', 'Add a Multiply node.', 'Palette > Arithmetic > Multiply, or right-click the canvas and type mul'),
-      wire('w5', ['noise', 'out'], ['amount', 'a'], 'Wire the noise into A.'),
-      set('k', 'amount', 'b', 0.2, 'Set B to 0.2.', 'The B number box on the Multiply node'),
+      add('mul', 'amount', 'mul', 'Add a Multiply node. It multiplies its two inputs, A and B.', 'Palette > Arithmetic > Multiply, or right-click the canvas and type mul'),
+      wire('w5', ['noise', 'out'], ['amount', 'a'], 'Wire the noise into Multiply\'s A.'),
+      set('k', 'amount', 'b', 0.2, 'Set Multiply\'s B to 0.2.', 'The B number box on the Multiply node'),
       wire('w6', ['amount', 'out'], ['out', 'position'], 'Wire Multiply into Displacement. The bumps now re-form continuously: a living surface. Unity scrolls UVs the same way; Unreal calls it a Panner.'),
-      look('try', 'Try: put a Multiply between Time and Add to change the drift speed, or wire the noise into Color too. What else could you add Time to?'),
+      look('try', 'Try: on the Time node set speed, the number under the clock, to 0.3: the drift slows. Or wire the noise into Color too. What else could you add Time to?', ['clock']),
     ],
   },
   {
@@ -480,7 +607,7 @@ export const TUTORIALS: readonly TutorialDef[] = [
       wire('w1', ['noise', 'out'], ['out', 'color'], 'Wire it into the Output Color: grey clouds.'),
       add('knob', 'knob', 'property_float', 'Add a Property (float) node. It is a named number, property1, that the shader exposes as a knob.', 'Palette > Inputs > Property (float), or right-click the canvas and type property'),
       set('value', 'knob', 'value', 4, 'Set the Property\'s value to 4.', 'The number box on the Property node'),
-      wire('w2', ['knob', 'out'], ['noise', 'scale'], 'Wire the Property into the noise\'s Scale: drag the wire onto the noise node and its hidden Scale socket appears.', 'Hidden inputs show while a wire is dragged near a node; or right-click it and tick Scale'),
+      wire('w2', ['knob', 'out'], ['noise', 'scale'], 'Wire the Property into the noise\'s scale input: the dimmed socket on its left edge, hidden until a wire needs it.', 'Hidden inputs show while a wire is dragged near a node; or right-click it and tick scale'),
       look('slide', 'The 3D view now lists property1 in its Uniforms panel. Drag its slider: the noise rescales live, and the graph does not change.'),
       look('try', 'Try: press Set as default to write the slider\'s value back into the node. An exported shader keeps property1 as a knob anyone can turn.'),
     ],

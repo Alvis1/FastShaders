@@ -1,9 +1,9 @@
 /**
  * The code panel shows only the nodes that FEED AN OUTPUT (owner, 2026-10-27):
  * a chain wired to nothing stays on the canvas but is not in the TSL text, the
- * 3D preview or the module a save writes. The study keeps the whole panel
- * (`whole`, `isEvalMode()` at the one caller), so a running study measures
- * the editor it started with.
+ * 3D preview or the module a save writes — in a study session too since
+ * 2026-11-10 (the first study round kept the whole panel). `whole` remains for
+ * EXPORT's regenerate check (engine/exportGraph.ts).
  *
  * The prune is an EMISSION scope (`graphToCode`'s `emitOnly`), never a pruned
  * graph: names are still claimed over the whole graph, so wiring or unwiring
@@ -19,6 +19,7 @@
 import type { AppEdge, AppNode, GeneratedCode } from '@/types';
 import { isSinkNode } from '@/utils/sdfPartition';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { bypassMutedEdges, mutedNodeIds } from '@/utils/nodeMute';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { graphToCode } from './graphToCode';
 
@@ -32,15 +33,26 @@ import { graphToCode } from './graphToCode';
  * Frames and notes are never in it — they emit nothing. EXPORT's
  * `connectedExportIds` is this plus the expansions that keep a FILE intact
  * (frames up the parent chain, a collapsed group whole, board notes).
+ *
+ * `bypassMuted` walks the wires as the SHADER reads them (utils/nodeMute.ts):
+ * a MUTED node feeds nothing, so it — and whatever feeds only it — is out of
+ * the code panel's text. EXPORT walks the REAL wires: a muted node sitting
+ * between two kept ones must ride the file, or its consumer's wire is cut
+ * and the exported shader stops passing its value through.
  */
-export function feedsAnOutputIds(nodes: readonly AppNode[], edges: readonly AppEdge[]): Set<string> | null {
+export function feedsAnOutputIds(
+  nodes: readonly AppNode[],
+  edges: readonly AppEdge[],
+  opts: { bypassMuted?: boolean } = {},
+): Set<string> | null {
   const byId = new Map<string, AppNode>();
   for (const n of nodes) byId.set(n.id, n);
   const sinks = nodes.filter((n) => n.type !== 'group' && n.type !== 'note' && isSinkNode(n));
   if (sinks.length === 0) return null;
 
   const feeders = new Map<string, string[]>();
-  for (const e of unwrapCollapsedGroupEdges(nodes as AppNode[], edges as AppEdge[])) {
+  const unwrapped = unwrapCollapsedGroupEdges(nodes as AppNode[], edges as AppEdge[]);
+  for (const e of opts.bypassMuted ? bypassMutedEdges(nodes, unwrapped) : unwrapped) {
     const list = feeders.get(e.target);
     if (list) list.push(e.source);
     else feeders.set(e.target, [e.source]);
@@ -68,7 +80,20 @@ export function panelCodegen(
   edges: AppEdge[],
   whole: boolean,
 ): { result: GeneratedCode; emitted: ReadonlySet<string> | null } {
-  const ids = whole ? null : feedsAnOutputIds(nodes, edges);
-  if (!ids) return { result: graphToCode(nodes, edges, NODE_REGISTRY), emitted: null };
+  let ids = whole ? null : feedsAnOutputIds(nodes, edges, { bypassMuted: true });
+  // A MUTED node is never in the text, whatever the scope (graphToCode leaves
+  // it out), so the emitted set must not claim it: an Apply then CARRIES it
+  // back, with its wires (utils/panelCarry.ts). Where the scope is otherwise
+  // the whole graph (no sink, or `whole`), that set is every node but the
+  // muted — and only while one is muted, so every other graph keeps
+  // `emitted: null` and today's Apply exactly.
+  if (!ids) {
+    const muted = mutedNodeIds(nodes);
+    if (!muted) return { result: graphToCode(nodes, edges, NODE_REGISTRY), emitted: null };
+    // Frames and notes stay out, as in `feedsAnOutputIds` (they emit nothing).
+    ids = new Set(
+      nodes.filter((n) => n.type !== 'group' && n.type !== 'note' && !muted.has(n.id)).map((n) => n.id),
+    );
+  }
   return { result: graphToCode(nodes, edges, NODE_REGISTRY, { emitOnly: ids }), emitted: ids };
 }

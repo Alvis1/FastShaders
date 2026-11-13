@@ -41,14 +41,14 @@ describe('ShaderPreview: the pre-read model gate', () => {
     expect(PREVIEW).not.toMatch(/import \{[^}]*\bMESH_MAX_BYTES\b[^}]*\} from '@\/utils\/previewMesh'/);
   });
 
-  it('passes the OFFER predicate: never in a study session, never for a paired model, only a glTF', () => {
+  it('passes the OFFER predicate: never for a paired model, only a glTF (a study session too)', () => {
     expect(load).toMatch(/preReadModelGate\(detectMeshKind\(file\.name\), file\.size, offer\)/);
     // The predicate is decided BEFORE the gate and the read.
     const offerAt = load.indexOf('const offer =');
     expect(offerAt).toBeGreaterThan(-1);
     expect(offerAt).toBeLessThan(load.indexOf('preReadModelGate('));
     const offer = load.slice(offerAt, load.indexOf(';', offerAt));
-    expect(offer).toContain('!isEvalMode()');
+    expect(offer).not.toContain('isEvalMode');
     expect(offer).toContain("opts?.offerBuild !== false");
     expect(offer).toMatch(/kind === 'glb' \|\| kind === 'gltf'/);
   });

@@ -1,8 +1,7 @@
 /**
  * Drag-connect: dragging a node ONTO another node wires them together.
- * The hovered node highlights, a tooltip names the input socket the drop
- * will plug into, and vertical movement of the dragged node changes which
- * socket that is. Direction follows the side the dragged node sits on:
+ * The hovered node highlights and a tooltip names the input socket the drop
+ * will plug into. Direction follows the side the dragged node sits on:
  *
  * - Dragged node LEFT of the hovered node's center → the dragged node's
  *   output feeds the hovered node's input ('feed-hover').
@@ -11,40 +10,42 @@
  * - If the preferred direction is impossible (missing sockets, or it would
  *   create a cycle) the opposite direction is tried before giving up.
  *
- * Vertical alignment picks the sockets: the (output, input) pair with the
- * nearest center Ys wins, so a multi-output source (Data node columns) picks
- * its column by alignment too. Occupied inputs are eligible — aligning with a
- * used socket re-wires it (inputs are single-connection, so the drop swaps its
- * edge). A hair of bias toward free inputs only breaks EXACT ties, so a loose
- * drop still fills an empty socket instead of overwriting a wired one sitting
- * at the same height.
+ * The input STARTS on the node's MAIN input (utils/primaryInput.ts — the Factor
+ * of a Mix, the X of a Smoothstep, otherwise the top input) wherever the hover
+ * begins, and vertical TRAVEL from there steps through the inputs (owner,
+ * 2026-11-13: "it does not cycle through inputs anymore when dragged
+ * vertically"). The two halves are separate on purpose. Where the node sits must
+ * not pick the socket — absolute alignment put a node dropped dead-centre on a
+ * three-input node onto its MIDDLE socket (owner, 2026-11-10) — but how far it
+ * has MOVED since the hover began may: `stepInput` keeps a virtual point in the
+ * input sockets' frame, anchored on the main input at the first frame, moved
+ * one socket pitch per pitch of vertical travel (in the physical direction:
+ * moving down rings a lower socket of the hovered node, and an UPPER one of the
+ * dragged node's own inputs, as alignment would), and CLAMPED to the outermost
+ * sockets with the anchor sliding along — so overshooting an end and reversing
+ * steps back at once, and every socket is reachable from either edge of the
+ * hover box. The dragged centre can only travel the hover node's height before
+ * the hover ends, so when the input span would need more than `REACH_FRAC` of
+ * it (a tall Output dragged onto a small Float) the travel is amplified rather
+ * than leaving the far sockets unreachable. `STEP_HYSTERESIS` keeps a pointer
+ * resting between two sockets from flickering the ring. The state rides the
+ * PLAN (`step`), and the caller hands the previous frame's plan back in; a
+ * hover that ends (no plan), another node or the other side starts over on the
+ * main input.
  *
- * EVERY SOCKET MUST BE REACHABLE, and physical alignment alone cannot promise
- * that. The gesture is gated on the dragged node's CENTER being inside the
- * hover node's box, so the whole vertical range a drag can explore is the
- * hover box's height — while the sockets being aligned sit wherever their
- * nodes put them. Two shapes break it (measured on the shipped registry, 246
- * of 9540 dragged/hover/side combinations): a dragged node whose OUTPUT
- * socket is far from its own center (select's is 35px below; `uv`'s was 46px
- * ABOVE it when this was measured — it was re-authored to the body centre on
- * 2026-09-19, so the shape now has one fewer example, not one fewer case)
- * shifts the sweep off the hover node's lower or upper sockets,
- * and a dragged node TALLER than the hover node (remap, smoothstep, clamp,
- * mix, the Output node dropped onto a Float) can only bring the inputs within
- * ±half the hover height of its own center level with the hover's output.
- * Dragging the Output node onto a Float could never reach its `position`
- * row; dragging `uv` onto `add` could never reach `b`. So the planner first
- * checks, by sweeping the dragged node across the hover box, whether physical
- * alignment gives every distinct socket height a usable band (`MIN_BAND_PX`),
- * and keeps the physical rule when it does — the common case, and the one
- * where "the socket level with mine" is what people aim for. When it does
- * not, the sweep is STRETCHED: the dragged center's position within the hover
- * box, top to bottom, is mapped across the candidate sockets' span (each end
- * socket gets a full half-pitch cell), in the same direction physical
- * alignment would move — so the choice still follows the drag, only scaled
- * to fit. The output side keeps physical pairing in both modes: the output
- * nearest the chosen input wins, which is what lets a Data node pick its
- * column by alignment.
+ * A fed main input is REPLACED (inputs are single-connection) — except on an
+ * operand node (Add, Multiply, Append: `spare` handles), whose A, B, C… are
+ * interchangeable slots, where the hover starts on the next free one so two
+ * drops build `a + b` instead of the second overwriting the first. Stepping
+ * visits occupied sockets too (the ring shows what a drop would replace). The
+ * channels of an Output are not interchangeable (Position is vertex
+ * displacement), so a fed Color is replaced, never silently bypassed. The
+ * gesture counterpart's own existing edge doesn't count as occupying
+ * (NodeEditor's `mountedHandles`), so re-docking a feeder re-recognizes its
+ * connection.
+ *
+ * The OUTPUT of a multi-output source (Data node columns, Split) is still
+ * chosen by alignment: the output level with the chosen input wins.
  *
  * This module is the pure decision logic (node-env testable). NodeEditor
  * adapts React Flow internals (measured boxes, mounted handle bounds) into
@@ -73,23 +74,45 @@ export interface ConnectHandle {
   cy: number;
   /** Inputs only: whether an edge already feeds this handle. */
   occupied?: boolean;
+  /** Inputs only: this is the node's MAIN input (utils/primaryInput.ts). With
+   *  no handle flagged, the first input in the array is the main one. */
+  primary?: boolean;
+  /** Inputs only: an interchangeable operand slot (Add's A/B/C…) — it may take
+   *  the drop when the main input is already fed. */
+  spare?: boolean;
 }
 
 export type DragConnectMode = 'feed-hover' | 'feed-dragged';
+
+/** Flow px, in the input sockets' frame: a socket must be this much nearer the
+ *  virtual point than the ringed one before the ring moves to it, so a pointer
+ *  resting on the midpoint between two sockets does not flicker between them.
+ *  Never more than a quarter of the tightest gap between two socket rows, or
+ *  sockets packed closer than twice it could never be reached. */
+export const STEP_HYSTERESIS = 4;
+
+/** The share of the hover node's height the whole input span may need: past
+ *  it, vertical travel is amplified so every input stays reachable before the
+ *  dragged centre leaves the hover box. */
+export const REACH_FRAC = 0.7;
+
+/** The vertical-step state of one hover, carried frame to frame on the plan. */
+export interface InputStep {
+  /** dragged id, hover id and mode: a different key starts over on the main input. */
+  key: string;
+  /** The virtual point is `gain · travel + offset`, in the inputs' frame. */
+  offset: number;
+}
 
 export interface DragConnectEndpoints {
   draggedId: string;
   hoverId: string;
   draggedCenterX: number;
   hoverCenterX: number;
-  /** The dragged node's visual center Y and the hover box's vertical span.
-   *  The gate that produced these endpoints is "dragged center inside the
-   *  hover box", so these three numbers ARE the range the gesture can sweep —
-   *  which is what decides whether every socket is reachable (see the module
-   *  comment). Handles are absolute, so shifting the dragged node by `dy`
-   *  shifts every dragged handle by `dy`. */
+  /** The dragged node's centre Y and the hovered box's centre and height:
+   *  vertical travel steps the input (see the module header). */
   draggedCenterY: number;
-  hoverTop: number;
+  hoverCenterY: number;
   hoverHeight: number;
   draggedInputs: ConnectHandle[];
   draggedOutputs: ConnectHandle[];
@@ -103,8 +126,10 @@ export interface DragConnectPlan {
   sourceHandle: string;
   target: string;
   targetHandle: string;
-  /** The input socket picked by vertical alignment (tooltip/ring anchor). */
+  /** The input socket picked (tooltip/ring anchor). */
   chosen: ConnectHandle;
+  /** Hand the plan back to the next frame's `planDragConnect` to keep stepping. */
+  step: InputStep;
 }
 
 /**
@@ -170,123 +195,80 @@ export function wouldCreateCycle(
   return false;
 }
 
-/** A hair of bias so an EXACT free/occupied vertical tie resolves to the FREE
- *  input — a loose drop fills an empty socket rather than silently overwriting
- *  a wired one at the same height. Smaller than any real socket spacing, so it
- *  never overrides a deliberate alignment with an occupied socket. */
-const OCCUPIED_TIE_BIAS = 0.001;
+/**
+ * The input a hover STARTS on (vertical travel then steps from it — `stepInput`):
+ * the main input — and when it is fed, the next free OPERAND slot (`spare`,
+ * visual order) if there is one, else the main input again, replacing its wire.
+ * Null for no inputs.
+ */
+export function pickMainInput(inputs: ConnectHandle[]): ConnectHandle | null {
+  if (inputs.length === 0) return null;
+  const main = inputs.find((i) => i.primary) ?? inputs[0];
+  if (!main.occupied) return main;
+  return inputs.find((i) => i.spare && !i.occupied) ?? main;
+}
 
 /**
- * The smallest vertical band (flow px of drag travel) a socket must own for
- * physical alignment to count as reaching it. A band you cannot hold the
- * pointer in is a socket you cannot pick — `select` dragged onto `mul` gave
- * `a` a 2px band under pure alignment, which reads as unreachable. The
- * reachability sweep samples every `SWEEP_STEP` px and asks for two hits, so
- * a band of roughly this width or more passes.
+ * The input a hover rings this frame: the main input on its first frame (or a
+ * new key), afterwards wherever vertical travel has stepped it — see the module
+ * header. Null for no inputs.
  */
-export const MIN_BAND_PX = 8;
-const SWEEP_STEP = MIN_BAND_PX / 2;
-
-/** Physical pairing: the (output, input) pair with the nearest center Ys,
- *  the dragged side's handles shifted by `dy` (0 = where the node is now). */
-function bestPair(
+export function stepInput(
   mode: DragConnectMode,
   ep: DragConnectEndpoints,
-  dy: number,
-): { out: ConnectHandle; chosen: ConnectHandle } | null {
-  const outs = mode === 'feed-hover' ? ep.draggedOutputs : ep.hoverOutputs;
-  const inputs = mode === 'feed-hover' ? ep.hoverInputs : ep.draggedInputs;
-  const outShift = mode === 'feed-hover' ? dy : 0;
-  const inShift = mode === 'feed-hover' ? 0 : dy;
-  let out: ConnectHandle | null = null;
-  let chosen: ConnectHandle | null = null;
-  let bestD = Infinity;
-  for (const o of outs) {
-    for (const i of inputs) {
-      const d = Math.abs(o.cy + outShift - (i.cy + inShift)) + (i.occupied ? OCCUPIED_TIE_BIAS : 0);
-      if (d < bestD) {
-        bestD = d;
-        out = o;
-        chosen = i;
-      }
-    }
+  inputs: ConnectHandle[],
+  prev: DragConnectPlan | null | undefined,
+): { chosen: ConnectHandle; step: InputStep } | null {
+  const anchor = pickMainInput(inputs);
+  if (!anchor) return null;
+  const key = `${ep.draggedId}\u0000${ep.hoverId}\u0000${mode}`;
+  // The inputs' own frame: the hovered node's centre for its inputs, the
+  // dragged node's for the dragged node's (they travel with it).
+  const frameY = mode === 'feed-hover' ? ep.hoverCenterY : ep.draggedCenterY;
+  const dy = ep.draggedCenterY - ep.hoverCenterY;
+  // Physical direction: the dragged node moving DOWN brings a lower socket of
+  // the hovered node level with it, and an upper one of its own.
+  const travel = mode === 'feed-hover' ? dy : -dy;
+  const rows = inputs.map((i) => i.cy - frameY).sort((p, q) => p - q);
+  const lo = rows[0];
+  const hi = rows[rows.length - 1];
+  let gap = Infinity;
+  for (let k = 1; k < rows.length; k++) if (rows[k] > rows[k - 1]) gap = Math.min(gap, rows[k] - rows[k - 1]);
+  const hysteresis = Math.min(STEP_HYSTERESIS, gap / 4);
+  const room = Math.max(ep.hoverHeight, 1) * REACH_FRAC;
+  const gain = Math.max(1, (hi - lo) / room);
+  const current = prev?.step.key === key ? inputs.find((i) => i.id === prev.chosen.id) : undefined;
+  let offset = current && prev ? prev.step.offset : anchor.cy - frameY - gain * travel;
+  let v = gain * travel + offset;
+  // Clamp to the outermost sockets and let the anchor slide with the overshoot:
+  // reversing then steps back at once instead of first undoing the overshoot.
+  if (v < lo) {
+    offset += lo - v;
+    v = lo;
+  } else if (v > hi) {
+    offset -= v - hi;
+    v = hi;
   }
-  return out && chosen ? { out, chosen } : null;
+  const held = current ?? anchor;
+  const nearest = nearestByCy(v + frameY, inputs) ?? held;
+  const chosen =
+    Math.abs(nearest.cy - frameY - v) + hysteresis < Math.abs(held.cy - frameY - v) ? nearest : held;
+  return { chosen, step: { key, offset } };
 }
 
-/**
- * Does physical alignment give EVERY distinct socket height a usable band as
- * the dragged center sweeps the hover box? Sockets sharing a height (the
- * phantom tile's ports all sit at the cursor) can only ever be told apart by
- * the occupied tie-break, so they count as one height. Sampled rather than
- * solved: the chosen pair is the lower envelope of |out − in| V-shapes, and a
- * few dozen pair searches per drag frame cost nothing against the closed form.
- */
-function physicalReachesEverySocket(mode: DragConnectMode, ep: DragConnectEndpoints): boolean {
-  const inputs = mode === 'feed-hover' ? ep.hoverInputs : ep.draggedInputs;
-  const heights = new Set<number>();
-  for (const i of inputs) heights.add(i.cy);
-  if (heights.size <= 1) return true;
-  const hits = new Map<number, number>();
-  const n = Math.max(1, Math.round(ep.hoverHeight / SWEEP_STEP));
-  for (let k = 0; k <= n; k++) {
-    const centerY = ep.hoverTop + (ep.hoverHeight * k) / n;
-    const pair = bestPair(mode, ep, centerY - ep.draggedCenterY);
-    if (pair) hits.set(pair.chosen.cy, (hits.get(pair.chosen.cy) ?? 0) + 1);
-  }
-  for (const cy of heights) if ((hits.get(cy) ?? 0) < 2) return false;
-  return true;
-}
-
-/**
- * Stretched pick: map the dragged center's position within the hover box
- * across the candidate inputs' span — top socket at one end, bottom socket at
- * the other, each end socket owning a full half-pitch cell — moving in the
- * SAME direction physical alignment would (feed-dragged reverses: moving the
- * dragged node DOWN brings its UPPER inputs level with the hover's output).
- * The candidate handles are read at their current absolute positions, and so
- * is the span, so for the dragged side both move together and the mapping is
- * consistent at any instant of the drag.
- */
-function stretchedPick(
+function tryMode(
   mode: DragConnectMode,
   ep: DragConnectEndpoints,
-): { out: ConnectHandle; chosen: ConnectHandle } | null {
+  prev: DragConnectPlan | null | undefined,
+): DragConnectPlan | null {
   const outs = mode === 'feed-hover' ? ep.draggedOutputs : ep.hoverOutputs;
   const inputs = mode === 'feed-hover' ? ep.hoverInputs : ep.draggedInputs;
-  const cys = [...new Set(inputs.map((i) => i.cy))].sort((a, b) => a - b);
-  let lo = cys[0];
-  let hi = cys[cys.length - 1];
-  if (cys.length > 1) {
-    lo -= (cys[1] - cys[0]) / 2;
-    hi += (cys[cys.length - 1] - cys[cys.length - 2]) / 2;
-  }
-  const t =
-    ep.hoverHeight > 0
-      ? Math.min(1, Math.max(0, (ep.draggedCenterY - ep.hoverTop) / ep.hoverHeight))
-      : 0.5;
-  const ref = mode === 'feed-hover' ? lo + t * (hi - lo) : hi - t * (hi - lo);
-  let chosen: ConnectHandle | null = null;
-  let bestD = Infinity;
-  for (const i of inputs) {
-    const d = Math.abs(i.cy - ref) + (i.occupied ? OCCUPIED_TIE_BIAS : 0);
-    if (d < bestD) {
-      bestD = d;
-      chosen = i;
-    }
-  }
-  if (!chosen) return null;
-  const out = nearestByCy(chosen.cy, outs);
-  return out ? { out, chosen } : null;
-}
-
-function tryMode(mode: DragConnectMode, ep: DragConnectEndpoints): DragConnectPlan | null {
-  const outs = mode === 'feed-hover' ? ep.draggedOutputs : ep.hoverOutputs;
-  const inputs = mode === 'feed-hover' ? ep.hoverInputs : ep.draggedInputs;
-  if (outs.length === 0 || inputs.length === 0) return null;
-  const pair = physicalReachesEverySocket(mode, ep) ? bestPair(mode, ep, 0) : stretchedPick(mode, ep);
-  if (!pair) return null;
-  const { out, chosen } = pair;
+  const picked = stepInput(mode, ep, inputs, prev);
+  // The output level with the chosen input (first wins a tie — the phantom
+  // tile's ports all sit at one Y, and its `out` comes first).
+  const out = picked ? nearestByCy(picked.chosen.cy, outs) : null;
+  if (!picked || !out) return null;
+  const { chosen, step } = picked;
   return mode === 'feed-hover'
     ? {
         mode,
@@ -295,6 +277,7 @@ function tryMode(mode: DragConnectMode, ep: DragConnectEndpoints): DragConnectPl
         target: ep.hoverId,
         targetHandle: chosen.id,
         chosen,
+        step,
       }
     : {
         mode,
@@ -303,22 +286,27 @@ function tryMode(mode: DragConnectMode, ep: DragConnectEndpoints): DragConnectPl
         target: ep.draggedId,
         targetHandle: chosen.id,
         chosen,
+        step,
       };
 }
 
 /**
  * Decide what dropping the dragged node on the hovered node would connect.
- * Returns null when no legal connection exists in either direction.
+ * Returns null when no legal connection exists in either direction. `prev` is
+ * the plan this gesture showed on its previous frame (null when it showed
+ * none): it carries the vertical step, so passing it is what makes vertical
+ * travel move the chosen input.
  */
 export function planDragConnect(
   ep: DragConnectEndpoints,
   edges: ReadonlyArray<{ source: string; target: string }>,
+  prev?: DragConnectPlan | null,
 ): DragConnectPlan | null {
   const preferred: DragConnectMode =
     ep.draggedCenterX < ep.hoverCenterX ? 'feed-hover' : 'feed-dragged';
   const fallback: DragConnectMode = preferred === 'feed-hover' ? 'feed-dragged' : 'feed-hover';
   for (const mode of [preferred, fallback]) {
-    const plan = tryMode(mode, ep);
+    const plan = tryMode(mode, ep, prev);
     if (plan && !wouldCreateCycle(edges, plan.source, plan.target)) return plan;
   }
   return null;

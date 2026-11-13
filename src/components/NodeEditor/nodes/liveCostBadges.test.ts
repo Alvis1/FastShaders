@@ -88,15 +88,16 @@ function graph(): { nodes: AppNode[]; edges: AppEdge[] } {
   };
 }
 
-/** The Sin, plus the Add at its three-operand price (base × 2). */
-const expected = () => getCost('sin') + 2 * getCost('add');
+/** The Sin, the Add at its three-operand price (base × 2), and the nested
+ *  frame's Cos — a collapse hides it too (groupDescendantIds). */
+const expected = () => getCost('sin') + 2 * getCost('add') + getCost('cos');
 
 describe('the collapsed pill sums its members LIVE', () => {
-  it('prices the frame\'s direct members — never a snapshot, an outsider or a nested frame\'s members', () => {
+  it('prices every node inside the frame, nested frames\' members included — never a snapshot or an outsider', () => {
     const { nodes, edges } = graph();
     expect(groupMemberCost(nodes, edges, 'g')).toBe(expected());
-    // The nested frame is one member, priced 0 (no registry type), as the
-    // collapse prices it; its own Cos is not g's.
+    // The nested frame's own node prices 0 (no registry type); its Cos is
+    // counted once, as itself, in g and in h.
     expect(groupMemberCost(nodes, edges, 'h')).toBe(getCost('cos'));
     expect(groupMemberCost(nodes, edges, 'nobody')).toBe(0);
   });
@@ -130,7 +131,7 @@ describe('the collapsed pill sums its members LIVE', () => {
     expect(select({ nodes: dragged, edges, costVersion: 0 })).toBe(v0);
 
     // A device change bumps the version: repriced with no edit to the graph.
-    expect(select({ nodes: dragged, edges, costVersion: 1 })).toBe(40 + 2 * getCost('add'));
+    expect(select({ nodes: dragged, edges, costVersion: 1 })).toBe(40 + 2 * getCost('add') + getCost('cos'));
     setCostOverrides(null);
     expect(select({ nodes: dragged, edges, costVersion: 2 })).toBe(v0);
 
@@ -148,7 +149,7 @@ describe('the collapsed pill sums its members LIVE', () => {
 
     // A rewire: the outside operand unplugged, the Add back to two operands.
     const unplugged = edges.filter((e) => e.source !== 'p');
-    expect(select({ nodes: left, edges: unplugged, costVersion: 2 })).toBe(getCost('sin') + getCost('add'));
+    expect(select({ nodes: left, edges: unplugged, costVersion: 2 })).toBe(getCost('sin') + getCost('add') + getCost('cos'));
   });
 
   it('the pill prints that live sum through <Points>, never the snapshot', () => {

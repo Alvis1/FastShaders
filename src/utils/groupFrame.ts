@@ -225,3 +225,119 @@ export function growGroupFrames(
   });
   return changed ? (out as AppNode[]) : (nodes as AppNode[]);
 }
+
+/**
+ * Every node a group CONTAINS, at any depth — its children, their children
+ * when a child is itself a group, and so on (the group's own id excluded).
+ *
+ * A frame's MEMBERS for collapse, expand, ungroup and the pill's price. Asking
+ * `parentId === groupId` alone is what left a nested group's nodes standing
+ * outside a collapsed pill: an ADD drop parks a whole `.fastshader` in one
+ * group, nesting intact, and collapsing it hid the inner frames while their
+ * members (parented to the INNER frame, not this one) stayed on screen.
+ *
+ * `parentId` comes out of a file and may form a cycle; each node is visited
+ * once, so a cycle ends the walk instead of looping.
+ */
+export function groupDescendantIds(nodes: readonly AppNode[], groupId: string): Set<string> {
+  const children = new Map<string, string[]>();
+  for (const n of nodes) {
+    if (typeof n.parentId !== 'string') continue;
+    const list = children.get(n.parentId);
+    if (list) list.push(n.id);
+    else children.set(n.parentId, [n.id]);
+  }
+  const out = new Set<string>();
+  const stack = [groupId];
+  while (stack.length > 0) {
+    for (const c of children.get(stack.pop()!) ?? []) {
+      if (c === groupId || out.has(c)) continue;
+      out.add(c);
+      stack.push(c);
+    }
+  }
+  return out;
+}
+
+/**
+ * The descendants of `groupId` that stay HIDDEN while `groupId` itself is
+ * expanded: everything inside a group nested in it that is still collapsed.
+ * Expanding the outer frame must not open an inner pill as a side effect —
+ * its members keep their hide class and its internal wires stay hidden.
+ */
+export function hiddenByInnerCollapse(nodes: readonly AppNode[], groupId: string): Set<string> {
+  const inside = groupDescendantIds(nodes, groupId);
+  const out = new Set<string>();
+  for (const n of nodes) {
+    if (n.type !== 'group' || !inside.has(n.id)) continue;
+    if (!(n.data as { collapsed?: unknown }).collapsed) continue;
+    for (const id of groupDescendantIds(nodes, n.id)) out.add(id);
+  }
+  return out;
+}
+
+/** A node's stored stacking rank, read strictly: only a finite number counts
+ *  (`zIndex` comes out of a file, and React Flow's own read coerces). */
+function stackRank(n: AppNode): number | null {
+  const z = (n as { zIndex?: unknown }).zIndex;
+  return typeof z === 'number' && Number.isFinite(z) ? z : null;
+}
+
+/**
+ * Bring the groups behind `ids` to the TOP of the stack and keep them there:
+ * the group a node is in (its OUTERMOST group, so a nested frame comes up with
+ * the frame around it), or the group itself. The order is "last touched on
+ * top" — moved, clicked, selected or resized — and it persists after the
+ * selection ends, where React Flow's own select-elevation (+1000 while
+ * selected) did not: a group stayed on top only until the next click
+ * elsewhere, and clicking or resizing another one never moved it up.
+ *
+ * Written as React Flow's `zIndex` on the OUTERMOST groups only — members and
+ * nested frames inherit "parent + 1" from React Flow — and only on groups the
+ * user has raised: an untouched group keeps no rank and stacks by array order
+ * as before, below every raised one. Ranks are compacted to 1…m each time, so
+ * they never grow. Never the nodes ARRAY: its order names the generated
+ * variables, so reordering members would rename them on a click.
+ *
+ * Returns the new array, or null when nothing moves (already on top) so a
+ * caller can skip the store write entirely — this runs on every drag tick.
+ */
+export function raisedGroupStack(nodes: readonly AppNode[], ids: Iterable<string>): AppNode[] | null {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const outermostGroup = (id: string): string | null => {
+    let top: string | null = null;
+    const seen = new Set<string>();
+    let cur = byId.get(id);
+    while (cur && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      if (cur.type === 'group') top = cur.id;
+      cur = typeof cur.parentId === 'string' ? byId.get(cur.parentId) : undefined;
+    }
+    return top;
+  };
+  const raise = new Set<string>();
+  for (const id of ids) {
+    const g = outermostGroup(id);
+    if (g) raise.add(g);
+  }
+  if (raise.size === 0) return null;
+
+  // The current raised stack, bottom → top (rank, then array order), with
+  // the groups being raised lifted to the end in their own current order.
+  const isRoot = (n: AppNode) => n.type === 'group' && outermostGroup(n.id) === n.id;
+  const ranked = nodes
+    .map((n, i) => ({ n, i, r: stackRank(n) }))
+    .filter((e) => isRoot(e.n) && (e.r !== null || raise.has(e.n.id)))
+    .sort((a, b) => (a.r ?? Infinity) - (b.r ?? Infinity) || a.i - b.i);
+  const order = [...ranked.filter((e) => !raise.has(e.n.id)), ...ranked.filter((e) => raise.has(e.n.id))];
+  const want = new Map(order.map((e, k) => [e.n.id, k + 1]));
+
+  let changed = false;
+  const out = nodes.map((n) => {
+    const z = want.get(n.id);
+    if (z === undefined || stackRank(n) === z) return n;
+    changed = true;
+    return { ...n, zIndex: z } as AppNode;
+  });
+  return changed ? out : null;
+}

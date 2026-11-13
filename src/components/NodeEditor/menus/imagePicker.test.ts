@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { t } from '@/i18n';
 import { makeNode } from '@/test-utils';
 import { imageCharsReplacing, MAX_TOTAL_IMAGE_CHARS, PROJECT_IMAGE_BUDGET_COUNT } from '@/utils/imageNode';
-import { IMAGE_EMPTY_HINT, IMAGE_EMPTY_HINT_EVAL, imageEmptyHint } from '../nodes/ShaderNode';
+import { IMAGE_EMPTY_HINT, IMAGE_EMPTY_HINT_PLAIN } from '../nodes/ShaderNode';
 
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 const MENU = read('./ImageNodeSettings.tsx');
@@ -126,10 +126,10 @@ describe('"From file…" — the drop pipeline, into THIS node', () => {
   });
 });
 
-describe('the picker is settings-menu only, and hidden in study sessions', () => {
-  it('is gated by isEvalMode and keyed by the node', () => {
-    expect(MENU).toContain('const study = isEvalMode();');
-    expect(MENU).toMatch(/\{!study && \(\s*<TexturePicker\s+key=\{nodeId\}/);
+describe('the picker is settings-menu only, in a study session too', () => {
+  it('is ungated and keyed by the node', () => {
+    expect(MENU).not.toMatch(/isEvalMode|\{!study/);
+    expect(MENU).toMatch(/<TexturePicker\s+key=\{nodeId\}/);
   });
 
   it('keeps the Step 5 keyed-original rules it relies on (imageOriginView.ts)', () => {
@@ -183,24 +183,21 @@ describe('TexturePicker', () => {
   });
 });
 
-describe('the empty slot names the picker — except in a study session', () => {
+describe('the empty slot names the picker — in a study session too', () => {
   it('names the Texture row by the row’s own label, in both languages', () => {
     expect(PICKER).toContain("{t('Texture', language)}");
     expect(IMAGE_EMPTY_HINT).toContain('“Texture”');
     expect(t(IMAGE_EMPTY_HINT, 'lv')).toContain(`“${t('Texture', 'lv')}”`);
   });
 
-  it('keeps the plain statement where the picker is hidden', () => {
-    expect(imageEmptyHint(true)).toBe(IMAGE_EMPTY_HINT_EVAL);
-    expect(imageEmptyHint(false)).toBe(IMAGE_EMPTY_HINT);
-    expect(IMAGE_EMPTY_HINT_EVAL).not.toMatch(/Texture|Right-click/);
-    expect(t(IMAGE_EMPTY_HINT_EVAL, 'lv')).not.toBe(IMAGE_EMPTY_HINT_EVAL);
-    // Outside a study session (the node test env) the slot names the picker.
-    expect(imageEmptyHint()).toBe(IMAGE_EMPTY_HINT);
+  it('the plain statement names no control', () => {
+    expect(IMAGE_EMPTY_HINT_PLAIN).not.toMatch(/Texture|Right-click/);
+    expect(t(IMAGE_EMPTY_HINT_PLAIN, 'lv')).not.toBe(IMAGE_EMPTY_HINT_PLAIN);
   });
 
-  it('ImageThumbEmpty defaults to imageEmptyHint(), so every canvas slot agrees', () => {
-    expect(SHADER_NODE).toContain('hint = imageEmptyHint(),');
+  it('ImageThumbEmpty defaults to IMAGE_EMPTY_HINT, so every canvas slot agrees', () => {
+    expect(SHADER_NODE).toContain('hint = IMAGE_EMPTY_HINT,');
+    expect(SHADER_NODE).not.toMatch(/isEvalMode/);
     expect(SHADER_NODE).toContain('title={t(hint, language)}');
     // The slot is the `else` of the thumbnail now, both INSIDE the port
     // region (the edge-port layout centres the sockets on that region, so the
@@ -213,8 +210,8 @@ describe('the empty slot names the picker — except in a study session', () => 
   it('a replica keeps the plain statement: it has no menu to name', () => {
     // The Node Designer stage draws NodeVisual hit-testable and binds no
     // contextmenu, so following "Right-click the node…" there opens only the
-    // browser's own menu. Same reason the study session keeps the plain text.
-    expect(NODE_VISUAL).toMatch(/<ImageCardPicture values=\{values\} language=\{language\} emptyHint=\{IMAGE_EMPTY_HINT_EVAL\} \/>/);
+    // browser's own menu.
+    expect(NODE_VISUAL).toMatch(/<ImageCardPicture values=\{values\} language=\{language\} emptyHint=\{IMAGE_EMPTY_HINT_PLAIN\} \/>/);
   });
 });
 

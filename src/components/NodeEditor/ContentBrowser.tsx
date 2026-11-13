@@ -17,9 +17,9 @@ import { SavedGroupCard } from './SavedGroupCard';
 import { TutorialCard } from '@/tutorials/TutorialCard';
 import { TUTORIALS } from '@/tutorials/tutorialDefs';
 import { wantedNodeType } from '@/tutorials/tutorialRun';
-import { TUTORIALS_TAB, tutorialsOffered, effectiveBrowserTab } from '@/tutorials/tutorialsTab';
+import { TUTORIALS_TAB, tutorialsOffered, effectiveBrowserTab, offeredLessons } from '@/tutorials/tutorialsTab';
 import { isEvalMode } from '@/eval/evalArm';
-import { evalTask } from '@/eval/evalTask';
+import { evalTask, introShowsBudget } from '@/eval/evalTask';
 import { TextureCard } from './TextureCard';
 import { PresetCard } from './PresetCard';
 import { setHtml5TileDrag, endHtml5TileDrag } from './tileDrag';
@@ -107,12 +107,16 @@ function assetMatches(a: { id: string; name: string; description: string }, q: s
     .some((x) => foldSearchText(x).includes(q));
 }
 
-/** Tab style for a coloured category button: the active tab's bg + bottom
- *  border match the items-area tint, so it merges with the content below. */
+const ACTIVE_TAB_BG = '#1A1A1A';
+
+/** Tab style for a coloured category button: the active tab is dark (light
+ *  text from the CSS class) with its bottom border in the same colour. */
 function tabStyle(hex: string, active: boolean): React.CSSProperties {
   if (active) {
-    const body = `${hex}1A`;
-    return { background: body, borderColor: `${hex}66`, borderBottomColor: body };
+    // Owner 2026-11-10: the chosen tab is DARK with light text (the colour in
+    // .content-browser__cat-btn--active), whatever the theme; the category
+    // hue stays in its border and in the tile strip underneath.
+    return { background: ACTIVE_TAB_BG, borderColor: `${hex}66`, borderBottomColor: ACTIVE_TAB_BG };
   }
   return { background: `${hex}15`, borderColor: `${hex}33` };
 }
@@ -219,10 +223,12 @@ const BROWSER_TABS = new Set<string>([
 ]);
 const validateBrowserTab = (raw: string | null): BrowserCategory =>
   raw && BROWSER_TABS.has(raw) ? (raw as BrowserCategory) : 'all';
-/** The Tutorials tab exists outside a study and on the `/evalpro` entry.
- *  `isEvalMode` and the task are sampled once per page, so a module constant
- *  is the honest shape (tutorialsTab.ts). */
+/** The Tutorials tab exists outside a study and on every study entry; where
+ *  the cost bar is hidden (`/evalp`) its cost lesson is left out.
+ *  `isEvalMode` and the task are sampled once per page, so module constants
+ *  are the honest shape (tutorialsTab.ts). */
 const OFFER_TUTORIALS = tutorialsOffered(isEvalMode(), evalTask().arm);
+const LESSONS = offeredLessons(TUTORIALS, introShowsBudget(evalTask()));
 
 const validateBarHeight = (raw: string | null): number | null => {
   const v = parseFloat(raw ?? '');
@@ -757,8 +763,8 @@ export const ContentBrowser = memo(function ContentBrowser() {
   // surfaces one (the presets and textures DO fan out — they land on the canvas).
   const filteredTutorials = useMemo(() => {
     if (!OFFER_TUTORIALS) return [];
-    if (!q) return TUTORIALS;
-    return TUTORIALS.filter((d) =>
+    if (!q) return LESSONS;
+    return LESSONS.filter((d) =>
       [d.title, d.summary, t(d.title, 'lv'), t(d.summary, 'lv')].some((x) => foldSearchText(x).includes(q)),
     );
   }, [q]);
@@ -919,10 +925,10 @@ export const ContentBrowser = memo(function ContentBrowser() {
   if (activeCategory === TUTORIALS_TAB) {
     items = filteredTutorials.length === 0
       ? noMatch('No tutorials match “{query}”.')
-      : filteredTutorials.map((d) => <TutorialCard key={d.id} def={d} index={TUTORIALS.indexOf(d) + 1} />);
+      : filteredTutorials.map((d) => <TutorialCard key={d.id} def={d} index={LESSONS.indexOf(d) + 1} />);
   } else if (activeCategory === 'saved') {
     items = savedGroups.length === 0
-      ? empty(t('Right-click a group on the canvas → Save to Library to store it here.', language))
+      ? empty(t('Right-click a group → Save to Library to store it here.', language))
       : filteredSavedGroups.length === 0
         ? noMatch('No saved groups match “{query}”.')
         : filteredSavedGroups.map((g) => <SavedGroupCard key={g.id} group={g} />);
@@ -1020,11 +1026,10 @@ export const ContentBrowser = memo(function ContentBrowser() {
             style={
               activeCategory === 'all'
                 ? {
-                    // Merges into the bar below, which is theme panel color —
-                    // NOT the user's canvas pick (see ContentBrowser.css).
-                    background: 'var(--bg-panel)',
+                    // Dark like every active tab (tabStyle).
+                    background: ACTIVE_TAB_BG,
                     borderColor: 'var(--border-subtle)',
-                    borderBottomColor: 'var(--bg-panel)',
+                    borderBottomColor: ACTIVE_TAB_BG,
                   }
                 : {}
             }

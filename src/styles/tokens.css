@@ -236,7 +236,11 @@
      predates all of that, matched nothing on screen, and were read by no rule
      — keeping them would have handed the next author a 180px card. */
   --handle-size: 10px;
-  --handle-border: 2px;
+  --handle-border: 1px;
+  /* The socket ring (TypedHandle, the Output preview socket, the preview rail
+     disc). White in light mode; a mid grey in dark mode so it does not glare
+     off the dark node body. Not a type/category colour: the fill carries that. */
+  --handle-ring: white;
 
   /* ===== CATEGORY COLORS =====
      --cat-* vars are published at runtime from CAT_HEX in src/utils/colorUtils.ts
@@ -306,6 +310,7 @@
      same reason it is a step lighter (white on off-white) in light mode: a
      number box has to read as a field you can type in. */
   --node-bg: #2b2e34;
+  --handle-ring: #a3a8af;
   --node-ink-rgb: 236, 238, 240;
   --node-plate: #3a3e45;
   --bg-overlay: rgba(0, 0, 0, 0.5);

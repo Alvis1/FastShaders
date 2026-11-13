@@ -5,25 +5,31 @@
   position: relative;
 }
 
+/* Also the sockets' containing block — see the handle rules below. */
 .math-preview-node__canvas-wrap {
-  padding: 3px 5px;
+  position: relative;
+  /* No padding: the plot fills the card edge to edge, so the card's own frame
+     is the plot's frame and no blank strip is left around it. */
+  padding: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: 0;
 }
 
 .math-preview-node__canvas {
   width: 72px;
   height: 72px;
-  border-radius: var(--border-radius-sm);
-  border: 1px solid rgba(var(--node-ink-rgb), 0.1);
+  display: block;
 }
 
+/* X's number box, centred under the plot (rule 13: input numbers are
+   centred). Kept at its min-height while X is wired so the card never
+   changes size (layoutEngine reserves 121px). */
 .math-preview-node__port-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   padding: 0 5px;
   min-height: 16px;
   position: relative;
@@ -35,27 +41,24 @@
   gap: 2px;
 }
 
-/* Input handle in port row — positioned relative to row. This is the
-   row-anchored socket override restated against this node's own wrapper; the
-   pairing rule it has to obey (the transform replaces React Flow's, so the
-   inset is mandatory, and both edges must be overridden wherever both exist)
-   is written out once above `.node-base__row .react-flow__handle` in
-   NodeBase.css. Here the two edges have DIFFERENT anchors — the input rides
-   the port row, the output the node — hence the split below. */
-.math-preview-node__port-row .react-flow__handle {
+/* Both sockets sit IN the plot's wrapper, on the curve's ZERO LINE — the x
+   axis of the sin/cos plot, which is the plot's vertical centre
+   (waveScreenY(0) = WAVE_SIZE / 2) and, the wrapper's padding being
+   symmetric, the wrapper's centre too. Input and output therefore share one
+   horizontal line through the axis. They used to hang off two different
+   anchors — the input on the number row under the plot, the output at 50% of
+   the whole card — so a wire through the node ran on a slant. This restates
+   the canonical row-anchored override in NodeBase.css: the transform replaces
+   React Flow's, so BOTH insets are mandatory. */
+.math-preview-node__canvas-wrap > .react-flow__handle {
   top: 50% !important;
   transform: translateY(-50%) !important;
 }
 
-.math-preview-node__port-row .react-flow__handle-left {
+.math-preview-node__canvas-wrap > .react-flow__handle-left {
   left: calc(var(--handle-size) / -2) !important;
 }
 
-/* Output handle — direct child, vertically centered on node */
-.math-preview-node > .react-flow__handle {
-  transform: translateY(-50%) !important;
-}
-
-.math-preview-node > .react-flow__handle-right {
+.math-preview-node__canvas-wrap > .react-flow__handle-right {
   right: calc(var(--handle-size) / -2) !important;
 }

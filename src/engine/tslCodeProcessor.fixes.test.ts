@@ -191,7 +191,8 @@ export default shader;
     expect(out).toContain('colorNode: __pixel(greaterThan1, vec3(1, 1, 1))');
     expect(out).toContain('const __pixel = Fn(([__c0, __color]) => {');
     expect(out).toContain('Discard(__c0);');
-    expect(out).toContain('positionNode: positionLocal.add(');
+    // The displacement reads the position, so its normals follow it (displacedNormals.ts).
+    expect(out).toContain('positionNode: __fsDisplaced0(positionLocal.add(');
     // vec3 imported for the fallback color
     expect(out).toMatch(/import \{[^}]*\bvec3\b[^}]*\} from 'three\/tsl';/);
   });

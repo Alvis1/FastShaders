@@ -230,19 +230,21 @@ describe('the served loader and the loader version', () => {
 for (const v of ACTIVE_LOADERS) describe.skipIf(!loaderAvailable(v))(`shaderloader ${v} — per-part material settings contract`, () => {
   it('buildMaterial applies every PART_SETTING_KEYS entry from its spec', () => {
     const text = loaderText(v);
-    const start = text.indexOf('const buildMaterial = function (spec)');
+    // 0.8 takes the parent spec too (delta 14: a part inherits the top-level
+    // mergeVertices), so match the shared prefix.
+    const start = text.indexOf('const buildMaterial = function (spec');
     expect(start, 'buildMaterial not found').toBeGreaterThan(-1);
     const end = text.indexOf('return material;', start);
     expect(end).toBeGreaterThan(start);
     const src = text.slice(start, end);
     expect([...PART_SETTING_KEYS].sort())
-      .toEqual(['alphaTest', 'depthWrite', 'flatShading', 'side', 'transparent']);
-    // `flatShading` is 0.8-ONLY, and that asymmetry is the feature's whole
+      .toEqual(['alphaTest', 'depthWrite', 'flatShading', 'side', 'transparent', 'unlit']);
+    // `flatShading` and `unlit` (the Unlit material, delta 13) are 0.8-ONLY, and that asymmetry is the feature's whole
     // compatibility story: 0.6 is frozen (already-exported shaders fetch it
     // from the CDN), it reads its known keys BY NAME, and an unknown one is
     // simply ignored — so a shader authored flat renders SMOOTH on an old
     // loader instead of failing. Every other key must be in both.
-    const only08 = new Set(['flatShading']);
+    const only08 = new Set(['flatShading', 'unlit']);
     for (const key of PART_SETTING_KEYS) {
       if (v === '0.6' && only08.has(key)) {
         expect(src, `${key} must not have been back-ported into the frozen 0.6`)
@@ -257,10 +259,14 @@ for (const v of ACTIVE_LOADERS) describe.skipIf(!loaderAvailable(v))(`shaderload
     // The channel gate is why emission drops a settings-only part: the loader
     // would skip it anyway, so the module never carries one.
     const text = loaderText(v);
-    expect(text).toContain('partMaterials.set(names[i], buildMaterial(spec))');
+    // 0.8 passes the top-level spec as the parent (delta 14); 0.6 is frozen.
+    const call = v === '0.6'
+      ? 'partMaterials.set(names[i], buildMaterial(spec))'
+      : 'partMaterials.set(names[i], buildMaterial(spec, shaderResult))';
+    expect(text).toContain(call);
     const loop = text.slice(
       text.indexOf('const names = Object.keys(shaderResult.parts);'),
-      text.indexOf('partMaterials.set(names[i], buildMaterial(spec))'),
+      text.indexOf(call),
     );
     expect(loop).toContain('if (!hasChannels(spec)) continue;');
   });

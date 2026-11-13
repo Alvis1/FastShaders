@@ -400,11 +400,19 @@ describe('materialSettings carry per key', () => {
     mergeVertices: false,
   };
 
-  it('a TARGETED node takes the four emitted keys from the CODE and carries the other two', () => {
+  it('a TARGETED node takes EVERY key from the CODE — its part body carries its vertex settings too', () => {
     // The user deleted `transparent` from the part's body: the parse produces a
-    // node without it, and the carry must not put it back.
+    // node without it, and the carry must not put it back. Since 2026-11-10
+    // the same holds for the vertex keys, which ride the body where they differ
+    // from the module owner's (partVertexProps).
     const merged = outputNode('m', 1, ['Body'], { materialSettings: { side: 'double' } });
     carryMaterialSettings(merged, outputNode('old', 1, ['Body'], { materialSettings: FULL }));
+    expect(dataOf(merged).materialSettings).toEqual({ side: 'double' });
+  });
+
+  it('…except the OWNER\'s vertex keys, which are the module\'s own and never in the code', () => {
+    const merged = outputNode('m', 1, ['Body'], { materialSettings: { side: 'double' } });
+    carryMaterialSettings(merged, outputNode('old', 1, ['Body'], { materialSettings: FULL }), true);
     expect(dataOf(merged).materialSettings).toEqual({
       side: 'double',
       displacementMode: 'offset',

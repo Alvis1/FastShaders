@@ -23,7 +23,9 @@ import { intLiteral, isIntSource, type IntGraph } from './intPromotion';
 import { SOUND_CHANNELS, soundChannelForHandle } from '@/utils/soundAnalysis';
 import { readSoundSettings } from '@/utils/soundSettings';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { bypassMutedEdges, mutedNodeIds, passSources, type PassSource } from '@/utils/nodeMute';
 import { hasNoiseRangeFlag, isUnsignedNoise } from '@/utils/noiseRange';
+import { isUnitRange, unitWave } from '@/utils/unitRange';
 import { sameGraphSemantics } from '@/utils/graphSemantics';
 import { buildTimeUpstreamSet, buildDownstreamClosure } from '@/utils/graphTraversal';
 import { IMAGE_CHANNEL_INDEX } from '@/utils/imageChannels';
@@ -143,7 +145,15 @@ interface EvalCtx {
   edges: AppEdge[];
   nodeIndex: Map<string, AppNode>;
   edgeIndex: Map<string, AppEdge[]>;
-  /** `edgeIndex` minus the wires codegen resolves to NOTHING (`deadSplitWire`),
+  /** `edgeIndex` as the SHADER reads it: every wire leaving a MUTED node
+   *  re-sourced onto its pass-through (utils/nodeMute.ts). The same map as
+   *  `edgeIndex` when nothing is muted. */
+  logicalIndex: Map<string, AppEdge[]>;
+  /** Each muted node → where its wires really read from (null: nothing), or
+   *  null when nothing is muted. The edge-level reads below follow it, so a
+   *  wire drawn out of a muted node shows what the shader holds on it. */
+  mutedPass: Map<string, PassSource | null> | null;
+  /** `logicalIndex` minus the wires codegen resolves to NOTHING (`deadSplitWire`),
    *  which the shader reads as unwired, and every wire after a socket's FIRST —
    *  what `evaluate`/`computeRange` walk. `getTargetEdges` keeps the full index:
    *  such a socket is still drawn wired. */
@@ -221,23 +231,30 @@ function getCtx(nodes: AppNode[], edges: AppEdge[]): EvalCtx {
     const unwrapped = unwrapCollapsedGroupEdges(nodes, edges);
     const nodeIndex = buildNodeIndex(nodes);
     const edgeIndex = buildEdgeIndex(unwrapped);
+    // MUTED nodes are bypassed for everything the shader computes; the drawn
+    // wires (`edges`, `edgeIndex`, getTargetEdges) stay the real ones.
+    const muted = mutedNodeIds(nodes);
+    const logical = muted ? bypassMutedEdges(nodes, unwrapped, muted) : unwrapped;
+    const logicalIndex = logical === unwrapped ? edgeIndex : buildEdgeIndex(logical);
     // A socket reads its FIRST wire, as graphToCode's `inEdge` does — and when
     // that one is dead the socket is unwired, never the next wire in the array.
     const firstIntoSocket = new Set<string>();
-    const live = unwrapped.filter((e) => {
+    const live = logical.filter((e) => {
       if (typeof e.targetHandle === 'string') {
         const socket = `${e.target}\u0000${e.targetHandle}`;
         if (firstIntoSocket.has(socket)) return false;
         firstIntoSocket.add(socket);
       }
-      return !deadSplitWire(e, nodeIndex, edgeIndex);
+      return !deadSplitWire(e, nodeIndex, logicalIndex);
     });
-    const evalEdgeIndex = live.length === unwrapped.length ? edgeIndex : buildEdgeIndex(live);
-    if (evalEdgeIndex !== edgeIndex) FULL_EDGE_INDEX.set(evalEdgeIndex, edgeIndex);
+    const evalEdgeIndex = live.length === logical.length ? logicalIndex : buildEdgeIndex(live);
+    if (evalEdgeIndex !== logicalIndex) FULL_EDGE_INDEX.set(evalEdgeIndex, logicalIndex);
     ctx = {
       edges: unwrapped,
       nodeIndex,
       edgeIndex,
+      logicalIndex,
+      mutedPass: muted ? passSources(nodes, unwrapped, muted) : null,
       evalEdgeIndex,
       evalEdges: live,
       evalCache0: new Map(),
@@ -354,13 +371,26 @@ const UNIFORM_FIELD_TYPES: ReadonlySet<string> = new Set([
  * getFieldUpstreamSet without the uniform seeds: every node whose value VARIES
  * OVER THE SURFACE. The question an Image's UV hand-off asks (imageUvHandoff) —
  * a vec2 built from Sound or camera values is one point, and sampling a picture
- * there painted the whole mesh one flickering colour.
+ * there painted the whole mesh one flickering colour — and the one the noise
+ * card's thumbnail asks before drawing a pattern (PreviewNode).
+ *
+ * A noise is a seed only while its `pos` is UNWIRED: then it reads the surface
+ * position (positionGeometry, or the splat centre inside a splat Fn). Wired, it
+ * samples wherever that wire points, so it varies over the surface exactly
+ * when its inputs do — the closure decides — and a noise of the camera
+ * position or of Sound is one value per frame.
  */
 export function getSurfaceFieldUpstreamSet(nodes: AppNode[], edges: AppEdge[]): ReadonlySet<string> {
   const ctx = getCtx(nodes, edges);
   if (!ctx.surfaceFieldUpstream) {
+    const posWired = new Set<string>();
+    for (const e of ctx.evalEdges) {
+      if (e.targetHandle === 'pos' && ctx.nodeIndex.has(e.source)) posWired.add(e.target);
+    }
     ctx.surfaceFieldUpstream = buildDownstreamClosure(nodes, ctx.evalEdges, (n) =>
-      !UNIFORM_FIELD_TYPES.has(n.data.registryType) && analyticalRange(n) !== null);
+      !UNIFORM_FIELD_TYPES.has(n.data.registryType)
+      && !(posWired.has(n.id) && NODE_REGISTRY.get(n.data.registryType)?.category === 'noise')
+      && analyticalRange(n) !== null);
   }
   return ctx.surfaceFieldUpstream;
 }
@@ -415,7 +445,7 @@ export function getNodeOutputShape(
   const ctx = getCtx(nodes, edges);
   const hit = ctx.shapeCache.get(nodeId);
   if (hit !== undefined) return hit;
-  const result = computeShape(nodeId, new Set(), ctx.nodeIndex, ctx.edgeIndex);
+  const result = computeShape(nodeId, new Set(), ctx.nodeIndex, ctx.logicalIndex);
   ctx.shapeCache.set(nodeId, result);
   return result;
 }
@@ -668,6 +698,22 @@ function sliceRange(r: RangeResult | null, s: HandleChannels): RangeResult | nul
     : null;
 }
 
+/**
+ * The wire the SHADER reads in place of `edge`: itself, unless it leaves a
+ * MUTED node — then its pass-through's source (utils/nodeMute.ts), or null
+ * when the muted node passes nothing (the consumer reads its own unwired
+ * value, so the wire carries none).
+ */
+function throughMuted(
+  ctx: EvalCtx,
+  edge: Pick<AppEdge, 'source' | 'sourceHandle'>,
+): Pick<AppEdge, 'source' | 'sourceHandle'> | null {
+  if (!ctx.mutedPass) return edge;
+  const via = ctx.mutedPass.get(edge.source);
+  if (via === undefined) return edge;
+  return via ? { source: via.source, sourceHandle: via.sourceHandle } : null;
+}
+
 /** The value arriving along `edge` — the source node evaluated, then projected
  *  onto the socket the edge actually leaves from. */
 export function evaluateEdgeSource(
@@ -679,7 +725,10 @@ export function evaluateEdgeSource(
   // A wire codegen resolves to nothing carries nothing — a tampered Split
   // handle ('out', null) would otherwise read the whole padded vector.
   const ctx = getCtx(nodes, edges);
-  if (deadSplitWire(edge, ctx.nodeIndex, ctx.edgeIndex)) return null;
+  const via = throughMuted(ctx, edge);
+  if (!via) return null;
+  edge = via;
+  if (deadSplitWire(edge, ctx.nodeIndex, ctx.logicalIndex)) return null;
   const res = evaluateNodeOutput(edge.source, nodes, edges, time);
   return sliceEval(res, handleChannels(ctx.nodeIndex.get(edge.source), edge.sourceHandle));
 }
@@ -692,7 +741,10 @@ export function evaluateEdgeRange(
   time: number,
 ): RangeResult | null {
   const ctx = getCtx(nodes, edges);
-  if (deadSplitWire(edge, ctx.nodeIndex, ctx.edgeIndex)) return null;
+  const via = throughMuted(ctx, edge);
+  if (!via) return null;
+  edge = via;
+  if (deadSplitWire(edge, ctx.nodeIndex, ctx.logicalIndex)) return null;
   const r = evaluateNodeRange(edge.source, nodes, edges, time);
   return sliceRange(r, handleChannels(ctx.nodeIndex.get(edge.source), edge.sourceHandle));
 }
@@ -709,7 +761,11 @@ export function getEdgeOutputShape(
   nodes: AppNode[],
   edges: AppEdge[],
 ): number {
-  const node = getCtx(nodes, edges).nodeIndex.get(edge.source);
+  const ctx = getCtx(nodes, edges);
+  // A muted node's wire carries its pass-through's width; one passing nothing
+  // keeps its own socket's, so the wire still draws as what it is.
+  edge = throughMuted(ctx, edge) ?? edge;
+  const node = ctx.nodeIndex.get(edge.source);
   if (node && edge.sourceHandle) {
     const shape = portShapeForHandle(node, edge.sourceHandle);
     if (shape > 0) return shape;
@@ -998,19 +1054,12 @@ function evaluate(
       result = [0.5, 0.5]; // center of screen as default
       break;
     case 'uv': {
-      // Channel doesn't affect CPU evaluation (always UV center)
-      let u = 0.5, v = 0.5;
-      // Apply tiling
-      u *= scalarInput('tilingU', 1);
-      v *= scalarInput('tilingV', 1);
-      // Apply rotation around (0.5, 0.5)
-      const rot = scalarInput('rotation', 0);
-      if (rot !== 0) {
-        const cu = u - 0.5, cv = v - 0.5;
-        const cosR = Math.cos(rot), sinR = Math.sin(rot);
-        u = cu * cosR - cv * sinR + 0.5;
-        v = cu * sinR + cv * cosR + 0.5;
-      }
+      // Channel doesn't affect CPU evaluation (always UV center). graphToCode's
+      // map is c = (uv − ½)·(U, V), out = R(−θ°)·c + ½·(U, V) — so at the
+      // centre c = 0 and the TURN (any θ) leaves the point at ½·(U, V), which
+      // is also the tiling-only `uv·(U, V)` there. The range (uvRange) is
+      // where the rotation shows.
+      const u = 0.5 * scalarInput('tilingU', 1), v = 0.5 * scalarInput('tilingV', 1);
       result = [u, v];
       break;
     }
@@ -1068,8 +1117,8 @@ function evaluate(
     // Unary math (component-wise). Outside its domain the GPU has no number
     // (NaN; GLSL undefined, WGSL indeterminate, log2(0) is −∞), so neither does
     // the card: sqrt(−1) is '…', never the clamped 0 or log2's floored −33.22.
-    case 'sin': result = unaryOp('x', 0, Math.sin); break;
-    case 'cos': result = unaryOp('x', 0, Math.cos); break;
+    case 'sin': result = unaryOp('x', 0, unitWave(Math.sin, isUnitRange(type, values))); break;
+    case 'cos': result = unaryOp('x', 0, unitWave(Math.cos, isUnitRange(type, values))); break;
     case 'abs': result = unaryOp('x', 0, Math.abs); break;
     case 'sqrt': result = unaryOp('x', 0, Math.sqrt); break;
     case 'exp': result = unaryOp('x', 0, Math.exp); break;
@@ -2095,7 +2144,7 @@ function computeRange(
   }
 
   // UV carries its own tiling and turn (graphToCode: `mul(uv(), vec2(U, V))`,
-  // then a rotation about (½, ½)), so its interval is analyticalRange's [0, 1]²
+  // or with a turn R(−θ°)·(uv − ½)·(U, V) + ½·(U, V)), so its interval is analyticalRange's [0, 1]²
   // pushed through that same map, each parameter read as a RANGE (a wired
   // Slider or Time sweeps it). The table entry alone read "0…1" for U = 10
   // while the preview tiled ten times. Here, not in the table: the table sees
@@ -2186,7 +2235,11 @@ function computeRange(
       // Exact per channel (sinInterval): sin(uv·π) is the 0…1 arch it draws,
       // not the signed −1…1 a fixed bound read.
       const x = portRange('x', 0);
-      result = unaryRange(x, (lo, hi) => (type === 'sin' ? sinInterval(lo, hi) : cosInterval(lo, hi)));
+      const unit = isUnitRange(type, values);
+      result = unaryRange(x, (lo, hi) => {
+        const [a, b] = type === 'sin' ? sinInterval(lo, hi) : cosInterval(lo, hi);
+        return unit ? [0.5 + 0.5 * a, 0.5 + 0.5 * b] : [a, b];
+      });
       break;
     }
     case 'fract': {
@@ -2911,23 +2964,28 @@ function cosInterval(a: number, b: number): [number, number] {
 
 /**
  * The UV node's interval, through the emitted map: s = uv·(U, V) with uv in
- * [0, 1]² — so u·U spans the corners 0·U and 1·U — and, with a turn θ, the
- * centred box (s − ½) rotated, + ½. The turn is linear in that box, so interval
- * products give the exact axis-aligned bound for a constant θ (45° on the unit
- * square: −0.207…1.207) and a sound one for a swept θ. Rotation 0 skips the turn,
- * as codegen does, so an untouched UV stays exactly 0…1.
+ * [0, 1]² — so u·U spans the corners 0·U and 1·U — and, with a turn of θ
+ * DEGREES, the centred box c = (uv − ½)·(U, V) turned by R(−θ), + ½·(U, V).
+ * The turn is linear in that box, so interval products give the exact
+ * axis-aligned bound for a constant θ and tiling (45° on the unit square:
+ * −0.207…1.207) and a sound one for a swept θ or tiling. Rotation 0 skips the
+ * turn, as codegen does, so an untouched UV stays exactly 0…1.
  */
 function uvRange(tu: RangeResult, tv: RangeResult, rot: RangeResult): RangeResult {
   const su: [number, number] = [Math.min(0, tu.min[0]), Math.max(0, tu.max[0])];
   const sv: [number, number] = [Math.min(0, tv.min[0]), Math.max(0, tv.max[0])];
   if (rot.min[0] === 0 && rot.max[0] === 0) return { min: [su[0], sv[0]], max: [su[1], sv[1]] };
-  const cu: [number, number] = [su[0] - 0.5, su[1] - 0.5];
-  const cv: [number, number] = [sv[0] - 0.5, sv[1] - 0.5];
-  const c = cosInterval(rot.min[0], rot.max[0]), s = sinInterval(rot.min[0], rot.max[0]);
+  // c = (uv − ½)·(U, V): the centred unit box scaled by each tiling range.
+  const half: [number, number] = [-0.5, 0.5];
+  const cu = mulInterval(half, [tu.min[0], tu.max[0]]);
+  const cv = mulInterval(half, [tv.min[0], tv.max[0]]);
+  const d2r = Math.PI / 180;
+  const c = cosInterval(rot.min[0] * d2r, rot.max[0] * d2r), s = sinInterval(rot.min[0] * d2r, rot.max[0] * d2r);
   const ucos = mulInterval(cu, c), vsin = mulInterval(cv, s), usin = mulInterval(cu, s), vcos = mulInterval(cv, c);
+  // out = (cu·cos + cv·sin, cv·cos − cu·sin) + ½·(U, V)
   return {
-    min: [ucos[0] - vsin[1] + 0.5, usin[0] + vcos[0] + 0.5],
-    max: [ucos[1] - vsin[0] + 0.5, usin[1] + vcos[1] + 0.5],
+    min: [ucos[0] + vsin[0] + 0.5 * tu.min[0], vcos[0] - usin[1] + 0.5 * tv.min[0]],
+    max: [ucos[1] + vsin[1] + 0.5 * tu.max[0], vcos[1] - usin[0] + 0.5 * tv.max[0]],
   };
 }
 

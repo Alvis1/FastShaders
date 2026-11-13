@@ -174,6 +174,12 @@ export interface MaterialSettings {
    * every export made before this byte-identical.
    */
   flatShading?: boolean;
+  /**
+   * The FLAT SHADER — unlit (A-Frame's `shader: flat`): loader 0.8 builds a
+   * MeshBasicNodeMaterial, so the colour shows as it is and no light reaches
+   * it (utils/unlitMaterial.ts). Absent is lit; only `true` is stored.
+   */
+  unlit?: boolean;
 }
 
 /**

@@ -120,7 +120,8 @@ describe('every number field is the shared one', () => {
   });
 
   it('a click in and out of a ParamRow\'s drag number writes no rounding: what the box shows and commits, the guard knows', () => {
-    // The edit box opens at formatFieldNumber(value, 4) and Enter/blur commit parseFieldNumber of that text, typed or not.
+    // The edit box opens at formatFieldNumber(value, 4) and Enter/blur commit parseFieldNumber of that text once it is
+    // edited (an untouched box commits nothing since 2026-11-13; an edit can still type the rounding back).
     // Whatever comes back is either the stored number itself (the row writes it, as it always has) or exactly the
     // rounding isRoundingOnlyCommit refuses — never a third number, which would round an import on a click.
     const stored = [0.30358983848622445, -0.30358983848622445, 0.1 + 0.2, 1 / 3, -1 / 3, 0.5, -0.5, 0, -0.00004, 0.00005, 12345.678901, -7.25e-3, 2 ** 52 + 0.5, 1e21, 123456789.987654];

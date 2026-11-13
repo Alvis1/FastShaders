@@ -4,12 +4,12 @@
  * editorVisibility.test.ts may re-mock `@/eval/evalArm`).
  *
  * The tab is always on outside a study (it is not an optional category: there
- * is no switch). In a study it exists on the `/evalpro` ENTRY only (owner,
- * 2026-10-25) — keyed on the arm, never a parameter, like the professional
- * block: the student arms (`/eval`, `/evalp`) are compared with each other, so
- * a training surface in one of them would change the condition between
- * groups (docs/dev/eval-mode.md). A session with no recorded entry (an older
- * redirector) has none. Where it is absent, a stored `fs:assetTab` of
+ * is no switch), and on EVERY study entry since 2026-11-10 (owner: the arms
+ * differ only in the points; through the first study round it was `/evalpro`
+ * only). A session with no recorded entry (an older redirector) has none, like
+ * the intro (`introInStudy`). Where the cost bar is hidden (`/evalp`), the one
+ * lesson that teaches the cost bar is left out (`offeredLessons`), as the
+ * intro leaves out its budget slide. Where the tab is absent, a stored `fs:assetTab` of
  * `'tutorials'` stays a VALID value and is derived to `'all'` at render, never
  * written back — the same rule the optional categories follow (`effectiveTab`,
  * registry/optionalCategories.ts).
@@ -21,7 +21,16 @@ export const TUTORIALS_TAB = 'tutorials';
 
 /** Whether the Tutorials tab (and its tiles) exist in this page. */
 export function tutorialsOffered(evalMode: boolean, arm: EvalArm | null): boolean {
-  return !evalMode || arm === 'evalpro';
+  return !evalMode || arm !== null;
+}
+
+/** The lessons that teach the cost bar's point figures (`tut-costs`). */
+export const COST_LESSON_IDS: ReadonlySet<string> = new Set(['tut-costs']);
+
+/** The lessons this page lists: every one, less the cost lesson where the
+ *  point budget is not shown (`introShowsBudget(evalTask())` at the caller). */
+export function offeredLessons<T extends { id: string }>(defs: readonly T[], showsBudget: boolean): readonly T[] {
+  return showsBudget ? defs : defs.filter((d) => !COST_LESSON_IDS.has(d.id));
 }
 
 /** The tab to RENDER for a stored one: a hidden Tutorials tab shows the All strip. */

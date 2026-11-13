@@ -63,6 +63,9 @@ const PRESERVED_KEYS: Record<string, readonly string[]> = {
   perlinVec3: ['signed'],
   fbm: ['signed'],
   fbmVec3: ['signed'],
+  // Sine / Cosine "Map to 0…1" (utils/unitRange.ts): a MODE, not a number.
+  sin: ['unit'],
+  cos: ['unit'],
   // React to light and Replace own colour are the Splat Output's MODES
   // (utils/splatLight.ts, utils/splatColor.ts), like a noise's range: Reset
   // restores the numbers and colours, it does not switch the light off or

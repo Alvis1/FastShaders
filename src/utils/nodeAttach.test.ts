@@ -153,7 +153,7 @@ describe('attachEmptyReason', () => {
     const COLLAPSED = 'The Output is inside a collapsed group — expand it to attach';
     expect(menu).toContain("attachEmptyReason(nodes) === 'collapsed'");
     expect(menu).toContain(`t('${COLLAPSED}', language)`);
-    expect(menu).toContain("t('No Output on the canvas', language)");
+    expect(menu).toContain("t('No Output yet', language)");
     const lv = JSON.parse(readFileSync(new URL('../i18n/lv.json', import.meta.url), 'utf8')) as {
       ui: Record<string, string>;
     };

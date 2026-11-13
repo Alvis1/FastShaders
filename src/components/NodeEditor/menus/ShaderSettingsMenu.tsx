@@ -18,14 +18,21 @@ import {
   type OutputMaterial,
 } from '@/utils/outputMaterials';
 import { formatSectionLabel } from '../nodes/sectionLabelText';
-import { isEvalMode } from '@/eval/evalMode';
+import { evalTask } from '@/eval/evalTask';
 import { graphTextureMemory, textureMemoryLine, TEXTURE_MEMORY_HINT_KEY } from '@/utils/textureMemory';
+import { FACES_HINT_KEY } from '@/utils/displacedNormalCost';
+import { effectiveVertexSettings } from '@/engine/materialSettingsCode';
+import { UNLIT_HINT_KEY, UNLIT_IGNORED_CHANNELS, UNLIT_OFF_HINT_KEY, isUnlitSettings } from '@/utils/unlitMaterial';
+
 
 /** Ports that can be toggled on/off in the output node settings, listed in
  *  the SAME order as the node's socket arrangement (the registry def's
  *  inputs). Color is excluded (always exposed) and Opacity is excluded —
  *  it's auto-managed by transparent/alphaTest. */
 const OPTIONAL_OUTPUT_PORTS = ['emissive', 'roughness', 'metalness', 'discard', 'normal', 'env'];
+
+/** A row the Unlit material switches off: greyed and deaf to the pointer, its label still readable. */
+const OFF_STYLE = { opacity: 0.45, cursor: 'not-allowed' } as const;
 
 /**
  * The pixel stage's channel switches — one checkbox per optional Output
@@ -38,6 +45,7 @@ export function OutputPortToggles({
   onToggle,
   language,
   inert = false,
+  off,
 }: {
   outputDef: NodeDefinition;
   exposed: ReadonlySet<string>;
@@ -45,24 +53,28 @@ export function OutputPortToggles({
   language: Language;
   /** A picture of the rows: nothing focusable. */
   inert?: boolean;
+  /** Channels shown switched OFF (the Unlit material's): greyed, unclickable, the reason as tooltip. */
+  off?: ReadonlySet<string>;
 }) {
   return (
     <>
       {OPTIONAL_OUTPUT_PORTS.map((portId) => {
         const port = outputDef.inputs.find((p) => p.id === portId);
         if (!port) return null;
+        const isOff = !!off?.has(portId);
         return (
           <label
             key={portId}
-            style={labelStyle}
-            title={port.description ? t(port.description, language) : undefined}
+            style={isOff ? { ...labelStyle, ...OFF_STYLE } : labelStyle}
+            title={isOff ? t(UNLIT_OFF_HINT_KEY, language) : port.description ? t(port.description, language) : undefined}
           >
             <input
               type="checkbox"
               checked={exposed.has(portId)}
-              onChange={() => onToggle(portId)}
+              aria-disabled={isOff || undefined}
+              onChange={() => { if (!isOff) onToggle(portId); }}
               style={checkboxStyle}
-              tabIndex={inert ? -1 : undefined}
+              tabIndex={inert || isOff ? -1 : undefined}
               data-port={portId}
             />
             {portLabel(port.label, language)}
@@ -116,10 +128,9 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
   // reaches updateNodeData -> an unconditional pushHistory. Bracket the drag
   // so it lands as one undo entry (useHistoryBracket; see hooks).
   const { bracket, closeBracket } = useHistoryBracket();
-  // The texture-memory line is hidden in every study arm (a new
-  // participant-visible element; if it is ever shown there it must also honour
-  // `evalTask().pointsVisible`, since it is cost feedback).
-  const showTextureMemory = !isEvalMode();
+  // The texture-memory line is cost feedback, so it follows the points: shown
+  // in every session where they are, absent on `/evalp` (`pointsVisible`).
+  const showTextureMemory = evalTask().pointsVisible;
   const texMemKey = useAppStore((s) => (showTextureMemory ? textureMemoryKey(s.nodes, s.edges) : '0|0'));
   const [texBytes, texCount] = texMemKey.split('|').map(Number);
 
@@ -151,16 +162,24 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
    *  the canvas, with no node under the cursor at all). A number selector, so
    *  it re-renders on a count change and on nothing else. */
   const outputCount = useAppStore((s) => outputNodes(s.nodes).length);
-  /** Does THIS node own the module's two geometry directives? `mergeVertices`
-   *  and `displacementMode` are written at module level from
-   *  `moduleSettingsOutput`, never per part, so on any other node their
-   *  checkboxes wrote a field nothing read. A boolean selector, so a graph
-   *  notify that does not move the election re-renders nothing. */
+  /** Does THIS node own the module's vertex settings? The owner's
+   *  `displacementMode` / `mergeVertices` are the module's own (top-level);
+   *  every other Output's apply to its own material, written into its part
+   *  body only where they differ from the owner's (engine/materialSettingsCode
+   *  `partVertexProps`, owner 2026-11-10). A boolean selector. */
   const ownsModuleSettings = useAppStore(
     (s) => !!outputNode && moduleSettingsOutput(s.nodes)?.id === outputNode.id,
   );
+  /** The owner's settings: what a material without its own vertex choice follows. */
+  const ownerSettings = useAppStore(
+    (s) => (moduleSettingsOutput(s.nodes)?.data as { materialSettings?: MaterialSettings } | undefined)?.materialSettings,
+  );
 
   const settings: MaterialSettings = outputData?.materialSettings ?? {};
+  /** What this material's vertex stage does: its own choice, else the owner's. */
+  const vertex = effectiveVertexSettings(settings, ownsModuleSettings ? undefined : ownerSettings);
+  /** The Unlit material (utils/unlitMaterial.ts): the lit-only rows below show switched off. */
+  const unlit = isUnlitSettings(settings);
   const exposedPorts = outputData?.exposedPorts ?? OUTPUT_DEFAULT_EXPOSED;
   const exposedSet = new Set(exposedPorts);
 
@@ -285,6 +304,45 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
           whole-DOCUMENT row left, and it says "document" in its own words. */}
       <div className="context-menu__category">{t('Material Settings', language)}</div>
       <div className="context-menu__divider" />
+      {/* WHICH material these settings belong to — a static scope LINE, not a
+          selector: the NODE is the scope now (one node, one material), and a
+          dropdown here would be a second control for a binding the node's own
+          picker already owns — the exact argument that keeps the MESH picker
+          off this menu. Named by MESH (the first one plus an ellipsis, the
+          node picker's own rule), since that is how the user thinks of them —
+          "the glass one". Shown only while SEVERAL Output nodes exist, when
+          "which one am I editing" is a real question — this menu also opens
+          from the canvas with no node under the cursor, and then the line is
+          the only thing that says which Output answered. ONE label derivation
+          for the menu and the node: `sectionLabel` decides what the label is,
+          `formatSectionLabel` words it, so an untargeted Output reads
+          "All meshes (default)" here exactly as it does on the node. */}
+      {outputCount > 1 && (
+        <div style={{ ...labelStyle, cursor: 'default' }}>
+          <span>{t('Material', language)}</span>
+          <span style={{ fontWeight: 700 }}>
+            {formatSectionLabel(sectionLabel(materials, 0, readModelSignature(outputData)), language)}
+          </span>
+        </div>
+      )}
+
+      {/* THE FLAT SHADER — unlit, A-Frame's `shader: flat` (owner, 2026-11-10;
+          utils/unlitMaterial.ts, loader 0.8 delta 13). At the TOP because it
+          decides which of the rows below mean anything: with no light, the
+          lit-only channels (UNLIT_IGNORED_CHANNELS) and Faces have no effect,
+          so they show switched off — aria-disabled and guarded, never
+          `disabled`, so their tooltip still says why. Only `true` is stored. */}
+      <label style={labelStyle} title={t(UNLIT_HINT_KEY, language)}>
+        <input
+          type="checkbox"
+          checked={unlit}
+          onChange={(e) => updateSettings({ unlit: e.target.checked ? true : undefined })}
+          style={checkboxStyle}
+        />
+        {t('Unlit', language)}
+      </label>
+
+
       {/* Texture MEMORY, the currency points do not price: a figure, not a
           verdict, and the ONLY surface that carries it. Total Cost and the
           device budget used to sit above it under a "Shader (whole document)"
@@ -314,29 +372,13 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
       <div className="context-menu__divider" />
       <div className="context-menu__category">{t('Pixel (Fragment) Shader', language)}</div>
       {outputDef && (
-        <OutputPortToggles outputDef={outputDef} exposed={exposedSet} onToggle={handleTogglePort} language={language} />
-      )}
-
-      {/* WHICH material these settings belong to — a static scope LINE, not a
-          selector: the NODE is the scope now (one node, one material), and a
-          dropdown here would be a second control for a binding the node's own
-          picker already owns — the exact argument that keeps the MESH picker
-          off this menu. Named by MESH (the first one plus an ellipsis, the
-          node picker's own rule), since that is how the user thinks of them —
-          "the glass one". Shown only while SEVERAL Output nodes exist, when
-          "which one am I editing" is a real question — this menu also opens
-          from the canvas with no node under the cursor, and then the line is
-          the only thing that says which Output answered. ONE label derivation
-          for the menu and the node: `sectionLabel` decides what the label is,
-          `formatSectionLabel` words it, so an untargeted Output reads
-          "All meshes (default)" here exactly as it does on the node. */}
-      {outputCount > 1 && (
-        <div style={{ ...labelStyle, cursor: 'default' }}>
-          <span>{t('Material', language)}</span>
-          <span style={{ fontWeight: 700 }}>
-            {formatSectionLabel(sectionLabel(materials, 0, readModelSignature(outputData)), language)}
-          </span>
-        </div>
+        <OutputPortToggles
+          outputDef={outputDef}
+          exposed={exposedSet}
+          onToggle={handleTogglePort}
+          language={language}
+          off={unlit ? UNLIT_IGNORED_CHANNELS : undefined}
+        />
       )}
 
       <label style={labelStyle}>
@@ -395,19 +437,30 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
         </select>
       </div>
 
-      {/* Blender's Shade Smooth / Shade Flat. A SELECT and not a checkbox
-          because both states have names the user is looking for — "Flat
-          Shading" unticked does not say "smooth" — and because it sits beside
-          Side, which is the same shape. `flatShading` is a THREE.Material
-          property three's node materials honour, so it is per-material like
-          the rows around it: `undefined` is smooth, and only the flat case is
-          stored, which is what keeps every existing graph byte-identical. */}
-      <div style={{ ...labelStyle, cursor: 'default' }}>
-        <span>{t('Shading', language)}</span>
+      {/* FACES — Blender's Shade Smooth / Shade Flat, renamed from "Shading" so
+          it no longer shares the word "smooth" with the vertex weld. A SELECT
+          because both states have names the user looks for; beside Side, the
+          same shape. On Smooth a wired Position also rewrites the normals to
+          follow the displaced shape (engine/displacedNormals.ts, priced in
+          utils/displacedNormalCost.ts); on Flat every triangle takes its normal
+          from the pixel derivatives, which already follow it. `flatShading` is
+          a THREE.Material property, so it is per-material: `undefined` is
+          smooth and only the flat case is stored. Off under the Unlit material:
+          an unlit surface has no light for a normal to shape. */}
+      <div
+        style={{ ...labelStyle, cursor: 'default', ...(unlit ? OFF_STYLE : null) }}
+        title={t(unlit ? UNLIT_OFF_HINT_KEY : FACES_HINT_KEY, language)}
+      >
+        <span>{t('Faces', language)}</span>
         <select
           value={settings.flatShading ? 'flat' : 'smooth'}
-          onChange={(e) => updateSettings({ flatShading: e.target.value === 'flat' ? true : undefined })}
-          style={selectStyle}
+          aria-disabled={unlit || undefined}
+          tabIndex={unlit ? -1 : undefined}
+          onChange={(e) => {
+            if (unlit) return;
+            updateSettings({ flatShading: e.target.value === 'flat' ? true : undefined });
+          }}
+          style={{ ...selectStyle, ...(unlit ? { pointerEvents: 'none' as const } : null) }}
         >
           <option value="smooth">{t('Smooth', language)}</option>
           <option value="flat">{t('Flat', language)}</option>
@@ -426,24 +479,22 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
         </label>
       )}
 
-      {/* THE VERTEX STAGE ("Displacement" until the stage rename) — only
-          relevant when position port is exposed, and
-          only on the Output that OWNS these two keys. Neither is a per-material
-          setting: `mergeVertices` is a module-level geometry directive the
-          loader reads off the return object, and `displacementMode` has no
-          loader key at all — `buildShaderModule` takes both from
-          `moduleSettingsOutput`, so on any OTHER node these checkboxes wrote a
-          field nothing read and the geometry went on following the default's.
-          A pre-existing gap CLAUDE.md admits; showing them where they apply is
-          what makes the "Material Settings" title above honest. */}
-      {exposedSet.has('position') && ownsModuleSettings && (
+      {/* THE VERTEX STAGE — on EVERY Output whose Position is exposed (owner,
+          2026-11-10). Each material displaces its own meshes, so each has its
+          own Along Normal and Merge Vertices. On the module-settings Output they
+          are the module's own (top-level keys); on any other they apply to its
+          material alone, and a material that never chose shows — and follows —
+          the owner's (`effectiveVertexSettings`). A targeted node's choice is
+          stored EXPLICITLY, both ways, so it stops following the owner the
+          moment the user touches it. */}
+      {exposedSet.has('position') && (
         <>
           <div className="context-menu__divider" />
           <div className="context-menu__category">{t('Vertex Shader', language)}</div>
           <label style={labelStyle}>
             <input
               type="checkbox"
-              checked={(settings.displacementMode ?? 'normal') === 'normal'}
+              checked={vertex.displacementMode === 'normal'}
               onChange={(e) =>
                 updateSettings({ displacementMode: e.target.checked ? 'normal' : 'offset' })
               }
@@ -457,7 +508,7 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
           >
             <input
               type="checkbox"
-              checked={settings.mergeVertices !== false}
+              checked={vertex.mergeVertices}
               onChange={(e) => updateSettings({ mergeVertices: e.target.checked })}
               style={checkboxStyle}
             />

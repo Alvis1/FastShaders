@@ -31,7 +31,7 @@ import {
   ribbonOffsets,
   ribbonStrokeWidth,
 } from '@/components/NodeEditor/edges/bezierGeometry';
-import { COUNT_EDGE_COLORS, getContrastColor } from '@/utils/colorUtils';
+import { COUNT_EDGE_COLORS, canvasWireColor } from '@/utils/colorUtils';
 import { initialNodeValues } from '@/utils/newNodeValues';
 import { generateEdgeId } from '@/utils/idGenerator';
 import type { Point } from './timeline';
@@ -103,7 +103,7 @@ export function wiredValueText(
 
 /** TypedEdge's one-channel wire colour. */
 export function useWireInk(): string {
-  return getContrastColor(useAppStore((s) => s.nodeEditorBgColor));
+  return canvasWireColor(useAppStore((s) => s.nodeEditorBgColor));
 }
 
 /** A still wire from a socket's outer edge to an input's: the stroke TypedEdge

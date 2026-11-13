@@ -452,11 +452,11 @@ describe('every slide', () => {
   const dir = __dirname;
   const scenes = readdirSync(dir).filter((f) => /Scene\.tsx$/.test(f));
 
-  it('there are fourteen, and the window lists them all', () => {
+  it('there are sixteen, and the window lists them all', () => {
     const win = readFileSync(path.join(dir, 'IntroWindow.tsx'), 'utf8');
     expect(scenes.sort()).toEqual([
       'BudgetScene.tsx', 'CodeScene.tsx', 'ConnectScene.tsx', 'DrawScene.tsx', 'ExposeScene.tsx', 'FolderScene.tsx', 'ImageScene.tsx', 'InsertScene.tsx',
-      'LabelsScene.tsx', 'ModelScene.tsx', 'OrganizeScene.tsx', 'PreviewScene.tsx', 'UniformScene.tsx', 'ValuesScene.tsx',
+      'LabelsScene.tsx', 'MeshesScene.tsx', 'ModelScene.tsx', 'OrganizeScene.tsx', 'PreviewScene.tsx', 'SearchScene.tsx', 'UniformScene.tsx', 'ValuesScene.tsx',
     ]);
     for (const f of scenes) expect(win, f).toContain(`Scene: ${f.replace('.tsx', '')},`);
   });

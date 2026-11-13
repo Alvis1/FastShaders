@@ -40,7 +40,7 @@ const HOOKS: { file: string; events: string[] }[] = [
       // The two deferred halves of a canvas file drop (wide CSV, "Add anyway").
       "evalLog('asset-drop'",
       "evalLog('lang-switch'",
-      // The step-by-step lessons (/evalpro only): the takeover, each step
+      // The step-by-step lessons (every study entry): the takeover, each step
       // shown and the close.
       "evalLog('tutorial-start'",
       "evalLog('tutorial-step'",

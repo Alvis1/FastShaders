@@ -5,17 +5,18 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { usesExposedPorts } from '@/utils/exposedPorts';
 import { rowStyle, labelStyle, NodeActions } from './menuShared';
 import { uniformTypeFor, constantTypeFor, convertPropertyNode } from '@/utils/propertyConvert';
-import { isEvalMode } from '@/eval/evalMode';
 import { ParamRow } from './ParamRow';
 import { ImageNodeSettings } from './ImageNodeSettings';
 import { PreviewChannelRow } from './PreviewChannelRow';
 import { SoundNodeSettings } from './SoundNodeSettings';
 import { NoiseNodeSettings } from './NoiseNodeSettings';
+import { UnitRangeSettings } from './UnitRangeSettings';
 import { WireframeNodeSettings } from './WireframeNodeSettings';
 import { DataNodeStats } from './DataColumnStats';
 import { ColorRampSettings } from './ColorRampSettings';
 import { RgbCurvesSettings } from './RgbCurvesSettings';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
+import { hasUnitRangeFlag } from '@/utils/unitRange';
 import { modeOf } from '@/engine/moduleHelpers';
 
 
@@ -44,10 +45,9 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
    *  spelled "Image" under the headings are gone with them. */
   const imageNode = node.data.registryType === 'imageNode';
   /** The Image node draws its Tile/Offset rows itself (ImageNodeSettings: the
-   *  same ParamRow, named, beside the turn they work with) — except in a study
-   *  session, which keeps today's menu: the raw-key rows below, in this order.
-   *  `isEvalMode` is sampled once per page, so every render agrees. */
-  const imageOwnsParamRows = imageNode && !isEvalMode();
+   *  same ParamRow, named, beside the turn they work with) — in a study
+   *  session too since 2026-11-10 (it kept the raw-key rows through round 1). */
+  const imageOwnsParamRows = imageNode;
 
   // Only opt-in-socket nodes get the socket-only rows below (ParamRow draws
   // each row's checkbox on the same test). Everywhere else the ports are
@@ -127,6 +127,9 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
           than a defaultValues entry) because on a noise node defaultValues is
           the socket list — see NoiseNodeSettings. */}
       {hasNoiseRangeFlag(node.data.registryType) && <NoiseNodeSettings nodeId={nodeId} />}
+
+      {/* Sine / Cosine: the 0…1 mapping (values.unit) — see UnitRangeSettings. */}
+      {hasUnitRangeFlag(node.data.registryType) && <UnitRangeSettings nodeId={nodeId} />}
 
       {/* Wireframe node: the mesh-edge switch. A view of the active Output's
           material setting, not a value of this node — see WireframeNodeSettings. */}

@@ -1100,7 +1100,7 @@ describe('GRAPH_REPLACED_EVENTS are the events the app fires on a whole-graph re
     const projectImport = read('engine/projectImport.ts');
     expect(projectImport).toContain("window.dispatchEvent(new CustomEvent('fs:graph-imported'));");
     expect(projectImport).toContain("export const GRAPH_MERGED_EVENT = 'fs:graph-merged';");
-    expect(projectImport).toContain('window.dispatchEvent(new CustomEvent(GRAPH_MERGED_EVENT));');
+    expect(projectImport).toContain('window.dispatchEvent(new CustomEvent(GRAPH_MERGED_EVENT, { detail: { how } }));');
     expect(read('store/useAppStore.ts')).toContain("window.dispatchEvent(new CustomEvent('fs:graph-new'));");
     expect([...GRAPH_REPLACED_EVENTS].sort()).toEqual(['fs:graph-imported', 'fs:graph-merged', 'fs:graph-new']);
   });

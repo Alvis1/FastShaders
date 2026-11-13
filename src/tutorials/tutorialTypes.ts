@@ -58,9 +58,18 @@ interface StepBase {
   hint?: string;
 }
 
-/** A node the user adds. `values` are applied on the AUTO path only — the
- *  colours and ramp stops a lesson does not teach — and are never a condition:
- *  a value the lesson DOES teach is its own `set` step. */
+/** A node the user adds. `values` are what the lesson does not teach — the
+ *  colours, the ramp stops, a noise scale — and the node gets them HOWEVER it
+ *  is added while the step is on screen: by "Do it for me", or by the user's
+ *  own tile press / Add-node menu (`wantedNodeValues`). The captions describe
+ *  them as facts ("its two stops sit at 0.4 and 0.6"), so a hand-added node
+ *  must not arrive as a plain black→white ramp. Never a condition: a value the
+ *  lesson DOES teach is its own `set` step.
+ *
+ *  An Image node (`imageNode`) carries no `values`: it counts only once it
+ *  holds a picture — the reader's own, dropped from a file, or the painted
+ *  sky "Do it for me" brings (`tutorialPicture.ts`), which fills an EMPTY
+ *  Image node the reader added from the palette rather than adding a second. */
 export interface AddStep extends StepBase {
   kind: 'add';
   role: string;
@@ -99,9 +108,13 @@ export interface ExposeStep extends StepBase {
   handle: string;
 }
 
-/** A caption only — the idea at the start, the "Try: …" at the end. Always satisfied. */
+/** A caption only — the idea at the start, the "Try: …" at the end. Always
+ *  satisfied. `show` names the roles whose sockets the caption talks about
+ *  ("wire Split's X instead of Y"): those nodes hold their socket labels open
+ *  while the step is on screen, as every other step's nodes do (`stepTargets`). */
 export interface LookStep extends StepBase {
   kind: 'look';
+  show?: readonly string[];
 }
 
 export type TutorialStep = AddStep | WireStep | SetStep | ExposeStep | LookStep;

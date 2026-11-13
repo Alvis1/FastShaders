@@ -3,23 +3,24 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import { DEFAULT_EVAL_TASK, asksAge, introInStudy, introShowsBudget, parseEvalTask } from './evalTask';
+import { EVAL_PARTICIPANT_KEY, LINK_PARTICIPANT_RE, cleanLinkParticipant } from './evalMode';
 
 /**
  * RUN a redirector's inline script against a launch URL and return what it
  * stored — the behaviour, not its spelling. sessionStorage and location are
  * stand-ins; URLSearchParams is Node's, which follows the same spec.
  */
-function runRedirector(entry: 'eval' | 'evalp' | 'evalpro', search: string): Record<string, string> {
+function runRedirector(entry: 'eval' | 'evalp' | 'evalpro', search: string, hash = '', prior: Record<string, string> = {}): Record<string, string> {
   const html = readFileSync(fileURLToPath(new URL(`../../public/${entry}/index.html`, import.meta.url)), 'utf8');
   const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
   if (!script) throw new Error(`no inline script in public/${entry}/index.html`);
-  const store: Record<string, string> = {};
+  const store: Record<string, string> = { ...prior };
   const sessionStorage = {
     setItem: (k: string, v: string) => { store[k] = String(v); },
     removeItem: (k: string) => { delete store[k]; },
     getItem: (k: string) => store[k] ?? null,
   };
-  runInNewContext(script, { sessionStorage, location: { search, replace: () => {} }, URLSearchParams });
+  runInNewContext(script, { sessionStorage, location: { search, hash, replace: () => {} }, URLSearchParams });
   return store;
 }
 
@@ -185,7 +186,7 @@ describe('leaving the study returns the STANDARD app', () => {
     const src = readFileSync(fileURLToPath(new URL('./evalMode.ts', import.meta.url)), 'utf8');
     const body = src.slice(src.indexOf('export function clearEvalMode'));
     const fn = body.slice(0, body.indexOf('\n}') + 2);
-    for (const key of ['EVAL_ARM_KEY', 'EVAL_SESSION_KEY', 'EVAL_TASK_KEY']) {
+    for (const key of ['EVAL_ARM_KEY', 'EVAL_SESSION_KEY', 'EVAL_TASK_KEY', 'EVAL_PARTICIPANT_KEY']) {
       expect(fn, `clearEvalMode must remove ${key}`).toContain(`removeItem(${key})`);
     }
   });
@@ -240,3 +241,51 @@ describe('the /evalpro entry', () => {
   });
 });
 
+
+describe('the participant code in the link fragment', () => {
+  const ENTRIES = ['eval', 'evalp', 'evalpro'] as const;
+
+  it('every entry stores #P0101 for the consent field to open with', () => {
+    for (const entry of ENTRIES) {
+      expect(runRedirector(entry, '', '#P0101')[EVAL_PARTICIPANT_KEY]).toBe('P0101');
+      // Beside a task query, and percent-encoded.
+      expect(runRedirector(entry, '?task=T1', '#%20J0302%20')[EVAL_PARTICIPANT_KEY]).toBe('J0302');
+    }
+  });
+
+  it('a link without one, or with a non-code, stores nothing — and drops the previous participant\'s', () => {
+    for (const entry of ENTRIES) {
+      for (const hash of ['', '#', '#a b', '#<img>', '#%E0%A4%A', `#${'x'.repeat(41)}`, '#Pā01']) {
+        const store = runRedirector(entry, '', hash, { [EVAL_PARTICIPANT_KEY]: 'P0001' });
+        expect(store[EVAL_PARTICIPANT_KEY], `${entry} ${hash}`).toBeUndefined();
+        expect(store['fs:evalArm']).toBe('1');
+      }
+    }
+  });
+
+  it('a link\'s code is FIXED: read once, re-validated, shown as "Your code" with no field, and the one agreed and submitted', () => {
+    const consent = readFileSync(fileURLToPath(new URL('./ConsentModal.tsx', import.meta.url)), 'utf8');
+    expect(consent).toContain('const [linkCode] = useState(linkParticipantCode);');
+    expect(consent).toContain("onAgree(linkCode || participant.trim(), ASKS_AGE && adult);");
+    const sus = readFileSync(fileURLToPath(new URL('./SusModal.tsx', import.meta.url)), 'utf8');
+    expect(sus).toContain('const [linkCode] = useState(linkParticipantCode);');
+    expect(sus).toContain("const trimmedParticipant = linkCode || participant.trim()");
+    for (const src of [consent, sus]) {
+      // The input only on the no-code branch; the fixed branch says "Your code:".
+      expect(src).toMatch(/\{linkCode \? \(\s*<div className="eval-consent__code-row">\s*<span>\{t\('Your code:', language\)\}<\/span>/);
+    }
+    const mode = readFileSync(fileURLToPath(new URL('./evalMode.ts', import.meta.url)), 'utf8');
+    expect(mode).toContain('return cleanLinkParticipant(sessionStorage.getItem(EVAL_PARTICIPANT_KEY));');
+  });
+
+  it('the app re-validates with the redirectors\' own pattern', () => {
+    for (const entry of ENTRIES) {
+      const html = readFileSync(fileURLToPath(new URL(`../../public/${entry}/index.html`, import.meta.url)), 'utf8');
+      expect(html).toContain(LINK_PARTICIPANT_RE.toString());
+    }
+    expect(cleanLinkParticipant(' P0101 ')).toBe('P0101');
+    expect(cleanLinkParticipant('P 01')).toBe('');
+    expect(cleanLinkParticipant(null)).toBe('');
+    expect(cleanLinkParticipant({ toString: 1 })).toBe('');
+  });
+});

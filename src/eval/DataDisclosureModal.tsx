@@ -106,51 +106,51 @@ export function DataDisclosureModal({ onClose }: Props) {
         </div>
 
         <div className="eval-consent__section">
-          {t('Nothing leaves this computer while you work. When you submit the questionnaire, one ZIP file is built from the items below. The list is complete.', language)}
+          {t('Nothing leaves this computer while you work. Submitting builds one ZIP file containing only the items below.', language)}
         </div>
 
         <div className="eval-consent__section">
           <strong>{t('Contents of the ZIP file', language)}</strong>
           <ul className="eval-consent__list eval-disclosure__list">
             {item(
-              'What you did, step by step',
+              'Editor actions log',
               'telemetry-events.json',
-              'a timestamped list of your actions: nodes added or removed (by type), node settings changed (which setting, never its value), connections made and broken, undo and redo, code applied, assets dropped, the intro hints you looked at, the step-by-step lessons you followed and the steps you let the app do for you, language switches, the app shown or hidden, and a periodic graph-size count. What you did, never what you typed: no keystrokes, text, file contents, clipboard or addresses.',
+              'Timestamped editor events: nodes added/removed (by type), setting names changed (never values), connections, undo/redo, code applies, dropped assets, intro slides and tutorial steps used, language switches, tab visibility, and periodic graph-size counts. No keystrokes, typed text, clipboard, or addresses.',
             )}
             {item(
-              'Totals derived from those steps',
+              'Session totals',
               'telemetry-summary.json',
-              'session length, active time, counts per action type, node types used, time to your first node and first connection, and automatic quality checks.',
+              'Session duration, active time, action counts, node types used, time to first node and connection, and quality checks.',
             )}
             {item(
               'Your questionnaire answers',
               'sus.json',
-              'which tools you have made materials or shaders with (and the names of other node-based shader editors, if you give them), how much you have worked with node editors and whether you have written or changed shader code; the ten statements, the score computed from them, and your free-text comment; in a professional session also whether the look of a node told you what it does and how it affects performance, whether the code panel and the presets helped, how credible the performance impact points seemed, whether they changed what you built and where they might mislead, what the tool suits and what got in your way, whether the constraints of WebXR deter you, how you find out shader cost in your own work, your main work and years of work experience — each answer with the language you gave it in. Text you type in a box is stored word for word.',
+              'Responses to the 10 usability statements and computed SUS score; session/tool questions (task completion, mental effort, node look and performance points, plus workflow and suitability items on /evalpro); prior experience with 3D tools, node editors, and shader code; your optional free-text comment; and the language of each answer.',
             )}
             {item(
-              'The main numbers as one spreadsheet row',
+              'One-row CSV summary',
               'summary.csv',
-              'the headline figures from the totals above, in spreadsheet form.',
+              'Key session metrics and coded questionnaire answers as a single spreadsheet row.',
             )}
             {item(
-              'The session record',
+              'Session metadata',
               'session.json',
-              'your participant code (as given at the start, and as on the questionnaire if you changed it), your confirmation that you are 18 or older (if you were asked), start and submit times, time zone, which study link you opened, your task and cost-budget condition, the price table used for your shader, graph counts, and the technical facts about this computer.',
+              'Participant code, 18+ confirmation (when asked), start/submit timestamps, time zone, study arm, task and budget condition, cost table, graph counts, and device info.',
             )}
             {item(
               'The shader you built',
               'shader/',
-              'the complete shader with its node graph: note text, property and colour names you typed, freehand drawings on the board, and every image or 3D model you added, as the file itself plus its file name.',
+              'Your node graph, note text, custom property/colour names, board drawings, and any image or 3D model you added (the file and its file name).',
             )}
             {item(
-              'A picture of the 3D preview',
+              '3D preview screenshot',
               'preview.png',
-              'the 3D view as it looked when you pressed Submit. Only the rendered view: no toolbar, node graph or screen outside the app.',
+              'Snapshot of the 3D viewport at submit (only the 3D view, never the rest of the screen).',
             )}
             {item(
-              'A description of the ZIP contents',
+              'ZIP file guide',
               'README.txt',
-              'a plain-text description of the files above.',
+              'Plain-text explanation of the files in the archive.',
             )}
           </ul>
         </div>
@@ -159,9 +159,9 @@ export function DataDisclosureModal({ onClose }: Props) {
           <strong>{t('Technical facts about this computer', language)}</strong>
           <ul className="eval-consent__list eval-disclosure__list">
             {item(
-              'What this computer is and how fast it is',
+              'Device and browser profile',
               'session.json → device',
-              'browser and version, operating system, screen and window size, pixel ratio, graphics card name as the browser reports it, number of processor cores, approximate memory, touch support, WebGPU availability, browser language, time zone, and your dark-mode and reduced-motion settings. Collected to explain performance differences between participants; together they are fairly distinctive to this machine.',
+              'Browser and OS version, screen/window size, pixel ratio, graphics card name, processor cores, approximate memory, touch and WebGPU support, locale, time zone, and theme/motion preferences — used to interpret performance across devices.',
             )}
           </ul>
         </div>
@@ -169,21 +169,21 @@ export function DataDisclosureModal({ onClose }: Props) {
         <div className="eval-consent__section">
           <strong>{t('Not collected', language)}</strong>
           <div className="eval-disclosure__body">
-            {t('Keystrokes. Microphone or camera. Any screen or window outside this app. Browsing history, other tabs, or files other than those you add to your shader. Your name, email address or account.', language)}
+            {t('No keystrokes, microphone, camera, screen outside the app, browsing history, other files, or your name/email.', language)}
           </div>
         </div>
 
         <div className="eval-consent__section">
           <strong>{t('Where it goes', language)}</strong>
           <div className="eval-disclosure__body">
-            {t('The ZIP file is saved in this computer’s Downloads folder and uploaded to the study server alvismisjuns.lv (also reachable as fs.sferas.lv), operated by the researcher. An optional button can also email it to the researcher; that shows them the address you send from.', language)}
+            {t('Saved to your Downloads folder and uploaded to ViA\'s study server imgame.va.lv. Sending by email is optional and reveals your email address.', language)}
           </div>
         </div>
 
         <div className="eval-consent__section">
           <strong>{t('During the session', language)}</strong>
           <div className="eval-disclosure__body">
-            {t('Events are kept in this browser tab only, so a reload does not lose the session. Closing the tab discards them. Only Submit builds and sends the ZIP file.', language)}
+            {t('Data stays in this browser tab until you press Submit; closing the tab discards everything.', language)}
           </div>
         </div>
 

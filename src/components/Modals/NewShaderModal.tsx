@@ -120,8 +120,8 @@ export function NewShaderModal({ open, onCancel, onExport, onStartNew }: Props) 
         <div className="csv-import-modal__message">
           {t(
             hasModel
-              ? 'Pressing New replaces the nodes, connections and drawings on the canvas with an empty Output node, and removes the imported 3D model.'
-              : 'Pressing New replaces the nodes, connections and drawings on the canvas with an empty Output node.',
+              ? 'Pressing New replaces the nodes, connections and drawings with an empty Output node, and removes the imported 3D model.'
+              : 'Pressing New replaces the nodes, connections and drawings with an empty Output node.',
             language,
           )}
         </div>

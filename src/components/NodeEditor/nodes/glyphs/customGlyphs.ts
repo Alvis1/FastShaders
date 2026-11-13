@@ -106,12 +106,14 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   "wireframe": {
     "svg": "<g transform=\"translate(28 28)\" fill=\"none\"><g stroke=\"#8A8F9C\" stroke-width=\"1.5\"><line x1=\"-21\" y1=\"-14\" x2=\"21\" y2=\"-14\"></line><line x1=\"-21\" y1=\"0\" x2=\"21\" y2=\"0\"></line><line x1=\"-21\" y1=\"14\" x2=\"21\" y2=\"14\"></line><line x1=\"-14\" y1=\"-21\" x2=\"-14\" y2=\"21\"></line><line x1=\"0\" y1=\"-21\" x2=\"0\" y2=\"21\"></line><line x1=\"14\" y1=\"-21\" x2=\"14\" y2=\"21\"></line></g><rect x=\"0\" y=\"0\" width=\"14\" height=\"14\" stroke=\"#F57C00\" stroke-width=\"2.4\"></rect></g>",
     "scale": 1.1,
+    "dx": -0.5,
+    "dy": 24.5,
     "width": 45,
     "height": 51,
     "sockets": {
-      "out": 0,
+      "out": -16,
       "uv": 0,
-      "density": 16
+      "density": -16
     }
   },
   "isolines": {
@@ -237,16 +239,15 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   "uv": {
     "svg": "<g transform=\"translate(28 28)\"><g stroke=\"#F57C00\" stroke-width=\".6\" opacity=\".6\"><line x1=\"-13.57\" y1=\"-27.58\" x2=\"-13.57\" y2=\"28.29\"></line><line x1=\"-27.58\" y1=\"28.29\" x2=\"27.36\" y2=\"28.29\"></line><line x1=\"0\" y1=\"-27.58\" x2=\"0\" y2=\"28.29\"></line><line x1=\"14\" y1=\"-27.58\" x2=\"14\" y2=\"28.29\"></line><line x1=\"-27.58\" y1=\"-27.58\" x2=\"-27.58\" y2=\"28.29\"></line><line x1=\"27.36\" y1=\"-27.58\" x2=\"27.36\" y2=\"28.29\"></line><line x1=\"-27.58\" y1=\"-14\" x2=\"27.36\" y2=\"-14\"></line><line x1=\"-27.58\" y1=\"-27.58\" x2=\"27.36\" y2=\"-27.58\"></line><line x1=\"-27.58\" y1=\"0\" x2=\"27.36\" y2=\"0\"></line><line x1=\"-27.58\" y1=\"14.21\" x2=\"27.36\" y2=\"14.21\"></line><line x1=\"-13.57\" y1=\"0\" x2=\"14\" y2=\"0\"></line></g><g stroke=\"#2B2B2B\" stroke-width=\"1.6\" fill=\"none\"><rect x=\"0\" y=\"-14\" width=\"14\" height=\"14\"></rect><rect x=\"0\" y=\"14.21\" width=\"14\" height=\"14.08\"></rect><rect x=\"-13.57\" y=\"0\" width=\"13.57\" height=\"14.21\"></rect><rect x=\"14\" y=\"0\" width=\"13.36\" height=\"14.21\"></rect><rect x=\"0\" y=\"0\" width=\"14\" height=\"14.21\"></rect></g></g>",
     "scale": 1.2,
-    "dx": -0.5,
-    "dy": 28,
-    "width": 49,
+    "dy": 96.5,
+    "width": 48,
     "height": 105,
     "sockets": {
-      "out": 0,
+      "out": -44,
       "channel": -44,
-      "rotation": 40,
-      "tilingV": 24,
-      "tilingU": 12
+      "rotation": 0,
+      "tilingV": -16,
+      "tilingU": -28
     }
   },
   "add": {
@@ -522,26 +523,26 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   "mix": {
     "scale": 1.2,
     "dy": 28,
-    "width": 45,
-    "height": 57,
+    "width": 47,
+    "height": 50,
     "sockets": {
-      "out": -12,
-      "t": 16,
-      "b": -4,
-      "a": -20
+      "out": -16,
+      "t": -16,
+      "b": 16,
+      "a": 0
     }
   },
   "smoothstep": {
     "svg": "<g transform=\"translate(28 28)\"><line x1=\"-20\" y1=\"0\" x2=\"20\" y2=\"0\" stroke=\"#B4B7C0\" stroke-width=\"0.6\"/><g stroke=\"#8A8F9C\" stroke-width=\"0.8\" stroke-dasharray=\"1.4 1.4\"><line x1=\"-12\" y1=\"-13\" x2=\"-12\" y2=\"13\"/><line x1=\"12\" y1=\"-13\" x2=\"12\" y2=\"13\"/></g><path d=\"M-20 10 L-12 10 C-3 10 3 -10 12 -10 L20 -10 L20 0 L-20 0 Z\" fill=\"#FF9800\" fill-opacity=\"0.16\" stroke=\"none\"/><path d=\"M-20 10 L-12 10 C-3 10 3 -10 12 -10 L20 -10\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></g>",
     "scale": 2,
-    "dy": 21.5,
-    "width": 47,
-    "height": 88,
+    "dy": 18,
+    "width": 25,
+    "height": 80,
     "sockets": {
-      "x": 32,
-      "out": 12,
-      "edge1": -12,
-      "edge0": -36
+      "x": -32,
+      "out": -32,
+      "edge1": 32,
+      "edge0": -12
     }
   },
   "remap": {
@@ -567,7 +568,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     "width": 45,
     "height": 72,
     "sockets": {
-      "out": 8,
+      "out": -28,
       "x": -28,
       "min": -8,
       "max": 24
@@ -637,7 +638,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
       "condition": -28,
       "a": 12,
       "b": 28,
-      "out": 20
+      "out": -28
     }
   },
   "brightContrast": {
@@ -651,7 +652,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
       "color": -28,
       "bright": 12,
       "contrast": 28,
-      "out": 0
+      "out": -28
     }
   },
   "sdCircle": {
@@ -662,7 +663,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     "sockets": {
       "p": -24,
       "r": 24,
-      "out": 0
+      "out": -24
     }
   },
   "sdBox": {
@@ -677,7 +678,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
       "w": 16,
       "h": 32,
       "d": 48,
-      "out": -8,
+      "out": -32,
       "round": 16,
       "b": 32
     }
@@ -698,41 +699,43 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   },
   "sdCylinder": {
     "svg": "<g transform=\"translate(28 28)\">\n<path d=\"M-14 12 A14 5 0 0 1 14 12\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\" stroke-dasharray=\"2 2\"></path>\n<ellipse cx=\"0\" cy=\"-12\" rx=\"14\" ry=\"5\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></ellipse><line x1=\"-14\" y1=\"-12\" x2=\"-14\" y2=\"12\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></line><line x1=\"14\" y1=\"-12\" x2=\"14\" y2=\"12\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></line><path d=\"M-14 12 A14 5 0 0 0 14 12\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></path>\n\n<path d=\"M -18.37 -12 C -18.37 -12 -19.56 -22.04 0 -21.16 C 19.56 -21.16 18.3 -12 18.3 -12 L 18.3 12 C 18.3 12 20.72 21.98 0 21.26 C -20.72 21.26 -18.37 12 -18.37 12 L -18.37 -12 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<path d=\"M -21.69 -13.75 C -21.69 -13.75 -23.1 -25.26 0 -24.25 C 23.1 -24.25 21.61 -13.75 21.61 -13.75 L 21.61 13.76 C 21.61 13.76 24.47 25.2 0 24.38 C -24.47 24.38 -21.69 13.76 -21.69 13.76 L -21.69 -13.75 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<path d=\"M -24.98 -15.74 C -24.98 -15.74 -26.61 -28.92 0 -27.76 C 26.61 -27.76 24.89 -15.74 24.89 -15.74 L 24.89 15.76 C 24.89 15.76 28.19 28.86 0 27.92 C -28.19 27.92 -24.98 15.76 -24.98 15.76 L -24.98 -15.74 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n\n<line x1=\"0\" y1=\"12\" x2=\"13.1\" y2=\"12\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"13.1\" cy=\"12\" r=\"2.4\" fill=\"#F57C00\"></circle>\n\n\n<line x1=\"0\" y1=\"12\" x2=\"0\" y2=\"-12\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"0\" cy=\"-12\" r=\"2.4\" fill=\"#F57C00\"></circle>\n\n</g>",
-    "dy": 2,
+    "dx": 0.5,
+    "dy": 27,
     "width": 41,
-    "height": 104,
+    "height": 96,
     "sockets": {
-      "p": -8,
+      "p": -40,
       "r": 8,
       "h": 24,
       "round": 40,
-      "out": -4
+      "out": -40
     }
   },
   "sdCapsule": {
     "svg": "<g transform=\"translate(28 28)\">\n\n<rect x=\"-9\" y=\"-18\" width=\"17.74\" height=\"36\" rx=\"9\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></rect>\n\n\n\n<path d=\"M 0 -23.39 C -11.32 -22.39 -14.44 -16.62 -13.63 0 C -14.44 16.8 -11.32 22 0 23.18 C 11.32 22 13.63 16.8 13.63 0 C 13.63 -16.62 11.32 -22.39 0 -23.28 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<path d=\"M 0.12 -27.28 C -14.53 -26.11 -18.57 -19.38 -17.52 0.02 C -18.57 19.62 -14.53 25.69 0.12 27.07 C 14.77 25.69 17.76 19.62 17.76 0.02 C 17.76 -19.38 14.77 -26.11 0.12 -27.15 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<circle cx=\"0\" cy=\"0\" r=\"1.6\" fill=\"#2B2B2B\"></circle><line x1=\"0\" y1=\"0\" x2=\"0\" y2=\"-16.62\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"0\" cy=\"-16.62\" r=\"2.4\" fill=\"#F57C00\"></circle>\n\n<circle cx=\"0\" cy=\"0\" r=\"1.6\" fill=\"#2B2B2B\"></circle><line x1=\"0\" y1=\"0\" x2=\"8.74\" y2=\"0.02\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"8.74\" cy=\"0\" r=\"2.4\" fill=\"#F57C00\"></circle>\n\n</g>",
-    "dy": 7.5,
-    "width": 27,
-    "height": 90,
+    "dy": 26.5,
+    "width": 29,
+    "height": 80,
     "sockets": {
-      "p": 0,
-      "r": 20,
-      "h": 36,
-      "out": 0
+      "p": -32,
+      "r": 12,
+      "h": 28,
+      "out": -32
     }
   },
   "sdCone": {
     "svg": "<g transform=\"translate(28 28)\"><path d=\"M-14 12 L-5 -16 L5 -16 L14 12\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\" stroke-linejoin=\"round\"></path><ellipse cx=\"0\" cy=\"12\" rx=\"14\" ry=\"5\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></ellipse><ellipse cx=\"0\" cy=\"-16\" rx=\"5\" ry=\"2\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></ellipse>\n\n\n<path d=\"M -18.61 12 L -9 -18 C -9 -18 -9 -21.74 0 -21.61 C 9 -21.74 9 -18 9 -18 L 18.84 12 C 18.84 12 18.84 21.89 0 21.89 C -18.61 21.89 -18.61 12 -18.61 12 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<path d=\"M -23.06 13.64 L -11.16 -20.48 C -11.16 -20.48 -11.16 -24.75 -0.03 -24.59 C 11.11 -24.75 11.11 -20.48 11.11 -20.48 L 23.29 13.64 C 23.29 13.64 23.29 24.9 -0.03 24.9 C -23.06 24.9 -23.06 13.64 -23.06 13.64 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<path d=\"M -27.25 15.45 L -13.2 -23.22 C -13.2 -23.22 -13.2 -28.07 -0.05 -27.89 C 13.1 -28.07 13.1 -23.22 13.1 -23.22 L 27.48 15.45 C 27.48 15.45 27.48 28.22 -0.05 28.22 C -27.25 28.22 -27.25 15.45 -27.25 15.45 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<line x1=\"0\" y1=\"12\" x2=\"13.1\" y2=\"12\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"13.1\" cy=\"12\" r=\"2.4\" fill=\"#F57C00\"></circle>\n\n\n<line x1=\"0\" y1=\"12\" x2=\"-0.05\" y2=\"-16\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"-0.05\" cy=\"-16\" r=\"2.4\" fill=\"#F57C00\"></circle>\n</g>",
     "scale": 1.05,
-    "dy": 0.5,
+    "dx": -0.5,
+    "dy": 26.5,
     "width": 42,
     "height": 88,
     "sockets": {
-      "p": -4,
+      "p": -36,
       "r1": 12,
       "r2": 24,
       "h": 36,
-      "out": -4
+      "out": -36
     }
   },
   "sdPlane": {
@@ -748,7 +751,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
       "ny": 16,
       "nz": 28,
       "h": 24,
-      "out": -12,
+      "out": -28,
       "n": 8
     }
   },
@@ -761,7 +764,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     "sockets": {
       "p": -24,
       "s": 24,
-      "out": 0
+      "out": -24
     }
   },
   "sdStar": {
@@ -814,7 +817,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
       "lx": 28,
       "ly": 48,
       "lz": 60,
-      "out": -8,
+      "out": -28,
       "l": 28,
       "s": 12
     }
@@ -921,7 +924,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
       "a": -4,
       "b": 12,
       "k": 28,
-      "out": -4
+      "out": -24
     }
   },
   "rayDirection": {

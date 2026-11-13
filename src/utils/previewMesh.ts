@@ -208,18 +208,6 @@ export const MESH_COMPRESSED_KEY =
 export const MESH_GLTF_SPLAT_KEY =
   '“{name}” stores Gaussian splats inside glTF (KHR_gaussian_splatting), which FastShaders cannot read yet. Export the splats as .ply, .splat or .spz.';
 /**
- * A splat dropped in a study session. Splats are refused there outright
- * (before the pre-read gate), so the study host never serves the splat
- * runtime; the drop surface and the zip import build this refusal.
- */
-export const MESH_SPLAT_EVAL_KEY = 'Gaussian splats are not available in a study session.';
-
-/** The study-session refusal for a splat kind (`MESH_SPLAT_EVAL_KEY`) — a fresh object per call. */
-export function splatEvalRefusal(): MeshRefusal {
-  return { reason: 'splat-eval', key: MESH_SPLAT_EVAL_KEY };
-}
-
-/**
  * A splat count as a notice prints it: a whole number, grouped in the reader's
  * language ("1,000,000" / "1 000 000"). A count that is not a finite
  * non-negative number prints as nothing rather than as "NaN".
@@ -389,11 +377,6 @@ function dropPreviewPayload(
  * only (`isTextKind`), and a splat kind gets its header sniff instead — its
  * facts become `PreviewMesh.splat`. A glTF naming KHR_gaussian_splatting is
  * refused ('gltf-splat') ahead of any compression refusal.
- *
- * NOT here: the study-session refusal of a splat kind (`splatEvalRefusal`).
- * The IndexedDB restore and the zip import come through this constructor too,
- * and a restore must never decide the session's mode — so the surfaces that
- * know it (the preview drop, the zip import) refuse before calling this.
  */
 let nextPreviewMeshId = 1;
 export function createPreviewMesh(

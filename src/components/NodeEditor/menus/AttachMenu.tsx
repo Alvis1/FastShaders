@@ -113,7 +113,7 @@ export function AttachMenu({ nodeId, onAttach }: { nodeId: string; onAttach: (c:
           <button className="context-menu__item" disabled>
             {attachEmptyReason(nodes) === 'collapsed'
               ? t('The Output is inside a collapsed group — expand it to attach', language)
-              : t('No Output on the canvas', language)}
+              : t('No Output yet', language)}
           </button>
         </>
       )}

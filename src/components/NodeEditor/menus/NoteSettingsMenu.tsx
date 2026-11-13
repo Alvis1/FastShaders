@@ -1,5 +1,7 @@
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
+import { getContrastColor } from '@/utils/colorUtils';
+import { noteDrawnColors } from '@/utils/noteDefaults';
 import type { NoteFlowNode } from '@/types';
 import { rowStyle, labelStyle, colorFieldStyle, wideFieldStyle } from './menuShared';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
@@ -13,11 +15,13 @@ export function NoteSettingsMenu({ nodeId }: NoteSettingsMenuProps) {
   const updateNoteData = useAppStore((s) => s.updateNoteData);
   const removeNode = useAppStore((s) => s.removeNode);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
+  const darkCanvas = useAppStore((s) => getContrastColor(s.nodeEditorBgColor) === '#ffffff');
 
   const node = useAppStore((s) => s.nodes.find((n) => n.id === nodeId)) as NoteFlowNode | undefined;
   if (!node || node.type !== 'note') return null;
 
   const { heading, color, headerColor, scale } = node.data;
+  const drawn = noteDrawnColors(color, headerColor, darkCanvas);
 
   return (
     <div className="context-menu__list">
@@ -48,7 +52,7 @@ export function NoteSettingsMenu({ nodeId }: NoteSettingsMenuProps) {
         <PaletteColorPicker
           className="context-menu__color"
           history="none"
-          value={headerColor ?? '#ffd24a'}
+          value={drawn.header}
           onPick={(hex) => updateNoteData(nodeId, { headerColor: hex })}
         />
       </div>
@@ -58,7 +62,7 @@ export function NoteSettingsMenu({ nodeId }: NoteSettingsMenuProps) {
         <PaletteColorPicker
           className="context-menu__color"
           history="none"
-          value={color ?? '#fff7cc'}
+          value={drawn.body}
           onPick={(hex) => updateNoteData(nodeId, { color: hex })}
         />
       </div>

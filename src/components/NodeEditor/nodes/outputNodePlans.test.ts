@@ -398,12 +398,15 @@ describe('the Output settings menu is titled for what it edits', () => {
     expect(vertex).toBeGreaterThan(transparent);
   });
 
-  it('the two MODULE-level geometry rows render only where they apply', () => {
-    // `mergeVertices` is a module-level directive and `displacementMode` has no
-    // loader key: `buildShaderModule` takes both from `moduleSettingsOutput`,
-    // so anywhere else these checkboxes wrote a field nothing read.
-    expect(MENU).toContain("{exposedSet.has('position') && ownsModuleSettings && (");
-    expect(MENU).toContain('moduleSettingsOutput(s.nodes)?.id === outputNode.id');
+  it('the vertex rows render on EVERY Output with Position, showing what that material does', () => {
+    // Owner 2026-11-10: each material displaces its own meshes, so each has
+    // its own Along Normal / Merge Vertices; one that never chose shows the
+    // owner's (effectiveVertexSettings).
+    expect(MENU).toContain("{exposedSet.has('position') && (");
+    expect(MENU).not.toContain("{exposedSet.has('position') && ownsModuleSettings && (");
+    expect(MENU).toContain('effectiveVertexSettings(settings, ownsModuleSettings ? undefined : ownerSettings)');
+    expect(MENU).toContain("checked={vertex.displacementMode === 'normal'}");
+    expect(MENU).toContain('checked={vertex.mergeVertices}');
   });
 
   it('does not stack a third "Material" heading under the new title', () => {
@@ -427,18 +430,20 @@ describe('the Latvian side moved with it', () => {
   });
 });
 
-describe('the Shading row (Blender’s Shade Smooth / Shade Flat)', () => {
+describe('the Faces row (Blender’s Shade Smooth / Shade Flat)', () => {
   const MENU = readFileSync(
     resolve(__dirname, '../menus/ShaderSettingsMenu.tsx'),
     'utf8',
   );
 
-  it('names BOTH states, beside Side', () => {
-    // A select and not a checkbox: "Flat Shading" unticked does not say
-    // "smooth", and the user is looking for both Blender words.
-    expect(MENU).toContain("{t('Shading', language)}");
+  it('names BOTH states, under "Faces" — never "Shading", which shared "smooth" with the weld', () => {
+    // A select and not a checkbox: "Flat" unticked does not say "smooth", and
+    // the user is looking for both Blender words.
+    expect(MENU).toContain("{t('Faces', language)}");
+    expect(MENU).not.toContain("{t('Shading', language)}");
     expect(MENU).toContain('<option value="smooth">{t(\'Smooth\', language)}</option>');
     expect(MENU).toContain('<option value="flat">{t(\'Flat\', language)}</option>');
+    expect(MENU).toContain('title={t(unlit ? UNLIT_OFF_HINT_KEY : FACES_HINT_KEY, language)}');
   });
 
   it('stores only the FLAT case — smooth clears the key', () => {
@@ -448,17 +453,30 @@ describe('the Shading row (Blender’s Shade Smooth / Shade Flat)', () => {
     expect(MENU).toContain("value={settings.flatShading ? 'flat' : 'smooth'}");
   });
 
-  it('sits with the other render-state rows, in the pixel section', () => {
-    // It is a THREE.Material property, so two materials on one model may
-    // differ — it belongs beside Transparent / Side.
-    const pixel = MENU.slice(MENU.indexOf("{t('Pixel (Fragment) Shader', language)}"));
-    expect(pixel.indexOf("{t('Shading', language)}")).toBeGreaterThan(-1);
-    expect(pixel.indexOf("{t('Shading', language)}")).toBeLessThan(pixel.indexOf("{t('Vertex Shader', language)}"));
+  it('sits in the pixel section after Side; the Unlit material box sits at the TOP', () => {
+    // Faces is a render-state row like Side (owner, 2026-11-10: moved back
+    // down); the Unlit material decides which rows mean anything, so it leads,
+    // under the Material line.
+    const heading = MENU.indexOf("{t('Material Settings', language)}");
+    const material = MENU.indexOf("<span>{t('Material', language)}</span>");
+    const flat = MENU.indexOf("{t('Unlit', language)}");
+    const pixel = MENU.indexOf("{t('Pixel (Fragment) Shader', language)}");
+    const side = MENU.indexOf("{t('Side', language)}");
+    const faces = MENU.indexOf("{t('Faces', language)}");
+    const vertex = MENU.indexOf("{t('Vertex Shader', language)}");
+    expect(heading).toBeGreaterThan(-1);
+    expect(material).toBeGreaterThan(heading);
+    expect(flat).toBeGreaterThan(material);
+    expect(pixel).toBeGreaterThan(flat);
+    expect(side).toBeGreaterThan(pixel);
+    expect(faces).toBeGreaterThan(side);
+    expect(vertex).toBeGreaterThan(faces);
   });
 
   it('carries its Latvian', () => {
     const LV = JSON.parse(readFileSync(resolve(__dirname, '../../../i18n/lv.json'), 'utf8')) as Record<string, unknown>;
     const ui = ((LV as { ui?: Record<string, string> }).ui ?? LV) as Record<string, string>;
-    for (const k of ['Shading', 'Smooth', 'Flat']) expect(ui[k]).toBeTruthy();
+    for (const k of ['Faces', 'Smooth', 'Flat']) expect(ui[k]).toBeTruthy();
+    expect(ui.Shading).toBeUndefined();
   });
 });

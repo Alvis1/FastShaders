@@ -151,7 +151,7 @@
   bottom: -1px;
 }
 
-.content-browser__cat-btn:hover {
+.content-browser__cat-btn:hover:not(.content-browser__cat-btn--active) {
   color: var(--text-primary);
   background: rgba(0, 0, 0, 0.02);
 }
@@ -179,7 +179,7 @@
    bottom-aligns its tabs, so the extra top padding raises the active one alone
    (exactly one tab is always active, so the row's own height never moves). */
 .content-browser__cat-btn--active {
-  color: var(--text-primary);
+  color: #F5F5F5; /* on the dark background tabStyle() sets inline */
   font-weight: 700;
   padding-top: 9px;
   border-color: var(--border-subtle);

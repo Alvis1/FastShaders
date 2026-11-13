@@ -16,6 +16,8 @@
  * native review plus one blind back-translation (Beaton et al. 2000), and the
  * paper must label the Latvian form a non-validated adaptation. The answered
  * language is recorded per participant (Orfanou et al. 2015 precedent).
+ * Each Latvian item carries Brooke's English original in brackets (owner,
+ * 2026-11-09), so a participant can check the Latvian against the source.
  *
  * Scoring (Brooke's rule): odd items contribute `response − 1`, even items
  * `5 − response`; the sum × 2.5 gives 0–100 in steps of 2.5. Individual item
@@ -28,36 +30,36 @@ export const SUS_SCALE_MIN = 1;
 export const SUS_SCALE_MAX = 5;
 
 export const SUS_ITEMS_EN: readonly string[] = [
-  'I think that I would like to use this system frequently',
-  'I found the system unnecessarily complex',
-  'I thought the system was easy to use',
-  'I think that I would need the support of a technical person to be able to use this system',
-  'I found the various functions in this system were well integrated',
-  'I thought there was too much inconsistency in this system',
-  'I would imagine that most people would learn to use this system very quickly',
-  'I found the system very awkward to use',
-  'I felt very confident using the system',
-  'I needed to learn a lot of things before I could get going with this system',
+  "I think that I would like to use this system frequently",
+  "I found the system unnecessarily complex",
+  "I thought the system was easy to use",
+  "I think that I would need the support of a technical person to be able to use this system",
+  "I found the various functions in this system were well integrated",
+  "I thought there was too much inconsistency in this system",
+  "I would imagine that most people would learn to use this system very quickly",
+  "I found the system very awkward to use",
+  "I felt very confident using the system",
+  "I needed to learn a lot of things before I could get going with this system",
 ];
 
 export const SUS_ITEMS_LV: readonly string[] = [
-  'Es domāju, ka vēlētos šo sistēmu lietot bieži',
-  'Sistēma man šķita nevajadzīgi sarežģīta',
-  'Man šķita, ka sistēmu ir viegli lietot',
-  'Es domāju, ka man būtu vajadzīgs tehniskā speciālista atbalsts, lai spētu šo sistēmu lietot',
-  'Man šķita, ka sistēmas dažādās funkcijas ir labi integrētas',
-  'Man šķita, ka sistēmā ir pārāk daudz nekonsekvences',
-  'Es domāju, ka lielākā daļa cilvēku iemācītos lietot šo sistēmu ļoti ātri',
-  'Sistēma man šķita ļoti neērta lietošanā',
-  'Lietojot sistēmu, es jutos ļoti pārliecināts/-a',
-  'Man vajadzēja daudz ko apgūt, pirms varēju sākt darboties ar šo sistēmu',
+  "Domāju, ka es labprāt izmantotu šo sistēmu bieži. (I think that I would like to use this system frequently.)",
+  "Sistēma man šķita nevajadzīgi sarežģīta. (I found the system unnecessarily complex.)",
+  "Man šķita, ka šo sistēmu ir viegli lietot. (I thought the system was easy to use.)",
+  "Domāju, ka man būtu vajadzīga tehniska speciālista palīdzība, lai varētu lietot šo sistēmu. (I think that I would need the support of a technical person to be able to use this system.)",
+  "Man šķita, ka dažādās šīs sistēmas funkcijas ir labi integrētas. (I found the various functions in this system were well integrated.)",
+  "Man šķita, ka šajā sistēmā ir pārāk daudz nekonsekvences (neatbilstību). (I thought there was too much inconsistency in this system.)",
+  "Domāju, ka lielākā daļa cilvēku ļoti ātri iemācītos lietot šo sistēmu. (I would imagine that most people would learn to use this system very quickly.)",
+  "Sistēma man šķita ļoti neērta (apgrūtinoša) lietošanā. (I found the system very cumbersome/awkward to use.)",
+  "Es jutos ļoti pārliecināti, lietojot šo sistēmu. (I felt very confident using the system.)",
+  "Man bija daudz kas jāapgūst, pirms varēju sākt darbu ar šo sistēmu. (I needed to learn a lot of things before I could get going with this system.)",
 ];
 
 /** Scale-end anchors (Brooke's form labels only the two ends). */
-export const SUS_ANCHOR_LOW_EN = 'Strongly disagree';
-export const SUS_ANCHOR_HIGH_EN = 'Strongly agree';
-export const SUS_ANCHOR_LOW_LV = 'Pilnīgi nepiekrītu';
-export const SUS_ANCHOR_HIGH_LV = 'Pilnīgi piekrītu';
+export const SUS_ANCHOR_LOW_EN = "Strongly disagree";
+export const SUS_ANCHOR_HIGH_EN = "Strongly agree";
+export const SUS_ANCHOR_LOW_LV = "Pilnīgi nepiekrītu";
+export const SUS_ANCHOR_HIGH_LV = "Pilnīgi piekrītu";
 
 /**
  * Contribution of one item (0–4). `index` is 0-based, so even indexes are the
@@ -77,7 +79,8 @@ export function computeSusScore(responses: readonly number[]): number | null {
   let sum = 0;
   for (let i = 0; i < SUS_ITEM_COUNT; i++) {
     const r = responses[i];
-    if (!Number.isInteger(r) || r < SUS_SCALE_MIN || r > SUS_SCALE_MAX) return null;
+    if (!Number.isInteger(r) || r < SUS_SCALE_MIN || r > SUS_SCALE_MAX)
+      return null;
     sum += susContribution(i, r);
   }
   return sum * 2.5;

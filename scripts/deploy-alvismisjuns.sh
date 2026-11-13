@@ -12,6 +12,13 @@
 #
 # Requires: brew install putty   (psftp)  — expect ships with macOS.
 #
+# The study upload: like every build, this one posts finished study packages
+# CROSS-origin to ViA's endpoint on imgame.va.lv (DEFAULT_EVAL_UPLOAD_URL in
+# vite.config.ts; until 2026-11-09 it posted same-origin to the endpoint that
+# then lived beside the app here). scripts/check-eval-upload.sh judges the live
+# endpoint from both of this host's origins BEFORE anything is built or
+# uploaded, and the served CSP must let the page reach it.
+#
 # NB: psftp has no --delete; superseded content-hashed assets accumulate on
 # the server over time. Harmless (index.html always points at the current
 # ones), but prune /var/www/alvis/src/fastshaders/assets/ manually once in a
@@ -31,10 +38,17 @@ read -r HOST USER KEY REMOTE <<< "$(node -e '
 ' "$CONF")"
 export DEPLOY_PP="$(node -e 'console.log(require(process.argv[1]).passphrase ?? "")' "$CONF")"
 
+# The app is reachable at the apex AND at www, so both origins must be admitted.
+echo "==> checking the study upload endpoint"
+for ORIGIN in https://alvismisjuns.lv https://www.alvismisjuns.lv; do
+  bash "$ROOT/scripts/check-eval-upload.sh" "$ORIGIN"
+done
+UPLOAD_URL="$(bash "$ROOT/scripts/check-eval-upload.sh" --url)"
+
 if [ "${1:-}" != "--no-build" ]; then
   # public/js is generated from the submodule: build only from a committed pointer.
   bash "$ROOT/scripts/check-submodule.sh"
-  echo "==> building (base /fastshaders/, CSP for alvismisjuns.lv)"
+  echo "==> building (base /fastshaders/, CSP for alvismisjuns.lv, study uploads to $UPLOAD_URL)"
   cd "$ROOT"
   FS_BASE=/fastshaders/ \
   FS_PREVIEW_ORIGIN='https://alvismisjuns.lv https://www.alvismisjuns.lv' \
@@ -76,8 +90,8 @@ EOF
 echo "==> verifying"
 EXPECTED="$(node -p "require('$ROOT/package.json').version")"
 curl -sS -o /dev/null -w 'https://alvismisjuns.lv/fastshaders/ -> HTTP %{http_code}\n' https://alvismisjuns.lv/fastshaders/
-SERVED="$(curl -sS -H 'Cache-Control: no-cache' "https://alvismisjuns.lv/fastshaders/index.html?cb=$(date +%s)" \
-  | sed -n 's/.*<meta name="version" content="\([^"]*\)".*/\1/p')"
+PAGE="$(curl -sS -H 'Cache-Control: no-cache' "https://alvismisjuns.lv/fastshaders/index.html?cb=$(date +%s)")"
+SERVED="$(printf '%s' "$PAGE" | sed -n 's/.*<meta name="version" content="\([^"]*\)".*/\1/p')"
 if [ "$SERVED" = "$EXPECTED" ]; then
   echo "version $SERVED live ✓"
 else
@@ -86,6 +100,18 @@ else
   echo "served docroot — check remotePath in .vscode/sftp.json against the real" >&2
   echo "web root (it is the directory whose index.html mtime matches the site's" >&2
   echo "Last-Modified header). As of 2026-08-24: /var/www/alvis/src/public" >&2
+  exit 1
+fi
+
+# The study upload's other half: the served page's CSP must let it reach the
+# endpoint whose preflight was checked before the build. A `--no-build` upload
+# of a snapshot built before 2026-11-09 still names alvismisjuns here and fails.
+UPLOAD_ORIGIN="$(node -p "new URL('$UPLOAD_URL').origin")"
+CSP_OK="$(printf '%s' "$PAGE" | grep -o "connect-src [^;\"]*" | grep -cF "$UPLOAD_ORIGIN" || true)"
+if [ "$CSP_OK" -ge 1 ]; then
+  echo "CSP names the upload origin $UPLOAD_ORIGIN ✓"
+else
+  echo "DEPLOY VERIFICATION FAILED: the served CSP's connect-src does not name $UPLOAD_ORIGIN, so no study package can upload" >&2
   exit 1
 fi
 

@@ -81,7 +81,9 @@ interface Layout {
 
 const key = (node: string, handle: string) => `${node}\0${handle}`;
 
-function MenuRow({ def, focused, language, costLow, costHigh, probe }: {
+/** One Add-node menu row (AddNodeMenu's markup); SearchScene uses it too. A
+ *  `probe` row carries its type as `data-intro-row`, for measuring. */
+export function MenuRow({ def, focused, language, costLow, costHigh, probe }: {
   def: NodeDefinition;
   focused: boolean;
   language: Language;
@@ -97,7 +99,7 @@ function MenuRow({ def, focused, language, costLow, costHigh, probe }: {
     <button
       tabIndex={-1}
       className={`context-menu__item${focused ? ' context-menu__item--focused' : ''}`}
-      data-intro-row={probe && def.type === insertedDef.type ? 'round' : undefined}
+      data-intro-row={probe ? def.type : undefined}
     >
       <span>
         {formatNodeLabel(def.label, def.type, language)}

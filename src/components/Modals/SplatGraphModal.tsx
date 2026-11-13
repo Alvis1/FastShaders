@@ -96,7 +96,7 @@ export function SplatGraphModal({ fileName, portalHost, onChoose }: Props) {
           </button>
           <button
             className="csv-import-modal__button csv-import-modal__button--yes csv-import-modal__choice"
-            title={t('Replaces the nodes, connections and drawings on the canvas with one Splat Output, ready to wire, and loads the splat. Your palettes and tuned values stay. Undo (Ctrl+Z / ⌘Z) brings the graph back.', language)}
+            title={t('Replaces the nodes, connections and drawings with one Splat Output, ready to wire, and loads the splat. Your palettes and tuned values stay. Undo (Ctrl+Z / ⌘Z) brings the graph back.', language)}
             onClick={() => onChoose('clear')}
           >
             {t('Clear graph', language)}

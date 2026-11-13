@@ -102,6 +102,15 @@
   opacity: 0.25;
 }
 
+/* A MUTED node (M — utils/nodeMute.ts; the attribute is MutedMarks.tsx's) is
+   in the graph but out of the shader: its wires pass straight through it.
+   Faded on the WRAPPER for Preview mode's reason — a multi-channel stack
+   fades as one object — and by opacity alone: no filter, which would put a
+   zoomed card on its own compositing layer. */
+.react-flow__node[data-fs-muted] {
+  opacity: 0.4;
+}
+
 /* While a WIRE is being dragged, nothing highlights on hover. Pulling a
    connection sweeps the pointer across every node between the socket and the
    target, and lifting each one in turn is noise on top of a gesture that
@@ -422,9 +431,9 @@
    THE CANONICAL COPY. Every node component that anchors its sockets to
    something other than the whole card restates these three declarations
    against its own wrapper, because CSS has no way to compose a rule and each
-   anchor is a different selector. Seven anchors do, across five stylesheets:
+   anchor is a different selector. Six anchors do, across five stylesheets:
    `.clock-node__canvas-wrap` and `.clock-node__speed-row`,
-   `.math-preview-node__port-row` and `.math-preview-node`, `.preview-node`,
+   `.math-preview-node__canvas-wrap`, `.preview-node`,
    `.sound-node__body`, and `.output-node__row`.
 
    WHY THIS IS STILL COPIED, having twice been looked at: the obvious fix is

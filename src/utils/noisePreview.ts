@@ -180,3 +180,38 @@ export function renderNoisePreview(
   }
   return imageData;
 }
+
+/**
+ * The grey a FLAT thumbnail shows for a noise node's evaluated value `v`
+ * (cpuEvaluator's sample, already remapped by the node's range flag), on the
+ * same 0…1 display scale as the pattern above: a signed Perlin/fBm value is
+ * mapped (v + 1)/2 exactly as `sampleNoise` maps the raw field, so one value
+ * reads the same grey in either range mode. `null` — the input is unknown (the
+ * camera position) — is the scale's middle grey: a tone, never a pattern.
+ */
+export function flatNoiseDisplay(type: NoiseType, v: number | null, unsigned: boolean): number {
+  if (v === null || !Number.isFinite(v)) return 0.5;
+  const signed = (type === 'perlin' || type === 'perlinVec3' || type === 'fbm' || type === 'fbmVec3') && !unsigned;
+  return Math.max(0, Math.min(1, signed ? (v + 1) * 0.5 : v));
+}
+
+/**
+ * One flat grey thumbnail — the card of a noise whose input is ONE value per
+ * frame for the whole surface (its `pos` wired to the camera position, Sound,
+ * Time alone or a constant: `getSurfaceFieldUpstreamSet`). The shader then
+ * paints the whole mesh one tone, so a pattern on the card would show something
+ * the model never does. `reuse` as in `renderNoisePreview`; every byte written.
+ */
+export function renderFlatNoisePreview(size: number, display: number, reuse?: ImageData | null): ImageData {
+  const imageData =
+    reuse && reuse.width === size && reuse.height === size ? reuse : new ImageData(size, size);
+  const data = imageData.data;
+  const byte = Math.round(Math.max(0, Math.min(1, display)) * 255);
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = byte;
+    data[i + 1] = byte;
+    data[i + 2] = byte;
+    data[i + 3] = 255;
+  }
+  return imageData;
+}

@@ -11,6 +11,7 @@ import {
   EVAL_STUDY_EMAIL,
   IDLE_THRESHOLD_MS,
   clearEvalMode,
+  linkParticipantCode,
   readEvalSession,
 } from './evalMode';
 import {
@@ -21,7 +22,7 @@ import {
   clearEvalJournal,
   isEvalSessionActive,
 } from './telemetry';
-import { deriveSummary, runQualityChecks, type QualityCheck } from './telemetryModel';
+import { deriveSummary, runQualityChecks } from './telemetryModel';
 import { evalTask } from './evalTask';
 import {
   BACKGROUND_GROUP_HEADINGS,
@@ -31,6 +32,7 @@ import {
   type BackgroundAnswers,
 } from './background';
 import { PRO_GROUP_HEADINGS, PRO_GROUP_NOTES, PRO_ITEMS, buildProRecord, proMissing } from './proQuestions';
+import { TASK_GROUP_HEADINGS, buildTaskRecord, taskItemsFor, taskMissing } from './taskQuestions';
 import { CANT_JUDGE, OTHER_CAP, TEXT_CAP, gridKey, otherKey, type QAnswers, type QItem, type QLang, type QText } from './questionItems';
 import { LangSwitch } from './LangSwitch';
 import { summarizeAnswerLanguages } from './answerLanguage';
@@ -106,7 +108,6 @@ interface DoneState {
    *  participant's line is added at render, in the current language. */
   mailSubject: string;
   mailSummary: string[];
-  failedChecks: QualityCheck[];
   /** Delivery option B: 'pending' while in flight; 'disabled' = not configured; 'too-large' = over MAX_UPLOAD_BYTES, never sent (the size shown is zipBytes.length). */
   upload: EvalUploadResult | 'pending';
 }
@@ -123,18 +124,19 @@ export function SusModal({ open, onClose }: Props) {
     () => Array<number | null>(SUS_ITEM_COUNT).fill(null),
   );
   const [comment, setComment] = useState('');
-  // Asked BEFORE the SUS, in every arm, since the first study packages — kept
-  // there for comparability with them and with the pilot, which asked them
-  // first too. That order makes them the SUS's immediate context (it protects
-  // the self-ratings from the SUS answers, not the reverse), so a context
-  // effect on the SUS cannot be ruled out; the paper says so.
+  // Asked AFTER the SUS (and after the arm-specific session / professional
+  // questions) in every arm (consent-15): every participant now reaches SUS
+  // item 1 immediately upon ending the session (Brooke 1996), with no prior
+  // competence-priming self-report.
   const [background, setBackground] = useState<BackgroundAnswers>({});
-  // The professional block — only in the /evalpro arm, AFTER SUS item 10, so
-  // every arm reaches the SUS the same way (proQuestions.ts).
+  // The arm-specific block after SUS item 10: `taskQuestions` on `/eval` and
+  // `/evalp` (`taskQuestions.ts`), or `pro` on `/evalpro` (`proQuestions.ts`).
+  const [taskAnswers, setTaskAnswers] = useState<QAnswers>({});
   const [pro, setPro] = useState<QAnswers>({});
-  // The UI language each experience / professional answer was given in,
-  // keyed like the answers (answerLanguage.ts says why Submit's is not enough).
+  // The UI language each experience / session / professional answer was given
+  // in, keyed like the answers (answerLanguage.ts says why Submit's is not enough).
   const backgroundLangRef = useRef<Record<string, QLang>>({});
+  const taskAnswerLangRef = useRef<Record<string, QLang>>({});
   const proAnswerLangRef = useRef<Record<string, QLang>>({});
   // Set by a Submit press on an incomplete form: every unanswered question is
   // then marked, and the first one is scrolled into view.
@@ -147,6 +149,10 @@ export function SusModal({ open, onClose }: Props) {
   // onChange (answerLanguage.ts says why the language at Submit is not enough).
   const susAnswerLangRef = useRef<(Language | undefined)[]>(Array(SUS_ITEM_COUNT).fill(undefined));
   const [participant, setParticipant] = useState(() => readEvalSession()?.participant ?? '');
+  // A code the study LINK gave is fixed here too (evalMode.ts,
+  // linkParticipantCode): shown as "Your code", never a field, and the one
+  // submitted. Read at mount, before anything could clear it.
+  const [linkCode] = useState(linkParticipantCode);
   const [done, setDone] = useState<DoneState | null>(null);
 
   // One sus-open marker per opening (not while the thank-you screen shows).
@@ -171,19 +177,24 @@ export function SusModal({ open, onClose }: Props) {
   const anchorLow = language === 'lv' ? SUS_ANCHOR_LOW_LV : SUS_ANCHOR_LOW_EN;
   const anchorHigh = language === 'lv' ? SUS_ANCHOR_HIGH_LV : SUS_ANCHOR_HIGH_EN;
   const answered = useMemo(() => responses.filter((r) => r != null).length, [responses]);
-  const proAsked = evalTask().proQuestions;
+  const taskSpec = evalTask();
+  const proAsked = taskSpec.proQuestions;
+  const pointsVisible = taskSpec.pointsVisible;
   // Every required answer still missing, as the `data-q` keys the form's rows
-  // carry, in screen order: experience, SUS, then the professional block.
+  // carry, in screen order: SUS 1–10, the arm-specific post-SUS block
+  // (`pro-*` on /evalpro, `tq-*` on /eval and /evalp), then experience (`bg-*`).
   const missing = useMemo(() => [
-    ...backgroundMissing(background).map((k) => `bg-${k}`),
     ...responses.flatMap((r, i) => (r == null ? [`sus-${i}`] : [])),
-    ...(proAsked ? proMissing(pro).map((k) => `pro-${k}`) : []),
-  ], [background, responses, pro, proAsked]);
+    ...(proAsked
+      ? proMissing(pro).map((k) => `pro-${k}`)
+      : taskMissing(taskAnswers, pointsVisible).map((k) => `tq-${k}`)),
+    ...backgroundMissing(background).map((k) => `bg-${k}`),
+  ], [responses, proAsked, pro, taskAnswers, pointsVisible, background]);
   const complete = missing.length === 0;
   const missingSet = useMemo(() => new Set(missing), [missing]);
   const isMissing = (key: string) => showMissing && missingSet.has(key);
   // One block = its answers, their languages and the name prefix its radios
-  // share; the renderer below draws either block from it.
+  // share; the renderer below draws each block from it.
   interface Block { prefix: string; answers: QAnswers; set: (key: string, value: QAnswers[string]) => void }
   const bgBlock: Block = {
     prefix: 'bg',
@@ -191,6 +202,14 @@ export function SusModal({ open, onClose }: Props) {
     set: (key, value) => {
       backgroundLangRef.current[key] = language;
       setBackground((prev) => ({ ...prev, [key]: value }));
+    },
+  };
+  const taskBlock: Block = {
+    prefix: 'tq',
+    answers: taskAnswers,
+    set: (key, value) => {
+      taskAnswerLangRef.current[key] = language;
+      setTaskAnswers((prev) => ({ ...prev, [key]: value }));
     },
   };
   const proBlock: Block = {
@@ -251,12 +270,13 @@ export function SusModal({ open, onClose }: Props) {
     // Taken with `filled`, before the await below: both must describe the
     // same moment, the click.
     const answerLangs = susAnswerLangRef.current.slice();
+    const taskLangs = { ...taskAnswerLangRef.current };
     const proLangs = { ...proAnswerLangRef.current };
     const bgLangs = { ...backgroundLangRef.current };
     const score = computeSusScore(filled);
     const submittedIso = new Date().toISOString();
     const session = readEvalSession();
-    const trimmedParticipant = participant.trim() || session?.participant || '';
+    const trimmedParticipant = linkCode || participant.trim() || session?.participant || '';
 
     // The image is captured FIRST, while the preview still shows the finished
     // shader and before the session is torn down. Best-effort: a null here
@@ -292,7 +312,9 @@ export function SusModal({ open, onClose }: Props) {
       language: answeredIn.language,
       languageAtSubmit: language,
       background: buildBackgroundRecord(background, bgLangs),
-      ...(proAsked ? { professional: buildProRecord(pro, proLangs) } : {}),
+      ...(proAsked
+        ? { professional: buildProRecord(pro, proLangs) }
+        : { taskQuestions: buildTaskRecord(taskAnswers, taskLangs, pointsVisible) }),
       itemsVersion: 'brooke-1996-item8-awkward',
       items: filled.map((response, i) => {
         const itemLanguage = answeredIn.perItem[i];
@@ -395,7 +417,6 @@ export function SusModal({ open, onClose }: Props) {
       zipBytes,
       mailSubject,
       mailSummary,
-      failedChecks: quality.filter((q) => !q.ok),
       upload: precheck ?? 'pending',
     });
     // The thank-you screen is up (same render), so Escape closes it again.
@@ -446,12 +467,8 @@ export function SusModal({ open, onClose }: Props) {
             {t('Your answers, your shader and the session data are packed into one file, saved in your Downloads folder:', language)}
           </div>
           <div className="eval-done__file">{done.fileName}</div>
-          {done.failedChecks.length > 0 && (
-            <div className="eval-done__warn">
-              {t('Some data-quality checks failed. Tell the researcher before you leave:', language)}{' '}
-              {done.failedChecks.map((q) => q.id).join(', ')}
-            </div>
-          )}
+          {/* The quality checks travel in the package only (owner, 2026-11-11):
+              shown here, a flag such as response-pattern judged the participant. */}
           {done.upload === 'ok' ? (
             <div className="csv-import-modal__message">
               {t('The file was uploaded to the study server.', language)}{' '}
@@ -689,36 +706,40 @@ export function SusModal({ open, onClose }: Props) {
         </div>
 
         <div className="sus-modal__meta">
-          <div className="eval-consent__code-row">
-            <label htmlFor="sus-participant">{t('Participant code (from the researcher):', language)}</label>
-            <input
-              id="sus-participant"
-              type="text"
-              value={participant}
-              maxLength={40}
-              placeholder="P01"
-              aria-describedby="sus-participant-hint"
-              disabled={busy}
-              onChange={(e) => setParticipant(e.target.value)}
-            />
-          </div>
+          {linkCode ? (
+            <div className="eval-consent__code-row">
+              <span>{t('Your code:', language)}</span>
+              <strong className="eval-consent__code-fixed">{linkCode}</strong>
+            </div>
+          ) : (
+            <div className="eval-consent__code-row">
+              <label htmlFor="sus-participant">{t('Participant code (from the researcher):', language)}</label>
+              <input
+                id="sus-participant"
+                type="text"
+                value={participant}
+                maxLength={40}
+                placeholder="P01"
+                aria-describedby="sus-participant-hint"
+                disabled={busy}
+                onChange={(e) => setParticipant(e.target.value)}
+              />
+            </div>
+          )}
           <div className="sus-modal__progress">
             {answered}/{SUS_ITEM_COUNT}
           </div>
         </div>
-        <div className="sus-modal__hint" id="sus-participant-hint">
-          {t('Type the code the researcher gave you, not your name.', language)}
-        </div>
-
-        {/* The experience block — BEFORE the SUS in every arm, as it has been
-            since the first packages (background.ts says what that order does
-            and does not protect). */}
-        {renderBlock(BACKGROUND_ITEMS, bgBlock, BACKGROUND_GROUP_HEADINGS)}
+        {!linkCode && (
+          <div className="sus-modal__hint" id="sus-participant-hint">
+            {t('Type the code the researcher gave you, not your name.', language)}
+          </div>
+        )}
 
         <div className="sus-modal__section-head">{t('Statements about FastShaders', language)}</div>
-        {/* Brooke's own instruction, placed on the SUS block it applies to: the
-            experience block above is Yes/No rows and option strips, where
-            "centre point" would be meaningless. */}
+        {/* Brooke's own instruction, placed on the SUS block it applies to:
+            the SUS comes FIRST in every arm so it is answered immediately
+            after the task under identical context. */}
         <div className="csv-import-modal__message">
           {t('Mark your immediate response to each statement without thinking long. If you cannot respond to one, mark the centre point (3).', language)}
         </div>
@@ -763,7 +784,13 @@ export function SusModal({ open, onClose }: Props) {
           ))}
         </div>
 
-        {proAsked && renderBlock(PRO_ITEMS, proBlock, PRO_GROUP_HEADINGS, PRO_GROUP_NOTES)}
+        {proAsked
+          ? renderBlock(PRO_ITEMS, proBlock, PRO_GROUP_HEADINGS, PRO_GROUP_NOTES)
+          : renderBlock(taskItemsFor(pointsVisible), taskBlock, TASK_GROUP_HEADINGS)}
+
+        {/* The shared experience block — AFTER the SUS and the arm-specific
+            session/professional questions in every arm (background.ts). */}
+        {renderBlock(BACKGROUND_ITEMS, bgBlock, BACKGROUND_GROUP_HEADINGS)}
 
         <label className="csv-import-modal__message" htmlFor="sus-comment">
           {t('Comments (optional)', language)}

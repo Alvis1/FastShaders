@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
-import { EVAL_DPO_CONTACT, EVAL_RETENTION_PERIOD, warnIfConsentIncomplete } from './evalMode';
+import { EVAL_DPO_CONTACT, EVAL_RETENTION_PERIOD, linkParticipantCode, warnIfConsentIncomplete } from './evalMode';
 import { asksAge, evalTask } from './evalTask';
 import { DataDisclosureModal } from './DataDisclosureModal';
 import { LangSwitch } from './LangSwitch';
@@ -21,7 +21,9 @@ import './eval.css';
  * The participant field asks for a CODE, not a name (GDPR data minimisation;
  * pseudonymisation is the Horizon Europe default) — the researcher assigns
  * P01, P02, … and keeps the code→name key on the paper consent form, apart
- * from the data.
+ * from the data. A link may carry the code in its fragment
+ * (`…/evalpro#P0101`): the dialog then shows it as "Your code: P0101" and
+ * offers no field — the researcher assigned it, so it cannot be changed.
  */
 
 /*
@@ -57,7 +59,10 @@ interface Props {
 
 export function ConsentModal({ onAgree, onDecline }: Props) {
   const language = useAppStore((s) => s.language);
-  const [participant, setParticipant] = useState('');
+  // From the link's fragment (`/evalpro#P0101`, stored by the redirector):
+  // FIXED when present — shown, never editable, and what Agree records.
+  const [linkCode] = useState(linkParticipantCode);
+  const [participant, setParticipant] = useState(linkCode);
   const [adult, setAdult] = useState(false);
   const [showDisclosure, setShowDisclosure] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -99,12 +104,11 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
         </div>
 
         <div className="eval-consent__section">
-          {t('You are invited to a usability study of FastShaders, a visual shader editor built in a research project.', language)}{' '}
+          {t('You are invited to a usability study of the FastShaders visual shader editor.', language)}{' '}
           <strong>{t('Data controller: Vidzeme University of Applied Sciences (ViA).', language)}</strong>{' '}
-          {t('Contact: alvis.misjuns@va.lv.', language)}{' '}
           {EVAL_DPO_CONTACT
-            ? `${t('Data-protection questions can also go to the data protection officer:', language)} ${EVAL_DPO_CONTACT}`
-            : t('Data-protection questions go to the same address.', language)}
+            ? `${t('Contact: alvis.misjuns@va.lv.', language)} ${t('Data protection officer:', language)} ${EVAL_DPO_CONTACT}`
+            : t('Contact (including data protection): alvis.misjuns@va.lv.', language)}
         </div>
 
         {/* A LAYERED notice: one sentence naming the categories, with the
@@ -114,7 +118,7 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
             decision, the detail is what answers a question about it. */}
         <div className="eval-consent__section">
           <div className="eval-consent__what-head">
-            <strong>{t('What is recorded during the session:', language)}</strong>
+            <strong>{t('What is recorded:', language)}</strong>
             <button
               type="button"
               className="eval-consent__help"
@@ -124,23 +128,23 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
               {t('Details', language)}
             </button>
           </div>
-          {t('Your actions in the editor (not what you type), your questionnaire answers, the shader you build with a picture of it, and technical facts about this computer.', language)}
+          {t('Editor actions (never typed text), questionnaire answers, your shader with a preview image, and basic device info.', language)}
         </div>
 
         <div className="eval-consent__section">
-          {t('Nothing is sent while you work. When you submit the questionnaire, the data is packed into one file, saved on this computer and uploaded to the study server alvismisjuns.lv (also reachable as fs.sferas.lv), operated by the researcher.', language)}
+          {t('Nothing is sent while you work. On submit, one ZIP file is saved locally and uploaded to ViA\'s study server imgame.va.lv.', language)}
         </div>
 
         <div className="eval-consent__section">
           {EVAL_RETENTION_PERIOD
-            ? `${t('The data is stored under your participant code, not your name, used only for this research and kept', language)} ${EVAL_RETENTION_PERIOD}.`
-            : t('The data is stored under your participant code, not your name, used only for this research and deleted when the project ends.', language)}{' '}
+            ? `${t('Data is stored under your participant code (not your name), used only for this research, and kept', language)} ${EVAL_RETENTION_PERIOD}.`
+            : t('Data is stored under your participant code (not your name), used only for this research, and deleted when the project ends.', language)}{' '}
           {ASKS_AGE && `${t('Only people aged 18 or older can take part.', language)} `}
-          {t('Taking part is voluntary. To stop, close this tab: nothing is kept unless you submit. Later you can have your data deleted by quoting your participant code, and you can complain to the Data State Inspectorate (Datu valsts inspekcija).', language)}
+          {t('Participation is voluntary. Close this tab at any time to quit without saving. You may request deletion using your participant code or lodge a complaint with the Data State Inspectorate (Datu valsts inspekcija).', language)}
         </div>
 
         <div className="eval-consent__section">
-          <strong>{t('When you are finished, press EXPORT in the toolbar and choose “Submit”.', language)}</strong>
+          <strong>{t('When finished, click EXPORT in the toolbar and choose “Submit”.', language)}</strong>
         </div>
 
         {ASKS_AGE && (
@@ -150,18 +154,25 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
           </label>
         )}
 
-        <div className="eval-consent__code-row">
-          <label htmlFor="eval-participant">{t('Participant code (from the researcher):', language)}</label>
-          <input
-            id="eval-participant"
-            type="text"
-            value={participant}
-            maxLength={40}
-            placeholder="P01"
-            onChange={(e) => setParticipant(e.target.value)}
-            autoFocus
-          />
-        </div>
+        {linkCode ? (
+          <div className="eval-consent__code-row">
+            <span>{t('Your code:', language)}</span>
+            <strong className="eval-consent__code-fixed">{linkCode}</strong>
+          </div>
+        ) : (
+          <div className="eval-consent__code-row">
+            <label htmlFor="eval-participant">{t('Participant code (from the researcher):', language)}</label>
+            <input
+              id="eval-participant"
+              type="text"
+              value={participant}
+              maxLength={40}
+              placeholder="P01"
+              onChange={(e) => setParticipant(e.target.value)}
+              autoFocus
+            />
+          </div>
+        )}
 
         <div className="csv-import-modal__buttons">
           <button type="button" className="csv-import-modal__button" onClick={onDecline}>
@@ -173,7 +184,7 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
             disabled={ASKS_AGE && !adult}
             onClick={() => {
               if (ASKS_AGE && !adult) return;
-              onAgree(participant.trim(), ASKS_AGE && adult);
+              onAgree(linkCode || participant.trim(), ASKS_AGE && adult);
             }}
           >
             {t('I agree — start the session', language)}

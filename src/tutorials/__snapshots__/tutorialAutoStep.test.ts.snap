@@ -218,6 +218,234 @@ export default shader;
 "
 `;
 
+exports[`every lesson, built by "Do it for me" > tut-curve builds a shader that parses back, within budget 1`] = `
+"import { Fn, float, mix, mx_noise_float, positionGeometry, texture, vec2, vec3 } from 'three/tsl';
+
+const fsLut = (() => {
+  const made = new Map();
+  const f32 = new Float32Array(1);
+  const i32 = new Int32Array(f32.buffer);
+  const half = (v) => {
+    f32[0] = v;
+    const w = i32[0];
+    let bits = (w >> 16) & 0x8000;
+    let man = (w >> 12) & 0x07ff;
+    const ex = (w >> 23) & 0xff;
+    if (ex < 103) return bits;
+    if (ex > 142) return bits | 0x7c00 | (ex === 255 && (w & 0x007fffff) !== 0 ? 0x0200 : 0);
+    if (ex < 113) {
+      man |= 0x0800;
+      return bits | ((man >> (114 - ex)) + ((man >> (113 - ex)) & 1));
+    }
+    bits |= ((ex - 112) << 10) | (man >> 1);
+    return bits + (man & 1);
+  };
+  const unit = (s) => {
+    let dots = 0;
+    let digits = 0;
+    for (let i = 0; i < s.length; i++) {
+      const k = s.charCodeAt(i);
+      if (k === 46) dots++;
+      else if (k >= 48 && k <= 57) digits++;
+      else return null;
+    }
+    if (dots > 1 || digits === 0 || s.length > 12) return null;
+    const num = Number(s);
+    return num > 1 ? 1 : num;
+  };
+  const hex = (s) => {
+    if (s.length !== 7 || s.charCodeAt(0) !== 35) return null;
+    for (let i = 1; i < 7; i++) {
+      const k = s.charCodeAt(i);
+      if (!((k >= 48 && k <= 57) || (k >= 65 && k <= 70) || (k >= 97 && k <= 102))) return null;
+    }
+    return [1, 3, 5].map((o) => {
+      const cv = parseInt(s.slice(o, o + 2), 16) / 255;
+      return cv <= 0.04045 ? cv / 12.92 : Math.pow((cv + 0.055) / 1.055, 2.4);
+    });
+  };
+  const word = (s) => {
+    if (s.length < 1 || s.length > 12) return false;
+    for (let i = 0; i < s.length; i++) {
+      const k = s.charCodeAt(i);
+      if (k < 97 || k > 122) return false;
+    }
+    return true;
+  };
+  const rows = (str, lo, hi) => {
+    if (!str || str.split === undefined || str.length === 0 || str.length > 1024) return null;
+    const recs = str.split(',');
+    if (recs.length < lo || recs.length > hi) return null;
+    return recs.map((rec) => rec.trim().split(' ').filter((tok) => tok !== ''));
+  };
+  const make = (key, nearest, bake) => {
+    let hit = made.get(key);
+    if (hit) return hit;
+    const baked = bake();
+    const data = new Uint16Array(baked.vals.length);
+    for (let i = 0; i < baked.vals.length; i++) data[i] = half(baked.vals[i]);
+    const tex = new globalThis.THREE.DataTexture(data, baked.vals.length / 4, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.HalfFloatType);
+    tex.minFilter = nearest ? globalThis.THREE.NearestFilter : globalThis.THREE.LinearFilter;
+    tex.magFilter = tex.minFilter;
+    tex.wrapS = globalThis.THREE.ClampToEdgeWrapping;
+    tex.wrapT = globalThis.THREE.ClampToEdgeWrapping;
+    tex.needsUpdate = true;
+    hit = { tex: tex, slopes: baked.slopes };
+    made.set(key, hit);
+    return hit;
+  };
+  const at = (tex, u) => texture(tex, vec2(float(u).mul(256 / 257).add(0.5 / 257), 0.5)).level(0);
+  return { half: half, unit: unit, hex: hex, word: word, rows: rows, make: make, at: at };
+})();
+
+const fsRgbCurves = (col, fac, curveC, curveR, curveG, curveB, extend) => {
+  const flat = extend === 'horizontal';
+  const read = (str) => {
+    const recs = fsLut.rows(str, 2, 32);
+    const pts = recs && recs.map((rec) => {
+      if (rec.length < 2 || rec.length > 3 || (rec.length === 3 && !fsLut.word(rec[2]))) return null;
+      const px = fsLut.unit(rec[0]);
+      const py = fsLut.unit(rec[1]);
+      return px === null || py === null ? null : { x: px, y: py };
+    });
+    return pts && pts.every((pt) => pt !== null) ? pts.sort((q1, q2) => q1.x - q2.x) : [{ x: 0, y: 0 }, { x: 1, y: 1 }];
+  };
+  const curves = [curveR, curveG, curveB, curveC].map(read);
+  const lineal = curves.every((pts) => pts.length === 2 && pts[0].x === 0 && pts[0].y === 0 && pts[1].x === 1 && pts[1].y === 1);
+  const base = vec3(col);
+  if (lineal && !flat) return base;
+  const bake = () => {
+    const eps = 1.1920928955078125e-7;
+    const slopes = [];
+    const tables = curves.map((pts) => {
+      const cnt = pts.length;
+      const bz = pts.map((pt) => ({ h0: [0, 0], k: [pt.x, pt.y], h2: [0, 0] }));
+      for (let i = 0; i < cnt; i++) {
+        const k2 = bz[i].k;
+        const k1 = i > 0 ? bz[i - 1].k : [2 * k2[0] - bz[i + 1].k[0], 2 * k2[1] - bz[i + 1].k[1]];
+        const k3 = i < cnt - 1 ? bz[i + 1].k : [2 * k2[0] - k1[0], 2 * k2[1] - k1[1]];
+        const da = [k2[0] - k1[0], k2[1] - k1[1]];
+        const db = [k3[0] - k2[0], k3[1] - k2[1]];
+        const la = Math.hypot(da[0], da[1]) || 1;
+        const lb = Math.hypot(db[0], db[1]) || 1;
+        const tv = [db[0] / lb + da[0] / la, db[1] / lb + da[1] / la];
+        const tl = Math.hypot(tv[0], tv[1]) * 2.5614;
+        if (tl !== 0) {
+          bz[i].h0 = [k2[0] - tv[0] * (la / tl), k2[1] - tv[1] * (la / tl)];
+          bz[i].h2 = [k2[0] + tv[0] * (lb / tl), k2[1] + tv[1] * (lb / tl)];
+        }
+      }
+      if (cnt > 2) {
+        const fix = (b, near, keep, toward) => {
+          const hl = Math.hypot(b.k[0] - b[keep][0], b.k[1] - b[keep][1]);
+          const vx = toward(near[0], b.k[0]) - b.k[0];
+          const vy = near[1] - b.k[1];
+          const nl = Math.hypot(vx, vy);
+          if (nl > eps) {
+            const sx = vx * (hl / nl);
+            const sy = vy * (hl / nl);
+            return [[b.k[0] + sx, b.k[1] + sy], [b.k[0] - sx, b.k[1] - sy]];
+          }
+          return null;
+        };
+        const f0 = fix(bz[0], bz[1].h0, 'h2', Math.max);
+        if (f0) { bz[0].h2 = f0[0]; bz[0].h0 = f0[1]; }
+        const fl = fix(bz[cnt - 1], bz[cnt - 2].h2, 'h0', Math.min);
+        if (fl) { bz[cnt - 1].h0 = fl[0]; bz[cnt - 1].h2 = fl[1]; }
+      }
+      const xs = [];
+      const ys = [];
+      const diff = (q0, q1, q2, q3, out) => {
+        let fd = 31;
+        const rt0 = q0;
+        const rt1 = 3 * (q1 - q0) / fd;
+        fd *= fd;
+        const rt2 = 3 * (q0 - 2 * q1 + q2) / fd;
+        fd *= 31;
+        const rt3 = (q3 - q0 + 3 * (q1 - q2)) / fd;
+        let d0 = rt0;
+        let d1 = rt1 + rt2 + rt3;
+        let d2 = 2 * rt2 + 6 * rt3;
+        const d3 = 6 * rt3;
+        for (let i = 0; i <= 31; i++) { out.push(d0); d0 += d1; d1 += d2; d2 += d3; }
+      };
+      for (let i = 0; i < cnt - 1; i++) {
+        const v1 = bz[i].k;
+        const v2 = bz[i].h2;
+        const v3 = bz[i + 1].h0;
+        const v4 = bz[i + 1].k;
+        const ha = [v1[0] - v2[0], v1[1] - v2[1]];
+        const hb = [v4[0] - v3[0], v4[1] - v3[1]];
+        const span = v4[0] - v1[0];
+        const l1 = Math.abs(ha[0]);
+        const l2 = Math.abs(hb[0]);
+        if (l1 + l2 !== 0 && l1 + l2 > span) {
+          const sc = span / (l1 + l2);
+          bz[i].h2 = [v1[0] - sc * ha[0], v1[1] - sc * ha[1]];
+          bz[i + 1].h0 = [v4[0] - sc * hb[0], v4[1] - sc * hb[1]];
+        }
+        diff(v1[0], bz[i].h2[0], bz[i + 1].h0[0], v4[0], xs);
+        diff(v1[1], bz[i].h2[1], bz[i + 1].h0[1], v4[1], ys);
+      }
+      const unitDir = (dx, dy) => {
+        const dl = Math.sqrt(dx * dx + dy * dy);
+        return dl > 0 ? [dx / dl, dy / dl] : [1, 0];
+      };
+      const ein = unitDir(bz[0].h0[0] - bz[0].k[0], bz[0].h0[1] - bz[0].k[1]);
+      const eout = unitDir(bz[cnt - 1].k[0] - bz[cnt - 1].h2[0], bz[cnt - 1].k[1] - bz[cnt - 1].h2[1]);
+      const last = xs.length - 1;
+      const extendAt = (x) => {
+        if (x <= xs[0]) {
+          if (flat) return ys[0];
+          return ein[0] === 0 ? ys[0] + ein[1] * 10000 : ys[0] + ein[1] * (x - xs[0]) / ein[0];
+        }
+        if (flat) return ys[last];
+        return eout[0] === 0 ? ys[last] - eout[1] * 10000 : ys[last] + eout[1] * (x - xs[last]) / eout[0];
+      };
+      const tab = new Float64Array(257);
+      let ptr = 0;
+      for (let i = 0; i <= 256; i++) {
+        const cx = i * 0.00390625;
+        while (cx >= xs[ptr] && ptr !== last) ptr++;
+        if (ptr === 0 || (ptr === last && cx >= xs[ptr])) {
+          tab[i] = Math.abs(cx - xs[ptr]) <= 1e-6 ? ys[ptr] : extendAt(cx);
+        } else {
+          let f1 = xs[ptr] - xs[ptr - 1];
+          const f2 = xs[ptr] - cx;
+          f1 = f1 > eps ? f2 / f1 : 0;
+          tab[i] = f1 * ys[ptr - 1] + (1 - f1) * ys[ptr];
+        }
+      }
+      const slope = (d) => {
+        const sl = flat ? 0 : d[0] !== 0 ? d[1] / d[0] : 1e4;
+        return Number.isFinite(sl) ? Math.max(-1e4, Math.min(1e4, sl)) : 0;
+      };
+      slopes.push(slope(ein), slope(eout));
+      return tab.every(Number.isFinite) ? tab : tab.map((_, i) => i / 256);
+    });
+    const vals = new Float32Array(257 * 4);
+    for (let i = 0; i <= 256; i++) for (let k = 0; k < 4; k++) vals[i * 4 + k] = tables[k][i];
+    return { vals: vals, slopes: slopes };
+  };
+  const hit = fsLut.make('curves ' + (flat ? 'horizontal' : 'extrapolate') + ' ' + [curveR, curveG, curveB, curveC].join('|'), false, bake);
+  const sl = hit.slopes;
+  const tap = (u, k) => fsLut.at(hit.tex, u)[k];
+  const pre = vec3(tap(base.x, 'w'), tap(base.y, 'w'), tap(base.z, 'w')).add(base.min(0).mul(sl[6])).add(base.sub(1).max(0).mul(sl[7]));
+  const post = vec3(tap(pre.x, 'x'), tap(pre.y, 'y'), tap(pre.z, 'z')).add(pre.min(0).mul(vec3(sl[0], sl[2], sl[4]))).add(pre.sub(1).max(0).mul(vec3(sl[1], sl[3], sl[5])));
+  return mix(base, post, float(fac));
+};
+
+const shader = Fn(() => {
+  const noise1 = mx_noise_float(positionGeometry.mul(3)).mul(0.5).add(0.5);
+  const rgbCurves1 = fsRgbCurves(noise1, 1, "0 0,0.4 0.05,0.6 0.95,1 1", "0 0,1 1", "0 0,1 1", "0 0,1 1", "extrapolate");
+
+  return rgbCurves1;
+});
+
+export default shader;
+"
+`;
+
 exports[`every lesson, built by "Do it for me" > tut-dissolve builds a shader that parses back, within budget 1`] = `
 "import { Discard, Fn, color, float, greaterThan, mx_noise_float, positionGeometry, texture, vec2 } from 'three/tsl';
 
@@ -562,6 +790,22 @@ export default shader;
 "
 `;
 
+exports[`every lesson, built by "Do it for me" > tut-grid builds a shader that parses back, within budget 1`] = `
+"import { Fn, float, fract, greaterThan, max, mul, uv, vec2, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const uv1 = mul(uv(), vec2(8, 8));
+  const fract1 = fract(uv1);
+  const max1 = max(fract1.x, fract1.y);
+  const greaterThan1 = greaterThan(max1, 0.9);
+
+  return vec3(float(greaterThan1));
+});
+
+export default shader;
+"
+`;
+
 exports[`every lesson, built by "Do it for me" > tut-holes builds a shader that parses back, within budget 1`] = `
 "import { Discard, Fn, color, greaterThan, mx_noise_float, positionGeometry } from 'three/tsl';
 
@@ -608,12 +852,24 @@ export default shader;
 `;
 
 exports[`every lesson, built by "Do it for me" > tut-material builds a shader that parses back, within budget 1`] = `
-"import { Fn, color, float } from 'three/tsl';
+"import { Fn, color, float, texture, uv } from 'three/tsl';
+
+const _image1_img = new Image();
+_image1_img.src = "fs-asset:<node>"; // sky.png, 1024x512 png, 42.0 KB
+let _image1_ok = true;
+try { await _image1_img.decode(); } catch { _image1_ok = false; }
+const _image1_tex = _image1_ok ? new globalThis.THREE.Texture(_image1_img) : new globalThis.THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.UnsignedByteType);
+_image1_tex.colorSpace = globalThis.THREE.SRGBColorSpace;
+_image1_tex.wrapS = globalThis.THREE.RepeatWrapping;
+_image1_tex.wrapT = globalThis.THREE.RepeatWrapping;
+_image1_tex.flipY = true;
+_image1_tex.needsUpdate = true;
 
 const shader = Fn(() => {
   const color1 = color(0xb0bec5);
+  const image1 = texture(_image1_tex, uv()).rgb;
 
-  return { color: color1, roughness: float(0.1), metalness: float(1) };
+  return { color: color1, roughness: float(0.1), metalness: float(1), env: texture(_image1_tex) };
 });
 
 export default shader;
@@ -1137,6 +1393,33 @@ export default shader;
 "
 `;
 
+exports[`every lesson, built by "Do it for me" > tut-sharp-rim builds a shader that parses back, within budget 1`] = `
+"import { Fn, abs, add, cameraPosition, clamp, div, dot, float, frontFacing, greaterThan, max, mul, normalWorld, normalize, positionWorld, pow, select, sqrt, sub, vec2, vec3 } from 'three/tsl';
+
+const fsFresnel = Fn(([eta, n, pw]) => {
+  const v = normalize(sub(cameraPosition, pw));
+  const c = abs(dot(vec3(n), v));
+  const e = clamp(float(eta), float(1e-5), float(1e4));
+  const r = select(frontFacing, e, div(float(1), e));
+  const g2 = add(sub(mul(r, r), float(1)), mul(c, c));
+  const g = sqrt(max(g2, float(0)));
+  const a = div(sub(g, c), max(add(g, c), float(1e-6)));
+  const b = div(sub(mul(c, add(g, c)), float(1)), add(mul(c, sub(g, c)), float(1)));
+  const fr = select(greaterThan(g2, float(0)), mul(mul(float(0.5), mul(a, a)), add(float(1), mul(b, b))), float(1));
+  return vec2(fr, sub(float(1), c));
+});
+
+const shader = Fn(() => {
+  const fresnel1 = fsFresnel(1.5, normalWorld, positionWorld);
+  const pow1 = pow(fresnel1.y, 4);
+
+  return vec3(pow1);
+});
+
+export default shader;
+"
+`;
+
 exports[`every lesson, built by "Do it for me" > tut-snow builds a shader that parses back, within budget 1`] = `
 "import { Fn, float, normalWorld, texture, vec2 } from 'three/tsl';
 
@@ -1479,6 +1762,22 @@ export default shader;
 "
 `;
 
+exports[`every lesson, built by "Do it for me" > tut-terraces builds a shader that parses back, within budget 1`] = `
+"import { Fn, div, floor, mul, mx_noise_float, positionGeometry, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const noise1 = mx_noise_float(positionGeometry.mul(2)).mul(0.5).add(0.5);
+  const mul1 = mul(noise1, 5);
+  const floor1 = floor(mul1);
+  const div1 = div(floor1, 5);
+
+  return vec3(div1);
+});
+
+export default shader;
+"
+`;
+
 exports[`every lesson, built by "Do it for me" > tut-toon builds a shader that parses back, within budget 1`] = `
 "import { Fn, dot, float, normalWorld, texture, vec2, vec3 } from 'three/tsl';
 
@@ -1632,6 +1931,22 @@ const shader = Fn(() => {
   const colorRamp1 = fsColorRamp(dot1, "0 #1a237e 1,0.35 #3949ab 1,0.75 #c5cae9 1", "constant");
 
   return colorRamp1.rgb;
+});
+
+export default shader;
+"
+`;
+
+exports[`every lesson, built by "Do it for me" > tut-veins builds a shader that parses back, within budget 1`] = `
+"import { Fn, abs, mx_noise_float, positionGeometry, smoothstep, sub, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const noise1 = mx_noise_float(positionGeometry.mul(3)).mul(0.5).add(0.5);
+  const sub1 = sub(noise1, 0.5);
+  const abs1 = abs(sub1);
+  const smoothstep1 = smoothstep(0, 0.05, abs1);
+
+  return vec3(smoothstep1);
 });
 
 export default shader;

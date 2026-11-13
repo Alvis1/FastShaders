@@ -19,12 +19,13 @@ import {
   buildPreviewShaderModule,
   buildTeapotAttr,
   decoderAssetUrl,
+  fpvPose,
   getBunnyModelUrl,
   isModelGeometry,
   isTeapotGeometry,
   tslToPreviewHTML,
 } from '@/engine/tslToPreviewHTML';
-import type { CameraPosition, GeometryType, LightingMode, PreviewOptions } from '@/engine/tslToPreviewHTML';
+import type { CameraPosition, FpvPose, GeometryType, LightingMode, PreviewOptions } from '@/engine/tslToPreviewHTML';
 import {
   SUBDIVISION_DEFAULT,
   SUBDIVISION_STEPS,
@@ -50,9 +51,7 @@ import {
   isBinaryKind,
   isSplatKind,
   preReadModelGate,
-  splatEvalRefusal,
   MESH_DROP_HINT_KEY,
-  MESH_SPLAT_EVAL_KEY,
 } from '@/utils/previewMesh';
 import {
   meshRefusalMessage,
@@ -65,7 +64,6 @@ import {
 } from '@/utils/previewMeshMessage';
 import { loadDecoderPayload, type DecoderPayload } from '@/utils/meshDecoders';
 import { PREVIEW_MODEL_FILE_EVENT, previewModelDropOf } from '@/utils/previewModelDrop';
-import { isEvalMode } from '@/eval/evalMode';
 import { GLB_IMPORT_KEYS } from '@/utils/glbImportCopy';
 import { useGlbImport } from './useGlbImport';
 import { useSplatGraphAsk } from './useSplatGraphAsk';
@@ -94,7 +92,7 @@ import { graphToCode } from '@/engine/graphToCode';
 import { collectImageAssets, inlineImageAssetsFromNodes } from '@/engine/imageAssets';
 import { PREVIEW_ASSETS_MESSAGE, planPreviewAssetFeed } from '@/engine/previewAssetFeed';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import { importShaderText, importShaderZip, isZipFile, reportZipImportError } from '@/engine/projectImport';
+import { isZipFile } from '@/engine/projectImport';
 import { requestShaderImport } from '@/utils/shaderDropRequest';
 import { displayImageFileName } from '@/utils/imageNode';
 import { isImageChannelHandle } from '@/utils/imageChannels';
@@ -326,6 +324,28 @@ function loadCameraPos(): CameraPosition | null {
 
 function loadRotation(): CameraPosition | null {
   return loadVec3('fs:previewRotation');
+}
+
+/** Where the fly-through camera was left (`fs:previewFpvPose`), validated like
+ *  every stored camera value: a `.fastshader` cannot write it, but a stale or
+ *  hand-edited one is still never coerced. Junk is removed. */
+function loadFpvPose(): FpvPose | null {
+  try {
+    const raw = localStorage.getItem(FPV_POSE_KEY);
+    if (!raw) return null;
+    const pose = fpvPose(JSON.parse(raw, safeJsonReviver));
+    if (!pose) localStorage.removeItem(FPV_POSE_KEY);
+    return pose;
+  } catch {
+    return null;
+  }
+}
+const FPV_POSE_KEY = 'fs:previewFpvPose';
+/** FPV mode on/off — `'true'` exactly, anything else is off. A study's clean
+ *  slate removes it with the pose (EvalGate), so no participant inherits it. */
+const FPV_ON_KEY = 'fs:previewFpv';
+function loadFpvOn(): boolean {
+  try { return isTrueFlag(localStorage.getItem(FPV_ON_KEY)); } catch { return false; }
 }
 
 /** A stored on/off flag that defaults to OFF (turntable, FPS readout, in-place). */
@@ -663,9 +683,6 @@ export function ShaderPreview() {
       .then((mesh) => {
         if (cancelled || !mesh) return;
         if (useAppStore.getState().previewMesh) return;
-        // A study session takes no splat from ANY path (D10) — a cached one
-        // from an earlier, non-study visit in this browser included.
-        if (isEvalMode() && isSplatKind(mesh.kind)) return;
         // persist:false — these bytes came straight OUT of the cache.
         useAppStore.getState().setPreviewMesh(mesh, { persist: false });
         if (bootGeometryWasCustom()) setGeometry('custom');
@@ -1148,6 +1165,16 @@ export function ShaderPreview() {
    */
   const cameraTargetRef = useRef<CameraPosition | null>(null);
   const rotationRef = useRef<CameraPosition | null>(loadRotation());
+  /**
+   * FPV (fly-through) mode and where the flyer is. BOTH are stored, so a
+   * reload comes back flying from the same spot (owner, 2026-11-09), and
+   * switching FPV off and on resumes it too. Both are read through refs when
+   * a document is built (`initialFpv`), like the camera above, so the first
+   * document and every cold rebuild keep flying without joining the deps.
+   */
+  const [fpvOn, setFpvOn] = useState(loadFpvOn);
+  const fpvOnRef = useRef(fpvOn);
+  const fpvPoseRef = useRef<FpvPose | null>(loadFpvPose());
 
   /**
    * Persist the turntable angle at most once every ROTATION_PERSIST_MS.
@@ -1305,20 +1332,12 @@ export function ShaderPreview() {
     try {
       const kind = detectMeshKind(file.name);
       // Whether this drop may be OFFERED as a shader (the GLB import dialog):
-      // never in a study session (the drop stays today's, byte for byte —
-      // the 64 MiB gate included), never for a model dropped WITH a shader
+      // in a study session too since 2026-11-10; never for a model dropped WITH a shader
       // (it pairs with the shader just imported), and only for a glTF.
       // `offerBuild: false` = the import dialog is not opened at all — build
       // AND restore (a stored shader never beats a shader dropped with it).
       // `source` reaches the dialog: a forwarded ('iframe') drop's Restore asks.
-      const offer = opts?.offerBuild !== false && !isEvalMode() && (kind === 'glb' || kind === 'gltf');
-      // A study session takes no Gaussian splat (D10): refused on the kind
-      // alone, BEFORE the pre-read gate and the read, so the study host never
-      // reaches for the splat runtime. The zip import skips one the same way.
-      if (isEvalMode() && isSplatKind(kind)) {
-        showDropNotice(meshRefusalMessage(splatEvalRefusal(), language));
-        return;
-      }
+      const offer = opts?.offerBuild !== false && (kind === 'glb' || kind === 'gltf');
       // EVERY model drop is refused while either model dialog is open — an
       // .obj or a paired model is not offerable, but it would still swap the
       // mesh under the dialog that is asking about another one.
@@ -1376,12 +1395,10 @@ export function ShaderPreview() {
     // DOM events and skip the prompt.
     let shaderFile = zip ?? script;
     if (shaderFile && source === 'iframe') {
-      // Outside a study session the Open/Add dialog follows, and Add replaces
-      // nothing — so the warning names what comes NEXT instead of a
-      // replacement the user may not choose.
-      const ask = isEvalMode()
-        ? 'Load the dropped shader file? It replaces the current project.'
-        : 'Accept the shader file dropped on the preview? You then choose whether to open it or add it.';
+      // The Open/Add dialog follows, and Add replaces nothing — so the
+      // warning names what comes NEXT instead of a replacement the user may
+      // not choose.
+      const ask = 'Accept the shader file dropped on the preview? You then choose whether to open it or add it.';
       const ok = window.confirm(`${t(ask, language)}\n(${shaderFile.name})`);
       if (!ok) shaderFile = null;
     }
@@ -1389,49 +1406,15 @@ export function ShaderPreview() {
     // A dropped shader ASKS first — Open or Add (utils/shaderDropRequest.ts).
     // The dialog owns the import and every message about it from here, and
     // calls back when it settles so a model dropped WITH the shader still
-    // follows it; a CANCELLED drop is dropped whole, model included. It
-    // returns false in a study session, which keeps the direct path below.
-    if (
-      shaderFile &&
+    // follows it; a CANCELLED drop is dropped whole, model included.
+    if (shaderFile) {
       requestShaderImport(shaderFile, source, (outcome) => {
+        // A model dropped WITH a shader pairs with it: never offered as a shader.
         if (outcome !== 'cancelled' && model) void loadMeshFile(model, { offerBuild: false });
-      })
-    ) {
+      });
       return;
     }
-
-    // Shader import FIRST (it clears/overwrites the mesh — see
-    // importShaderText/importShaderZip), THEN the dropped model — so a
-    // combined shader+model drop deterministically shows the dropped model
-    // (podest's pairing semantics) instead of racing two file reads.
-    let shaderP: Promise<unknown> | null = null;
-    if (shaderFile && zip && shaderFile === zip) {
-      shaderP = importShaderZip(zip).then(
-        (r) => { if (r === null) showDropNotice(t('The zip holds no shader script', language)); },
-        (e: unknown) => {
-          // A zip the reader refused says why (shared mapping, all surfaces);
-          // anything else keeps the engine's own English message, framed.
-          if (reportZipImportError(e, zip.name)) return;
-          showDropNotice(
-            fillTemplate(t('Could not import {name}: {reason}', language), {
-              name: `“${zip.name}”`,
-              reason: String(e instanceof Error ? e.message : e),
-            }),
-          );
-        },
-      );
-    } else if (shaderFile) {
-      const readName = shaderFile.name;
-      shaderP = shaderFile.text().then(
-        (text) => { importShaderText(text); },
-        () => showDropNotice(fillTemplate(t('Could not read {name}.', language), { name: `“${readName}”` })),
-      );
-    }
-    if (model) {
-      // A model dropped WITH a shader pairs with it: never offered as a shader.
-      if (shaderP) void shaderP.finally(() => { void loadMeshFile(model, { offerBuild: false }); });
-      else void loadMeshFile(model, { source });
-    }
+    if (model) void loadMeshFile(model, { source });
     if (!model && !zip && !script) {
       showDropNotice(t(MESH_DROP_HINT_KEY, language));
     }
@@ -1961,6 +1944,15 @@ export function ShaderPreview() {
           if (isSoundUniformName(name)) continue;
           win.postMessage({ type: 'fs:uniform', name, value }, '*');
         }
+      } else if (data.type === 'fs:fpv-pose') {
+        // Forgeable like fs:camera: five finite numbers inside the fly radius.
+        // Only while FPV is on — a report the user did not cause is dropped.
+        const pose = fpvOnRef.current ? fpvPose(data) : null;
+        if (pose) {
+          lastActivityRef.current = performance.now();
+          fpvPoseRef.current = pose;
+          try { localStorage.setItem(FPV_POSE_KEY, JSON.stringify(pose)); } catch { /* */ }
+        }
       } else if (data.type === 'fs:camera') {
         // Forgeable (the document runs the loaded shader): finite numbers only,
         // and never inside radius 1, which the orbit controls' minDistance of 2
@@ -2020,6 +2012,24 @@ export function ShaderPreview() {
   // Reset the iframe to defaults: camera home, studio lighting, default
   // subdivision, and every property uniform back to its shader-defined value.
   // Min/max bounds and bg color are user preferences, not part of the reset.
+  /**
+   * Switch FPV on or off in the live document, resuming the stored pose (or,
+   * with none, starting from the orbit view). The frame gets FOCUS so the keys
+   * reach it at once — left on this button, W/A/S/D would land on the node
+   * canvas instead (A selects every node).
+   */
+  const toggleFpv = useCallback(() => {
+    const on = !fpvOnRef.current;
+    fpvOnRef.current = on;
+    setFpvOn(on);
+    try { localStorage.setItem(FPV_ON_KEY, String(on)); } catch { /* */ }
+    const frame = iframeRef.current;
+    frame?.contentWindow?.postMessage({ type: 'fs:fpv', on, pose: on ? fpvPoseRef.current : null }, '*');
+    if (on) {
+      try { frame?.focus(); } catch { /* */ }
+    }
+  }, []);
+
   const handleReset = useCallback(() => {
     // Camera: clear the saved view AND tell the live iframe to snap home now
     cameraPosRef.current = null;
@@ -2027,6 +2037,10 @@ export function ShaderPreview() {
     rotationRef.current = null;
     try { localStorage.removeItem('fs:previewCameraPos'); } catch { /* */ }
     try { localStorage.removeItem('fs:previewRotation'); } catch { /* */ }
+    // The fly-through's saved spot too: the stage puts a flying camera home
+    // (facing the object) on the same message, and reports that pose back.
+    fpvPoseRef.current = null;
+    try { localStorage.removeItem(FPV_POSE_KEY); } catch { /* */ }
     const win = iframeRef.current?.contentWindow;
     win?.postMessage({ type: 'fs:reset-camera' }, '*');
 
@@ -2197,15 +2211,14 @@ export function ShaderPreview() {
   // light" changed in it (unticked, or undone), since that is the setting the
   // Normal notice asks for: telling the user to tick the box they just
   // unticked is noise (utils/splatLight.ts `litSplatCount`). Never over a note
-  // that is still up (an import report would be replaced), and never in a
-  // study session.
+  // that is still up (an import report would be replaced).
   const shownModelKey = `${previewGeometry}|${previewMesh?.id ?? ''}`;
   const litSplats = useAppStore((s) => litSplatCount(s.nodes));
   const lastFitRef = useRef({ issue: sinkIssue, shownModelKey, litSplats });
   useEffect(() => {
     const prev = lastFitRef.current;
     lastFitRef.current = { issue: sinkIssue, shownModelKey, litSplats };
-    if (sinkIssue === null || sinkIssue === prev.issue || shownModelKey !== prev.shownModelKey || litSplats !== prev.litSplats || isEvalMode()) return;
+    if (sinkIssue === null || sinkIssue === prev.issue || shownModelKey !== prev.shownModelKey || litSplats !== prev.litSplats) return;
     const store = useAppStore.getState();
     if (store.importNote) return;
     store.showImportNote([{ kind: 'sink-model', issue: sinkIssue, name: store.previewMesh?.name ?? '' }]);
@@ -2437,6 +2450,7 @@ export function ShaderPreview() {
       initialCameraPosition: cameraPosRef.current,
       initialCameraTarget: cameraTargetRef.current,
       initialRotation: rotationRef.current,
+      initialFpv: fpvOnRef.current ? { pose: fpvPoseRef.current } : null,
       // The exact bytes the hot channel will post, so the document's baked
       // module and the channel's idempotency seed cannot differ (see
       // PreviewOptions.shaderModule). It is built from the same code passed
@@ -2957,14 +2971,8 @@ export function ShaderPreview() {
   // model on screen — it would otherwise look like the shader does nothing.
   // LOADED and SHOWN are separate facts: the Model menu is local state, so
   // picking Sphere parks a loaded splat without clearing it, and then the
-  // advice is to pick it, not to drop a file. In a study session splats are
-  // refused outright, so only the Splat Output's own two can arise, and they
-  // get the study's refusal; no new notice enters the study condition.
-  const modelNotice = sinkIssue === null
-    ? null
-    : isEvalMode()
-      ? (sinkIssue === 'splat-needs-splat' || sinkIssue === 'splat-pick-splat' ? t(MESH_SPLAT_EVAL_KEY, language) : null)
-      : sinkModelIssueText(sinkIssue, previewMesh?.name ?? '', language);
+  // advice is to pick it, not to drop a file.
+  const modelNotice = sinkIssue === null ? null : sinkModelIssueText(sinkIssue, previewMesh?.name ?? '', language);
 
   return (
     <div
@@ -3336,6 +3344,17 @@ export function ShaderPreview() {
               aria-label={playing ? t('Pause rotation', language) : t('Play rotation', language)}
             >
               {playing ? '⏸' : '▶'}
+            </button>
+            {/* FPV: fly through the scene instead of orbiting it. */}
+            <button
+              type="button"
+              className={`shader-preview__fpv-btn${fpvOn ? ' shader-preview__fpv-btn--active' : ''}`}
+              onClick={toggleFpv}
+              aria-pressed={fpvOn}
+              title={t('Fly through (FPV): W A S D or the arrow keys move, Q / E down / up, Shift faster, drag to look around. The position is remembered; Reset (✕) puts it back.', language)}
+              aria-label={t('Fly through (FPV)', language)}
+            >
+              FPV
             </button>
             {/* `history="none"`: the scene backdrop is a PREVIEW PREFERENCE
                 (`usePersistedState('fs:previewBgColor')`) — it never touches the

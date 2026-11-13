@@ -61,6 +61,27 @@
   background: rgba(var(--node-ink-rgb), 0.04);
 }
 
+/* The step a drag moves by, above the field while it is dragged
+   (DragNumberInput's portal, viewport px): chrome-sized whatever the canvas
+   zoom, and never in the pointer's way. Opaque like every panel over the
+   canvas, with the one floating shadow. */
+.drag-num__step {
+  position: fixed;
+  z-index: 10050;
+  transform: translate(-50%, calc(-100% - 6px));
+  padding: 2px 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--border-radius-sm);
+  box-shadow: var(--shadow-float);
+  color: var(--text-primary);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 /* Edit mode: a TEXT input (components/inputs/NumberField.tsx), so there are no
    native spin buttons to hide — the ◂ ▸ arrows and the arrow keys step it. */
 .drag-num__edit {

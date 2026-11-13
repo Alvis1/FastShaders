@@ -132,6 +132,22 @@ describe('outputEdgeIsDormant — the scope', () => {
     expect(outputEdgeIsDormant(state([out], [bare], meshes), bare.id)).toBe(false);
   });
 
+  it('an Unlit material hides its ignored channels on purpose — and only those', () => {
+    const out = output('o1', []);
+    const d = out.data as Record<string, unknown>;
+    d.exposedPorts = ['color', 'roughness'];
+    d.materialSettings = { unlit: true };
+    const rough = makeEdge('n1', 'out', 'o1', 'roughness');
+    const col = makeEdge('n1', 'out', 'o1', 'color');
+    const s = state([out], [rough, col], ['Body']);
+    expect(outputEdgeIsDormant(s, rough.id)).toBe(true);
+    // Colour is still drawn while Unlit, so its missing handle is a real bug.
+    expect(outputEdgeIsDormant(s, col.id)).toBe(false);
+    // Unticked: roughness draws again, so a missing handle warns again.
+    d.materialSettings = undefined;
+    expect(outputEdgeIsDormant(state([out], [rough], ['Body']), rough.id)).toBe(false);
+  });
+
   it('an unknown id, a non-Output target and a handle-less edge all warn', () => {
     const out = output('o1', sleeping);
     const wire = makeEdge('n1', 'out', 'o1', 'm1:color');

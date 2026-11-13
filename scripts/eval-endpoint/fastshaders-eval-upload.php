@@ -3,23 +3,30 @@
  * FastShaders eval-package upload endpoint (delivery option B).
  * Companion of src/eval/evalUpload.ts — see EVAL_MODE_PLAN.md §4 Phase 5.
  *
- * DEPLOY (alvismisjuns.lv): `bash scripts/deploy-eval-endpoint.sh` renders
- * the secrets in and uploads this file. The first-time recipe was:
- *   1. Pick a real secret; set $SECRET below AND EVAL_UPLOAD_KEY in
- *      src/eval/evalUpload.ts to the same value.
- *   2. Upload this file to /fastshaders-eval/upload.php (i.e. a sibling of
- *      the /fastshaders/ app dir — same origin for that deploy, so its CSP
- *      already permits the POST; other hosts go through $ALLOWED_ORIGINS).
- *   3. Set EVAL_UPLOAD_URL in src/eval/evalUpload.ts to
- *      '/fastshaders-eval/upload.php' and redeploy the app.
- *   4. Optionally set $NOTIFY to get a mail per received package (the file
- *      itself stays on the server — PHP mail() attachments are unreliable,
- *      and the zip is already safely stored).
- *   5. If you enable this, extend the consent text to say the package is
- *      transferred to the university's server — today's wording only
- *      promises "handed to the researcher".
- *   6. Check the host's post_max_size covers your expected package size
- *      (shader zips with images/models can reach tens of MB).
+ * LIVE ON imgame.va.lv (since 2026-11-09, consent-16): the server of Vidzeme
+ * University of Applied Sciences (ViA), the data controller the consent names,
+ * at https://imgame.va.lv/fastshaders-eval/upload.php. Until then it ran on the
+ * researcher's own alvismisjuns.lv. EVERY app build posts here, cross-origin
+ * (DEFAULT_EVAL_UPLOAD_URL in vite.config.ts), so the consent's "uploaded to
+ * ViA's study server imgame.va.lv" holds whichever host served the app.
+ *
+ * DEPLOY: `bash scripts/deploy-eval-endpoint.sh` renders the secrets in,
+ * uploads this file with list.php and the folder's .htaccess, and proves the
+ * whole path with a real package. The recipe it encodes:
+ *   1. $SECRET below and EVAL_UPLOAD_KEY in src/eval/evalUpload.ts are the same
+ *      value (public by construction: it ships in the app bundle).
+ *   2. $INBOX: a directory PHP can WRITE. Outside the web root is safest; the
+ *      ViA container's only mount IS the web root, so there it is a random-
+ *      named folder beside this file behind two deny rules (README.md).
+ *   3. post_max_size must cover $MAX_BYTES: a package is the raw request body.
+ *      The php:8-apache image keeps 8M; the folder's .htaccess raises it.
+ *   4. Every app origin is in $ALLOWED_ORIGINS below.
+ *   5. Moving this endpoint to another host is a CONSENT change: the text names
+ *      the host (evalDisclosure.test.ts ties it to EVAL_UPLOAD_URL), so it gets
+ *      new wording and a CONSENT_TEXT_VERSION bump.
+ *   6. Optionally set $NOTIFY to get a mail per received package (the file
+ *      itself stays on the server — PHP mail() attachments are unreliable, and
+ *      the ViA container has no mail transport configured).
  *
  * Hardening: POST-only, constant-time key check, strict filename pattern
  * (exactly what evalZipFileName() emits), size cap, zip magic check,
@@ -31,29 +38,39 @@
  * checks above stay the controls.
  */
 
+// A PHP warning printed BEFORE http_response_code() sends the headers with a
+// 200: a failed write then reached the participant as "uploaded", followed by
+// "write failed" in a body nobody reads. The ViA container has no php.ini, and
+// PHP's built-in default is display_errors=1, so it is switched off here (and
+// in the folder's .htaccess). The client also requires the body to be "ok".
+ini_set('display_errors', '0');
+
 $SECRET    = 'CHANGE-ME';
 $MAX_BYTES = 64 * 1024 * 1024;
-// Where packages are stored. SAFEST is a path OUTSIDE the web root, e.g.
-// '/var/www/alvis/eval-inbox' — then no Apache config can ever serve it and
-// list.php's streaming is the only way in. It must also be WRITABLE by PHP,
-// which no refusal ever tests: list.php?health makes a real write there, and
-// both deploy scripts stop unless it passes. The default below keeps the two
-// files self-contained and relies on the 0700 mode + the deny-all .htaccess
-// written on first use (which needs AllowOverride to be on).
+// The inbox shares its disk with the ImGame site, and the key is public, so a
+// package that would leave less than this free is refused (507) rather than
+// filling the disk for both projects.
+$MIN_FREE_BYTES = 1024 * 1024 * 1024;
+// Where packages are stored. SAFEST is a path OUTSIDE the web root — then no
+// web-server config can ever serve it and list.php's streaming is the only way
+// in. It must also be WRITABLE by PHP, which no refusal ever tests:
+// list.php?health makes a real write there, and every deploy script stops
+// unless it passes. The default below keeps the two files self-contained and
+// relies on the 0700 mode + the deny-all .htaccess written on first use (which
+// needs AllowOverride to be on). The live value is rendered from inboxDir.
 $INBOX     = __DIR__ . '/eval-inbox';   // ← set an ABSOLUTE path outside the web root
 $NOTIFY    = ''; // e.g. 'alvis.misjuns@va.lv' — empty disables the notification mail
 
-// Pages on OTHER origins that may post here, by exact origin. The app posts
-// SAME-origin from alvismisjuns.lv/fastshaders/ (no CORS involved), and
-// CROSS-origin from the study host fs.sferas.lv: a static nginx container with
-// no endpoint of its own, whose build names this URL absolutely
-// (FS_EVAL_UPLOAD_URL in scripts/deploy-sferas.sh). The POST is not a "simple"
-// request (the X-FS-Eval-* headers, an application/zip body), so the browser
-// first sends an OPTIONS preflight — and the POST's own response needs the
-// Allow-Origin too: without it the browser hides the answer from fetch(), so
-// the package is STORED while the participant is told the upload failed.
+// Pages that may post here, by EXACT origin — every host the app is served
+// from, since every build posts here cross-origin: the study host fs.sferas.lv,
+// alvismisjuns.lv (apex and www) and GitHub Pages. evalUpload.test.ts holds this
+// list to the hosts the deploy scripts and vite.config.ts name. The POST is not
+// a "simple" request (the X-FS-Eval-* headers, an application/zip body), so the
+// browser first sends an OPTIONS preflight — and the POST's own response needs
+// the Allow-Origin too: without it the browser hides the answer from fetch(),
+// so the package is STORED while the participant is told the upload failed.
 // No cookies are involved, so no Allow-Credentials.
-$ALLOWED_ORIGINS = ['https://fs.sferas.lv'];
+$ALLOWED_ORIGINS = ['https://fs.sferas.lv', 'https://alvismisjuns.lv', 'https://www.alvismisjuns.lv', 'https://alvis1.github.io'];
 
 $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
 header('Vary: Origin');
@@ -93,6 +110,9 @@ if (!is_dir($INBOX)) {
   // Belt and braces if the inbox ever lands inside the webroot.
   @file_put_contents($INBOX . '/.htaccess', "Require all denied\n");
 }
+
+$free = @disk_free_space($INBOX);
+if ($free !== false && $free - strlen($data) < $MIN_FREE_BYTES) { http_response_code(507); exit("server full\n"); }
 
 // Never overwrite: a re-submitted or colliding name gets a numeric suffix.
 $target = $INBOX . '/' . $name;

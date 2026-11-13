@@ -23,6 +23,7 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { isSinkNode } from '@/utils/sdfPartition';
 import { COLLAPSED_MEMBER_CLASS } from '@/utils/groupFrame';
 import { generateEdgeId } from '@/utils/idGenerator';
+import { mutedNodeIds, passSources } from '@/utils/nodeMute';
 
 /**
  * The old nodes an Apply carries: everything the panel's text did not emit,
@@ -132,6 +133,74 @@ export function carryPanelHidden(
     }
   }
   return { nodes, edges };
+}
+
+/**
+ * The wires LEAVING a carried MUTED node (utils/nodeMute.ts), which
+ * `carryPanelHidden` cannot bring: a muted node is never in the text, yet it
+ * feeds nodes that are — its consumers' lines read its PASS-THROUGH instead,
+ * so the parse wired each of them from that feeder. Each such parsed wire is
+ * put back as the wire from the muted node it stood for, which makes an
+ * unchanged Apply change nothing and keeps the mute undoable by M.
+ *
+ * Only where the text still says what the bypass said: the socket is wired
+ * from the pass-through's feeder (re-found by NAME, as a carried wire's is),
+ * or — when the muted node passed nothing — left unwired. A socket the user
+ * rewired in the text keeps the text's wire, and the muted node's is dropped.
+ * The consumer must be the same TYPE it was (a retyped line is a different
+ * node). `parsed` holds the parse's nodes under their FINAL ids. Returns
+ * `edges` itself when there is nothing to restore.
+ */
+export function restoreMutedOutWires(
+  oldNodes: readonly AppNode[],
+  realOldEdges: readonly AppEdge[],
+  carriedIds: ReadonlySet<string>,
+  feederOf: (oldId: string, handle: string | null | undefined) => string | null,
+  parsed: readonly AppNode[],
+  edges: AppEdge[],
+  relayout: boolean,
+): AppEdge[] {
+  const muted = mutedNodeIds(oldNodes.filter((n) => carriedIds.has(n.id)));
+  if (!muted) return edges;
+  const pass = passSources(oldNodes, realOldEdges, muted);
+  const oldType = new Map(oldNodes.map((n) => [n.id, n.data.registryType] as const));
+  const newType = new Map(parsed.map((n) => [n.id, n.data.registryType] as const));
+  const socketOf = (target: string, handle: string | null | undefined) => `${target}\0${handle ?? ''}`;
+  const at = new Map<string, number>();
+  edges.forEach((e, i) => {
+    const k = socketOf(e.target, e.targetHandle);
+    if (!at.has(k)) at.set(k, i);
+  });
+  let out: AppEdge[] | null = null;
+  const done = new Set<string>();
+  for (const e of realOldEdges) {
+    if (!muted.has(e.source) || carriedIds.has(e.target)) continue;
+    const target = feederOf(e.target, null);
+    if (target === null || newType.get(target) !== oldType.get(e.target)) continue;
+    const k = socketOf(target, e.targetHandle);
+    if (done.has(k)) continue;
+    const via = pass.get(e.source) ?? null;
+    const i = at.get(k);
+    const cur = i === undefined ? null : (out ?? edges)[i];
+    if (via) {
+      const from = carriedIds.has(via.source) ? via.source : feederOf(via.source, via.sourceHandle);
+      if (!cur || from === null || cur.source !== from || (cur.sourceHandle ?? 'out') !== (via.sourceHandle ?? 'out')) continue;
+    } else if (cur) {
+      continue;
+    }
+    done.add(k);
+    const id = generateEdgeId(e.source, e.sourceHandle ?? 'out', target, e.targetHandle ?? 'in');
+    let wire: AppEdge = { ...e, target, id };
+    if (relayout && wire.className !== undefined) {
+      const { className: _c, ...rest } = wire;
+      void _c;
+      wire = rest as AppEdge;
+    }
+    out ??= [...edges];
+    if (i === undefined) out.push(wire);
+    else out[i] = wire;
+  }
+  return out ?? edges;
 }
 
 /**

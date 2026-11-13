@@ -44,7 +44,8 @@ describe('the output nodes are translated on every surface', () => {
       expect(src, name).not.toContain('{port.label}</span>');
       expect(src, name).not.toContain('>{section.label}<');
       expect(src, name).not.toMatch(/>(Pixel|Vertex) Shader</);
-      expect(src, name).toContain('portLabel(port.label, language)');
+      // OutputNode routes it through `unlitPortLabel` (Color reads Emissive while Unlit).
+      expect(src, name).toMatch(/portLabel\((?:unlitPortLabel\(port\.id, )?port\.label(?:, unlit\))?, language\)/);
     }
   });
 

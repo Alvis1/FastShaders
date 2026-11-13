@@ -194,11 +194,11 @@ describe('the wiring (source pins)', () => {
   const HOOK = codeOnly(read('useGlbImport.tsx'));
   const PREVIEW = codeOnly(read('ShaderPreview.tsx'));
 
-  it('ShaderPreview threads the drop source; the paired branch never offers; the study gate is untouched', () => {
-    expect(PREVIEW).toContain('else void loadMeshFile(model, { source });');
+  it('ShaderPreview threads the drop source; the paired branch never offers; no study gate', () => {
+    expect(PREVIEW).toContain('if (model) void loadMeshFile(model, { source });');
     expect(PREVIEW).toContain('void loadMeshFile(model, { offerBuild: false });');
     expect(PREVIEW).toContain("glbFlow.offer(file.name, bytes, kind, opts?.source ?? 'dom')");
-    expect(PREVIEW).toMatch(/const offer = opts\?\.offerBuild !== false && !isEvalMode\(\)/);
+    expect(PREVIEW).toMatch(/const offer = opts\?\.offerBuild !== false && \(kind === 'glb'/);
   });
 
   it('Restore confirms a forwarded drop with the forwarded-shader key BEFORE the commit, and only then', () => {

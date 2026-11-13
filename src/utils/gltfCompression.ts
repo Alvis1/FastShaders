@@ -73,7 +73,7 @@ export const MESH_TOO_LARGE_LIMIT_KEY =
  * `splat-count` (over SPLAT_MAX_COUNT), `ply-not-splat` (a mesh or point-cloud
  * `.ply`), `ply-sh` (a training `.ply` with `f_rest_*` bands), `ply-compressed`
  * (SuperSplat's chunked `.ply`), `spz-version` (SPZ v4, zstd), `gltf-splat` (a
- * glTF naming KHR_gaussian_splatting) and `splat-eval` (a study session).
+ * glTF naming KHR_gaussian_splatting).
  */
 export type MeshRejectReason =
   | 'unsupported'
@@ -87,8 +87,7 @@ export type MeshRejectReason =
   | 'ply-sh'
   | 'ply-compressed'
   | 'spz-version'
-  | 'gltf-splat'
-  | 'splat-eval';
+  | 'gltf-splat';
 
 /**
  * A model refusal, structured so every surface can translate it rather than
@@ -179,8 +178,8 @@ export function modelTooLargeRefusal(sizeBytes: number, limitBytes: number = MES
  * must hold whole), and so does an OBJ or an unknown kind.
  *
  * `buildEnabled` is the caller's: ShaderPreview passes its OFFER predicate
- * (`!isEvalMode()`, not paired with a shader, a glTF), so it is never true in a
- * study session or for a model that came with a shader, and every non-offered
+ * (not paired with a shader, a glTF), so it is never true for a model that
+ * came with a shader, and every non-offered
  * drop is exactly the old `file.size > MESH_MAX_BYTES` test
  * (`modelDropGate.test.ts` pins the call). A size that is not a finite,
  * non-negative number is refused: it cannot be shown to fit.

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { buildZip, type ZipEntry } from '@/utils/zipWriter';
-import { createPreviewMesh, splatEvalRefusal, type MeshRejectReason } from '@/utils/previewMesh';
+import { createPreviewMesh, type MeshRejectReason } from '@/utils/previewMesh';
 import { useAppStore } from '@/store/useAppStore';
 import { splatRows } from '@/test-utils';
 import {
@@ -120,22 +120,12 @@ describe('a Gaussian splat in a zip', () => {
     expect(mesh?.text).toBeUndefined();
   });
 
-  it('outside a study session the outcome is the constructor’s', () => {
-    const got = zipModelOutcome('models/garden.splat', splatRows(8), false);
+  it('the outcome is the constructor’s (in a study session too)', () => {
+    const got = zipModelOutcome('models/garden.splat', splatRows(8));
     expect('mesh' in got && got.mesh.kind).toBe('splat');
-    const bad = zipModelOutcome('models/garden.splat', new Uint8Array(33), false);
+    const bad = zipModelOutcome('models/garden.splat', new Uint8Array(33));
     expect('refusal' in bad && bad.refusal.reason).toBe('bad-splat');
-  });
-
-  it('in a study session every splat kind is refused on its KIND, before any sniff', () => {
-    // Bytes that would sniff as damaged: the refusal must still be the study
-    // one, since the file is never looked at.
-    for (const name of ['a.splat', 'b.SPZ', 'models/c.ply', 'd.ksplat']) {
-      const got = zipModelOutcome(name, new Uint8Array(3), true);
-      expect('refusal' in got && got.refusal, name).toEqual(splatEvalRefusal());
-    }
-    // A mesh model is untouched by the study switch.
-    const glb = zipModelOutcome('models/robot.glb', GLB_BYTES, true);
+    const glb = zipModelOutcome('models/robot.glb', GLB_BYTES);
     expect('mesh' in glb && glb.mesh.kind).toBe('glb');
   });
 
@@ -146,7 +136,7 @@ describe('a Gaussian splat in a zip', () => {
     // included — or such a refusal is reported as "no shader".
     const reasons = [
       'unsupported', 'empty', 'too-large', 'bad-glb', 'compressed',
-      'bad-splat', 'splat-count', 'ply-not-splat', 'ply-sh', 'ply-compressed', 'spz-version', 'gltf-splat', 'splat-eval',
+      'bad-splat', 'splat-count', 'ply-not-splat', 'ply-sh', 'ply-compressed', 'spz-version', 'gltf-splat',
     ] as const satisfies readonly MeshRejectReason[];
     for (const reason of reasons) {
       const e = Object.assign(new Error('x'), { name: 'ZipModelSkippedError', refusal: { reason, key: 'k' }, bytes: 1 });

@@ -23,8 +23,10 @@ interface ParamRowProps {
 }
 
 /** The decimal places DragNumberInput's edit field shows (`startEdit`:
- *  `formatFieldNumber(value, 4)`, utils/numberField.ts); Enter or a blur
- *  commits that text whether or not anything was typed. */
+ *  `formatFieldNumber(value, 4)`, utils/numberField.ts). Since 2026-11-13 an
+ *  UNTOUCHED box commits nothing (Tab walks through fields); Enter or a blur
+ *  still commits any edited text, which may be that same rounding typed out
+ *  differently (`0.30360`) — what the guard below still refuses. */
 const EDIT_DECIMALS = 4;
 
 /**

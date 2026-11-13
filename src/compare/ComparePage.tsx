@@ -353,7 +353,7 @@ export function ComparePage() {
           <input type="checkbox" checked={onlyDifferences} onChange={(e) => setOnlyDifferences(e.target.checked)} />
           {t('Only differences', lang)}
         </label>
-        <span className="cmp-legend">{t('* Price of a new node — on the canvas, its settings or wiring change it.', lang)}</span>
+        <span className="cmp-legend">{t('* Price of a new node — its settings or wiring change it.', lang)}</span>
         {/* Always mounted, so the FIRST message is announced too: a live
             region that appears together with its text is not. */}
         <span className="cmp-notice" role="status">{notice}</span>

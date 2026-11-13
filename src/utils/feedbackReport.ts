@@ -5,8 +5,10 @@
  *
  * WHY mailto: and not a POST. Three constraints rule out a hosted form:
  *   - the build CSP (`vite.config.ts`) is `connect-src 'self' blob: <deploy
- *     origin>` and `form-action 'self'`, so a fetch/POST to Formspree, Google
- *     Forms or the like is blocked by the app's own policy;
+ *     origin> <the study-upload origin, imgame.va.lv>` and `form-action
+ *     'self'`, so a fetch/POST to Formspree, Google Forms or any OTHER hosted
+ *     endpoint is blocked by the app's own policy (the one admitted origin is
+ *     ViA's study endpoint, which takes only study packages);
  *   - the desktop (Tauri) build must work with NO network at all;
  *   - a third-party form makes someone else a data processor for what is
  *     grant-funded research feedback.

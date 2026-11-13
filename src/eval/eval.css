@@ -49,6 +49,12 @@
   border-radius: var(--border-radius-sm);
 }
 
+/* A code the study link gave: shown, not editable (ConsentModal, SusModal). */
+.eval-consent__code-fixed {
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
 .eval-consent__age-row {
   display: flex;
   align-items: center;
@@ -117,10 +123,11 @@
 }
 
 /* End anchors above the strip, stated once (per Brooke's form the scale is
-   anchored only at the ends). */
+   anchored only at the ends) and right-aligned over the 1–5 radios rather than
+   stretched across the statement column. */
 .sus-modal__anchors {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: var(--space-3);
   font-size: var(--font-size-xs);
   color: var(--text-secondary);

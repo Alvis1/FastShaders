@@ -273,33 +273,24 @@ describe('comments about the shipped file stay true', () => {
   });
 });
 
-describe('a study session withholds STUDY_WITHHELD_NODE_TYPES (mocked eval arm)', () => {
+describe('a study session offers the same add surfaces (mocked eval arm)', () => {
   afterEach(() => {
     vi.doUnmock('@/eval/evalArm');
     vi.resetModules();
   });
 
-  it('the Splat Output leaves every add surface in a study, and only there', async () => {
+  // Through the first study round a study withheld the Splat Output; since
+  // 2026-11-10 every arm gets the app as it is (docs/dev/eval-mode.md).
+  it('the Splat Output is offered in a study, like everywhere else', async () => {
     vi.resetModules();
     const normal = await import('@/registry/nodeRegistry');
-    expect(normal.getEditorDefinitions().map((d) => d.type)).toContain('splatOutput');
+    const normalTypes = normal.getEditorDefinitions().map((d) => d.type);
+    expect(normalTypes).toContain('splatOutput');
 
     vi.resetModules();
     vi.doMock('@/eval/evalArm', () => ({ EVAL_ARM_KEY: 'fs:evalArm', isEvalMode: () => true }));
     const study = await import('@/registry/nodeRegistry');
-    const vis = await import('@/registry/editorVisibility');
-    expect([...vis.STUDY_WITHHELD_NODE_TYPES]).toEqual(['splatOutput']);
-    expect(study.getEditorDefinitions().map((d) => d.type)).not.toContain('splatOutput');
-    // With a hidden-category set too (every real add surface passes one)…
-    const hidden = new Set(['texture', 'sdf'] as const);
-    expect(study.getEditorDefinitions(hidden).map((d) => d.type)).not.toContain('splatOutput');
-    // …and search, where the node's own name is the strongest tier.
-    expect(study.searchNodes('splat').map((d) => d.type)).not.toContain('splatOutput');
-    // An add-surface filter, never a registry one: a saved graph holding one
-    // still loads.
-    expect(study.NODE_REGISTRY.get('splatOutput')).toBeDefined();
-    expect(study.getAllDefinitions().map((d) => d.type)).toContain('splatOutput');
-    // The Output tab still has nodes to offer (Output, the SDF Output).
-    expect(study.categoryEmptiedByHiding('output')).toBe(false);
+    expect(study.getEditorDefinitions().map((d) => d.type)).toEqual(normalTypes);
+    expect(study.searchNodes('splat').map((d) => d.type)).toContain('splatOutput');
   });
 });

@@ -57,19 +57,27 @@ describe('UV — the reported case: tiling and turn reach the label', () => {
     expect(range('u', nodes, edges, 4)).toEqual({ min: [0, 0], max: [4, 1] });
   });
 
-  it('a turn about (½, ½) is the emitted map\'s exact box, and contains every rotated sample', () => {
-    // The emitted lines, run on the CPU: s = uv·(U, V), c = s − ½, out = R(θ)c + ½.
-    const emitted = (u: number, v: number, tu: number, tv: number, th: number) => {
-      const cu = u * tu - 0.5, cv = v * tv - 0.5;
-      return [cu * Math.cos(th) - cv * Math.sin(th) + 0.5, cu * Math.sin(th) + cv * Math.cos(th) + 0.5];
+  it('a turn about the projection\'s centre is the emitted map\'s exact box, and contains every rotated sample', () => {
+    // The emitted lines, run on the CPU: c = (uv − ½)·(U, V), θ in DEGREES,
+    // out = R(−θ)c + ½·(U, V) — the picture turns counter-clockwise.
+    const emitted = (u: number, v: number, tu: number, tv: number, deg: number) => {
+      const th = (deg * Math.PI) / 180;
+      const cu = (u - 0.5) * tu, cv = (v - 0.5) * tv;
+      return [cu * Math.cos(th) + cv * Math.sin(th) + 0.5 * tu, cv * Math.cos(th) - cu * Math.sin(th) + 0.5 * tv];
     };
-    for (const [tu, tv, th] of [[1, 1, Math.PI / 4], [3, 2, 0.5236], [10, 1, -1.2], [1, 4, 2.5]]) {
+    for (const [tu, tv, th] of [[1, 1, 45], [3, 2, 30], [10, 1, -70], [1, 4, 143], [-2, 3, 90]]) {
       const r = range('u', [makeNode('u', 'uv', { tilingU: tu, tilingV: tv, rotation: th })], []);
       expectContains(r, grid().map(([u, v]) => emitted(u, v, tu, tv, th)), `uv ${tu} ${tv} ${th}`);
     }
-    const r45 = range('u', [makeNode('u', 'uv', { rotation: Math.PI / 4 })], []);
+    const r45 = range('u', [makeNode('u', 'uv', { rotation: 45 })], []);
     expect(r45.min[0]).toBeCloseTo(0.5 - Math.SQRT1_2, 9);
     expect(r45.max[0]).toBeCloseTo(0.5 + Math.SQRT1_2, 9);
+    // A quarter turn of a 4×2 tiling is the 2×4 box, still centred on (2, 1).
+    const r90 = range('u', [makeNode('u', 'uv', { tilingU: 4, tilingV: 2, rotation: 90 })], []);
+    expect(r90.min[0]).toBeCloseTo(1, 9);
+    expect(r90.max[0]).toBeCloseTo(3, 9);
+    expect(r90.min[1]).toBeCloseTo(-1, 9);
+    expect(r90.max[1]).toBeCloseTo(3, 9);
   });
 
   it('flows downstream: UV(U 8) → Floor reads 0…8', () => {
@@ -531,6 +539,29 @@ describe('review round — the twins read what the helpers read', () => {
     expect(getSurfaceFieldUpstreamSet(nodes, edges).has('ap')).toBe(false);
     const uvNodes = [makeNode('u', 'uv'), makeNode('m', 'mul', { b: 2 })];
     expect(getSurfaceFieldUpstreamSet(uvNodes, [makeEdge('u', 'out', 'm', 'a')]).has('m')).toBe(true);
+  });
+
+  it('a noise varies over the surface only while what it samples does', () => {
+    const noise = () => makeNode('n', 'voronoiVec2', { pos: 'positionGeometry', scale: 1 });
+    // Unwired: it reads the surface position.
+    expect(getSurfaceFieldUpstreamSet([noise()], []).has('n')).toBe(true);
+    // The camera, Sound or a constant: one value per frame for the whole mesh.
+    for (const [type, handle] of [['cameraPosition', 'out'], ['soundNode', 'level'], ['vec3', 'out']] as const) {
+      const nodes = [makeNode('s', type), noise(), makeNode('m', 'mul', { b: 2 })];
+      const edges = [makeEdge('s', handle, 'n', 'pos'), makeEdge('n', 'out', 'm', 'a')];
+      expect(getSurfaceFieldUpstreamSet(nodes, edges).has('n'), type).toBe(false);
+      expect(getSurfaceFieldUpstreamSet(nodes, edges).has('m'), type).toBe(false);
+      // Still a range on its label: the CPU noise is not MaterialX's value.
+      expect(getFieldUpstreamSet(nodes, edges).has('n'), type).toBe(true);
+    }
+    // The camera position offset by a surface field varies again.
+    const nodes = [makeNode('c', 'cameraPosition'), makeNode('p', 'positionGeometry'), makeNode('a', 'add'), noise()];
+    const edges = [makeEdge('c', 'out', 'a', 'a'), makeEdge('p', 'out', 'a', 'b'), makeEdge('a', 'out', 'n', 'pos')];
+    expect(getSurfaceFieldUpstreamSet(nodes, edges).has('n')).toBe(true);
+    // …and so does a surface-driven Scale on a camera-fed noise.
+    const scaled = [makeNode('c', 'cameraPosition'), makeNode('u', 'uv'), makeNode('x', 'split'), noise()];
+    const scaledEdges = [makeEdge('c', 'out', 'n', 'pos'), makeEdge('u', 'out', 'x', 'v'), makeEdge('x', 'x', 'n', 'scale')];
+    expect(getSurfaceFieldUpstreamSet(scaled, scaledEdges).has('n')).toBe(true);
   });
 });
 

@@ -32,7 +32,8 @@ import { LangSwitch } from '@/eval/LangSwitch';
 import { focusNodes } from '@/components/NodeEditor/outputFocus';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { findTutorial } from './tutorialDefs';
-import { evaluateStep, reconcileBindings, stepTargets } from './tutorialRun';
+import { PICTURE_TYPE, evaluateStep, reconcileBindings, stepTargets } from './tutorialRun';
+import { primeTutorialPicture, tutorialPicture } from './tutorialPicture';
 import { tutorialAutoStep } from './tutorialAutoStep';
 import { markStepTargets } from './tutorialHighlights';
 import { OUT_ROLE } from './tutorialTypes';
@@ -102,13 +103,25 @@ function TutorialPanelBody({ run, def }: { run: TutorialRun; def: TutorialDef })
     return markStepTargets(stepTargets(step, run.bindings));
   }, [step, run.bindings, nodes, edges]);
 
+  // A lesson with a picture step paints its picture as it starts, so "Do it
+  // for me" is ready by the time that step comes up (tutorialPicture.ts).
+  const wantsPicture = def.steps.some((s) => s.kind === 'add' && s.type === PICTURE_TYPE);
+  const [pictureReady, setPictureReady] = useState(() => tutorialPicture() !== null);
+  useEffect(() => {
+    if (!wantsPicture || pictureReady) return;
+    let live = true;
+    void primeTutorialPicture().then((p) => { if (live && p) setPictureReady(true); });
+    return () => { live = false; };
+  }, [wantsPicture, pictureReady]);
+
   const [hintShown, setHintShown] = useState(false);
   useEffect(() => setHintShown(false), [run.step]);
 
   const passed = run.step < run.reached;
   const satisfied = result?.status === 'satisfied';
   const canNext = satisfied || passed;
-  const canAuto = !!step && step.kind !== 'look' && !satisfied;
+  const canAuto = !!step && step.kind !== 'look' && !satisfied &&
+    !(step.kind === 'add' && step.type === PICTURE_TYPE && !pictureReady);
 
   const next = useCallback(() => tutorialGo(Math.min(total, run.step + 1)), [tutorialGo, total, run.step]);
   const back = useCallback(() => tutorialGo(Math.max(0, run.step - 1)), [tutorialGo, run.step]);
@@ -180,6 +193,12 @@ function TutorialPanelBody({ run, def }: { run: TutorialRun; def: TutorialDef })
           {fillTemplate(t('The {role} node is gone. Add it again, or press Do it for me.', language), {
             role: roleLabel(def, result.missingRole, language),
           })}
+        </p>
+      );
+    } else if (result?.needsPicture) {
+      status = (
+        <p className="tutorial-panel__status tutorial-panel__status--warn">
+          {t('This Image node has no picture yet. Right-click it and choose From file…, or press Do it for me.', language)}
         </p>
       );
     } else if (result?.wrongType && step.kind === 'add') {

@@ -115,14 +115,18 @@ function cleanSlateForStudy(): void {
     // with the rest of their state rather than inherited.
     for (const key of Object.values(OPTIONAL_CATEGORY_KEYS)) localStorage.removeItem(key);
     // The GLB material-gate override decides what an import BUILDS, so it is
-    // a condition, not a preference; the dialog is not offered in a study
-    // session anyway, but a leaked '1' would reach the next normal-mode
-    // session on this machine.
+    // a condition, not a preference: the previous user's override would
+    // change what this participant's model drop builds.
     localStorage.removeItem(ALLOW_MANY_MATERIALS_KEY);
     // The lessons finished on this browser (the tick on each Step by step
-    // tile, /evalpro only): the previous participant's ticks would tell the
-    // next one which lessons to take — or to skip.
+    // tile): the previous participant's ticks would tell the next one which
+    // lessons to take — or to skip.
     localStorage.removeItem(TUTORIALS_DONE_KEY);
+    // The preview's fly-through mode and its remembered camera pose
+    // (ShaderPreview's FPV_ON_KEY / FPV_POSE_KEY): the next participant would
+    // otherwise open the preview inside the previous one's flight.
+    localStorage.removeItem('fs:previewFpv');
+    localStorage.removeItem('fs:previewFpvPose');
   } catch {
     /* storage blocked — nothing persisted to leak either */
   }

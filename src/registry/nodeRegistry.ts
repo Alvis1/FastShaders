@@ -2,8 +2,7 @@ import type { NodeDefinition, NodeCategory, PortDefinition } from '@/types';
 import { nodeSearchLV, nodeLabelLV } from '@/i18n';
 import { foldSearchText } from '@/utils/searchFold';
 import { SOUND_DEFAULT_VALUES } from '@/utils/soundSettings';
-import { HIDDEN_NODE_TYPES, STUDY_WITHHELD_NODE_TYPES } from './editorVisibility';
-import { isEvalMode } from '@/eval/evalArm';
+import { HIDDEN_NODE_TYPES } from './editorVisibility';
 import { withheldNodeTypes } from './optionalCategories';
 
 const definitions: NodeDefinition[] = [
@@ -320,11 +319,11 @@ const definitions: NodeDefinition[] = [
       { id: 'channel', label: 'Channel', dataType: 'int' },
       { id: 'tilingU', label: 'U', dataType: 'float' },
       { id: 'tilingV', label: 'V', dataType: 'float' },
-      { id: 'rotation', label: 'Rotation', dataType: 'float' },
+      { id: 'rotation', label: 'Rotation (°)', dataType: 'float' },
     ],
     outputs: [{ id: 'out', label: 'UV', dataType: 'vec2' }],
     defaultValues: { channel: 0, tilingU: 1.0, tilingV: 1.0, rotation: 0.0 },
-    description: 'Texture coordinates with tiling and rotation. Defaults to geometry UV. On a Gaussian splat, UV is projected onto the splats from the front. Also: texcoord, texture coordinate',
+    description: 'Texture coordinates with tiling and rotation. Defaults to geometry UV. Rotation is in degrees: 90 turns whatever the UV feeds a quarter turn counter-clockwise, about its centre. On a Gaussian splat, UV is projected onto the splats from the front. Also: texcoord, texture coordinate',
   },
   // The Image (Texture) node. Usually created by dropping an image file onto
   // the canvas (that path is not an add surface and is never gated); since GLB
@@ -2093,17 +2092,16 @@ export function getAllDefinitions(): NodeDefinition[] {
 }
 
 /**
- * `getAllDefinitions()` minus whatever `editorVisibility.json` hides — and, in a
- * study session, `STUDY_WITHHELD_NODE_TYPES`. Computed ONCE, not per call: the
- * hidden set is fixed at module init (a source file, plus the eval arm flag,
- * which is itself sampled once at init), and every consumer memoizes on this array's identity, so a
+ * `getAllDefinitions()` minus whatever `editorVisibility.json` hides — the same
+ * set in a study session (since 2026-11-10; through the first study round a
+ * study also withheld the Splat Output). Computed ONCE, not per call: the
+ * hidden set is fixed at module init (a source file), and every consumer
+ * memoizes on this array's identity, so a
  * fresh `filter()` per call would quietly make those `useMemo`s recompute — and
  * would give the accessor two different identities within one render.
  * `allDefinitions` itself is reused when nothing is hidden.
  */
-const offeredHidden: ReadonlySet<string> = isEvalMode()
-  ? new Set([...HIDDEN_NODE_TYPES, ...STUDY_WITHHELD_NODE_TYPES])
-  : HIDDEN_NODE_TYPES;
+const offeredHidden: ReadonlySet<string> = HIDDEN_NODE_TYPES;
 const editorDefinitions: NodeDefinition[] =
   offeredHidden.size === 0
     ? allDefinitions

@@ -12,7 +12,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { useDeviceBudget } from '@/hooks/useDeviceBudget';
 import { toBudgetPoints } from '@/utils/budgetPoints';
 import { Points } from '@/components/Points/Points';
-import { buildRows, visiblePortRows, rowHoldsInt, outputRowLabel, ImageCardPicture, IMAGE_EMPTY_HINT_EVAL, PortValueCell } from './ShaderNode';
+import { buildRows, visiblePortRows, rowHoldsInt, outputRowLabel, ImageCardPicture, IMAGE_EMPTY_HINT_PLAIN, PortValueCell } from './ShaderNode';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
@@ -476,7 +476,7 @@ export function NodeVisual({
               PLAIN statement: a replica has no settings menu, and on the Node
               Designer stage (drawn hit-testable) the canvas hint's
               "Right-click the node…" would open only the browser's menu. */}
-          {def.type === 'imageNode' && <ImageCardPicture values={values} language={language} emptyHint={IMAGE_EMPTY_HINT_EVAL} />}
+          {def.type === 'imageNode' && <ImageCardPicture values={values} language={language} emptyHint={IMAGE_EMPTY_HINT_PLAIN} />}
 
           {/* EDGE PORTS — ShaderNode's rail, inert. Indexed against the node's
               FULL port lists (`rawDef`, not the exposure-filtered `def`) for

@@ -11,7 +11,7 @@ import {
 import type { AppEdge } from '@/types';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '@/store/useAppStore';
-import { COUNT_EDGE_COLORS, getContrastColor } from '@/utils/colorUtils';
+import { COUNT_EDGE_COLORS, canvasWireColor, getContrastColor } from '@/utils/colorUtils';
 import { setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { evaluateEdgeSource, getEdgeOutputShape, getLiveUpstreamSet, getUnwrappedEdge } from '@/engine/cpuEvaluator';
 import {
@@ -325,7 +325,7 @@ export function TypedEdge({
   // colors — those already read against any background. A still wire's
   // chevrons are drawn in that same canvas ink: a single wire's own colour,
   // and on a ribbon the one colour that reads across all of its lines.
-  const ink = getContrastColor(nodeEditorBgColor);
+  const ink = canvasWireColor(nodeEditorBgColor);
   const channelColors =
     count === 1
       ? [ink]

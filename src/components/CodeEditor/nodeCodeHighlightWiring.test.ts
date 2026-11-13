@@ -22,10 +22,11 @@ describe('node → code highlight wiring (source pins)', () => {
     expect(editor.match(/onMount=\{/g)).toHaveLength(1);
   });
 
-  it('a study session attaches nothing — on mount and on a replayed effect', () => {
+  it('attaches in every session, a study one included — on mount and on a replayed effect', () => {
     const cb = hook.slice(hook.indexOf('return useCallback('));
-    expect(cb).toMatch(/if \(isEvalMode\(\)\) return;\s+ctrl\.current = attachNodeCodeHighlight\(editor, monaco\);/);
-    expect(hook).toContain('if (!ctrl.current && last.current && !isEvalMode())');
+    expect(cb).toMatch(/last\.current = \[editor, monaco\];\s+ctrl\.current = attachNodeCodeHighlight\(editor, monaco\);/);
+    expect(hook).toContain('if (!ctrl.current && last.current) ctrl.current = attachNodeCodeHighlight(...last.current);');
+    expect(hook).not.toMatch(/isEvalMode/);
   });
 
   it('no animation-frame loop and no telemetry', () => {

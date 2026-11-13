@@ -10,6 +10,7 @@ afterAll(() => {
 });
 import { HISTORY_IDLE, makeNode, makeEdge } from '@/test-utils';
 import type { AppNode } from '@/types';
+import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 
 /**
  * toggleGroupCollapsed anchors at the group's TOP-RIGHT corner: the collapsed
@@ -393,5 +394,86 @@ describe('toggleGroupCollapsed: repairs a group collapsed by the old code', () =
     plant({ ...damaged(), style: undefined } as AppNode);
     useAppStore.getState().toggleGroupCollapsed('g');
     expect((group() as AppNode & { width?: number }).width).toBe(200);
+  });
+});
+
+/**
+ * An ADD drop parks a whole file in one group with its own groups nested
+ * inside. Collapsing the outer frame must hide EVERY node inside it — the
+ * nested frames' members too, which are parented to the INNER frame — and
+ * every wire leaving any of them must land on the pill. Before 2026-11-09 the
+ * members were `parentId === groupId` only, and the inner frames' nodes stayed
+ * standing on the canvas outside the collapsed pill.
+ */
+describe('toggleGroupCollapsed: nested groups', () => {
+  const HIDE = 'fs-collapsed-member';
+  const byId = (id: string) => useAppStore.getState().nodes.find((n) => n.id === id)!;
+  const hidden = (id: string) => String(byId(id).className ?? '').includes(HIDE);
+
+  beforeEach(() => {
+    useAppStore.setState({
+      nodes: [
+        makeGroup('outer', 0, 0, 600, 400),
+        makeGroup('inner', 20, 40, 300, 200),
+        member(makeNode('a', 'mul'), 'inner', 20, 40),
+        member(makeNode('b', 'mul'), 'inner', 160, 40),
+        member(makeNode('c', 'mul'), 'outer', 400, 40),
+        makeNode('x', 'mul'),
+      ].map((n) => (n.id === 'inner' ? ({ ...n, parentId: 'outer' }) as AppNode : n)),
+      edges: [makeEdge('a', 'out', 'b', 'a'), makeEdge('b', 'out', 'c', 'a'), makeEdge('b', 'out', 'x', 'a')],
+      past: [],
+      future: [],
+      ...HISTORY_IDLE,
+    });
+  });
+
+  it('collapsing the outer frame hides the inner frame\'s members and routes their outside wire to the pill', () => {
+    useAppStore.getState().toggleGroupCollapsed('outer');
+    for (const id of ['inner', 'a', 'b', 'c']) expect(hidden(id), id).toBe(true);
+    expect(hidden('x')).toBe(false);
+    const edges = useAppStore.getState().edges;
+    // b → x leaves the outer frame from a GRANDCHILD: it now starts at the pill.
+    expect(edges.some((e) => e.source === 'outer' && e.target === 'x')).toBe(true);
+    // b → c is internal to the outer frame (hidden), never an input socket.
+    const pill = byId('outer').data as { collapsedInputs?: unknown[] };
+    expect(pill.collapsedInputs ?? []).toHaveLength(0);
+  });
+
+  it('collapse → expand restores every node and wire exactly', () => {
+    const before = useAppStore.getState();
+    useAppStore.getState().toggleGroupCollapsed('outer');
+    useAppStore.getState().toggleGroupCollapsed('outer');
+    const after = useAppStore.getState();
+    for (const id of ['inner', 'a', 'b', 'c']) expect(hidden(id), id).toBe(false);
+    const ends = (es: typeof before.edges) => es.map((e) => `${e.source}.${e.sourceHandle}>${e.target}.${e.targetHandle}|${e.className ?? ''}`).sort();
+    expect(ends(after.edges)).toEqual(ends(before.edges));
+  });
+
+  it('inner collapsed, then outer: the wire unwraps through both pills, and expanding the outer keeps the inner shut', () => {
+    useAppStore.getState().toggleGroupCollapsed('inner');
+    useAppStore.getState().toggleGroupCollapsed('outer');
+    const s = useAppStore.getState();
+    // The engines read through both pills back to the real endpoints.
+    const real = unwrapCollapsedGroupEdges(s.nodes, s.edges).map((e) => `${e.source}>${e.target}`).sort();
+    expect(real).toEqual(['a>b', 'b>c', 'b>x']);
+    useAppStore.getState().toggleGroupCollapsed('outer');
+    expect(hidden('inner')).toBe(false);
+    expect(hidden('c')).toBe(false);
+    // The inner pill is still a pill: its members stay hidden, its wire inside stays hidden.
+    expect(hidden('a')).toBe(true);
+    expect(hidden('b')).toBe(true);
+    const ab = useAppStore.getState().edges.find((e) => e.source === 'a' && e.target === 'b')!;
+    expect(ab.className).toBe('fs-collapsed-edge');
+    // …and opening it brings everything back.
+    useAppStore.getState().toggleGroupCollapsed('inner');
+    expect(hidden('a')).toBe(false);
+    const real2 = useAppStore.getState().edges.map((e) => `${e.source}>${e.target}`).sort();
+    expect(real2).toEqual(['a>b', 'b>c', 'b>x']);
+  });
+
+  it('ungrouping a collapsed outer frame shows the open inner frame\'s members', () => {
+    useAppStore.getState().toggleGroupCollapsed('outer');
+    useAppStore.getState().ungroup('outer');
+    for (const id of ['inner', 'a', 'b', 'c']) expect(hidden(id), id).toBe(false);
   });
 });

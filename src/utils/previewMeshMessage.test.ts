@@ -35,7 +35,6 @@ import {
   MESH_PLY_NOT_SPLAT_KEY,
   MESH_PLY_SH_KEY,
   MESH_SPLAT_COUNT_KEY,
-  MESH_SPLAT_EVAL_KEY,
   MESH_SPZ_TOO_LARGE_KEY,
   MESH_SPZ_VERSION_KEY,
   MESH_UNSUPPORTED_KEY,
@@ -145,7 +144,6 @@ describe('Gaussian-splat notice keys in lv.json', () => {
     MESH_SPZ_VERSION_KEY,
     MESH_SPZ_TOO_LARGE_KEY,
     MESH_GLTF_SPLAT_KEY,
-    MESH_SPLAT_EVAL_KEY,
     MESH_SPLAT_HEADSET_KEY,
     MESH_SPLAT_SH_DROPPED_KEY,
   ])('has a Latvian entry that differs from the English, same placeholders: %s', (key) => {

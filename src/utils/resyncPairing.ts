@@ -4,7 +4,7 @@
  * See docs/dev/outputs-and-materials.md § Per-mesh materials, rule (3).
  */
 import type { AppNode } from '@/types';
-import { PART_SETTING_KEYS } from '@/engine/materialSettingsCode';
+import { PART_SETTING_KEYS, PART_VERTEX_KEYS } from '@/engine/materialSettingsCode';
 import { isCustomSink, isSinkNode, isUntargetedOutput } from './sdfPartition';
 import { absoluteNodePosition } from './groupFrame';
 import {
@@ -162,13 +162,17 @@ export function placeParsedOutputs(
 }
 
 /**
- * The resync's `materialSettings` carry, PER KEY. The four `PART_SETTING_KEYS`
- * are CODE-AUTHORITATIVE on a targeted node (they are in its `parts` entry) and
- * inherited on an untargeted one; `displacementMode` and `mergeVertices` are
- * always carried. Always a FRESH object: subscribers compare by reference.
+ * The resync's `materialSettings` carry, PER KEY. The `PART_SETTING_KEYS` are
+ * CODE-AUTHORITATIVE on a targeted node (they are in its `parts` entry) and
+ * inherited on an untargeted one. The vertex keys (`PART_VERTEX_KEYS`,
+ * `displacementMode` / `mergeVertices`) are code-authoritative on a targeted
+ * node that does NOT own the module settings — its part body carries them where
+ * they differ from the owner's (2026-11-10) — and carried on the owner and on
+ * an untargeted node, whose vertex settings never appear in the code. Always a
+ * FRESH object: subscribers compare by reference.
  * See docs/dev/outputs-and-materials.md § Per-mesh materials.
  */
-export function carryMaterialSettings(merged: AppNode, match: AppNode): void {
+export function carryMaterialSettings(merged: AppNode, match: AppNode, ownsModuleSettings = false): void {
   if (!isOutputNode(merged)) return;
   // Both sides are ADVERSARIAL (a `.fastshader`, the autosave): objects only.
   const obj = (v: unknown): Record<string, unknown> | undefined =>
@@ -182,6 +186,7 @@ export function carryMaterialSettings(merged: AppNode, match: AppNode): void {
   let changed = false;
   for (const [k, v] of Object.entries(old)) {
     if (PART_SETTING_KEYS.has(k) && !inheritsEmitted) continue;
+    if (PART_VERTEX_KEYS.has(k) && !inheritsEmitted && !ownsModuleSettings) continue;
     if (next[k] !== undefined) continue;
     next[k] = v;
     changed = true;

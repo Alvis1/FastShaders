@@ -336,7 +336,7 @@ export function MathCardContent(props: ContentProps & { xWired?: boolean; dynami
   // node's OWN renderer (WaveformSvg) at phase 0 — the tile used to repaint
   // a private canvas copy of the same picture.
   return (
-    <CardShell {...props} nodeClassName="math-preview-node">
+    <CardShell {...props} nodeClassName="math-preview-node" hideOutput>
       <div className="math-preview-node__canvas-wrap">
         <WaveformSvg
           func={def.type === 'cos' ? Math.cos : Math.sin}
@@ -345,16 +345,18 @@ export function MathCardContent(props: ContentProps & { xWired?: boolean; dynami
           showReadout
           dynamicRefs={dynamicRefs}
         />
+        {/* Both sockets on the plot's zero line, as MathPreviewNode places
+            them (hideOutput above drops the generic centre dot). */}
+        {def.inputs[0] && <CardSocket side="left" dataType={def.inputs[0].dataType} port={def.inputs[0]} />}
+        {def.outputs[0] && <CardSocket side="right" dataType={def.outputs[0].dataType} port={def.outputs[0]} />}
       </div>
 
-      {/* The canvas node's bottom port row: socket AND the editable X value
-          beside it (MathPreviewNode renders the number whenever `x` is
-          unconnected — which is always true on a palette tile). The tile used
-          to draw only a floating dot, so it was both missing the widget and
+      {/* The canvas node's bottom row: the editable X value (MathPreviewNode
+          renders the number whenever `x` is unconnected — which is always
+          true on a palette tile). The tile used to lack the widget and was
           shorter than the node by the row's height. */}
       <div className="math-preview-node__port-row">
         <div className="math-preview-node__left">
-          {def.inputs[0] && <CardSocket side="left" dataType={def.inputs[0].dataType} port={def.inputs[0]} />}
           {!xWired && <DragNumberInput compact value={0} onChange={() => {}} />}
         </div>
       </div>
@@ -513,7 +515,7 @@ function SoundCardContent(props: ContentProps) {
  * ============================================================ */
 
 export function OutputCardContent({
-  def, cost, costColor, costTextColor, headerTextColor, exposedPorts = OUTPUT_DEFAULT_EXPOSED, wired,
+  def, cost, costColor, costTextColor, headerTextColor, exposedPorts = OUTPUT_DEFAULT_EXPOSED, wired, ordinal, meshRow,
 }: ContentProps & {
   /** The channels shown — a fresh node's set unless a surface depicts a node
    *  whose user exposed more (the node's right-click menu does that). */
@@ -523,6 +525,13 @@ export function OutputCardContent({
    *  The cell is the node's FIXED 20px one, so the text should be formatted
    *  the way OutputNode formats it: `edgeValueLabel(…, { compact: true })`. */
   wired?: Readonly<Record<string, string>>;
+  /** The `_01` suffix the canvas header carries on a document with several
+   *  Outputs (OutputNode's `plans.ordinals`), for a surface depicting one. */
+  ordinal?: string;
+  /** The mesh row OutputNode shows once a model is on screen (its picker), in
+   *  the node's own `.output-node__mesh-row` slot. A tile has no model, so
+   *  none. */
+  meshRow?: React.ReactNode;
 }) {
   // The labels follow the UI language like the canvas node's do (OutputNode.tsx).
   const language = useAppStore((s) => s.language);
@@ -584,11 +593,12 @@ export function OutputCardContent({
       </div>
     ));
 
+  const vertexRows = section(OUTPUT_VERTEX_PORTS);
   return (
     <div className="output-node node-preview-card__node" style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid var(--cat-output)` }}>
       <CardCostBadge cost={cost} color={costTextColor} className={badgeClass} />
       <div className="output-node__header" style={{ background: costColor }}>
-        <span className="output-node__title" style={{ color: headerTextColor }}>{formatNodeLabel(def.label, def.type, language, false)}</span>
+        <span className="output-node__title" style={{ color: headerTextColor }}>{formatNodeLabel(def.label, def.type, language, false)}{ordinal ?? ''}</span>
       </div>
       {/* The card shows ONE material, wrapped in the canvas node's own
           `.output-node__material` block so the permanently-connected preview
@@ -599,18 +609,24 @@ export function OutputCardContent({
           part of the node is exactly the drift these cards keep reintroducing. */}
       <div className="output-node__material">
         <span className="output-node__preview-socket" aria-hidden="true" />
+        {meshRow && <div className="output-node__mesh-row">{meshRow}</div>}
         <div className="output-node__section">
           <div className="output-node__section-label">{t('Pixel Shader', language)}</div>
           <div className="output-node__ports">{rows(section(OUTPUT_PIXEL_PORTS))}</div>
         </div>
         {/* SUB-divider: this separates the two halves of ONE material, which is
             what `__divider` now means on the node only BETWEEN materials (and it
-            is the node's red frame colour). The card shows one material. */}
-        <div className="output-node__subdivider" />
-        <div className="output-node__section">
-          <div className="output-node__section-label">{t('Vertex Shader', language)}</div>
-          <div className="output-node__ports">{rows(section(OUTPUT_VERTEX_PORTS))}</div>
-        </div>
+            is the node's red frame colour). The card shows one material. Only
+            when a vertex channel is shown, as on the node (`vertex.length > 0`). */}
+        {vertexRows.length > 0 && (
+          <>
+            <div className="output-node__subdivider" />
+            <div className="output-node__section">
+              <div className="output-node__section-label">{t('Vertex Shader', language)}</div>
+              <div className="output-node__ports">{rows(vertexRows)}</div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -716,8 +732,15 @@ function SplatOutputCardContent(props: ContentProps) {
  * ColorCardContent — color circle with contrast-aware label
  * ============================================================ */
 
-function ColorCardContent({ def, cost, costTextColor }: { def: NodeDefinition; cost: number; costTextColor: string }) {
-  const hex = String(def.defaultValues?.hex ?? '#ff0000');
+export function ColorCardContent({ def, cost, costTextColor, hex: shownHex }: {
+  def: NodeDefinition;
+  cost: number;
+  costTextColor: string;
+  /** The colour a surface depicting a REAL node shows (its stored `hex`);
+   *  absent, the registry default a tile shows. */
+  hex?: string;
+}) {
+  const hex = shownHex ?? String(def.defaultValues?.hex ?? '#ff0000');
   const [r, g, b] = hexToRgb01(hex);
   const labelColor = 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.45
     ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.85)';

@@ -96,11 +96,10 @@ const versionHtmlPlugin = (): Plugin => ({
 //   FS_BASE           — path the app is served under (default keeps the GitHub Pages build identical)
 //   FS_PREVIEW_ORIGIN — extra origin(s) the sandboxed preview iframe may fetch from at the deploy domain
 //                       (space-separated; the iframe's opaque origin means each must be listed explicitly)
-//   FS_EVAL_UPLOAD_URL — where a finished study package is POSTed, overriding evalUpload.ts's RELATIVE
-//                       default (`/fastshaders-eval/upload.php`, which only alvismisjuns.lv serves). An
-//                       absolute URL's origin joins connect-src. The fs.sferas.lv build sets it
-//                       (scripts/deploy-sferas.sh): that host is static nginx with no endpoint, so the
-//                       relative default 404ed there, and alvismisjuns's endpoint answers its CORS preflight.
+//   FS_EVAL_UPLOAD_URL — where a finished study package is POSTed. Unset (or empty) = DEFAULT_EVAL_UPLOAD_URL,
+//                       ViA's endpoint on imgame.va.lv, for EVERY build — the host consent-16 names as where
+//                       the data goes. Its origin joins connect-src. Override only to test against a
+//                       stand-in endpoint: the consent text would no longer be true for that build.
 //   FS_DESKTOP=1      — desktop (Tauri) build profile: base defaults to '/', the CSP meta is
 //                       suppressed (the wrapper's own CSP config governs; WebKit handles
 //                       custom-scheme origins in meta CSPs unreliably), and the WebGPU-only
@@ -122,12 +121,23 @@ const FS_BASE = process.env.FS_BASE ?? (FS_DESKTOP ? '/' : '/FastShaders/');
 const FS_PREVIEW_ORIGIN = process.env.FS_PREVIEW_ORIGIN ?? '';
 
 /**
+ * Where EVERY build posts a finished study package. Since 2026-11-10 (owner)
+ * that is the researcher's alvismisjuns.lv endpoint again, as a STAGING inbox:
+ * the owner copies every package from it to ViA's imgame.va.lv by hand, so the
+ * consent text (consent-16) still names imgame.va.lv as where the data is held
+ * and deliberately does not mention this hop. From 2026-11-09 to 11-10 builds
+ * posted to imgame.va.lv directly. One copy: scripts/check-eval-upload.sh reads this LINE with sed
+ * (keep it on one line, single-quoted), evalUpload.ts carries the same literal
+ * as its bare-node fallback, and evalUpload.test.ts pins all three.
+ */
+const DEFAULT_EVAL_UPLOAD_URL = 'https://alvismisjuns.lv/fastshaders-eval/upload.php';
+
+/**
  * FS_EVAL_UPLOAD_URL, checked when the config loads, so a typo fails the BUILD
- * instead of every participant's upload. Empty = no override (evalUpload.ts
- * keeps its relative default). A path must be root-relative; a URL must be
- * https, since an http endpoint is mixed content on an https host and the
- * browser blocks it (http is accepted for localhost/127.0.0.1 only, for local
- * testing against a stand-in endpoint).
+ * instead of every participant's upload. Unset or empty = the default above. A
+ * path must be root-relative; a URL must be https, since an http endpoint is
+ * mixed content on an https host and the browser blocks it (http is accepted
+ * for localhost/127.0.0.1 only, for local testing against a stand-in endpoint).
  */
 function checkedEvalUploadUrl(raw: string): string {
   const v = raw.trim();
@@ -145,7 +155,7 @@ function checkedEvalUploadUrl(raw: string): string {
   }
   return u.href;
 }
-const FS_EVAL_UPLOAD_URL = checkedEvalUploadUrl(process.env.FS_EVAL_UPLOAD_URL ?? '');
+const FS_EVAL_UPLOAD_URL = checkedEvalUploadUrl(process.env.FS_EVAL_UPLOAD_URL || DEFAULT_EVAL_UPLOAD_URL);
 /** The endpoint's origin when it lives on ANOTHER host — it must join connect-src. */
 const EVAL_UPLOAD_ORIGIN = /^https?:\/\//.test(FS_EVAL_UPLOAD_URL) ? new URL(FS_EVAL_UPLOAD_URL).origin : '';
 
@@ -1064,5 +1074,11 @@ export default defineConfig({
     // leave the worker as it found it: docs/dev/testing.md; enforced by
     // stubGlobalRestore.test.ts and historyIdleReset.test.ts.
     isolate: false,
+    // vitest's 5 s default is a CPU-load lottery here: a dozen sweeps and fuzz
+    // suites take 0.5–1 s alone but crossed 5 s while every worker was busy
+    // (intPromotion, splatOutput, nodeSpans, gltfReaderFuzz, gltfReader —
+    // each passing alone and on the next full run, 2026-11-09). A real hang
+    // still fails, just later.
+    testTimeout: 30_000,
   },
 });

@@ -18,6 +18,7 @@ import { generateId } from '@/utils/idGenerator';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { getCostTextColor } from '@/utils/colorUtils';
 import { initialNodeValues } from '@/utils/newNodeValues';
+import { wantedNodeValues } from '@/tutorials/tutorialRun';
 import { getRecentNodeTypes, noteNodeUsed } from './recentNodes';
 import { hiddenOptionalCategories } from '@/registry/optionalCategories';
 import { freshNodeCost } from '@/utils/nodeCost';
@@ -189,8 +190,13 @@ export function AddNodeMenu() {
       newNodeId = generateId();
 
       // Property auto-naming + a random colour for colour nodes — shared with
-      // the palette-tile drop path so both surfaces add identical nodes.
-      const values = initialNodeValues(def, nodes);
+      // the palette-tile drop path so both surfaces add identical nodes. A
+      // running lesson waiting for THIS type lays its own values on top, as
+      // on the tile path (`wantedNodeValues`).
+      const values = {
+        ...initialNodeValues(def, nodes),
+        ...wantedNodeValues(useAppStore.getState().tutorial, def.type),
+      };
 
       const newNode = {
         id: newNodeId,

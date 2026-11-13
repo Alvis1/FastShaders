@@ -160,7 +160,7 @@ describe('source pins', () => {
     expect(fn).not.toContain('announceGraphImport(');
     expect(fn).not.toContain('applyProjectToStore(');
     expect(fn).toContain('showCustomMesh()');
-    expect(fn).toContain('announceGraphMerged()');
+    expect(fn).toContain("announceGraphMerged('model')");
   });
 
   it('runs the image backstop and the restore chain in order', () => {
