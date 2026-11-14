@@ -4,6 +4,7 @@
  * Meaningful only beside a stored graph (`fs:graph`, or the desktop marker).
  * Reasoning: docs/dev/storage-and-limits.md → fs:viewport.
  */
+import { isEmbedMode } from '@/embed/embedMode';
 
 export const VIEWPORT_KEY = 'fs:viewport';
 
@@ -93,6 +94,10 @@ export function formatViewport(vp: StoredViewport): string {
  * `localStorage` access rather than returning null.
  */
 export function readStoredViewport(): StoredViewport | null {
+  // Embedded, the graph is the host's document, never the stored one this
+  // viewport was measured against; the write below is refused for the same
+  // reason (it would re-aim a full FastShaders tab at a graph it never held).
+  if (isEmbedMode()) return null;
   try {
     // The desktop room stores the graph in a file; the marker says one exists.
     if (
@@ -109,6 +114,7 @@ export function readStoredViewport(): StoredViewport | null {
 
 export function writeStoredViewport(vp: StoredViewport): void {
   if (!Number.isFinite(vp.x) || !Number.isFinite(vp.y) || !Number.isFinite(vp.zoom)) return;
+  if (isEmbedMode()) return;
   try {
     localStorage.setItem(VIEWPORT_KEY, formatViewport(vp));
   } catch {

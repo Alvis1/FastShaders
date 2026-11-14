@@ -13,6 +13,7 @@ import {
 import { AppLayout } from './components/Layout/AppLayout';
 import { useSyncEngine } from './hooks/useSyncEngine';
 import { isEvalMode } from './eval/evalMode';
+import { isEmbedMode } from './embed/embedMode';
 import { installFileDropGuard } from './utils/fileDropGuard';
 import complexityData from './registry/complexity.json';
 import type { AppNode, AppEdge, OutputNodeData, ShaderNodeData } from './types';
@@ -94,6 +95,24 @@ function EvalGateUnavailable() {
 const EvalGate = lazyOr(
   () => import('./eval/EvalGate').then((m) => m.EvalGate),
   EvalGateUnavailable,
+);
+
+/**
+ * The SuperWXR embed bridge (embed/EmbedBridge.tsx), a lazy chunk on the same
+ * terms as EvalGate: `isEmbedMode()` is sampled once at module init
+ * (embed/embedMode.ts), so an ordinary visitor's boot never creates the
+ * element and never fetches the chunk — the bridge pulls the import path and
+ * the export assembly, which the boot wave must not carry for a feature only an
+ * embedding page can use. A chunk that fails to load leaves the host page
+ * without its `superwxr:ready`; the host's panel says so itself, and nothing
+ * rendered here could reach it.
+ */
+function EmbedBridgeUnavailable() {
+  return null;
+}
+const EmbedBridge = lazyOr(
+  () => import('./embed/EmbedBridge').then((m) => m.EmbedBridge),
+  EmbedBridgeUnavailable,
 );
 
 /**
@@ -341,13 +360,25 @@ export default function App() {
     }
 
     const groupsReport = loadSavedGroupsReport();
-    const saved = loadGraph();
+    // Embedded, the graph is the host's document and arrives by `superwxr:open`:
+    // the stored one is a full FastShaders tab's, or a shader the host has
+    // since closed, so the editor starts from the built-in graph every time.
+    const saved = isEmbedMode() ? null : loadGraph();
     seedFromStored(saved, groupsReport);
   }, []);
 
   return (
     <ReactFlowProvider>
       <SyncController />
+      {/* Embedded in another app's iframe (?embed=1, SuperWXR's shader panel):
+          the postMessage bridge that opens a module, broadcasts the settled
+          export module and hands EXPORT to the host. Never in a study. The
+          bridge renders nothing, so the Suspense fallback is null too. */}
+      {isEmbedMode() && !isEvalMode() && (
+        <Suspense fallback={null}>
+          <EmbedBridge />
+        </Suspense>
+      )}
       {/* User-study mode (…/eval): consent gate + telemetry boot. The guard
           keeps every eval-mode module inert for normal sessions — and, since
           EvalGate is lazy, unfetched. Suspense fallback is null on purpose: the
@@ -362,7 +393,7 @@ export default function App() {
       )}
       <AppLayout />
       {desktopBooting && <DesktopBootOverlay />}
-      {introVia && !desktopBooting && (
+      {introVia && !desktopBooting && !isEmbedMode() && (
         <Suspense fallback={null}>
           {/* The window writes its own "Don't show this again" on close —
               outside a study session; inside one it logs instead. */}

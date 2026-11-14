@@ -87,3 +87,16 @@
 .app-layout__preview {
   height: 100%;
 }
+
+/* Embedded: the canvas pane is the whole app, and no toolbar casts its shadow on it. */
+.app-layout--embed .app-layout__left {
+  flex: 1;
+  min-height: 0;
+}
+.app-layout--embed .app-layout__left::before {
+  display: none;
+}
+/* The Output node's socket is the anchor of a wire to a preview that is not here. */
+.app-layout--embed .output-node__preview-socket {
+  display: none;
+}
