@@ -8,9 +8,10 @@ import { CAT_HEX } from '@/utils/colorUtils';
 import { Points } from '@/components/Points/Points';
 import { useCostChrome, useLiveNodeCost, useRemeasureOnScale } from './useCostChrome';
 import { useFrameLoop } from '@/hooks/useFrameLoop';
-import { evaluateEdgeSource, evaluateNodeOutput, getSurfaceFieldUpstreamSet, getTargetEdges, getTimeUpstreamSet } from '@/engine/cpuEvaluator';
+import { evaluateEdgeRange, evaluateEdgeSource, evaluateNodeOutput, getSurfaceFieldUpstreamSet, getTargetEdges, getTimeUpstreamSet } from '@/engine/cpuEvaluator';
+import { noiseWindowAt } from '@/engine/noiseWindow';
 import { TypedHandle } from '../handles/TypedHandle';
-import { flatNoiseDisplay, renderFlatNoisePreview, renderNoisePreview, type NoiseType, type TimeInputs } from '@/utils/noisePreview';
+import { flatNoiseDisplay, renderFlatNoisePreview, renderNoisePreview, type NoiseType } from '@/utils/noisePreview';
 import './PreviewNode.css';
 import { hasNoiseRangeFlag, isUnsignedNoise } from '@/utils/noiseRange';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
@@ -24,10 +25,14 @@ const PREVIEW_SIZE = 96;
  * (utils/frameTicker), on the same frames as every other animated surface.
  *
  * Every redraw is a full PREVIEW_SIZE² CPU noise field plus a `resolveValues`
- * walk of the upstream graph. MEASURED per call at 96 px on an M-series Mac:
- * cellNoise 0.08 ms, perlin 0.12–0.19, voronoi 0.30–0.35, fBm 0.29–0.40 (taken
- * while every call also minted a fresh 36 KB ImageData; the tick now hands
- * `noiseBufRef` back to renderNoisePreview, which reuses one buffer per card).
+ * walk of the upstream graph. MEASURED per call at 96 px on an M-series Mac
+ * for the 2-D stand-in the card drew until 2026-11-16: cellNoise 0.08 ms,
+ * perlin 0.12–0.19, voronoi 0.30–0.35, fBm 0.29–0.40 (taken while every call
+ * also minted a fresh 36 KB ImageData; the tick now hands `noiseBufRef` back
+ * to renderNoisePreview, which reuses one buffer per card). The card now draws
+ * three's own MaterialX noise (utils/mxNoise), costlier per pixel: Perlin
+ * 0.4 ms, fBm 1.0–1.6, 3-D Voronoi 0.7–1.2, cell 0.15 (noise field only, with
+ * mxNoise's one-cell hash memos; node, 2026-11-16).
  * Four animated fBm/Voronoi cards — an ordinary state once a Time node feeds
  * a noise-driven shader — ate ~1.6 ms of every 16.7 ms frame at 60 Hz.
  *
@@ -37,8 +42,9 @@ const PREVIEW_SIZE = 96;
  * that writes to the canvas pays Chrome's whole-canvas layerization pass —
  * and only every surface writing on the same few frames buys it back.
  *
- * The TIME the field is sampled at is still the shared appClock, so the card
- * agrees with every other animated surface on the frames it draws.
+ * The TIME the field is sampled at is still the shared appClock — which
+ * follows the 3D view's own shader clock — so the card agrees with every other
+ * animated surface AND with the mesh on the frames it draws.
  */
 /** Registry types this preview node can render — all MaterialX noise variants. */
 const NOISE_TYPES = new Set<string>([
@@ -56,6 +62,11 @@ export function handleTop(index: number, total: number): string {
   const end = 75;
   const step = (end - start) / (total - 1);
   return `${start + index * step}%`;
+}
+
+/** Which input ports of the noise node are driven by time. */
+interface TimeInputs {
+  pos?: boolean;
 }
 
 /**
@@ -98,7 +109,7 @@ export const PreviewNode = memo(function PreviewNode({
   // can serve every tick of the animated loop — see the FRAME RATE note. It
   // lives in a ref rather than inside either effect so re-arming the
   // loop (a dependency change: a new registryType, edited values, a fresh
-  // timeInputs identity) reuses the buffer instead of allocating another, and
+  // time-fed flag) reuses the buffer instead of allocating another, and
   // so the static and animated effects — which are mutually exclusive on
   // `hasAnyTime` — share the one allocation.
   const noiseBufRef = useRef<ImageData | null>(null);
@@ -168,7 +179,11 @@ export const PreviewNode = memo(function PreviewNode({
       if (!e.targetHandle) continue;
       const v = evaluateEdgeSource(e, s.nodes, s.edges, 0)?.[0] ?? null;
       const timeFed = getTimeUpstreamSet(s.nodes, s.edges).has(e.source);
-      key += `${e.source}\u0000${e.sourceHandle ?? ''}\u0000${e.targetHandle}\u0000${v ?? 'n'}\u0000${timeFed ? 1 : 0}\u0001`;
+      // The `pos` wire's RANGE is the card's window: an edit that widens it
+      // (Position × 3 → × 4) moves no point value, a field having none.
+      const r = e.targetHandle === 'pos' ? evaluateEdgeRange(e, s.nodes, s.edges, 0) : null;
+      const span = r ? `${r.min.join(',')}/${r.max.join(',')}` : 'n';
+      key += `${e.source}\u0000${e.sourceHandle ?? ''}\u0000${e.targetHandle}\u0000${v ?? 'n'}\u0000${timeFed ? 1 : 0}\u0000${span}\u0001`;
     }
     return key;
   });
@@ -268,7 +283,8 @@ export const PreviewNode = memo(function PreviewNode({
     const imageData = flat
       ? renderFlatNoisePreview(PREVIEW_SIZE, flatDisplay(nodes, edges, 0), noiseBufRef.current)
       : renderNoisePreview(
-        data.registryType as NoiseType, PREVIEW_SIZE, resolveValues(nodes, edges, 0), 0, {}, noiseBufRef.current,
+        data.registryType as NoiseType, PREVIEW_SIZE, resolveValues(nodes, edges, 0),
+        noiseWindowAt(id, nodes, edges, 0), noiseBufRef.current,
       );
     noiseBufRef.current = imageData;
     ctx.putImageData(imageData, 0, 0);
@@ -280,8 +296,9 @@ export const PreviewNode = memo(function PreviewNode({
   // The tick reads fresh graph state straight from the store (this component
   // no longer subscribes to nodes/edges at all), so its deps stay stable
   // across unrelated drags and the loop never tears down mid-animation. The
-  // remaining deps (registryType, the stabilized timeInputs, this node's own
-  // values) change only on real edits to this node's upstream.
+  // remaining deps (registryType, whether time feeds it at all, this node's
+  // own values) change only on real edits to this node's upstream; the window
+  // (`noiseWindowAt`) and the input values are read fresh on every tick.
   //
   // Nothing culls a node in this editor: React Flow renders every one
   // (`onlyRenderVisibleElements` is left at its default false), and a member
@@ -312,8 +329,9 @@ export const PreviewNode = memo(function PreviewNode({
             data.registryType as NoiseType,
             PREVIEW_SIZE,
             resolveValues(nodes, edges, t),
-            t,
-            timeInputs,
+            // The window at THIS t: Position + Time slides it as the mesh's
+            // input slides, at the wire's own speed and direction.
+            noiseWindowAt(id, nodes, edges, t),
             noiseBufRef.current,
           );
         // Keep whatever came back: the first call (or one after PREVIEW_SIZE
@@ -322,7 +340,7 @@ export const PreviewNode = memo(function PreviewNode({
         ctx.putImageData(imageData, 0, 0);
       };
     },
-    [data.registryType, data.values, hasAnyTime, timeInputs, flat],
+    [data.registryType, data.values, hasAnyTime, flat, id],
   );
 
   return (

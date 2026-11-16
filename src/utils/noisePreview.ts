@@ -1,10 +1,30 @@
-// CPU-based 2D noise for node preview thumbnails. These are approximations of
-// the GPU-side TSL functions (mx_perlin_noise_*, mx_worley_noise_*, mx_cell_*,
-// mx_fractal_noise_*) — accurate enough for a recognisable thumbnail, not for
-// use as actual shading. Range conventions match the GPU side: Perlin/fBm in
-// [-1, 1] (mapped to [0, 1] for display), Worley/Cell in [0, 1].
+// Noise THUMBNAILS. The noise node's card draws three's own MaterialX noise
+// (utils/mxNoise — the numbers the shader computes) over the range of values
+// its `pos` input takes, so the card is a picture of what the 3D view samples:
+// the same lattice, contrast and scale, moving as the mesh moves.
+//
+// `perlin2D` below is NOT that: a 2-D Ken-Perlin stand-in kept only for the
+// DECORATIVE tiles that imitate a preset's look (PresetCard, TextureCard, the
+// LED tile, the tutorial shades). It is never a noise node's card again — as
+// one it shared nothing with the GPU but the name (twice the contrast, another
+// lattice, no third axis), and the card could never look like the mesh.
 
 import { valueNum } from './valueCoerce';
+import { mxNoiseChannel, type MxNoiseType } from './mxNoise';
+import { MODEL_POSITION_BOUND } from './modelPositionBound';
+import { linearToSrgb01 } from './colorUtils';
+
+/**
+ * A 0…1 LINEAR value as the byte the 3D view shows for it. The shader's value
+ * is linear light and the preview writes it out sRGB-encoded (no tone
+ * mapping), so mid-grey 0.5 is drawn ~0.74 on the mesh; a card that wrote the
+ * raw value read a third darker than the sphere beside it (measured
+ * 2026-11-16: mesh 0.77, card 0.53, on the same unlit Perlin). The Color Ramp
+ * card encodes the same way (colorRamp.ts).
+ */
+function greyByte(display: number): number {
+  return Math.round(linearToSrgb01(display) * 255);
+}
 
 // Permutation table (Ken Perlin's original)
 const PERM = new Uint8Array(512);
@@ -52,84 +72,52 @@ export function perlin2D(x: number, y: number): number {
   );
 }
 
-/** Fractal Brownian motion built on Perlin (3 octaves). */
-export function fbm2D(x: number, y: number): number {
-  let amp = 0.5;
-  let freq = 1;
-  let sum = 0;
-  for (let o = 0; o < 3; o++) {
-    sum += amp * perlin2D(x * freq, y * freq);
-    freq *= 2;
-    amp *= 0.5;
+export type NoiseType = MxNoiseType;
+
+/**
+ * The span of values a noise's `pos` takes over the surface, per channel:
+ * the card's x runs across channel 0, its y UP channel 1 (3-D y is up, a
+ * canvas row is down), and any further channel is held at its middle — a
+ * slice. It is cpuEvaluator's RANGE of the `pos` wire at the card's time, so
+ * `Position + Time` slides the window exactly as the shader's input slides,
+ * `Position × 3` widens it, and a float `pos` gives stripes, as on the mesh.
+ */
+export interface NoiseWindow {
+  readonly min: readonly number[];
+  readonly max: readonly number[];
+}
+
+/** Unwired `pos` is Position: the default sphere's ±1 in every axis. */
+export const DEFAULT_NOISE_WINDOW: NoiseWindow = {
+  min: [-MODEL_POSITION_BOUND, -MODEL_POSITION_BOUND, -MODEL_POSITION_BOUND],
+  max: [MODEL_POSITION_BOUND, MODEL_POSITION_BOUND, MODEL_POSITION_BOUND],
+};
+
+/**
+ * The 0…1 grey for one RAW noise value: a signed Perlin/fBm value maps
+ * (v + 1)/2 — what an unsigned node (`.mul(0.5).add(0.5)`) shows on the mesh,
+ * so the range switch never changes the card — and everything else is the
+ * value itself, clamped as a colour channel clamps: cell noise is 0…1 and
+ * Voronoi is F1², the SQUARED distance the shader holds (three passes metric 1).
+ */
+export function rawNoiseDisplay(type: NoiseType, v: number): number {
+  const signed = type === 'perlin' || type === 'perlinVec3' || type === 'fbm' || type === 'fbmVec3';
+  const d = signed ? (v + 1) * 0.5 : v;
+  return d > 0 ? (d < 1 ? d : 1) : 0;
+}
+
+/** A window channel the card can draw: finite and ordered, else Position's ±1. */
+function windowChannel(win: NoiseWindow, c: number): [number, number] {
+  const lo = win.min[c], hi = win.max[c];
+  if (typeof lo !== 'number' || typeof hi !== 'number' || !Number.isFinite(lo) || !Number.isFinite(hi)) {
+    return [-MODEL_POSITION_BOUND, MODEL_POSITION_BOUND];
   }
-  return sum;
-}
-
-/** Hash-based per-cell random in [0, 1]. */
-export function cellNoise2D(x: number, y: number): number {
-  const ix = Math.floor(x) & 255;
-  const iy = Math.floor(y) & 255;
-  return PERM[PERM[ix] + iy] / 255;
-}
-
-/** Worley/Voronoi F1 distance (approximate, range ~[0, 1]). */
-export function voronoi2D(x: number, y: number): number {
-  const ix = Math.floor(x);
-  const iy = Math.floor(y);
-  // Squared distances in the loop, ONE sqrt at the end (sqrt is monotone).
-  let minD2 = Infinity;
-
-  for (let dy = -1; dy <= 1; dy++) {
-    for (let dx = -1; dx <= 1; dx++) {
-      const cx = ix + dx;
-      const cy = iy + dy;
-      // Hash-based random point within cell
-      const h = PERM[(PERM[(cx & 255)] + (cy & 255)) & 255];
-      const px = cx + (h / 255);
-      const py = cy + (PERM[(h + 37) & 255] / 255);
-      const d2 = (x - px) * (x - px) + (y - py) * (y - py);
-      if (d2 < minD2) minD2 = d2;
-    }
-  }
-  return Math.min(Math.sqrt(minD2), 1);
-}
-
-export type NoiseType =
-  | 'perlin'
-  | 'perlinVec3'
-  | 'fbm'
-  | 'fbmVec3'
-  | 'cellNoise'
-  | 'voronoi'
-  | 'voronoiVec2'
-  | 'voronoiVec3';
-
-/** Which input ports of the noise node are driven by time. */
-export interface TimeInputs {
-  pos?: boolean;
-}
-
-/** Sample a single greyscale value in [0, 1] for the given noise type at (nx, ny). */
-function sampleNoise(type: NoiseType, nx: number, ny: number): number {
-  switch (type) {
-    case 'perlin':
-    case 'perlinVec3':
-      // Perlin output is ~[-1, 1] → remap to [0, 1] for display
-      return (perlin2D(nx, ny) + 1) * 0.5;
-    case 'fbm':
-    case 'fbmVec3':
-      return (fbm2D(nx, ny) + 1) * 0.5;
-    case 'cellNoise':
-      return cellNoise2D(nx, ny);
-    case 'voronoi':
-    case 'voronoiVec2':
-    case 'voronoiVec3':
-      return voronoi2D(nx, ny);
-  }
+  return lo <= hi ? [lo, hi] : [hi, lo];
 }
 
 /**
- * Render one greyscale noise thumbnail.
+ * Render one greyscale noise thumbnail: channel 0 of the node's output at
+ * `mx_…(pos · scale)` for every pixel of `win` (null = unwired, Position).
  *
  * `reuse` is an optional scratch buffer for callers that redraw on a clock —
  * PreviewNode's animated cards run this on the shared 15 Hz frame ticker
@@ -137,40 +125,53 @@ function sampleNoise(type: NoiseType, nx: number, ny: number): number {
  * `ImageData` per frame is 4·size² bytes of garbage each time (36 KB at the
  * 96 px preview size, so four animated cards minted ~4 MB/s for the collector
  * to sweep at the old 30 Hz). Passing the previous buffer back in reuses it; anything of the
- * wrong shape (or nothing at all) allocates, so the 5-argument call sites are
- * untouched.
+ * wrong shape (or nothing at all) allocates.
  *
  * Reuse is safe because the loop below writes ALL FOUR bytes of every pixel —
  * the three channels from the sample and alpha pinned to 255 — so no part of
  * the previous frame can survive into this one, and `putImageData` copies into
  * the canvas synchronously, so a caller can never be holding the returned
  * buffer across a redraw.
+ *
+ * The input is converted as three converts it (mxNoiseInput, inlined for the
+ * hot loop): fBm's vec3 layout splats a float and pads a vec2 with z = 0;
+ * every other call keeps a vec3 and reads any other width as a vec2 — a float
+ * splats (f, f), a vec4 drops .zw.
  */
 export function renderNoisePreview(
   type: NoiseType,
   size: number,
   values: Record<string, string | number>,
-  time: number,
-  timeInputs: TimeInputs,
+  win: NoiseWindow | null,
   reuse?: ImageData | null,
 ): ImageData {
   const imageData =
     reuse && reuse.width === size && reuse.height === size ? reuse : new ImageData(size, size);
   const data = imageData.data;
-  const userScale = valueNum(values.scale ?? 1);
-  const scale = 4.0 * userScale;
-
-  // Time-driven position offset (when time feeds into pos)
-  const posOffset = timeInputs.pos ? time * 0.4 : 0;
+  const rawScale = valueNum(values.scale ?? 1);
+  const scale = Number.isFinite(rawScale) ? rawScale : 1;
+  const span = win !== null && win.min.length > 0 && win.max.length > 0 ? win : DEFAULT_NOISE_WINDOW;
+  const w = Math.min(span.min.length, span.max.length, 4);
+  const [lo0, hi0] = windowChannel(span, 0);
+  const [lo1, hi1] = w >= 2 ? windowChannel(span, 1) : [0, 0];
+  const [lo2, hi2] = w >= 3 ? windowChannel(span, 2) : [0, 0];
+  const mid2 = (lo2 + hi2) * 0.5;
+  const fbm = type === 'fbm' || type === 'fbmVec3';
+  // Three dimensions when three does: a vec3 pos, or fBm with anything but a vec2…
+  const threeD = fbm || w === 3;
+  // …and the third coordinate the call receives.
+  const zOf = fbm ? (w === 1 ? null : w === 2 ? 0 : mid2) : mid2;
 
   for (let y = 0; y < size; y++) {
+    const fy = (y + 0.5) / size;
+    // Channel 1 runs UP the card; a float pos has no channel 1 and splats.
+    const c1 = w >= 2 ? hi1 - (hi1 - lo1) * fy : 0;
     for (let x = 0; x < size; x++) {
-      const nx = (x / size) * scale + posOffset;
-      const ny = (y / size) * scale + posOffset * 0.75;
-
-      const v = sampleNoise(type, nx, ny);
-
-      const byte = Math.round(Math.max(0, Math.min(1, v)) * 255);
+      const c0 = lo0 + (hi0 - lo0) * ((x + 0.5) / size);
+      const qy = w === 1 ? c0 : c1;
+      const qz = threeD ? (zOf === null ? c0 : zOf) : null;
+      const v = mxNoiseChannel(type, c0 * scale, qy * scale, qz === null ? null : qz * scale, 0);
+      const byte = greyByte(rawNoiseDisplay(type, v));
       const idx = (y * size + x) * 4;
       data[idx] = byte;
       data[idx + 1] = byte;
@@ -185,14 +186,15 @@ export function renderNoisePreview(
  * The grey a FLAT thumbnail shows for a noise node's evaluated value `v`
  * (cpuEvaluator's sample, already remapped by the node's range flag), on the
  * same 0…1 display scale as the pattern above: a signed Perlin/fBm value is
- * mapped (v + 1)/2 exactly as `sampleNoise` maps the raw field, so one value
+ * mapped (v + 1)/2 exactly as `rawNoiseDisplay` maps the raw field, so one value
  * reads the same grey in either range mode. `null` — the input is unknown (the
  * camera position) — is the scale's middle grey: a tone, never a pattern.
  */
 export function flatNoiseDisplay(type: NoiseType, v: number | null, unsigned: boolean): number {
   if (v === null || !Number.isFinite(v)) return 0.5;
-  const signed = (type === 'perlin' || type === 'perlinVec3' || type === 'fbm' || type === 'fbmVec3') && !unsigned;
-  return Math.max(0, Math.min(1, signed ? (v + 1) * 0.5 : v));
+  // An unsigned node's value is already (raw + 1)/2: shown as it is, clamped.
+  if (unsigned) return v > 0 ? (v < 1 ? v : 1) : 0;
+  return rawNoiseDisplay(type, v);
 }
 
 /**
@@ -206,7 +208,7 @@ export function renderFlatNoisePreview(size: number, display: number, reuse?: Im
   const imageData =
     reuse && reuse.width === size && reuse.height === size ? reuse : new ImageData(size, size);
   const data = imageData.data;
-  const byte = Math.round(Math.max(0, Math.min(1, display)) * 255);
+  const byte = greyByte(display);
   for (let i = 0; i < data.length; i += 4) {
     data[i] = byte;
     data[i + 1] = byte;

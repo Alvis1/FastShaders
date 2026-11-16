@@ -14,7 +14,8 @@ import type { AppNode, AppEdge, TSLDataType, NodeDefinition } from '@/types';
 import { valueNum, valueStr } from '@/utils/valueCoerce';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
-import { perlin2D, fbm2D, cellNoise2D, voronoi2D } from '@/utils/noisePreview';
+import { mxNoise } from '@/utils/mxNoise';
+import { MODEL_POSITION_BOUND } from '@/utils/modelPositionBound';
 import { HEX6, hexToRgb01, srgbToLinear01 } from '@/utils/colorUtils';
 import { decodeDataNode, type DecodedDataNode } from '@/utils/dataNode';
 import { columnStats, isNormalizeMode, planNormalize, type ColumnStats, type NormalizePlan } from '@/utils/dataViz';
@@ -32,9 +33,6 @@ import { IMAGE_CHANNEL_INDEX } from '@/utils/imageChannels';
 import { fresnelFacing } from '@/utils/fresnel';
 import { readColorRamp, rampFetch, rampRangeOver } from '@/utils/colorRamp';
 import { readRgbCurves, evalRgbCurves, rgbCurvesRange } from '@/utils/rgbCurves';
-
-/** Multiplier applied to UV coordinates before sampling noise (matches GPU preview scale). */
-const NOISE_UV_SCALE = 4;
 
 /**
  * An append node's operand ports in socket order. Append grows past its base
@@ -1333,10 +1331,11 @@ function evaluate(
       break;
     }
 
-    // Noise (evaluate at a representative point — center of UV).
-    // Float-output variants return a single channel; vec2/vec3 variants
-    // approximate the multi-channel output by replicating the same scalar
-    // sample (good enough for the dataflow viz, the GPU side is exact).
+    // Noise: three's own MaterialX noise (utils/mxNoise, held to a GPU
+    // readback), so a noise of a constant, Time or Sound reads the number the
+    // shader holds — the flat noise card's grey is this value. Under a FIELD
+    // (`pos` unwired, i.e. Position, or wired to anything that varies over the
+    // surface) it is one arbitrary sample: labels there take the range path.
     case 'perlin':
     case 'perlinVec3':
     case 'fbm':
@@ -1348,31 +1347,22 @@ function evaluate(
       // `pos`/`scale` may hold a coordinate-source NAME (e.g. 'positionGeometry',
       // 'uv') rather than a number — Number() of those is NaN, which would poison
       // the sample and every downstream value (the multiply card showed '…').
-      // Fall back to the centre/unit when a resolved coordinate isn't finite,
-      // matching the unconnected-input default.
+      // A channel that is not finite reads the field sample's ½, as before.
       const finiteOr = (n: number | undefined, fallback: number) =>
         n !== undefined && Number.isFinite(n) ? n : fallback;
-      const posInput = channelInput('pos', 0);
       const scale = finiteOr(scalarInput('scale', 1), 1);
-      const px = finiteOr(posInput?.[0], 0.5) * NOISE_UV_SCALE * scale;
-      const py = finiteOr(posInput?.[1], 0.5) * NOISE_UV_SCALE * scale;
-      let v: number;
+      // Unwired, `pos` IS Position (graphToCode ignores a stored number): a vec3
+      // field, sampled at (½, ½, ½). Wired, the upstream's own width — three
+      // converts it on the way in (a float splats, a vec4 drops .zw), and
+      // mxNoise does the same.
+      const posInput = nodeEdges.some((e) => e.targetHandle === 'pos') ? channelInput('pos', 0) : null;
+      const p = posInput && posInput.length > 0 ? posInput : [0.5, 0.5, 0.5];
+      const raw = mxNoise(type, p.map((c) => finiteOr(c, 0.5) * scale));
       // The remap follows the node's own range flag, so the CPU value agrees
       // with the emitted shader instead of asserting 0-1 for both modes.
-      const unsignedNoise = isUnsignedNoise(type, values);
-      if (type === 'perlin' || type === 'perlinVec3') {
-        v = perlin2D(px, py);
-        if (unsignedNoise) v = (v + 1) * 0.5;
-      } else if (type === 'fbm' || type === 'fbmVec3') {
-        v = fbm2D(px, py);
-        if (unsignedNoise) v = (v + 1) * 0.5;
-      }
-      else if (type === 'cellNoise') v = cellNoise2D(px, py);
-      else v = voronoi2D(px, py);
-      // Match the channel count of the registered output port for downstream
-      // dataflow visualizations (single line vs ribbon). The case labels are
-      // registry keys, so `def` is always present here.
-      result = Array(shapeOfDataType(def!.outputs[0].dataType)).fill(v);
+      const v = isUnsignedNoise(type, values) ? raw.map((c) => c * 0.5 + 0.5) : raw;
+      // The declared width (vec2 for Voronoi F1/F2), each channel the shader's.
+      result = toTslWidth(v, shapeOfDataType(def!.outputs[0].dataType));
       break;
     }
 
@@ -1854,13 +1844,7 @@ const UNBOUNDED_SOURCE_TYPES: ReadonlySet<string> = new Set([
   'positionWorld', 'positionView', 'cameraPosition', 'cameraNear', 'cameraFar',
 ]);
 
-/** Model-space position bound: the built-in shapes are NOT fitted (the sphere
- *  has radius 1, the plane is 2 × 2, the cube ±0.7) and fit-bounds puts a
- *  dropped model, the teapot and a splat within ±0.8 — ±1 holds for all of
- *  them. Not for a skinned or animated model (fit-bounds scales its root, so
- *  its positions stay in authored units), nor positionLocal under a
- *  displacement or inside a raymarch scope (docs/dev/codegen.md). */
-const MODEL_POSITION_BOUND = 1;
+/* MODEL_POSITION_BOUND (utils/modelPositionBound.ts) says which shapes Position's ±1 holds for. */
 
 /** MaterialX Worley as three r184 calls it: metric int(1), the SQUARED
  *  distance, over a 3×3(×3) cell window with jitter 1 — so F1², F2², F3² are

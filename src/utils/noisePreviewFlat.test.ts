@@ -37,8 +37,10 @@ describe('renderFlatNoisePreview', () => {
     const reuse = { width: 3, height: 3, data: new Uint8ClampedArray(3 * 3 * 4).fill(7) } as unknown as ImageData;
     const out = renderFlatNoisePreview(3, 0.5, reuse);
     expect(out).toBe(reuse);
+    // The value is LINEAR light, drawn as the 3D view draws it: 0.5 is
+    // sRGB-encoded to 188, the grey the mesh shows (noisePreview's greyByte).
     for (let i = 0; i < out.data.length; i += 4) {
-      expect([...out.data.slice(i, i + 4)]).toEqual([128, 128, 128, 255]);
+      expect([...out.data.slice(i, i + 4)]).toEqual([188, 188, 188, 255]);
     }
   });
 });

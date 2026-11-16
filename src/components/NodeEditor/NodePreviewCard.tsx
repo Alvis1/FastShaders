@@ -384,12 +384,12 @@ export function NoiseCardContent(props: ContentProps & {
     const ctx = canvasCtx(canvasRef.current);
     if (!ctx) return;
 
+    // A fresh node: `pos` unwired, i.e. Position's window (null).
     const imageData = renderNoisePreview(
       def.type as NoiseType,
       96,
       def.defaultValues ?? {},
-      0,
-      {},
+      null,
     );
     ctx.putImageData(imageData, 0, 0);
   }, [def.type, def.defaultValues]);

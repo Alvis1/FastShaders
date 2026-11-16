@@ -2809,6 +2809,54 @@ const RENDER_PACER_SCRIPT = `<script>
   })();
 <${''}/script>`;
 
+/** The stage → parent message that says when the shader's `time` was 0. */
+export const SHADER_CLOCK_MESSAGE = 'fs:shader-clock';
+/** How often the stage re-reads its clock (it posts only when the zero moved). */
+export const SHADER_CLOCK_POLL_MS = 500;
+
+/**
+ * The shader-clock reporter, for the SANDBOXED editor preview only (owner,
+ * 2026-11-16: "the noise node visual does not sync with the iframe"). The
+ * module's `time` is three's NodeFrame clock — `time += now − lastTime` on
+ * every update, i.e. wall seconds since this document's first frame — so
+ * `timeOrigin + lastTime − time·1000` is ONE wall instant per document: the
+ * moment `time` read 0. The stage posts it (`fs:shader-clock {zero}`) once its
+ * renderer exists and again whenever it moves by a millisecond or more, which
+ * a running document never does (the sum telescopes); the parent's
+ * `followShaderClock` (utils/appClock.ts) makes it the zero of every editor
+ * card's clock, so a noise card, a sin card and the Time hand read the
+ * mesh's own `time`.
+ *
+ * Read-only on three: it reads `renderer._nodes.nodeFrame` (r184's name) and
+ * posts nothing at all when that is missing, leaving the editor on its own
+ * clock — never a guess. The render pacer does not disturb it: three's
+ * Animation loop updates the NodeFrame on every display frame whether or not
+ * the pacer draws, and an idle stretch is still wall time. Forgeable like
+ * every stage message; the parent bounds it. The XR popup has no parent.
+ */
+export const SHADER_CLOCK_SCRIPT = `<script>
+  (function () {
+    var posted = null;
+    function report() {
+      var scene = document.querySelector("a-scene");
+      var r = scene && scene.renderer;
+      var nf = r && r._nodes && r._nodes.nodeFrame;
+      var perf = window.performance;
+      if (!nf || !perf || typeof perf.timeOrigin !== "number") return;
+      var t = nf.time, last = nf.lastTime;
+      if (typeof t !== "number" || typeof last !== "number" || !isFinite(t) || !isFinite(last)) return;
+      var zero = perf.timeOrigin + last - t * 1000;
+      if (!isFinite(zero) || (posted !== null && Math.abs(zero - posted) < 1)) return;
+      posted = zero;
+      try { window.parent.postMessage({ type: "${SHADER_CLOCK_MESSAGE}", zero: zero }, "*"); } catch (e) {}
+    }
+    window.__fsWhenSceneBooted(function () {
+      report();
+      setInterval(report, ${SHADER_CLOCK_POLL_MS});
+    });
+  })();
+<${''}/script>`;
+
 /**
  * Sub-mesh protocol of a sandboxed model document: what named meshes the model
  * actually put in the scene (up, `fs:model-meshes`), and which to light up
@@ -3415,6 +3463,9 @@ export function tslToPreviewHTML(
   // keeps A-Frame's own every-frame loop.
   if (!xr) {
     lines.push(RENDER_PACER_SCRIPT);
+    lines.push('');
+    // The editor's cards follow this document's `time` (SHADER_CLOCK_SCRIPT).
+    lines.push(SHADER_CLOCK_SCRIPT);
     lines.push('');
   }
 

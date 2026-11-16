@@ -3,6 +3,7 @@ import { contributingOutputs, defaultOutput, materialPartsMirrorPlanAcross, mirr
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
+import { followShaderClock } from '@/utils/appClock';
 import { rememberBunnyText } from '@/utils/builtinModelText';
 import { ScrollArrow, useScrollArrows } from '@/components/Layout/ScrollArrows';
 import { evalLog } from '@/eval/telemetry';
@@ -14,6 +15,7 @@ import {
   MARCH_WINDOW_GEOMETRY,
   LIGHT_PRESETS,
   RENDER_MODE_MESSAGE,
+  SHADER_CLOCK_MESSAGE,
   SHADER_SWAP_MESSAGE,
   buildGeoAttr,
   buildPreviewShaderModule,
@@ -1665,6 +1667,15 @@ export function ShaderPreview() {
       if (typeof data.hot === 'number') {
         if (data.hot !== hotGenRef.current) return;
         clearHotSwapWait();
+      }
+      if (data.type === SHADER_CLOCK_MESSAGE) {
+        // When the shader's `time` was 0 (SHADER_CLOCK_SCRIPT): every editor
+        // card's clock follows it, so a noise card, a sin card and the Time
+        // hand show the mesh's own `time`. Forgeable; followShaderClock takes
+        // only a plausible finite number, and it moves nothing but what the
+        // cards draw.
+        followShaderClock((data as { zero?: unknown }).zero);
+        return;
       }
       if (data.type === 'fs:model-meshes') {
         // What named sub-meshes the loaded model actually put in the scene.

@@ -276,7 +276,7 @@ export function CodeScene() {
       const ctx = noiseRef.current?.getContext('2d', { willReadFrequently: true });
       if (ctx && tick !== lastNoise) {
         lastNoise = tick;
-        buf = renderNoisePreview('perlin', 96, { scale: Math.sin(tt) }, tt, {}, buf);
+        buf = renderNoisePreview('perlin', 96, { scale: Math.sin(tt) }, null, buf);
         ctx.putImageData(buf, 0, 0);
       }
     };
