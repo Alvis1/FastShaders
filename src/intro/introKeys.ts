@@ -6,7 +6,9 @@
  * Each row names its keys as TOKENS, read per platform at display time
  * (`keyLabel`): `mod` is ⌘ on Apple and Ctrl elsewhere — every handler
  * this table describes takes either (`e.metaKey || e.ctrlKey`) — and `alt` is
- * ⌥ / Alt. A token whose label is null on this platform drops its combo:
+ * ⌥ / Alt. `ctrl` is the Control key spelled out where it is NOT `mod` (an
+ * Apple keyboard), for a row that names both; elsewhere it would print
+ * `mod`'s Ctrl a second time, so it drops. A token whose label is null on this platform drops its combo:
  * Backspace is the Mac's "delete" key, so there the table lists Delete alone.
  * Mouse gestures are tokens too, printed as translated words (`MOUSE_TOKENS`).
  *
@@ -52,6 +54,7 @@ export const TRANSLATED_TOKENS: ReadonlySet<string> = new Set([...MOUSE_TOKENS, 
  */
 export const KEY_ROWS: readonly KeyRow[] = [
   { combos: [['Space'], ['shift', 'A'], ['Right-click']], does: 'Open the node search' },
+  { combos: [['1', 'Click'], ['2', 'Click'], ['3', 'Click']], does: 'Add a Float, Vec2 or Vec3 node where you click' },
   { combos: [['↑'], ['↓'], ['Enter']], does: 'In the search: pick a result and add it' },
   { combos: [['A']], does: 'Select every node' },
   { combos: [['shift', 'Click']], does: 'Add a node to the selection' },
@@ -61,6 +64,7 @@ export const KEY_ROWS: readonly KeyRow[] = [
   { combos: [['Middle-drag'], ['Right-drag']], does: 'Move the view' },
   { combos: [['Esc']], does: 'Leave Draw, hide socket names, stop a preview' },
   { combos: [['Delete'], ['backspace'], ['X']], does: 'Delete the selection; the wire joins up again' },
+  { combos: [['alt', 'Click']], does: 'On a wire: delete it' },
   { combos: [['mod', 'C'], ['mod', 'V']], does: 'Copy, paste' },
   { combos: [['mod', 'D']], does: 'Duplicate' },
   { combos: [['mod', 'G'], ['mod', 'shift', 'G']], does: 'Group, ungroup' },
@@ -75,7 +79,8 @@ export const KEY_ROWS: readonly KeyRow[] = [
   { combos: [['mod', '←↑→↓']], does: 'Follow the wires: → toward the Output, ← back' },
   { combos: [['alt', '←'], ['alt', '→']], does: 'Jump between the toolbar, canvas, palette, 3D view and code' },
   { combos: [['Drag']], does: 'On a number: change it step by step (the step shows as you drag)' },
-  { combos: [['shift', 'Drag']], does: 'On a number: steps ten times bigger' },
+  { combos: [['ctrl', 'Drag'], ['mod', 'Drag']], does: 'On a number: steps ten times bigger' },
+  { combos: [['shift', 'Drag']], does: 'On a number: steps ten times smaller' },
   { combos: [['↑'], ['↓']], does: 'In a number box: one step up, down (with Shift, ten)' },
   { combos: [['Tab'], ['shift', 'Tab']], does: 'Next, previous box on the node' },
   { combos: [['Enter'], ['Esc']], does: 'Keep, cancel the typed value' },
@@ -101,6 +106,8 @@ export function keyLabel(token: KeyToken, mac: boolean): string | null {
       return mac ? '⌘' : 'Ctrl';
     case 'alt':
       return mac ? '⌥' : 'Alt';
+    case 'ctrl':
+      return mac ? 'Ctrl' : null;
     case 'shift':
       return 'Shift';
     // The Mac's Backspace key is the one printed "delete": listed as Delete.

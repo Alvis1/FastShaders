@@ -499,6 +499,7 @@ export function TypedEdge({
       {logical && (
         <EdgeLabelRenderer>
           <EdgeInfoCard
+            edgeId={id}
             sourceId={logical.source}
             sourceHandle={logical.sourceHandle}
             targetId={logical.target}

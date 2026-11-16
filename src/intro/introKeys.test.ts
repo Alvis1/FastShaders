@@ -44,6 +44,11 @@ describe('keys table', () => {
     const del = KEY_ROWS.find((r) => r.combos.some((c) => c.includes('backspace')))!;
     expect(rowCombos(del, true).map((c) => c.map((k) => k.label).join('+'))).toEqual(['Delete', 'X']);
     expect(rowCombos(del, false).map((c) => c.map((k) => k.label).join('+'))).toEqual(['Delete', 'Backspace', 'X']);
+    // A number drags coarse on Ctrl AND ⌘: an Apple keyboard is told both,
+    // elsewhere Ctrl is printed once.
+    const coarse = KEY_ROWS.find((r) => r.does === 'On a number: steps ten times bigger')!;
+    expect(rowCombos(coarse, true).map((c) => c.map((k) => k.label).join('+'))).toEqual(['Ctrl+Drag', '⌘+Drag']);
+    expect(rowCombos(coarse, false).map((c) => c.map((k) => k.label).join('+'))).toEqual(['Ctrl+Drag']);
   });
 
   it('marks gestures as words and keeps key names untranslated', () => {

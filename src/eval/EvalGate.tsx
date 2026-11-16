@@ -127,6 +127,9 @@ function cleanSlateForStudy(): void {
     // otherwise open the preview inside the previous one's flight.
     localStorage.removeItem('fs:previewFpv');
     localStorage.removeItem('fs:previewFpvPose');
+    // The 3D view's backdrop (room / grid, ShaderPreview's fs:previewStage):
+    // every participant starts on the plain colour the study was run with.
+    localStorage.removeItem('fs:previewStage');
   } catch {
     /* storage blocked — nothing persisted to leak either */
   }

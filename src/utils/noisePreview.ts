@@ -10,7 +10,7 @@
 // lattice, no third axis), and the card could never look like the mesh.
 
 import { valueNum } from './valueCoerce';
-import { mxNoiseChannel, type MxNoiseType } from './mxNoise';
+import { mxNoiseChannel, mxNoiseGrid, type MxNoiseType } from './mxNoise';
 import { MODEL_POSITION_BOUND } from './modelPositionBound';
 import { linearToSrgb01 } from './colorUtils';
 
@@ -115,6 +115,80 @@ function windowChannel(win: NoiseWindow, c: number): [number, number] {
   return lo <= hi ? [lo, hi] : [hi, lo];
 }
 
+/*
+ * THE BYTE without a Math.pow per pixel. greyByte is a monotone step function
+ * of the 0…1 display value, so it is fixed by the 255 values where it steps up.
+ * Those are found ONCE, by bisection on greyByte itself down to adjacent
+ * doubles, so the table answers exactly what greyByte answers (noisePreview
+ * Window.test.ts sweeps it); a 4097-bucket guess lands within one step, since
+ * the narrowest step (sRGB's linear toe, 1/(255 · 12.92) ≈ 3.0e-4) is wider
+ * than a bucket (2.4e-4). The pow was a tenth of a card's whole cost.
+ */
+const GREY_BUCKETS = 4096;
+/** [k] = the least display value whose byte is ≥ k; [0] = −∞, [256] = +∞. */
+let greyStep: Float64Array | null = null;
+/** A starting byte per 1/GREY_BUCKETS of the display range. */
+let greyGuess: Uint8Array | null = null;
+/** Per byte: the opaque grey pixel as ONE 32-bit word in this machine's order. */
+let greyPixel: Uint32Array | null = null;
+
+function greyTables(): void {
+  const step = new Float64Array(257);
+  step[0] = -Infinity;
+  step[256] = Infinity;
+  for (let k = 1; k <= 255; k++) {
+    // greyByte(0) = 0 < k ≤ 255 = greyByte(1).
+    let lo = 0, hi = 1;
+    for (;;) {
+      const mid = lo + (hi - lo) / 2;
+      if (mid <= lo || mid >= hi) break;
+      if (greyByte(mid) >= k) hi = mid;
+      else lo = mid;
+    }
+    step[k] = hi;
+  }
+  const guess = new Uint8Array(GREY_BUCKETS + 1);
+  let b = 0;
+  for (let i = 0; i <= GREY_BUCKETS; i++) {
+    const d = i / GREY_BUCKETS;
+    while (d >= step[b + 1]) b++;
+    guess[i] = b;
+  }
+  const littleEndian = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+  const pixel = new Uint32Array(256);
+  for (let g = 0; g < 256; g++) {
+    pixel[g] = littleEndian
+      ? ((255 << 24) | (g << 16) | (g << 8) | g) >>> 0
+      : ((g << 24) | (g << 16) | (g << 8) | 255) >>> 0;
+  }
+  greyStep = step;
+  greyGuess = guess;
+  greyPixel = pixel;
+}
+
+/** The table read: the one byte whose step range holds `d` (0…1). */
+function tableByte(d: number, step: Float64Array, guess: Uint8Array): number {
+  let b = guess[(d * GREY_BUCKETS) | 0];
+  while (d >= step[b + 1]) b++;
+  while (d < step[b]) b--;
+  return b;
+}
+
+/**
+ * The byte a card writes for a 0…1 display value (clamped; a non-finite one
+ * reads 0, as greyByte reads it) — greyByte, read off its table.
+ */
+export function noiseGreyByte(display: number): number {
+  if (greyStep === null) greyTables();
+  const d = !Number.isFinite(display) ? 0 : display > 0 ? (display < 1 ? display : 1) : 0;
+  return tableByte(d, greyStep!, greyGuess!);
+}
+
+/** Shared per-size scratch: the grid's coordinates and values. */
+let gridXs = new Float64Array(0);
+let gridYs = new Float64Array(0);
+let gridOut = new Float64Array(0);
+
 /**
  * Render one greyscale noise thumbnail: channel 0 of the node's output at
  * `mx_…(pos · scale)` for every pixel of `win` (null = unwired, Position).
@@ -133,10 +207,13 @@ function windowChannel(win: NoiseWindow, c: number): [number, number] {
  * the canvas synchronously, so a caller can never be holding the returned
  * buffer across a redraw.
  *
- * The input is converted as three converts it (mxNoiseInput, inlined for the
- * hot loop): fBm's vec3 layout splats a float and pads a vec2 with z = 0;
+ * The input is converted as three converts it (mxNoiseInput, spelled out per
+ * width here): fBm's vec3 layout splats a float and pads a vec2 with z = 0;
  * every other call keeps a vec3 and reads any other width as a vec2 — a float
- * splats (f, f), a vec4 drops .zw.
+ * splats (f, f), a vec4 drops .zw. Every value is EXACTLY mxNoiseChannel's at
+ * the pixel's centre: the picture is computed as one grid (mxNoiseGrid) — a
+ * float `pos`, the one case that is no grid, is a diagonal, the same in every
+ * row — and its byte read off greyByte's table.
  */
 export function renderNoisePreview(
   type: NoiseType,
@@ -159,23 +236,44 @@ export function renderNoisePreview(
   const fbm = type === 'fbm' || type === 'fbmVec3';
   // Three dimensions when three does: a vec3 pos, or fBm with anything but a vec2…
   const threeD = fbm || w === 3;
-  // …and the third coordinate the call receives.
-  const zOf = fbm ? (w === 1 ? null : w === 2 ? 0 : mid2) : mid2;
 
-  for (let y = 0; y < size; y++) {
-    const fy = (y + 0.5) / size;
-    // Channel 1 runs UP the card; a float pos has no channel 1 and splats.
-    const c1 = w >= 2 ? hi1 - (hi1 - lo1) * fy : 0;
-    for (let x = 0; x < size; x++) {
-      const c0 = lo0 + (hi0 - lo0) * ((x + 0.5) / size);
-      const qy = w === 1 ? c0 : c1;
-      const qz = threeD ? (zOf === null ? c0 : zOf) : null;
-      const v = mxNoiseChannel(type, c0 * scale, qy * scale, qz === null ? null : qz * scale, 0);
-      const byte = greyByte(rawNoiseDisplay(type, v));
-      const idx = (y * size + x) * 4;
-      data[idx] = byte;
-      data[idx + 1] = byte;
-      data[idx + 2] = byte;
+  if (gridXs.length !== size) {
+    gridXs = new Float64Array(size);
+    gridYs = new Float64Array(size);
+    gridOut = new Float64Array(size * size);
+  }
+  const xs = gridXs, ys = gridYs, out = gridOut;
+  for (let x = 0; x < size; x++) xs[x] = (lo0 + (hi0 - lo0) * ((x + 0.5) / size)) * scale;
+  if (w === 1) {
+    // A float pos has no channel 1: (f, f) — fBm's (f, f, f) — a diagonal, so
+    // every row is the first.
+    for (let x = 0; x < size; x++) out[x] = mxNoiseChannel(type, xs[x], xs[x], fbm ? xs[x] : null, 0);
+    for (let y = 1; y < size; y++) out.copyWithin(y * size, 0, size);
+  } else {
+    // Channel 1 runs UP the card.
+    for (let y = 0; y < size; y++) ys[y] = (hi1 - (hi1 - lo1) * ((y + 0.5) / size)) * scale;
+    // …and the third coordinate the call receives: a vec2 pads fBm's z with 0.
+    const z = threeD ? (fbm && w === 2 ? 0 : mid2) * scale : null;
+    mxNoiseGrid(type, xs, ys, z, out, 0);
+  }
+
+  if (greyStep === null) greyTables();
+  const step = greyStep!, guess = greyGuess!, pixel = greyPixel!;
+  const signed = type === 'perlin' || type === 'perlinVec3' || type === 'fbm' || type === 'fbmVec3';
+  const aligned = data.byteOffset % 4 === 0;
+  const px = aligned ? new Uint32Array(data.buffer, data.byteOffset, size * size) : null;
+  for (let i = 0, n = size * size; i < n; i++) {
+    // rawNoiseDisplay, inlined.
+    const v = out[i];
+    const raw = signed ? (v + 1) * 0.5 : v;
+    const b = tableByte(raw > 0 ? (raw < 1 ? raw : 1) : 0, step, guess);
+    if (px !== null) {
+      px[i] = pixel[b];
+    } else {
+      const idx = i * 4;
+      data[idx] = b;
+      data[idx + 1] = b;
+      data[idx + 2] = b;
       data[idx + 3] = 255;
     }
   }

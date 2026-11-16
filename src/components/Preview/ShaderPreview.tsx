@@ -16,6 +16,9 @@ import {
   LIGHT_PRESETS,
   RENDER_MODE_MESSAGE,
   SHADER_CLOCK_MESSAGE,
+  STAGE_MESSAGE,
+  isPreviewStage,
+  nextPreviewStage,
   SHADER_SWAP_MESSAGE,
   buildGeoAttr,
   buildPreviewShaderModule,
@@ -27,7 +30,7 @@ import {
   isTeapotGeometry,
   tslToPreviewHTML,
 } from '@/engine/tslToPreviewHTML';
-import type { CameraPosition, FpvPose, GeometryType, LightingMode, PreviewOptions } from '@/engine/tslToPreviewHTML';
+import type { CameraPosition, FpvPose, GeometryType, LightingMode, PreviewOptions, PreviewStage, StageWords } from '@/engine/tslToPreviewHTML';
 import {
   SUBDIVISION_DEFAULT,
   SUBDIVISION_STEPS,
@@ -219,6 +222,54 @@ function isValidCssColor(v: string): boolean {
     /^rgba?\(\s*[\d.,\s%]+\)$/.test(v) ||
     /^[a-zA-Z]{3,20}$/.test(v);
 }
+/** `fs:previewStage`: one of the three backdrops, else none (the 3D view as
+ *  it was before backdrops existed). A viewing preference, never in a project
+ *  file, and removed by the study clean slate. */
+function validateStage(v: string | null): PreviewStage {
+  return isPreviewStage(v) ? v : 'none';
+}
+
+/** The readout's two words in the UI language (STAGE_SCRIPT prints them). */
+function stageWords(language: Parameters<typeof t>[1]): StageWords {
+  return { cell: t('Grid square', language), size: t('Size', language) };
+}
+
+/** What the background button says: what is on, and what a click brings. */
+const STAGE_TITLES: Record<PreviewStage, string> = {
+  none: 'Background: plain colour. Click for a checker room',
+  room: 'Background: checker room around the object, with its X, Y and Z axes. Click for a grid in metres',
+  grid: 'Background: grid in metres through the object’s centre, with its X, Y and Z axes. Click for the plain colour',
+};
+
+/** The background button's icon: what is shown NOW. 16 px, stroked in the
+ *  button's own text colour, so it follows the theme. */
+function StageIcon({ stage }: { stage: PreviewStage }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true">
+      {stage === 'room' && (
+        <>
+          <rect x="5" y="4" width="6" height="6" />
+          <path d="M1.5 1.5 5 4M14.5 1.5 11 4M1.5 14.5 5 10M14.5 14.5 11 10" />
+          <path d="M6.5 10.8 5.6 14.5M9.5 10.8 10.4 14.5M3.6 12.3H12.4" strokeWidth="0.8" />
+        </>
+      )}
+      {stage === 'grid' && (
+        <>
+          <path d="M4 7.5H12L15 14H1Z" />
+          <path d="M8 7.5V14M6 7.5 4.6 14M10 7.5 11.4 14M2.8 10.2H13.2M2 12H14" strokeWidth="0.8" />
+          <path d="M8 6V1.5M8 1.5 6.8 2.9M8 1.5 9.2 2.9" />
+        </>
+      )}
+      {stage === 'none' && (
+        <>
+          <rect x="1.5" y="2.5" width="13" height="11" />
+          <path d="M3 12 13 4" strokeWidth="0.8" />
+        </>
+      )}
+    </svg>
+  );
+}
+
 function validateBgColor(v: string | null): string {
   if (v && isValidCssColor(v)) return v;
   return DEFAULT_BG_COLOR;
@@ -663,6 +714,8 @@ export function ShaderPreview() {
   // debounceMs: the Subd control is a range input — see SLIDER_PERSIST_MS.
   const [subdivision, setSubdivision] = usePersistedState('fs:previewSubdivision', validateSubdivision, { reloadOnProjectImport: true, debounceMs: SLIDER_PERSIST_MS });
   const [bgColor, setBgColor] = usePersistedState('fs:previewBgColor', validateBgColor, { reloadOnProjectImport: true });
+  // The backdrop: a viewing preference only, so no project import moves it.
+  const [stage, setStage] = usePersistedState('fs:previewStage', validateStage);
 
   // Restore the previous session's dropped mesh from the IndexedDB cache. The
   // stored 'custom' survives the async read (previewGeometryPref.ts), so the
@@ -2361,6 +2414,7 @@ export function ShaderPreview() {
    *   · effectiveSubdivision                       → fs:geometry
    *   · marchWindow (the a-sphere radius)          → fs:geometry
    *   · bgColor                                    → fs:bg-color
+   *   · stage (+ the readout's words, by language)  → fs:stage
    *   · effLighting                                → fs:lighting
    *   · playing                                    → fs:playing
    *   · uniform values                             → fs:uniform
@@ -2384,8 +2438,8 @@ export function ShaderPreview() {
    *
    * READ AT MEMO TIME, deliberately not deps (each has its own channel above,
    * or is a restore target rather than an input):
-   *   · previewGeometry / marchWindow / playing / bgColor / effLighting /
-   *     effectiveSubdivision / previewMesh — hot, and listing them would
+   *   · previewGeometry / marchWindow / playing / bgColor / stage / language /
+   *     effLighting / effectiveSubdivision / previewMesh — hot, and listing them would
    *     rebuild the document to emit HTML the running one already matches.
    *   · moduleNodes (through `settledRef`) — the nodes previewModule was
    *     generated from, for the boot asset list; it only ever moves together
@@ -2447,6 +2501,9 @@ export function ShaderPreview() {
       animate: playing,
       materialSettings,
       bgColor,
+      // The XR popup has no backdrop; this is the pane's document only.
+      stage,
+      stageWords: stageWords(language),
       lighting: effLighting,
       subdivision: effectiveSubdivision,
       customModel: previewGeometry === 'custom' && previewMesh
@@ -2679,6 +2736,15 @@ export function ShaderPreview() {
       '*',
     );
   }, [bgColor]);
+
+  // The backdrop, and the words its readout prints. A document still in
+  // `none` ignores a `none`, so the mount post costs it nothing (STAGE_SCRIPT).
+  useEffect(() => {
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: STAGE_MESSAGE, mode: stage, words: stageWords(language) },
+      '*',
+    );
+  }, [stage, language]);
 
   useEffect(() => {
     iframeRef.current?.contentWindow?.postMessage(
@@ -3379,6 +3445,17 @@ export function ShaderPreview() {
               onPick={setBgColor}
               title={t('Background color', language)}
             />
+            {/* The backdrop: room → grid → none, the icon showing what is on
+                now. A viewing preference, so it never touches the graph. */}
+            <button
+              type="button"
+              className={`shader-preview__stage-btn${stage !== 'none' ? ' shader-preview__stage-btn--active' : ''}`}
+              onClick={() => setStage(nextPreviewStage(stage))}
+              title={t(STAGE_TITLES[stage], language)}
+              aria-label={t(STAGE_TITLES[stage], language)}
+            >
+              <StageIcon stage={stage} />
+            </button>
             <button
               type="button"
               className="shader-preview__reset-btn"

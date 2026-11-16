@@ -203,6 +203,16 @@ export interface PreviewOptions {
    */
   initialFpv?: { pose: FpvPose | null } | null;
   /**
+   * The backdrop the sandboxed preview draws around the object (STAGE_SCRIPT):
+   * a light checker room, a floor grid with a metre ruler, or nothing (the
+   * default — the document is then what it was before the stage existed). HOT:
+   * switched live by `fs:stage`, baked here only so a fresh document starts in
+   * it. Ignored by the XR popup.
+   */
+  stage?: PreviewStage;
+  /** The two words the grid's readout prints, in the UI language. */
+  stageWords?: StageWords;
+  /**
    * Build the top-level immersive-VR page instead of the sandboxed preview.
    * WebXR cannot start in the opaque-origin iframe, so ShaderPreview opens an
    * about:blank popup at the app's real origin. The page forces WebGL2 with
@@ -403,6 +413,9 @@ export function getBunnyModelUrl(): string {
  * Per-geometry static rotation applied to the inner `preview-entity`. The
  * spin parent handles the live rotation animation; this is the resting tilt.
  * Exported so the hot-update path can set the same value as the initial HTML.
+ * While the 3D view draws a backdrop (room or grid) the object stands UPRIGHT
+ * instead, so its axes are the grid's (STAGE_SCRIPT, `uprightTilt`); this
+ * value is still what `fs:geometry` carries and what `none` restores.
  */
 export const GEOMETRY_ROTATIONS: Record<GeometryType, string> = {
   sphere: '45 45 0',
@@ -2365,7 +2378,10 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
         }
       }
       if (payload.rotation) {
-        entity.setAttribute("rotation", payload.rotation);
+        // The shape's RESTING tilt, kept on the entity; a drawn backdrop
+        // shows it upright instead (STAGE_SCRIPT's __fsShownTilt).
+        entity.setAttribute("data-fs-tilt", payload.rotation);
+        entity.setAttribute("rotation", window.__fsShownTilt ? window.__fsShownTilt(payload.rotation) : payload.rotation);
       }
     }
 
@@ -2791,6 +2807,503 @@ export const RENDER_MODE_MESSAGE = 'fs:render-mode';
 export const RENDER_DIRTY_MS = 1000;
 /** The pacer's floor: an idle stage still draws at least this often. */
 export const RENDER_HEARTBEAT_MS = 500;
+
+/**
+ * The 3D view's backdrop (owner, 2026-11-16): `room` is a light checker box
+ * the object stands in, `grid` a wire floor grid with a metre ruler and the
+ * object's size, `none` nothing. Both drawn modes also show the object's OWN
+ * X / Y / Z axes — the axes its Position reads, so they tilt and turn with it.
+ * A viewing preference (`fs:previewStage`), never part of the shader.
+ */
+export type PreviewStage = 'none' | 'room' | 'grid';
+
+/** The order the preview's background button steps through. */
+export const PREVIEW_STAGES: readonly PreviewStage[] = ['none', 'room', 'grid'];
+
+/** Parent → stage: `{ type, mode, words }` switches the backdrop live. */
+export const STAGE_MESSAGE = 'fs:stage';
+
+/** The readout's two words: "Grid square" and "Size", in the UI language. */
+export interface StageWords {
+  cell: string;
+  size: string;
+}
+
+export const DEFAULT_STAGE_WORDS: StageWords = { cell: 'Grid square', size: 'Size' };
+
+export function isPreviewStage(v: unknown): v is PreviewStage {
+  return v === 'none' || v === 'room' || v === 'grid';
+}
+
+/** The object's rotation while a backdrop is drawn: none, so its axes are the world's. */
+export const UPRIGHT_TILT = '0 0 0';
+
+/**
+ * The rotation `#preview-entity` SHOWS (owner, 2026-11-17: "make the object
+ * aligned with the world axis"): upright under a drawn backdrop, so the grid,
+ * the room and the gizmo's X / Y / Z agree, else its resting tilt
+ * (GEOMETRY_ROTATIONS). STAGE_SCRIPT's `shownTilt` is the live twin.
+ */
+export function uprightTilt(restingTilt: string, stage: PreviewStage): string {
+  return stage === 'room' || stage === 'grid' ? UPRIGHT_TILT : restingTilt;
+}
+
+/** The backdrop after `s`: room → grid → none → room. */
+export function nextPreviewStage(s: PreviewStage): PreviewStage {
+  return s === 'room' ? 'grid' : s === 'grid' ? 'none' : 'room';
+}
+
+/** A readout word as the stage may print it: a short plain string or the
+ *  English default (it is written with textContent either way). */
+function stageWord(v: unknown, fallback: string): string {
+  return typeof v === 'string' && v.length > 0 && v.length <= 40 ? v : fallback;
+}
+
+/**
+ * The 3D view's BACKDROP, for the SANDBOXED editor preview only (owner,
+ * 2026-11-16/17: "a light checker grid box interior, a ground plane grid wire
+ * and nothing"; then "the object in the cube's centre, and the grid also
+ * through the centre; the axes at the top left; the measurements smaller and
+ * embedded into the grid — no separate ruler").
+ *
+ * One A-Frame component, `fs-stage`, on the scene — attached at boot only when
+ * the document is built in a drawn mode, and by the first `fs:stage` message
+ * otherwise, so a document that never leaves `none` runs none of this. It
+ * draws, in the scene's own three (`AFRAME.THREE`, never `window.THREE`):
+ *  - `room`: the inside of a light checker CUBE with the object at its centre,
+ *    unlit (MeshBasicMaterial), one grey per face so the corners read;
+ *  - `grid`: a wire grid on the plane y = 0, through the object's centre as
+ *    Blender's floor grid runs through its default cube (minor, major and
+ *    centre lines, in strengths of the background's contrast colour), its
+ *    major lines numbered by small flat labels lying ON the grid along both
+ *    centre lines — the unit printed on the first one each way — and a small
+ *    readout of the square's size and the object's;
+ *  - in both, a GIZMO at the top left: the object's OWN X / Y / Z axes as the
+ *    camera sees them, so it turns with the turntable — exactly the axes the
+ *    shader's Position reads;
+ *  - and in both, the object stands UPRIGHT (owner, 2026-11-17): its resting
+ *    tilt (GEOMETRY_ROTATIONS, kept as `data-fs-tilt`) is set aside, so its
+ *    axes are the grid's and the room's, and `none` puts the tilt back.
+ *
+ * Sizes follow the object: its bounding radius is MEASURED (every vertex,
+ * sampled past 400k) whenever its geometry, tilt or the camera frame changes,
+ * and the grid's square is a 1-2-5 step of half of it — 0.5 m for the
+ * built-in sphere (2 m across), 1 m for the 1.4 m cube, and a dropped model's
+ * own units, read as metres as glTF writes them. A Gaussian cloud is an
+ * instanced quad, which has no vertices worth measuring, so it falls back to
+ * the frame's 1.6 box. Displacement moves the shape on the GPU and is not
+ * measured. A level camera sees the grid edge-on, as a line through the
+ * object; orbit to read it.
+ *
+ * The gizmo is SVG over the canvas, redrawn only on a frame the camera or the
+ * object turned. Nothing here posts anything, reads anything from the parent
+ * but the mode and two words (written with textContent), or touches the
+ * object's own entity — whose subtree the shader loader walks — beyond its
+ * `rotation`.
+ */
+export const STAGE_SCRIPT = `<script>
+  (function () {
+    if (!window.AFRAME || AFRAME.components["fs-stage"]) return;
+    var T = AFRAME.THREE || window.THREE;
+    if (!T) return;
+    var MODES = { none: 1, room: 1, grid: 1 };
+    var AXIS_CSS = ["#e53935", "#43a047", "#1e88e5"];
+    var AXIS_NAMES = ["X", "Y", "Z"];
+    var SVGNS = "http://www.w3.org/2000/svg";
+    var words = window.__fsStageWords || { cell: "Grid square", size: "Size" };
+
+    function nice(x) {
+      if (!(x > 0) || !isFinite(x)) return 1;
+      var p = Math.pow(10, Math.floor(Math.log(x) / Math.LN10));
+      var m = x / p;
+      return (m <= 1.0001 ? 1 : m <= 2.0001 ? 2 : m <= 5.0001 ? 5 : 10) * p;
+    }
+    function minorOf(s) {
+      var p = Math.pow(10, Math.floor(Math.log(s) / Math.LN10 + 1e-9));
+      return Math.round(s / p) === 2 ? s / 4 : s / 5;
+    }
+    // One unit per grid, chosen by its step: metres from 10 cm up, else cm,
+    // else mm.
+    function unitOf(step) { return step >= 0.1 ? ["m", 1] : step >= 0.01 ? ["cm", 100] : ["mm", 1000]; }
+    function fmtNum(v, step) {
+      var s = String(Number((v * unitOf(step)[1]).toPrecision(6)));
+      return s.charAt(0) === "-" ? "\\u2212" + s.slice(1) : s;
+    }
+    function fmtLen(v, step) { return fmtNum(v, step) + " " + unitOf(step)[0]; }
+    function fmtSize(sz, step) {
+      var u = unitOf(step);
+      function n(v) { return String(Number((v * u[1]).toPrecision(3))); }
+      return n(sz.x) + " \\u00d7 " + n(sz.y) + " \\u00d7 " + n(sz.z) + " " + u[0];
+    }
+
+    // The object, measured in its own entity's space: bounding radius and box.
+    var mv = new T.Vector3(), mm = new T.Matrix4(), minv = new T.Matrix4();
+    function measure(obj, k) {
+      obj.updateWorldMatrix(true, true);
+      minv.copy(obj.matrixWorld).invert();
+      var r2 = 0, box = new T.Box3(), count = 0, instanced = false;
+      obj.traverse(function (o) {
+        var g = o.geometry;
+        if (!g || !(o.isMesh || o.isLine || o.isPoints)) return;
+        if (o.isInstancedMesh || g.isInstancedBufferGeometry) { instanced = true; return; }
+        var pos = g.attributes && g.attributes.position;
+        if (!pos || !(pos.count > 0)) return;
+        var stride = pos.count > 400000 ? Math.ceil(pos.count / 400000) : 1;
+        mm.multiplyMatrices(minv, o.matrixWorld);
+        for (var i = 0; i < pos.count; i += stride) {
+          mv.fromBufferAttribute(pos, i).applyMatrix4(mm);
+          if (!isFinite(mv.x) || !isFinite(mv.y) || !isFinite(mv.z)) continue;
+          box.expandByPoint(mv);
+          var d = mv.lengthSq();
+          if (d > r2) r2 = d;
+          count++;
+        }
+      });
+      if (!count || instanced) return { r: 0.8 * k, size: null };
+      return { r: Math.sqrt(r2), size: box.getSize(new T.Vector3()) };
+    }
+
+    // The object stands UPRIGHT while a backdrop is drawn, so its axes are
+    // the grid's (uprightTilt's twin). Its resting tilt rides the entity as
+    // data-fs-tilt — baked into the document, rewritten by fs:geometry —
+    // and comes back with "none"; absent or malformed, it is no tilt.
+    function shownTilt(tilt, mode) {
+      return mode === "room" || mode === "grid" ? "${UPRIGHT_TILT}" : tilt;
+    }
+    function restTilt(entityEl) {
+      var t = entityEl.getAttribute ? entityEl.getAttribute("data-fs-tilt") : null;
+      return typeof t === "string" && /^-?\\d+(\\.\\d+)? -?\\d+(\\.\\d+)? -?\\d+(\\.\\d+)?$/.test(t) ? t : "${UPRIGHT_TILT}";
+    }
+    // For the bridge's fs:geometry: the tilt a newly shown shape gets now.
+    window.__fsShownTilt = function (tilt) {
+      var sc = document.querySelector("a-scene");
+      var c = sc && sc.components && sc.components["fs-stage"];
+      return shownTilt(tilt, c && c.data ? c.data.mode : "none");
+    };
+
+    function shapeSig(entityEl) {
+      var obj = entityEl.object3D;
+      var sig = 7, n = 0;
+      obj.traverse(function (o) {
+        var g = o.geometry;
+        if (!g || !(o.isMesh || o.isLine || o.isPoints)) return;
+        var p = g.attributes && g.attributes.position;
+        sig = (sig * 31 + (g.id | 0)) | 0;
+        sig = (sig * 31 + (p ? (p.count | 0) + (p.version | 0) : 0)) | 0;
+        n++;
+      });
+      var r = obj.rotation;
+      return sig + ":" + n + ":" + r.x.toFixed(5) + ":" + r.y.toFixed(5) + ":" + r.z.toFixed(5) + ":" + (window.__fsFrame || 1);
+    }
+
+    function disposeTree(o) {
+      o.traverse(function (c) {
+        if (c.geometry) c.geometry.dispose();
+        var mats = c.material ? (Array.isArray(c.material) ? c.material : [c.material]) : [];
+        for (var i = 0; i < mats.length; i++) {
+          if (mats[i].map) mats[i].map.dispose();
+          mats[i].dispose();
+        }
+      });
+      while (o.children.length) o.remove(o.children[0]);
+    }
+
+    var checkerCanvas = null;
+    function checkerTexture(rx, ry) {
+      if (!checkerCanvas) {
+        checkerCanvas = document.createElement("canvas");
+        checkerCanvas.width = checkerCanvas.height = 64;
+        var g = checkerCanvas.getContext("2d");
+        g.fillStyle = "#f3f3f3";
+        g.fillRect(0, 0, 64, 64);
+        g.fillStyle = "#dedede";
+        g.fillRect(0, 0, 32, 32);
+        g.fillRect(32, 32, 32, 32);
+      }
+      var t = new T.CanvasTexture(checkerCanvas);
+      t.wrapS = t.wrapT = T.RepeatWrapping;
+      t.magFilter = T.NearestFilter;
+      t.anisotropy = 8;
+      if (T.SRGBColorSpace) t.colorSpace = T.SRGBColorSpace;
+      t.repeat.set(rx, ry);
+      t.needsUpdate = true;
+      return t;
+    }
+
+    // The room: a cube centred on the object, seen from inside (BackSide),
+    // each face its own grey. Checker squares are one grid step, aligned on
+    // the origin. BoxGeometry's faces: +x, -x, +y, -y, +z, -z.
+    function buildRoom(root, m) {
+      var tints = [0.9, 0.9, 0.84, 1, 0.95, 0.95];
+      var mats = [];
+      for (var i = 0; i < 6; i++) {
+        var mat = new T.MeshBasicMaterial({ map: checkerTexture(m.room / m.step, m.room / m.step), side: T.BackSide });
+        mat.color.setScalar(tints[i]);
+        mats.push(mat);
+      }
+      root.add(new T.Mesh(new T.BoxGeometry(2 * m.room, 2 * m.room, 2 * m.room), mats));
+    }
+
+    function lineSet(pts, color) {
+      var g = new T.BufferGeometry();
+      g.setAttribute("position", new T.Float32BufferAttribute(pts, 3));
+      return new T.LineSegments(g, new T.LineBasicMaterial({ color: color }));
+    }
+
+    // A grid number: white text on a transparent canvas, tinted by its
+    // material, on a quad lying flat on the grid (readable from above, from
+    // the +Z side). Height in metres; width follows the text.
+    function gridLabel(text, h, color) {
+      var c = document.createElement("canvas");
+      var g = c.getContext("2d");
+      var font = "500 44px system-ui, -apple-system, Segoe UI, sans-serif";
+      g.font = font;
+      var w = Math.ceil((g.measureText ? g.measureText(text).width : text.length * 24) || text.length * 24) + 12;
+      c.width = w;
+      c.height = 56;
+      g = c.getContext("2d");
+      g.font = font;
+      g.fillStyle = "#ffffff";
+      g.textAlign = "center";
+      g.textBaseline = "middle";
+      g.fillText(text, w / 2, 30);
+      var t = new T.CanvasTexture(c);
+      t.anisotropy = 8;
+      if (T.SRGBColorSpace) t.colorSpace = T.SRGBColorSpace;
+      t.needsUpdate = true;
+      var mat = new T.MeshBasicMaterial({ map: t, color: color, transparent: true, depthWrite: false, side: T.DoubleSide });
+      var q = new T.Mesh(new T.PlaneGeometry(h * w / 56, h), mat);
+      q.rotation.x = -Math.PI / 2;
+      q.name = "fs-stage-label " + text;
+      q.userData.width = h * w / 56;
+      return q;
+    }
+
+    // The grid on y = 0: minor, major and centre lines in three strengths of
+    // the background's contrast colour, and the major lines' numbers lying on
+    // it beside the two centre lines.
+    function buildGrid(root, m, bg) {
+      var s = m.step, minor = m.minor, half = m.half;
+      var lum = 0.2126 * bg.r + 0.7152 * bg.g + 0.0722 * bg.b;
+      var ink = lum > 0.18 ? new T.Color(0, 0, 0) : new T.Color(1, 1, 1);
+      function tone(a) { return bg.clone().lerp(ink, a); }
+      var minorPts = [], majorPts = [], centrePts = [];
+      var n = Math.round(half / minor);
+      var per = Math.round(s / minor);
+      for (var i = -n; i <= n; i++) {
+        var v = i * minor;
+        var arr = i === 0 ? centrePts : i % per === 0 ? majorPts : minorPts;
+        arr.push(v, 0, -half, v, 0, half);
+        arr.push(-half, 0, v, half, 0, v);
+      }
+      root.add(lineSet(minorPts, tone(0.12)));
+      root.add(lineSet(majorPts, tone(0.3)));
+      root.add(lineSet(centrePts, tone(0.55)));
+      var h = s * 0.16, gap = h * 0.35, lift = s * 0.002, ink2 = tone(0.62);
+      var steps = Math.round(half / s);
+      var zero = gridLabel("0", h, ink2);
+      zero.position.set(gap + zero.userData.width / 2, lift, gap + h / 2);
+      root.add(zero);
+      for (var k = -steps; k <= steps; k++) {
+        if (k === 0) continue;
+        var val = k * s;
+        var text = k === 1 ? fmtLen(val, s) : fmtNum(val, s);
+        // Along X: just in front of the line, centred on its own grid line.
+        var lx = gridLabel(text, h, ink2);
+        lx.position.set(val, lift, gap + h / 2);
+        root.add(lx);
+        // Along Z: just right of the line, its middle on the grid line.
+        var lz = gridLabel(text, h, ink2);
+        lz.position.set(gap + lz.userData.width / 2, lift, val);
+        root.add(lz);
+      }
+    }
+
+    function svg(tag, attrs, parent) {
+      var e = document.createElementNS(SVGNS, tag);
+      for (var k in attrs) e.setAttribute(k, attrs[k]);
+      if (parent) parent.appendChild(e);
+      return e;
+    }
+
+    // The gizmo: a faint disc, and per axis a line to a lettered dot on +
+    // and a smaller hollow dot on −, stacked by depth each redraw.
+    var GIZMO_C = 38, GIZMO_L = 26;
+    function buildGizmo(parent) {
+      var root = svg("svg", { width: "76", height: "76", viewBox: "0 0 76 76" });
+      root.style.cssText = "position:absolute;left:8px;top:8px;overflow:visible;";
+      svg("circle", { cx: GIZMO_C, cy: GIZMO_C, r: "35", fill: "rgba(128,128,128,0.16)" }, root);
+      var parts = [];
+      for (var i = 0; i < 3; i++) {
+        var pos = svg("g", {}, root);
+        var line = svg("line", { x1: GIZMO_C, y1: GIZMO_C, stroke: AXIS_CSS[i], "stroke-width": "2", "stroke-linecap": "round" }, pos);
+        var dot = svg("circle", { r: "8", fill: AXIS_CSS[i] }, pos);
+        var letter = svg("text", { "text-anchor": "middle", "dominant-baseline": "central", fill: "#ffffff", "font-size": "10", "font-weight": "700", "font-family": "system-ui, sans-serif" }, pos);
+        letter.textContent = AXIS_NAMES[i];
+        var neg = svg("g", {}, root);
+        var ndot = svg("circle", { r: "5", fill: AXIS_CSS[i], "fill-opacity": "0.25", stroke: AXIS_CSS[i], "stroke-width": "1.2" }, neg);
+        parts.push({ g: pos, line: line, dot: dot, letter: letter, depth: 0 });
+        parts.push({ g: neg, dot: ndot, depth: 0 });
+      }
+      parent.appendChild(root);
+      return { root: root, parts: parts };
+    }
+
+    var gq = new T.Quaternion(), cq = new T.Quaternion(), gv = new T.Vector3();
+    function drawGizmo(gz, objQ, camQInv) {
+      for (var i = 0; i < 3; i++) {
+        gv.set(i === 0 ? 1 : 0, i === 1 ? 1 : 0, i === 2 ? 1 : 0).applyQuaternion(objQ).applyQuaternion(camQInv);
+        for (var sgn = 0; sgn < 2; sgn++) {
+          var p = gz.parts[2 * i + sgn];
+          var f = sgn === 0 ? 1 : -1;
+          var x = GIZMO_C + gv.x * GIZMO_L * f, y = GIZMO_C - gv.y * GIZMO_L * f;
+          p.depth = gv.z * f;
+          p.dot.setAttribute("cx", x.toFixed(1));
+          p.dot.setAttribute("cy", y.toFixed(1));
+          if (p.line) {
+            p.line.setAttribute("x2", x.toFixed(1));
+            p.line.setAttribute("y2", y.toFixed(1));
+            p.letter.setAttribute("x", x.toFixed(1));
+            p.letter.setAttribute("y", y.toFixed(1));
+          }
+        }
+      }
+      // Farthest first, so a dot pointing at the camera covers the others.
+      var order = gz.parts.slice().sort(function (a, b) { return a.depth - b.depth; });
+      for (var j = 0; j < order.length; j++) gz.root.appendChild(order[j].g);
+    }
+
+    AFRAME.registerComponent("fs-stage", {
+      schema: { mode: { default: "none" } },
+      init: function () {
+        this.world = new T.Group();
+        this.world.name = "fs-stage";
+        this.el.object3D.add(this.world);
+        this.sig = null;
+        this.bgKey = null;
+        this.m = null;
+        this.version = 0;
+        this.drawn = -1;
+        this.viewKey = new Float64Array(32);
+        this.overlay = document.createElement("div");
+        this.overlay.setAttribute("aria-hidden", "true");
+        this.overlay.style.cssText = "position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;overflow:hidden;z-index:5;display:none;";
+        this.readout = document.createElement("div");
+        this.readout.style.cssText = "position:absolute;top:8px;left:50%;transform:translateX(-50%);padding:1px 6px;background:rgba(0,0,0,0.38);color:rgba(255,255,255,0.92);font:10px/1.5 system-ui,sans-serif;white-space:nowrap;";
+        this.overlay.appendChild(this.readout);
+        this.gizmo = buildGizmo(this.overlay);
+        document.body.appendChild(this.overlay);
+        this.words = words;
+      },
+      update: function () {
+        if (!MODES[this.data.mode]) this.data.mode = "none";
+        this.sig = null;
+        var ent = this.entity();
+        if (ent && ent.setAttribute) ent.setAttribute("rotation", shownTilt(restTilt(ent), this.data.mode));
+      },
+      setWords: function (w) {
+        this.words = w;
+        this.sig = null;
+      },
+      remove: function () {
+        disposeTree(this.world);
+        if (this.world.parent) this.world.parent.remove(this.world);
+        if (this.overlay.parentNode) this.overlay.parentNode.removeChild(this.overlay);
+      },
+      entity: function () {
+        var e = this.entityEl;
+        if (!e || !e.isConnected) e = this.entityEl = document.getElementById("preview-entity");
+        return e && e.object3D ? e : null;
+      },
+      tick: function () {
+        var mode = this.data.mode;
+        var on = mode === "room" || mode === "grid";
+        this.world.visible = on;
+        this.overlay.style.display = on ? "" : "none";
+        if (!on) return;
+        var ent = this.entity();
+        if (!ent) return;
+        var bgAttr = this.el.getAttribute("background");
+        var bgStr = bgAttr && bgAttr.color ? String(bgAttr.color) : "#808080";
+        var sig = shapeSig(ent);
+        var bgKey = mode + "|" + bgStr;
+        if (sig === this.sig && bgKey === this.bgKey) return;
+        this.sig = sig;
+        this.bgKey = bgKey;
+        this.rebuild(ent, mode, bgStr);
+      },
+      rebuild: function (ent, mode, bgStr) {
+        var k = window.__fsFrame > 0 && isFinite(window.__fsFrame) ? window.__fsFrame : 1;
+        var shape = measure(ent.object3D, k);
+        var r = shape.r > 1e-6 && isFinite(shape.r) ? shape.r : 0.8 * k;
+        var step = nice(r / 2);
+        var m = {
+          step: step,
+          minor: minorOf(step),
+          half: step * 10,
+          // Past the camera's home (8 frames out) and well past the object.
+          room: step * Math.ceil(Math.max(12 * k, 6 * r) / step),
+          size: shape.size,
+        };
+        this.m = m;
+        disposeTree(this.world);
+        var bg = new T.Color();
+        try { bg.set(bgStr); } catch (e) { bg.set(0x808080); }
+        if (mode === "room") buildRoom(this.world, m);
+        else buildGrid(this.world, m, bg);
+        if (mode === "grid") {
+          this.readout.style.display = "";
+          this.readout.textContent = this.words.cell + " " + fmtLen(m.minor, m.step) + (m.size ? " \\u00b7 " + this.words.size + " " + fmtSize(m.size, m.step) : "");
+        } else {
+          this.readout.style.display = "none";
+        }
+        this.version++;
+      },
+      tock: function () {
+        if (!this.m || !this.world.visible) return;
+        var cam = this.el.camera;
+        var ent = this.entity();
+        if (!cam || !ent) return;
+        // Redrawn only when the view or the object turned: a time-driven
+        // shader renders every frame with both still.
+        ent.object3D.updateWorldMatrix(true, false);
+        var key = this.viewKey, same = this.drawn === this.version;
+        var ce = cam.matrixWorld.elements, oe = ent.object3D.matrixWorld.elements;
+        for (var i = 0; i < 16; i++) {
+          if (key[i] !== ce[i]) { same = false; key[i] = ce[i]; }
+          if (key[16 + i] !== oe[i]) { same = false; key[16 + i] = oe[i]; }
+        }
+        if (same) return;
+        this.drawn = this.version;
+        ent.object3D.getWorldQuaternion(gq);
+        cam.getWorldQuaternion(cq);
+        drawGizmo(this.gizmo, gq, cq.invert());
+      },
+    });
+
+    // The parent's switch: a mode from the closed list, and the readout's
+    // two words (short strings only, printed as text).
+    window.addEventListener("message", function (e) {
+      if (e.source !== window.parent) return;
+      var msg = e.data;
+      if (!msg || msg.type !== "${STAGE_MESSAGE}" || typeof msg.mode !== "string" || !Object.prototype.hasOwnProperty.call(MODES, msg.mode)) return;
+      var wd = msg.words;
+      if (wd && typeof wd.cell === "string" && typeof wd.size === "string" && wd.cell.length <= 40 && wd.size.length <= 40) {
+        words = { cell: wd.cell, size: wd.size };
+      }
+      var mode = msg.mode;
+      var whenBooted = window.__fsWhenSceneBooted || function (f) { f(); };
+      whenBooted(function () {
+        var scene = document.querySelector("a-scene");
+        if (!scene) return;
+        var comp = scene.components && scene.components["fs-stage"];
+        if (!comp && mode === "none") return;
+        if (comp) comp.setWords(words);
+        if (!comp || comp.data.mode !== mode) scene.setAttribute("fs-stage", "mode", mode);
+      });
+    });
+  })();
+<${''}/script>`;
 
 /**
  * Render on demand, for the SANDBOXED editor preview only (owner decision
@@ -3245,6 +3758,13 @@ export function tslToPreviewHTML(
   // Source-of-truth values live in GEOMETRY_ROTATIONS so the hot-update path
   // (postMessage fs:geometry) sets the same tilt without drifting.
   const rotationAttr = GEOMETRY_ROTATIONS[geometry] ?? '45 45 0';
+  // A drawn backdrop stands the object upright (STAGE_SCRIPT): the entity
+  // shows `0 0 0` and keeps its resting tilt as `data-fs-tilt` for `none` to
+  // restore. Absent (the XR popup, or a shape with no tilt), the resting tilt
+  // is `0 0 0` — so those entity lines are what they always were.
+  const stage: PreviewStage = !xr && isPreviewStage(options.stage) ? options.stage : 'none';
+  const shownTilt = uprightTilt(rotationAttr, stage);
+  const tiltDataAttr = !xr && rotationAttr !== UPRIGHT_TILT ? ` data-fs-tilt="${rotationAttr}"` : '';
 
   // Build the per-geometry entity attribute(s).
   // - Primitives: A-Frame `geometry` component with subdivision baked in.
@@ -3440,6 +3960,20 @@ export function tslToPreviewHTML(
   lines.push(FIT_BOUNDS_SCRIPT);
   lines.push('');
 
+  // The backdrop (STAGE_SCRIPT): sandboxed documents only, registered before
+  // the scene is injected so a document built in a drawn mode can name it on
+  // the <a-scene>. Its two readout words go first — the script reads them at
+  // parse time — with the `<` escape every inlined string here gets.
+  if (!xr) {
+    const words: StageWords = {
+      cell: stageWord(options.stageWords?.cell, DEFAULT_STAGE_WORDS.cell),
+      size: stageWord(options.stageWords?.size, DEFAULT_STAGE_WORDS.size),
+    };
+    lines.push(`<script>window.__fsStageWords = ${JSON.stringify(words).replace(/</g, '\\u003C')};<${''}/script>`);
+    lines.push(STAGE_SCRIPT);
+    lines.push('');
+  }
+
   // The runtime Utah teapot (teapot-mesh). Both scripts stay unconditional, the
   // hot-swap contract; sizes and rationale: docs/dev/preview-and-runtime.md,
   // the teapot bullet.
@@ -3516,7 +4050,10 @@ export function tslToPreviewHTML(
   // never removes — so a document booted on an EMPTY rig ('none', 'env') was
   // lit anyway, while switching to one live was not. Inert for every other
   // rig: the system adds its defaults only when there is no light.
-  sceneLines.push(`<a-scene${rendererAttr} vr-mode-ui="enabled: ${xr ? 'true' : 'false'}"${xr ? ' fs-xr-stats' : ' fs-stats'} loading-screen="enabled: false" light="defaultLightsEnabled: false" background="color: ${bgColor}">`);
+  // A drawn backdrop names its component here; `none` (the default) adds
+  // nothing, so such a document's scene line is what it always was.
+  const stageAttr = stage === 'none' ? '' : ` fs-stage="mode: ${stage}"`;
+  sceneLines.push(`<a-scene${rendererAttr} vr-mode-ui="enabled: ${xr ? 'true' : 'false'}"${xr ? ' fs-xr-stats' : ' fs-stats'}${stageAttr} loading-screen="enabled: false" light="defaultLightsEnabled: false" background="color: ${bgColor}">`);
   sceneLines.push('  <a-entity camera="fov: 20; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 8; rotateSpeed: 0.5"></a-entity>');
   // Parent holds the spin (so it tweens cleanly 0→360 on world Y/Z), child
   // holds the static tilt and the shader/geometry. The id stays on the child
@@ -3530,7 +4067,7 @@ export function tslToPreviewHTML(
   // splat draws as a flat grey 4x4 quad (measured in Chrome, both backends).
   // A glTF/OBJ root is a Group, where that assignment is inert.
   const materialAttr = splatKind ? '' : ' material="color: #808080"';
-  sceneLines.push(`    <a-entity id="preview-entity" ${entityAttrs}${materialAttr} position="0 0 0" rotation="${rotationAttr}"></a-entity>`);
+  sceneLines.push(`    <a-entity id="preview-entity" ${entityAttrs}${materialAttr} position="0 0 0" rotation="${shownTilt}"${tiltDataAttr}></a-entity>`);
   sceneLines.push('  </a-entity>');
 
   // Emit the light rig from LIGHT_PRESETS so the initial HTML and the

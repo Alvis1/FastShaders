@@ -12,7 +12,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import fixture from './mxNoiseGpu.fixture.json';
-import { mxNoise, mxNoiseChannel, mxNoiseInput, mxNoiseWidth, type MxNoiseType } from './mxNoise';
+import { mxNoise, mxNoiseChannel, mxNoiseGrid, mxNoiseInput, mxNoiseWidth, type MxNoiseType } from './mxNoise';
 
 const TOL = 2e-4;
 const inputs = fixture.inputs as number[][];
@@ -107,5 +107,93 @@ describe('mxNoise shape', () => {
         expect(() => mxNoise(type, [v, v, v])).not.toThrow();
       }
     }
+  });
+});
+
+describe('mxNoiseGrid: a card\'s whole picture, EXACTLY the point function', () => {
+  const TYPES: MxNoiseType[] = ['perlin', 'perlinVec3', 'fbm', 'fbmVec3', 'cellNoise', 'voronoi', 'voronoiVec2', 'voronoiVec3'];
+
+  /** Every grid value against mxNoiseChannel at the same coordinates — the
+   *  same number, not a close one (a zero's sign aside; NaN matches NaN). */
+  function mismatches(type: MxNoiseType, xs: number[], ys: number[], z: number | null, ch = 0): string[] {
+    const out = new Float64Array(xs.length * ys.length).fill(12345);
+    mxNoiseGrid(type, xs, ys, z, out, ch);
+    const bad: string[] = [];
+    for (let r = 0; r < ys.length; r++) {
+      for (let c = 0; c < xs.length; c++) {
+        const got = out[r * xs.length + c];
+        const want = mxNoiseChannel(type, xs[c], ys[r], z, ch);
+        if (!(got === want || (Number.isNaN(got) && Number.isNaN(want)))) {
+          bad.push(`${type} ch${ch} (${xs[c]}, ${ys[r]}, ${z}): grid ${got} point ${want}`);
+        }
+      }
+    }
+    return bad;
+  }
+
+  /** A card's axes: x across, y running DOWN the rows (the card's y is up). */
+  function cardAxes(n: number, lo: number, hi: number, scale: number): [number[], number[]] {
+    const xs: number[] = [], ys: number[] = [];
+    for (let i = 0; i < n; i++) {
+      xs.push((lo + (hi - lo) * ((i + 0.5) / n)) * scale);
+      ys.push((hi - (hi - lo) * ((i + 0.5) / n)) * scale);
+    }
+    return [xs, ys];
+  }
+
+  it('on card grids at every Scale (high ones step a cell every row), 2-D and 3-D', () => {
+    const bad: string[] = [];
+    for (const scale of [0.5, 1, 3, 5, 12, -2.5]) {
+      const [xs, ys] = cardAxes(40, -1.3, 1.1, scale);
+      for (const type of TYPES) {
+        for (const z of [null, 0.37 * scale, -1.25, 2]) bad.push(...mismatches(type, xs, ys, z));
+      }
+    }
+    expect(bad.slice(0, 5)).toEqual([]);
+  });
+
+  it('on the lattice itself, across cells out of order, and stepping y both ways', () => {
+    const lattice = [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2];
+    const shuffled = [0.2, 3.7, 3.9, -4.1, 8.1, 8.6, 7.9, 0.2, 0.4];
+    const zigzag = [0.5, 1.5, 0.5, -0.5, 0.5, 2.5, 3.5, 2.5, 1.5, 0.5, -3.5];
+    const bad: string[] = [];
+    for (const type of TYPES) {
+      for (const z of [null, 0, 1.5]) {
+        bad.push(...mismatches(type, lattice, lattice, z));
+        bad.push(...mismatches(type, shuffled, zigzag, z));
+        bad.push(...mismatches(type, zigzag, shuffled, z));
+      }
+    }
+    expect(bad.slice(0, 5)).toEqual([]);
+  });
+
+  it('every other channel too (the Voronoi F2/F3 reads go point by point)', () => {
+    const [xs, ys] = cardAxes(16, -1, 1, 4);
+    const bad: string[] = [];
+    for (const [type, chs] of [['perlinVec3', [1, 2]], ['fbmVec3', [1, 2]], ['voronoiVec2', [1]], ['voronoiVec3', [1, 2]]] as const) {
+      for (const ch of chs) for (const z of [null, 0.6]) bad.push(...mismatches(type, xs, ys, z, ch));
+    }
+    expect(bad.slice(0, 5)).toEqual([]);
+  });
+
+  it('on junk and wrapping coordinates, without throwing', () => {
+    const junk = [Number.NaN, Infinity, -Infinity, 1e300, -1e300, 2 ** 31 - 0.5, 2 ** 31 + 0.5, -(2 ** 31) - 0.5, 0.5];
+    const bad: string[] = [];
+    for (const type of TYPES) {
+      for (const z of [null, Number.NaN, 1e300, 0.25]) bad.push(...mismatches(type, junk, junk, z));
+    }
+    expect(bad.slice(0, 5)).toEqual([]);
+  });
+
+  it('keeps nothing between calls: a different size and window right after gives the same values', () => {
+    const [ax, ay] = cardAxes(30, -2, 2, 7);
+    const [bx, by] = cardAxes(7, 0, 1, 1);
+    const bad: string[] = [];
+    for (const type of TYPES) {
+      bad.push(...mismatches(type, ax, ay, 0.4));
+      bad.push(...mismatches(type, bx, by, 0.4));
+      bad.push(...mismatches(type, ax, ay, null));
+    }
+    expect(bad.slice(0, 5)).toEqual([]);
   });
 });

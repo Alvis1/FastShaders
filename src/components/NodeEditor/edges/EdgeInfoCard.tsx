@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useStore as useReactFlowStore, type ReactFlowState } from '@xyflow/react';
 import { useAppStore } from '@/store/useAppStore';
+import { t } from '@/i18n';
 import { COUNT_CARD_COLORS, COUNT_LABELS } from '@/utils/colorUtils';
 import { appTime } from '@/utils/appClock';
 import { useFrameLoop } from '@/hooks/useFrameLoop';
@@ -113,6 +114,8 @@ export function EdgeChipValues({ count, values }: { count: number; values: reado
 }
 
 interface EdgeInfoCardProps {
+  /** The wire this chip belongs to — what its ✕ deletes. */
+  edgeId: string;
   sourceId: string;
   /** Socket the edge leaves — a multi-output source (HSL h/s/l) must report
    *  the channel THIS wire carries, not the node's whole vector. */
@@ -124,6 +127,7 @@ interface EdgeInfoCardProps {
 }
 
 export function EdgeInfoCard({
+  edgeId,
   sourceId,
   sourceHandle,
   targetId,
@@ -132,6 +136,7 @@ export function EdgeInfoCard({
   const anchor = useReactFlowStore((s) => anchorFor(segs, s));
   const nodes = useAppStore((s) => s.nodes);
   const edges = useAppStore((s) => s.edges);
+  const language = useAppStore((s) => s.language);
   const sourceNode = nodes.find((n) => n.id === sourceId);
   const targetNode = nodes.find((n) => n.id === targetId);
 
@@ -195,17 +200,36 @@ export function EdgeInfoCard({
   const [labelX, labelY] = anchor.split(',');
 
   const { count, values } = edgeChipChannels(range, getEdgeOutputShape({ source: sourceId, sourceHandle }, nodes, edges));
+  // The ✕ deletes through the store's ONE single-wire path (removeEdge: one
+  // undo entry, the study's `edge-disconnect`), so it is offered only for a
+  // wire the store holds — never on a surface that draws a graph of its own.
+  const deletable = edges.some((e) => e.id === edgeId);
+  const deleteLabel = t('Delete Connection', language);
 
   return (
     <div
       ref={cardRef}
-      className="edge-info-card"
+      className="edge-info-card nodrag nopan"
       style={{
         transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
       }}
       onClick={(e) => e.stopPropagation()}
     >
       <EdgeChipValues count={count} values={values} />
+      {deletable && (
+        <button
+          type="button"
+          className="edge-info-card__delete"
+          onClick={(e) => {
+            e.stopPropagation();
+            useAppStore.getState().removeEdge(edgeId);
+          }}
+          title={deleteLabel}
+          aria-label={deleteLabel}
+        >
+          ✕
+        </button>
+      )}
     </div>
   );
 }

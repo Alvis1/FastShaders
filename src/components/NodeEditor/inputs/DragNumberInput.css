@@ -83,13 +83,16 @@
 }
 
 /* Edit mode: a TEXT input (components/inputs/NumberField.tsx), so there are no
-   native spin buttons to hide — the ◂ ▸ arrows and the arrow keys step it. */
+   native spin buttons to hide — the ◂ ▸ arrows and the arrow keys step it.
+   Its fill is a TOKEN that flips with the theme, like the text on it: a
+   literal white here left the light dark-mode text white on white while
+   typing (a professional participant's report, 2026-11). */
 .drag-num__edit {
   width: 100%;
   height: 100%;
   border: none;
   outline: none;
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--bg-input);
   font-size: var(--font-size-xs);
   font-family: var(--font-mono);
   color: var(--text-primary);
@@ -120,6 +123,12 @@
 
 .drag-num--compact .drag-num__arrow:hover {
   color: rgba(var(--node-ink-rgb), 0.7);
+}
+
+/* The on-node edit box keeps the node's own plate, which flips with the
+   node surface in dark mode (never the chrome input fill). */
+.drag-num--compact .drag-num__edit {
+  background: var(--node-plate);
 }
 
 .drag-num--compact .drag-num__value,
@@ -159,9 +168,9 @@
 }
 
 /* ===== Dark theme — CHROME variant only =====
-   The base selectors below assume a light input (black washes, white edit fill).
-   Scoping with :not(.drag-num--compact) flips only the menu/chrome inputs and
-   leaves the on-node compact variant untouched, so node value boxes stay light. */
+   The base selectors above assume a light input (black washes).
+   Scoping with :not(.drag-num--compact) flips only the menu/chrome inputs; the
+   on-node compact variant is drawn in the node tokens, which flip on their own. */
 :root[data-theme="dark"] .drag-num:not(.drag-num--compact) .drag-num__arrow:hover {
   background: rgba(255, 255, 255, 0.08);
 }
@@ -174,6 +183,3 @@
   background: rgba(255, 255, 255, 0.05);
 }
 
-:root[data-theme="dark"] .drag-num:not(.drag-num--compact) .drag-num__edit {
-  background: var(--bg-input);
-}

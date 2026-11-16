@@ -60,6 +60,8 @@ interface BootState {
   teapot: boolean;
   /** Act as the top-level XR popup (window.parent === window). */
   topLevel?: boolean;
+  /** STAGE_SCRIPT's `window.__fsShownTilt`, as a drawn backdrop answers it. */
+  shownTilt?: (tilt: string) => string;
 }
 
 /**
@@ -125,6 +127,7 @@ function makeBridge(html: string, boot: BootState) {
   const parent = boot.topLevel ? win : { postMessage: (m: Record<string, unknown>) => { posted.push(m); } };
   Object.assign(win, {
     parent,
+    __fsShownTilt: boot.shownTilt,
     postMessage: (m: Record<string, unknown>) => { posted.push(m); },
     addEventListener: (type: string, fn: Listener) => { if (type === 'message') messageListeners.push(fn); },
   });
@@ -341,5 +344,22 @@ describe('preview hot-update keys: the baked state mirrors the parent’s mount-
     b.send(playingMsg('sphere', true, null));
     expect(b.entityCalls.length).toBeGreaterThan(0);
     expect(b.spinCalls.length).toBeGreaterThan(0);
+  });
+});
+
+describe('preview geometry hot-update: the resting tilt and the backdrop', () => {
+  const rotationWrites = (b: ReturnType<typeof makeBridge>) =>
+    b.entityCalls.filter((c) => c[0] === 'set' && (c[1] === 'rotation' || c[1] === 'data-fs-tilt')).map((c) => [c[1], c[2]]);
+
+  it('with no backdrop a new shape shows its resting tilt, and keeps it on the entity', () => {
+    const b = makeBridge(sphereDoc(), { teapot: false });
+    b.send(primitiveMsg('cube', 64));
+    expect(rotationWrites(b)).toEqual([['data-fs-tilt', '45 45 0'], ['rotation', '45 45 0']]);
+  });
+
+  it('under a drawn backdrop it stands upright, its resting tilt kept for `none`', () => {
+    const b = makeBridge(sphereDoc(), { teapot: false, shownTilt: () => '0 0 0' });
+    b.send(teapotMsg(64));
+    expect(rotationWrites(b)).toEqual([['data-fs-tilt', GEOMETRY_ROTATIONS.teapot], ['rotation', '0 0 0']]);
   });
 });

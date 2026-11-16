@@ -97,6 +97,7 @@ import {
 } from './outputFocus';
 import { pickLivePreviewWire } from '@/components/Layout/previewLinkHit';
 import { selectAllChanges } from './selectAll';
+import { constantKeyType } from './constantKeys';
 import {
   readStoredViewport, writeStoredViewport, VIEWPORT_MIN_ZOOM, VIEWPORT_MAX_ZOOM,
   type StoredViewport,
@@ -311,6 +312,16 @@ function nodeAbsolutePos(node: AppNode, allNodes: AppNode[]): { x: number; y: nu
 }
 
 type GetInternalNode = (id: string) => InternalNode | undefined;
+
+/** NodeEditor's ONE placement path (`placeTilePayload`), as a ref can hold it:
+ *  `fromKey` marks a 1/2/3+click add, which logs no palette drop. */
+type PlaceTilePayload = (
+  payload: TilePayload,
+  clientX: number,
+  clientY: number,
+  activate?: boolean,
+  fromKey?: boolean,
+) => void;
 
 /**
  * The edge anchor React Flow actually draws from/to for one handle, in
@@ -1140,9 +1151,17 @@ export function NodeEditor() {
     };
   }, []);
   /**
+   * The node type a held 1 / 2 / 3 drops on the next empty-canvas click
+   * (CONSTANT_KEY_TYPES), or null; set and cleared by the bare canvas keys.
+   * `placeTileRef` reaches the placement path, declared further down.
+   */
+  const heldConstRef = useRef<string | null>(null);
+  const placeTileRef = useRef<PlaceTilePayload | null>(null);
+  /**
    * A click on the empty canvas. Closes the context menu and the socket-label
    * peek — and, since the per-material Output split, glides to an Output when
-   * the press landed on that node's decorative preview WIRE.
+   * the press landed on that node's decorative preview WIRE. With 1, 2 or 3
+   * held it drops that constant at the click instead.
    *
    * React Flow's own `onPaneClick` rather than a listener of our own, because
    * it is the only signal that already knows all three things a hand-rolled one
@@ -1161,6 +1180,15 @@ export function NodeEditor() {
     closeContextMenu();
     setPeekNodeId(null);
     if ((event.button ?? 0) !== 0) return;
+    // 1 / 2 / 3 held: drop a Float / Vec2 / Vec3 exactly here (Unreal's
+    // constants; the key is tracked by the bare canvas keys below). Through
+    // the ONE placement path as a drop at this point, so it is never
+    // scattered — and logged as a plain add, not a palette drop.
+    const constType = heldConstRef.current;
+    if (constType) {
+      placeTileRef.current?.({ kind: 'node', nodeType: constType }, event.clientX, event.clientY, false, true);
+      return;
+    }
     // The wires' live endpoints, published per frame by PreviewLink — the same
     // numbers its hover test uses, so what lit up is what answers the click.
     const hit = pickLivePreviewWire(event.clientX, event.clientY);
@@ -2481,6 +2509,18 @@ export function NodeEditor() {
     [openContextMenu]
   );
 
+  // Alt/⌥+click on a wire deletes it (Unreal's gesture; a wire's ✕ and X do
+  // the same once it is selected) — through removeEdge, the ONE single-wire
+  // path: one undo entry and the study's `edge-disconnect`.
+  const onEdgeClick = useCallback(
+    (event: React.MouseEvent, edge: Edge) => {
+      if (!event.altKey) return;
+      event.stopPropagation();
+      removeEdge(edge.id);
+    },
+    [removeEdge]
+  );
+
   // Double-click an edge → drop a routing waypoint at the click point
   // (addEdgeWaypoint orders it along the wire). Double-clicking a waypoint dot
   // removes it (handled in EdgeWaypointHandles, which stops propagation).
@@ -2591,7 +2631,7 @@ export function NodeEditor() {
   // Place a node/group/texture at the given screen point. Shared by both the
   // HTML5 onDrop path (desktop) and the touch tileDrag path (iPad/phone).
   const placeTilePayload = useCallback(
-    (payload: TilePayload, clientX: number, clientY: number, activate = false) => {
+    (payload: TilePayload, clientX: number, clientY: number, activate = false, fromKey = false) => {
       // Capture the drag-connect plan the drag preview promised (set by HTML5
       // dragover or the touch move stream). Guards: only PHANTOM plans belong
       // to a tile gesture (a live node-drag preview must not be hijacked),
@@ -2642,7 +2682,9 @@ export function NodeEditor() {
           ...(wired > 0 ? { wired } : {}),
         });
       };
-      if (!isGroupAsset) logAssetDrop(0);
+      // A 1/2/3+click add (`fromKey`) came from no palette: its node-add is
+      // the whole record, like an Add-node menu pick.
+      if (!isGroupAsset && !fromKey) logAssetDrop(0);
 
       // A DRAGGED group lands with its frame's top-right corner on the pointer
       // or finger; a click/Enter add keeps the top-left at its scattered
@@ -2786,6 +2828,9 @@ export function NodeEditor() {
       revealLibraryCorner,
     ],
   );
+  useEffect(() => {
+    placeTileRef.current = placeTilePayload;
+  }, [placeTilePayload]);
 
   // Parse a dropped CSV on the host and place a Data node at the drop point.
   // Parsing stays here (the sandboxed preview iframe can't read files); the data
@@ -3288,6 +3333,14 @@ export function NodeEditor() {
       // (measured 2026-10-11, Feedback dialog). The accelerators' guard, verbatim.
       if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      // 1 / 2 / 3: held, the next click on empty canvas drops a constant
+      // there (onPaneClick). By the key's PLACE as well as its character, so
+      // a layout that types the digits with Shift arms too.
+      const constType = constantKeyType(e);
+      if (constType) {
+        heldConstRef.current = constType;
+        return;
+      }
       const key = e.key.toLowerCase();
       if (key === 'a' && !e.shiftKey) {
         e.preventDefault();
@@ -3321,8 +3374,21 @@ export function NodeEditor() {
       if (!e.shiftKey || key !== 'a') return;
       openAddMenuAtCentre();
     };
+    // A held constant key is put down on its release (any guard state: a key
+    // released over a dialog is still released) and when the window loses
+    // focus, so it can never stay stuck.
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (heldConstRef.current && constantKeyType(e) === heldConstRef.current) heldConstRef.current = null;
+    };
+    const onBlur = () => { heldConstRef.current = null; };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
   }, [fitView]);
 
   // Touch d3 cannot hear (touchAsMouse.ts): replay its node / selection-box
@@ -3913,6 +3979,7 @@ export function NodeEditor() {
           onPaneContextMenu={onPaneContextMenu}
           onNodeContextMenu={onNodeContextMenu}
           onEdgeContextMenu={onEdgeContextMenu}
+          onEdgeClick={onEdgeClick}
           onEdgeDoubleClick={onEdgeDoubleClick}
           onSelectionContextMenu={onPaneContextMenu}
           onNodeClick={onNodeClick}

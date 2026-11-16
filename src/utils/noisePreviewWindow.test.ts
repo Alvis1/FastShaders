@@ -9,7 +9,7 @@
  * the mesh shows the value — sRGB-encoded, as the preview writes linear light.
  */
 import { describe, it, expect } from 'vitest';
-import { DEFAULT_NOISE_WINDOW, rawNoiseDisplay, renderNoisePreview, type NoiseType, type NoiseWindow } from './noisePreview';
+import { DEFAULT_NOISE_WINDOW, noiseGreyByte, rawNoiseDisplay, renderNoisePreview, type NoiseType, type NoiseWindow } from './noisePreview';
 import { mxNoise } from './mxNoise';
 import { linearToSrgb01 } from './colorUtils';
 
@@ -95,6 +95,31 @@ describe('renderNoisePreview: the window the shader samples', () => {
     expect(() => render('voronoiVec3', { min: [1e300, -1e300, 0], max: [1e301, 1e300, 0] })).not.toThrow();
   });
 
+  it('a big card at a Scale that steps a cell every few rows, either way up, is still exact', () => {
+    // The renderer draws one grid (mxNoiseGrid) and reads each byte off a
+    // table; the 8 px cards above cannot reach the cell-to-cell sharing.
+    const N = 40;
+    const big = { width: N, height: N, data: new Uint8ClampedArray(N * N * 4) } as unknown as ImageData;
+    const win = { min: [-1.1, -0.9, 0.3], max: [1.3, 1.2, 0.3] };
+    for (const scale of [6, -3.5]) {
+      for (const type of TYPES) {
+        const data = renderNoisePreview(type, N, { scale }, win, big).data;
+        let bad = 0;
+        for (let y = 0; y < N; y++) {
+          for (let x = 0; x < N; x++) {
+            const c0 = win.min[0] + (win.max[0] - win.min[0]) * ((x + 0.5) / N);
+            const c1 = win.max[1] - (win.max[1] - win.min[1]) * ((y + 0.5) / N);
+            const v = mxNoise(type, [c0 * scale, c1 * scale, 0.3 * scale])[0];
+            const want = Math.round(linearToSrgb01(rawNoiseDisplay(type, v)) * 255);
+            const i = (y * N + x) * 4;
+            if (data[i] !== want || data[i + 1] !== want || data[i + 2] !== want || data[i + 3] !== 255) bad++;
+          }
+        }
+        expect(bad, `${type} at Scale ${scale}`).toBe(0);
+      }
+    }
+  });
+
   it('a junk Scale reads 1, as the evaluator reads it', () => {
     const one = [...render('cellNoise', DEFAULT_NOISE_WINDOW, 1)];
     expect([...renderNoisePreview('cellNoise', SIZE, { scale: 'x' }, null, buffer()).data]).toEqual(one);
@@ -113,5 +138,42 @@ describe('rawNoiseDisplay: the card shows the value as the mesh shows it', () =>
     expect(rawNoiseDisplay('voronoi', 0.36)).toBe(0.36);
     expect(rawNoiseDisplay('voronoiVec3', 2.7)).toBe(1);
     expect(rawNoiseDisplay('voronoi', -0.1)).toBe(0);
+  });
+});
+
+describe('noiseGreyByte: greyByte without a pow per pixel, to the last bit', () => {
+  const ref = (d: number) => Math.round(linearToSrgb01(d) * 255);
+
+  it('agrees on a dense sweep, at random, and at the ends', () => {
+    const bad: number[] = [];
+    for (let i = 0; i <= 100_000; i++) {
+      const d = i / 100_000;
+      if (noiseGreyByte(d) !== ref(d)) bad.push(d);
+    }
+    let seed = 7;
+    for (let i = 0; i < 100_000; i++) {
+      seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+      const d = seed / 4294967296;
+      if (noiseGreyByte(d) !== ref(d)) bad.push(d);
+    }
+    for (const d of [0, 1, -1, 2, Number.NaN, Infinity, 5e-324, 0.0031308, 0.0031308 * (1 + 2 ** -52), 1 - 2 ** -53]) {
+      if (noiseGreyByte(d) !== ref(d)) bad.push(d);
+    }
+    expect(bad.slice(0, 5)).toEqual([]);
+  });
+
+  it('agrees on both sides of every step, down to neighbouring doubles', () => {
+    const bad: number[] = [];
+    for (let k = 1; k <= 255; k++) {
+      // Where linearToSrgb01(d)·255 reaches k − ½.
+      const c = (k - 0.5) / 255;
+      const edge = c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      for (let j = -16; j <= 16; j++) {
+        for (const d of [edge * (1 + j * 2 ** -52), edge + j * 1e-12]) {
+          if (noiseGreyByte(d) !== ref(d)) bad.push(d);
+        }
+      }
+    }
+    expect(bad.slice(0, 5)).toEqual([]);
   });
 });

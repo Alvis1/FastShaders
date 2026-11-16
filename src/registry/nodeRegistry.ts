@@ -77,10 +77,11 @@ const definitions: NodeDefinition[] = [
     // therefore R⁻¹·p, the local direction COUNTER-rotated. Invisible inside
     // three (its only consumers render at the origin under an identity world
     // matrix) but live here: every preview geometry but `plane` carries a
-    // resting tilt (GEOMETRY_ROTATIONS), so M·v and Mᵀ·v diverge by 38.7°-58.8°
-    // on the default sphere before the turntable even starts. Since the
-    // preview object sits at the world origin, the correct outward direction
-    // there is `normalize(positionWorld)`, not this node. Upstream defect —
+    // resting tilt (GEOMETRY_ROTATIONS; none while a backdrop is drawn), so
+    // M·v and Mᵀ·v diverge by 38.7°-58.8° on the default sphere before the
+    // turntable even starts. Since the preview object sits at the world
+    // origin, the correct outward direction there is
+    // `normalize(positionWorld)`, not this node. Upstream defect —
     // documented, not worked around.
     description:
       'The local position carried into world space by the model matrix, as a unit direction — points from the LOCAL origin out through the surface (sky/equirect-style lookups). Non-uniform scale skews it. Also: view dir, world direction, outward, equirect',

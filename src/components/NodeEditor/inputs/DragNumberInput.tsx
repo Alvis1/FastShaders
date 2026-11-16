@@ -6,7 +6,7 @@ import { fillTemplate } from '@/utils/fillTemplate';
 import { NumberField } from '@/components/inputs/NumberField';
 import { fullscreenElement } from '@/components/inputs/colorPickerModel';
 import { formatFieldNumber, parseFieldNumber } from '@/utils/numberField';
-import { dragOffset, dragStep, dragStepNow, formatDragStep } from './dragNumberStep';
+import { dragOffset, dragRate, dragStepAt, formatDragStep, stepDecimals, type DragRate } from './dragNumberStep';
 import './DragNumberInput.css';
 
 interface DragNumberInputProps {
@@ -40,16 +40,33 @@ function tabFields(root: HTMLElement | null): HTMLElement[] {
   );
 }
 
+/** Ctrl drags coarse on every platform and ⌘ does too, so an Apple keyboard
+ *  is told both; elsewhere ⌘ is the Windows key and goes unmentioned. */
+function coarseKeyLabel(): string {
+  const nav = typeof navigator !== 'undefined' ? navigator : undefined;
+  return nav && /Mac|iPhone|iPad|iPod/.test(nav.platform || nav.userAgent || '') ? 'Ctrl/⌘' : 'Ctrl';
+}
+
 /**
  * The readout above a dragged number: the step it moves by now and, on a
- * plain drag, what Shift would make it. Language read once per text, never
+ * plain drag, what Ctrl and Shift would make it (a whole-number field has no
+ * finer step, so it names Ctrl alone). Language read once per text, never
  * subscribed — a canvas holds many of these fields.
  */
-function stepChipText(now: number, step: number | undefined, coarse: boolean): string {
+function stepChipText(step: number | undefined, rate: DragRate): string {
   const lang = useAppStore.getState().language;
+  const now = dragStepAt(step, rate);
   const n = formatDragStep(now);
-  if (coarse) return fillTemplate(t('Step {n}', lang), { n });
-  return fillTemplate(t('Step {n} · Shift: {shift}', lang), { n, shift: formatDragStep(dragStep(step) * 10) });
+  if (rate !== 'plain') return fillTemplate(t('Step {n}', lang), { n });
+  const coarse = formatDragStep(dragStepAt(step, 'coarse'));
+  const fine = dragStepAt(step, 'fine');
+  if (fine === now) return fillTemplate(t('Step {n} · {key}: {coarse}', lang), { n, key: coarseKeyLabel(), coarse });
+  return fillTemplate(t('Step {n} · {key}: {coarse} · Shift: {fine}', lang), {
+    n,
+    key: coarseKeyLabel(),
+    coarse,
+    fine: formatDragStep(fine),
+  });
 }
 
 interface StepChip {
@@ -57,6 +74,9 @@ interface StepChip {
   x: number;
   y: number;
   text: string;
+  /** Decimals the value is shown with while it drags: enough for the step,
+   *  so a Shift drag's hundredths are seen moving. */
+  decimals: number;
 }
 
 function roundTo(v: number, decimals: number): number {
@@ -88,11 +108,12 @@ export function DragNumberInput({
   // another gesture is riding.
   //
   // `startX`/`startValue` are where the current RATE began (the press, or the
-  // last Shift press/release — dragNumberStep.ts), `pressX` where the press
-  // was (the click-vs-drag threshold), `lastValue` the last value sent.
+  // last Ctrl/⌘/Shift press or release — dragNumberStep.ts), `pressX` where
+  // the press was (the click-vs-drag threshold), `lastValue` the last value
+  // sent.
   const dragRef = useRef({
     startX: 0, startValue: 0, moved: false, isDown: false, bracketed: false,
-    pressX: 0, coarse: false, lastValue: 0,
+    pressX: 0, rate: 'plain' as DragRate, lastValue: 0,
   });
   const inputRef = useRef<HTMLInputElement>(null);
   const valueRef = useRef<HTMLSpanElement>(null);
@@ -197,7 +218,7 @@ export function DragNumberInput({
         isDown: true,
         bracketed: false,
         pressX: e.clientX,
-        coarse: e.shiftKey,
+        rate: dragRate(e),
         lastValue: value,
       };
     },
@@ -213,26 +234,29 @@ export function DragNumberInput({
         d.moved = true;
         setDragging(true);
       }
-      // Whole STEPS, at a constant rate; Shift ×10, then ×100 further out
-      // (dragNumberStep.ts). Shift pressed or released mid-drag starts the new
-      // rate from HERE, so the value never jumps.
-      if (e.shiftKey !== d.coarse) {
-        d.coarse = e.shiftKey;
+      // Whole STEPS, at a constant rate; Ctrl/⌘ ×10, Shift ÷10
+      // (dragNumberStep.ts). A modifier pressed or released mid-drag starts the
+      // new rate from HERE, so the value never jumps.
+      const rate = dragRate(e);
+      if (rate !== d.rate) {
+        d.rate = rate;
         d.startX = e.clientX;
         d.startValue = d.lastValue;
       }
       // The readout: placed over the field once per drag (it does not move
       // while dragged; viewport px, so the canvas zoom never scales the
       // text), its text set only when the step changes.
-      const text = stepChipText(dragStepNow(e.clientX - d.startX, step, d.coarse), step, d.coarse);
+      const stepNow = dragStepAt(step, d.rate);
+      const text = stepChipText(step, d.rate);
+      const shown = stepDecimals(stepNow, 0);
       setStepChip((prev) => {
-        if (prev?.text === text) return prev;
-        if (prev) return { ...prev, text };
+        if (prev?.text === text && prev.decimals === shown) return prev;
+        if (prev) return { ...prev, text, decimals: shown };
         const r = rootRef.current?.getBoundingClientRect();
-        return r ? { x: r.left + r.width / 2, y: r.top, text } : null;
+        return r ? { x: r.left + r.width / 2, y: r.top, text, decimals: shown } : null;
       });
-      const off = dragOffset(e.clientX - d.startX, step, d.coarse);
-      const next = off === 0 ? d.startValue : roundTo(d.startValue + off, Math.max(4, decimals));
+      const off = dragOffset(e.clientX - d.startX, step, d.rate);
+      const next = off === 0 ? d.startValue : roundTo(d.startValue + off, stepDecimals(stepNow, Math.max(4, decimals)));
       if (Object.is(next, d.lastValue)) return;
       if (!d.bracketed) {
         // Snapshot the pre-drag state ONCE, before the first onChange, so the
@@ -290,7 +314,18 @@ export function DragNumberInput({
     onChange(roundTo(value - step, 4));
   }, [value, step, onChange]);
 
-  const displayValue = roundTo(value, decimals);
+  // While a drag runs, at least as many decimals as its step has.
+  const displayValue = roundTo(value, stepChip ? Math.max(decimals, stepChip.decimals) : decimals);
+
+  // Ctrl/⌘ belongs to the drag here, never to the node under it: macOS turns
+  // Ctrl+press into a context menu (NodeEditor opens the Attach list for a
+  // Ctrl/⌘ one), and the click that ends a Ctrl/⌘ drag would reach the
+  // node's own Ctrl/⌘+click — Attach again.
+  const keepModifiedPress = useCallback((e: React.MouseEvent) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
 
   return (
     <span ref={rootRef} className={`drag-num nodrag ${compact ? 'drag-num--compact' : ''} ${className}`}>
@@ -328,6 +363,8 @@ export function DragNumberInput({
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerCancel}
+          onContextMenu={keepModifiedPress}
+          onClick={keepModifiedPress}
         >
           {displayValue}
         </span>

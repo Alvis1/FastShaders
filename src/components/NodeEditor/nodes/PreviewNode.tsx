@@ -14,6 +14,7 @@ import { TypedHandle } from '../handles/TypedHandle';
 import { flatNoiseDisplay, renderFlatNoisePreview, renderNoisePreview, type NoiseType } from '@/utils/noisePreview';
 import './PreviewNode.css';
 import { hasNoiseRangeFlag, isUnsignedNoise } from '@/utils/noiseRange';
+import { valueNum } from '@/utils/valueCoerce';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
 import { NodeTitle } from './NodeTitle';
 import { useHeaderTip } from './headerTip';
@@ -32,9 +33,13 @@ const PREVIEW_SIZE = 96;
  * to renderNoisePreview, which reuses one buffer per card). The card now draws
  * three's own MaterialX noise (utils/mxNoise), costlier per pixel: Perlin
  * 0.4 ms, fBm 1.0–1.6, 3-D Voronoi 0.7–1.2, cell 0.15 (noise field only, with
- * mxNoise's one-cell hash memos; node, 2026-11-16).
- * Four animated fBm/Voronoi cards — an ordinary state once a Time node feeds
- * a noise-driven shader — ate ~1.6 ms of every 16.7 ms frame at 60 Hz.
+ * mxNoise's one-cell hash memos; node, 2026-11-16) — measured in the app, 8
+ * animated cards at Scale 3 held the main thread 22% busy (81% at 4× CPU
+ * throttle, 38 fps), ~93% of their script being the noise field. The card is
+ * now ONE grid per frame (mxNoiseGrid: per-row, per-column and per-cell work
+ * done once, hashes shared between cells, exactly the same values): Perlin
+ * 0.06–0.09 ms, fBm 0.2–0.66, 3-D Voronoi 0.22–0.44, cell 0.04, bytes
+ * included (node, 96 px, Scale 1–5).
  *
  * This card ran its own 30 Hz budget until 2026-10-11, judged the floor below
  * which a translating pattern reads as stepping. The owner traded that for
@@ -315,6 +320,10 @@ export const PreviewNode = memo(function PreviewNode({
     () => {
       // willReadFrequently: see the static effect above.
       const ctx = canvasRef.current?.getContext('2d', { willReadFrequently: true }) ?? null;
+      // What the canvas holds: a tick whose picture would be the same — a Time
+      // at speed 0, a chain that clamps it — draws nothing, and so dirties no
+      // frame. Fresh per loop start, so a restart always draws.
+      let drawn = '';
       return (t) => {
         if (!ctx) return;
         // `t` is the shared app clock (utils/appClock) — a private per-loop
@@ -322,18 +331,28 @@ export const PreviewNode = memo(function PreviewNode({
         // epoch also lets cpuEvaluator's per-time cache buckets be shared
         // across surfaces within a tick.
         const { nodes, edges } = useAppStore.getState();
-        // Time alone into `pos` is one value per frame too: the grey flickers.
-        const imageData = flat
-          ? renderFlatNoisePreview(PREVIEW_SIZE, flatDisplay(nodes, edges, t), noiseBufRef.current)
-          : renderNoisePreview(
-            data.registryType as NoiseType,
-            PREVIEW_SIZE,
-            resolveValues(nodes, edges, t),
-            // The window at THIS t: Position + Time slides it as the mesh's
-            // input slides, at the wire's own speed and direction.
-            noiseWindowAt(id, nodes, edges, t),
-            noiseBufRef.current,
+        let imageData: ImageData;
+        if (flat) {
+          // Time alone into `pos` is one value per frame too: the grey flickers.
+          const display = flatDisplay(nodes, edges, t);
+          const key = `f${display}`;
+          if (key === drawn) return;
+          drawn = key;
+          imageData = renderFlatNoisePreview(PREVIEW_SIZE, display, noiseBufRef.current);
+        } else {
+          const values = resolveValues(nodes, edges, t);
+          // The window at THIS t: Position + Time slides it as the mesh's
+          // input slides, at the wire's own speed and direction.
+          const win = noiseWindowAt(id, nodes, edges, t);
+          // Everything the picture reads: the window and Scale (as
+          // renderNoisePreview reads it — never a coercion that can throw).
+          const key = `${valueNum(values.scale ?? 1)}|${win.min.join(',')}|${win.max.join(',')}`;
+          if (key === drawn) return;
+          drawn = key;
+          imageData = renderNoisePreview(
+            data.registryType as NoiseType, PREVIEW_SIZE, values, win, noiseBufRef.current,
           );
+        }
         // Keep whatever came back: the first call (or one after PREVIEW_SIZE
         // ever changed) allocates, every later one hands the same buffer back.
         noiseBufRef.current = imageData;
