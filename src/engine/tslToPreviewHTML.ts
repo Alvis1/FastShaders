@@ -98,8 +98,9 @@ export const MODEL_FEED_KINDS: Readonly<Record<PreviewMeshKind, 'bytes' | 'text'
 
 /**
  * The normalisation size the `splat-model` component bakes a splat scene to —
- * the same 1.6 `fit-bounds` bakes a mesh to, so SDF cutters and position-driven
- * presets keep their units on a splat (the component normalises the SOURCE
+ * the same 1.6 `fit-bounds` bakes a built-in mesh to (a dropped MESH keeps its
+ * own size, `keepScale`), so SDF cutters and position-driven presets keep
+ * their units on a splat (the component normalises the SOURCE
  * arrays; `fit-bounds` returns early on a GaussianSplat). The number lives in
  * utils/splatFrame.ts, which the Splat Output's UV projection reads too.
  */
@@ -137,7 +138,7 @@ export interface FpvPose {
   pitch: number;
 }
 
-/** How far from the origin the FPV camera may fly (and a stored pose sit). */
+/** How far from the origin the FPV camera may fly (and a stored pose sit), in camera FRAME units (× the shown model's frame inside the stage). */
 export const FPV_MAX_RADIUS = 100;
 const FPV_MAX_PITCH = 1.55;
 
@@ -758,6 +759,23 @@ export const STATS_REPORT_SCRIPT = `<script>
  */
 export const FIT_BOUNDS_SCRIPT = `<script>
   if (window.AFRAME && !AFRAME.components["fit-bounds"]) {
+    // The camera FRAME: how many scene units the shown shape's 1.6 box is.
+    // 1 for every built-in (normalized to 1.6); a dropped model keeps its OWN
+    // scale (keepScale), so fit-bounds sets its longest side / 1.6 here and
+    // the bridge scales the orbit camera, its zoom range, its clipping planes
+    // and the fly-through by it. Every camera value that crosses to the
+    // parent is in frame units, so a stored view frames any model alike.
+    // Clamped (1.6 mm to 160 km) so an absurd file cannot reach the matrices.
+    if (!window.__fsSetFrame) {
+      window.__fsFrame = 1;
+      window.__fsSetFrame = function (k) {
+        k = k > 0 && isFinite(k) ? Math.min(1e5, Math.max(1e-3, k)) : 1;
+        if (k === window.__fsFrame) return;
+        window.__fsFrame = k;
+        try { window.dispatchEvent(new Event("fs-frame")); } catch (e) {}
+      };
+    }
+    function setFrame(k) { if (window.__fsSetFrame) window.__fsSetFrame(k); }
     // three's OBJLoader INVENTS a flat per-face normal for every face written
     // without a vn index, so a bare v/f file — the built-in Stanford bunny —
     // arrived with normals the regen path below took for AUTHORED ones, and
@@ -787,11 +805,15 @@ export const FIT_BOUNDS_SCRIPT = `<script>
     // Merge vertices that share a quantized position. Discards old normals/UVs
     // (they index into the old layout and we recompute both anyway) and
     // returns a freshly indexed BufferGeometry.
-    function mergeByPosition(geom) {
+    // \`weld\` is the quantum's inverse in the geometry's own units: 1e4 for a
+    // mesh in the 1.6 preview box (4 decimal places — tighter than typical
+    // OBJ precision), scaled by the caller for a model kept at its own size so
+    // the weld stays the same fraction of the model.
+    function mergeByPosition(geom, weld) {
       var pos = geom.attributes.position;
       if (!pos) return geom;
       var oldIndex = geom.index;
-      var precision = 1e4; // 4 decimal places — tighter than typical OBJ precision
+      var precision = weld > 0 && isFinite(weld) ? weld : 1e4;
       var lookup = Object.create(null);
       var newPositions = [];
       var remap = new Uint32Array(pos.count);
@@ -1074,13 +1096,19 @@ export const FIT_BOUNDS_SCRIPT = `<script>
       // dropped OBJs — OBJLoader output is non-indexed, see mergeByPosition).
       // regen:false preserves a dropped GLB's authored normals/UVs and only
       // synthesizes UVs when the mesh has none (same split as podest.html).
-      schema: { size: { type: "number", default: 1.6 }, regen: { type: "boolean", default: true } },
+      // keepScale:true (a DROPPED model, owner 2026-11-16) centres the model
+      // and bakes its node transforms but keeps its OWN size, so the shader
+      // reads the units the model was made in; the camera follows instead
+      // (setFrame). The built-ins leave it off and are normalized to size.
+      schema: { size: { type: "number", default: 1.6 }, regen: { type: "boolean", default: true }, keepScale: { type: "boolean", default: false } },
       init: function () { this.el.addEventListener("model-loaded", this.fit.bind(this)); },
+      remove: function () { setFrame(1); },
       fit: function () {
         var root = this.el.getObject3D("mesh");
         if (!root) return;
         var regen = this.data.regen;
         var target = this.data.size;
+        var keep = this.data.keepScale === true;
         root.updateMatrixWorld(true);
 
         // An ANIMATED model must not be baked, for the same reason a rigged one
@@ -1118,7 +1146,7 @@ export const FIT_BOUNDS_SCRIPT = `<script>
           if (node.isSkinnedMesh || node.isInstancedMesh) { skinned = true; return; }
           entries.push({ node: node, m: new THREE.Matrix4().multiplyMatrices(pre, node.matrixWorld) });
         });
-        if (splatSeen) return;
+        if (splatSeen) { setFrame(1); return; }
 
         // A rigged, instanced or ANIMATED model keeps the legacy Object3D
         // normalization: baking would desync a skeleton's bind matrices, would
@@ -1142,16 +1170,19 @@ export const FIT_BOUNDS_SCRIPT = `<script>
           // carrying any of those measures far too small and scales up hard.
           // Framing an animated model slightly small beats blowing it up.
           var wbox = new THREE.Box3().setFromObject(root);
-          if (wbox.isEmpty()) return;
+          if (wbox.isEmpty()) { setFrame(1); return; }
           var wsize = new THREE.Vector3(), wcenter = new THREE.Vector3();
           wbox.getSize(wsize);
           wbox.getCenter(wcenter);
-          var ws = target / (Math.max(wsize.x, wsize.y, wsize.z) || 1);
+          var wlong = Math.max(wsize.x, wsize.y, wsize.z) || 1;
+          // Kept at its own size, only centred: the root's scale is the model's.
+          var ws = keep ? 1 : target / wlong;
           root.position.sub(wcenter.multiplyScalar(ws));
-          root.scale.setScalar(ws);
+          if (!keep) root.scale.setScalar(ws);
+          setFrame(wlong * ws / target);
           return;
         }
-        if (!entries.length) return;
+        if (!entries.length) { setFrame(1); return; }
 
         // Measure the union AABB in the entity's own frame. The old code used
         // \`Box3.setFromObject\`, which is WORLD-axis-aligned and therefore
@@ -1165,11 +1196,15 @@ export const FIT_BOUNDS_SCRIPT = `<script>
           if (!g0.boundingBox) g0.computeBoundingBox();
           if (g0.boundingBox) box.union(g0.boundingBox.clone().applyMatrix4(entries[i].m));
         }
-        if (box.isEmpty()) return;
+        if (box.isEmpty()) { setFrame(1); return; }
         var ext = new THREE.Vector3(), center = new THREE.Vector3();
         box.getSize(ext);
         box.getCenter(center);
-        var s = target / (Math.max(ext.x, ext.y, ext.z) || 1);
+        var longest = Math.max(ext.x, ext.y, ext.z) || 1;
+        // fitScale normalizes to the preview box; a kept model bakes at 1 (only
+        // its centring and node transforms move into the vertex data).
+        var fitScale = target / longest;
+        var s = keep ? 1 : fitScale;
 
         // N maps entity-frame coordinates to the normalized preview box, so
         // baking N·m into the ATTRIBUTES is what makes \`positionGeometry\` read
@@ -1197,9 +1232,11 @@ export const FIT_BOUNDS_SCRIPT = `<script>
             // Weld AFTER the bake so the 1e-4 quantization is a fixed fraction
             // of the preview box rather than of the model's authored units (on
             // a centimetre-scale scan it used to weld the mesh into a blob).
+            // A model kept at its own size welds at the same fraction of
+            // itself as a normalized one (1e4 per preview-box unit).
             var src = g;
             var hadUv = !!src.attributes.uv, hadNormal = !!src.attributes.normal;
-            g = mergeByPosition(src);
+            g = mergeByPosition(src, 1e4 * fitScale / s);
             g.computeVertexNormals();
             var pos = g.attributes.position;
             g.computeBoundingBox();
@@ -1265,6 +1302,7 @@ export const FIT_BOUNDS_SCRIPT = `<script>
           node.scale.set(1, 1, 1);
         });
         root.updateMatrixWorld(true);
+        setFrame(longest * s / target);
       }
     });
   }
@@ -1799,7 +1837,9 @@ const SHADER_HOT_SWAP_SCRIPT = `<script>
  * - Camera persistence: if the parent passed a saved position, apply it
  *   AFTER orbit-controls initializes — and only after, so the controls'
  *   internal `position0` snapshot remains the original `0 0 8` and `reset()`
- *   snaps back to home, not to the saved view.
+ *   snaps back to home, not to the saved view. Every value crossing to or
+ *   from the parent is in camera FRAME units (`applyFrame`: a dropped model
+ *   keeps its own size and the camera scales with it).
  *
  * `__SAVED_CAM__` is replaced with a JSON literal at emit time.
  */
@@ -1876,16 +1916,60 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
       // manipulates the wrapper group (which never moves) — so both restore
       // and polling must go through the camera child.
       var getCam = function() { return camEl && camEl.getObject3D && camEl.getObject3D("camera"); };
+      // The camera FRAME (fit-bounds' setFrame): the frame the camera's scene
+      // position is currently expressed in. A dropped model keeps its own
+      // size, so the view scales with it — position, orbit target, reset
+      // home, zoom range and clipping planes together, i.e. the same framing
+      // at that model's size. Every value that crosses to or from the parent
+      // (fs:camera, fs:fpv-pose and their restores) is in FRAME units, so the
+      // stored view stays valid whatever model is shown next.
+      var frameK = 1;
       var saved = window.__savedCameraPos;
       var savedTarget = window.__savedCameraTarget;
       var cam = getCam();
       if (saved && cam) {
-        cam.position.set(saved.x, saved.y, saved.z);
+        cam.position.set(saved.x * frameK, saved.y * frameK, saved.z * frameK);
         // The pan, restored WITH the position it belongs to: without it the
         // camera stays where the pan left it but turns to face the origin.
-        if (savedTarget && oc.controls.target) oc.controls.target.set(savedTarget.x, savedTarget.y, savedTarget.z);
+        if (savedTarget && oc.controls.target) oc.controls.target.set(savedTarget.x * frameK, savedTarget.y * frameK, savedTarget.z * frameK);
         try { oc.controls.update(); } catch (e) {}
       }
+      function applyFrame() {
+        var k = window.__fsFrame;
+        if (!(k > 0) || !isFinite(k)) k = 1;
+        if (k === frameK) return;
+        var r = k / frameK;
+        frameK = k;
+        var c = oc.controls;
+        var d = oc.data;
+        // On the component's data too: orbit-controls rebuilds its controls
+        // from it on every play().
+        if (d) {
+          if (d.minDistance > 0) d.minDistance *= r;
+          if (d.maxDistance > 0) d.maxDistance *= r;
+        }
+        var cm = getCam();
+        if (cm) {
+          cm.position.multiplyScalar(r);
+          if (cm.near > 0) cm.near *= r;
+          if (cm.far > 0) cm.far *= r;
+          if (typeof cm.updateProjectionMatrix === "function") cm.updateProjectionMatrix();
+        }
+        if (c) {
+          if (c.target) c.target.multiplyScalar(r);
+          if (c.position0) c.position0.multiplyScalar(r);
+          if (c.target0) c.target0.multiplyScalar(r);
+          if (d) { c.minDistance = d.minDistance; c.maxDistance = d.maxDistance; }
+        }
+        // Flying: the flyer keeps its place in the frame (cm.position above),
+        // and the orbit view it returns to scales with the rest.
+        var f = window.__fsFpv && window.__fsFpv.state;
+        if (f && f.orbitPos) f.orbitPos.multiplyScalar(r);
+        if (f && f.orbitTarget) f.orbitTarget.multiplyScalar(r);
+        if (c && !(f && f.on)) { try { c.update(); } catch (e) {} }
+      }
+      applyFrame();
+      window.addEventListener("fs-frame", applyFrame);
       // The RESTORE above is what the XR popup needs from this block; the
       // reporting below has nobody to report to there. In a session three
       // decomposes the XR pose into camera.position every frame
@@ -1909,7 +1993,8 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
       function fpvDirty() { try { window.dispatchEvent(new Event("fs-fpv")); } catch (e) {} }
       function fpvClamp(p) {
         var r = Math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
-        if (r > FPV_MAX_R) p.multiplyScalar(FPV_MAX_R / r);
+        var max = FPV_MAX_R * frameK;
+        if (r > max) p.multiplyScalar(max / r);
       }
       function fpvOrient(cam) {
         fpv.pitch = Math.max(-FPV_PITCH, Math.min(FPV_PITCH, fpv.pitch));
@@ -1924,7 +2009,7 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
       }
       function fpvPose(cam, pose) {
         if (pose) {
-          cam.position.set(pose.x, pose.y, pose.z);
+          cam.position.set(pose.x * frameK, pose.y * frameK, pose.z * frameK);
           fpv.yaw = pose.yaw;
           fpv.pitch = pose.pitch;
         }
@@ -1942,7 +2027,7 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
         var u = (k.KeyE ? 1 : 0) - (k.KeyQ ? 1 : 0);
         var cam = getCam();
         if (cam && dt > 0 && (f || r || u)) {
-          var step = FPV_SPEED * (k.ShiftLeft || k.ShiftRight ? 4 : 1) * dt;
+          var step = FPV_SPEED * frameK * (k.ShiftLeft || k.ShiftRight ? 4 : 1) * dt;
           var cy = Math.cos(fpv.yaw), sy = Math.sin(fpv.yaw);
           var cp = Math.cos(fpv.pitch), sp = Math.sin(fpv.pitch);
           cam.position.x += (-sy * cp * f + cy * r) * step;
@@ -2030,7 +2115,7 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
           e.preventDefault();
           var cam = getCam();
           if (!cam) return;
-          var step = Math.max(-1, Math.min(1, -e.deltaY * 0.002));
+          var step = Math.max(-1, Math.min(1, -e.deltaY * 0.002)) * frameK;
           var cp = Math.cos(fpv.pitch);
           cam.position.x += -Math.sin(fpv.yaw) * cp * step;
           cam.position.y += Math.sin(fpv.pitch) * step;
@@ -2050,7 +2135,7 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
           if (p && (p.x !== lx || p.y !== ly || p.z !== lz || fpv.yaw !== lyaw || fpv.pitch !== lpitch)) {
             lx = p.x; ly = p.y; lz = p.z; lyaw = fpv.yaw; lpitch = fpv.pitch;
             try {
-              window.parent.postMessage({ type: "fs:fpv-pose", x: p.x, y: p.y, z: p.z, yaw: fpv.yaw, pitch: fpv.pitch }, "*");
+              window.parent.postMessage({ type: "fs:fpv-pose", x: p.x / frameK, y: p.y / frameK, z: p.z / frameK, yaw: fpv.yaw, pitch: fpv.pitch }, "*");
             } catch (e) {}
           }
           return;
@@ -2063,8 +2148,8 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
           var tg = oc.controls && oc.controls.target;
           try {
             window.parent.postMessage({
-              type: "fs:camera", x: p.x, y: p.y, z: p.z,
-              tx: tg ? tg.x : 0, ty: tg ? tg.y : 0, tz: tg ? tg.z : 0
+              type: "fs:camera", x: p.x / frameK, y: p.y / frameK, z: p.z / frameK,
+              tx: tg ? tg.x / frameK : 0, ty: tg ? tg.y / frameK : 0, tz: tg ? tg.z / frameK : 0
             }, "*");
           } catch (e) {}
         }
@@ -2762,7 +2847,7 @@ const RENDER_PACER_SCRIPT = `<script>
       }
       dirty();
     });
-    ["shader-applied", "shader-error", "model-loaded", "model-error", "resize", "fs-fpv"].forEach(function (t) {
+    ["shader-applied", "shader-error", "model-loaded", "model-error", "resize", "fs-fpv", "fs-frame"].forEach(function (t) {
       window.addEventListener(t, dirty);
     });
     ["pointerdown", "pointerup", "pointercancel", "wheel", "keydown", "keyup"].forEach(function (t) {
@@ -3166,7 +3251,10 @@ export function tslToPreviewHTML(
   // - OBJ models: A-Frame `obj-model` component pointing at public/models/*,
   //   plus a custom `fit-bounds` component (registered below) that recenters
   //   and rescales the loaded mesh into a unit-ish bounding box so the camera
-  //   framing matches the primitives.
+  //   framing matches the primitives. A DROPPED model (custom, not a splat)
+  //   is only recentred — `keepScale: true` keeps its own size, so the shader
+  //   reads the units it was made in — and the camera scales with it instead
+  //   (the frame, in FIT_BOUNDS_SCRIPT and the bridge).
   let entityAttrs: string;
   if (isTeapot) {
     // The runtime teapot: tessellated in-document by teapot-mesh at the
@@ -3181,7 +3269,10 @@ export function tslToPreviewHTML(
     // regen is ALWAYS explicit — podest.html registers a fit-bounds twin whose
     // schema default is the opposite (false), so relying on either default
     // would flip behavior in a future copy-paste between the two.
-    const fitBoundsAttr = `fit-bounds="size: 1.6; regen: ${!isCustom || customRegen ? 'true' : 'false'}"`;
+    // A splat stays in splat-model's own 1.6 frame (fit-bounds returns early
+    // on it, and the vendored runtime normalises the source arrays itself).
+    const keepScale = isCustom && !splatKind;
+    const fitBoundsAttr = `fit-bounds="size: 1.6; regen: ${!isCustom || customRegen ? 'true' : 'false'}${keepScale ? '; keepScale: true' : ''}"`;
     // Attached to every MODEL geometry, not just the dropped-GLB case: the
     // component reports "no clips" for an OBJ and costs nothing there, and
     // gating it on the file extension would leave a dropped `.gltf` that

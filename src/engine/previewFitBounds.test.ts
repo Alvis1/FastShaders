@@ -12,10 +12,12 @@
  *  - `positionGeometry` is three's RAW position attribute, so normalizing the
  *    Object3D (which is what this used to do) is invisible to the shader. Every
  *    position-driven preset, built-in texture and noise-node default is tuned
- *    for the ±0.8 the pre-normalized built-in OBJs deliver, so a dropped model
- *    must be normalized in its ATTRIBUTES or it feeds the shader its authored
- *    units — a 180-unit statue turned Vertex Wave's `sin(pos.y * 8)` into
- *    hundreds of radians per vertex.
+ *    for the ±0.8 the pre-normalized built-in OBJs deliver, so a model is
+ *    normalized in its ATTRIBUTES or it feeds the shader its authored units —
+ *    a 180-unit statue turned Vertex Wave's `sin(pos.y * 8)` into hundreds of
+ *    radians per vertex. Since 2026-11-16 a DROPPED model opts out
+ *    (`keepScale`, owner: use the model's own scale, move the camera): it is
+ *    centred and baked at scale 1, and the camera frame follows it.
  *  - The measurement must happen in the entity's own frame. The preview nests
  *    the mesh under `#preview-entity` (resting tilt) and `#spin-parent` (a live
  *    360° animation), and a world-axis-aligned box would scale the model by its
@@ -36,7 +38,8 @@ import { FIT_BOUNDS_SCRIPT } from './tslToPreviewHTML';
 import { bareObjArrays } from './builtinModelObj';
 
 interface FitComponent {
-  fit: (this: { el: { getObject3D: () => THREE.Object3D | null }; data: { size: number; regen: boolean } }) => void;
+  fit: (this: { el: { getObject3D: () => THREE.Object3D | null }; data: { size: number; regen: boolean; keepScale?: boolean } }) => void;
+  remove?: () => void;
 }
 
 /**
@@ -44,7 +47,7 @@ interface FitComponent {
  * registered. `win` hands the script a `window` parameter (the editor's copy
  * takes one, podest's does not); `aframeThree` becomes AFRAME.THREE.
  */
-function evalFit(body: string, win: boolean, aframeThree?: object): FitComponent {
+function evalFit(body: string, win: boolean | Record<string, unknown>, aframeThree?: object): FitComponent {
   const registry: Record<string, FitComponent> = {};
   const AFRAME = {
     ...(aframeThree ? { THREE: aframeThree } : {}),
@@ -52,7 +55,7 @@ function evalFit(body: string, win: boolean, aframeThree?: object): FitComponent
     registerComponent: (name: string, def: FitComponent) => { registry[name] = def; },
   };
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
-  if (win) new Function('THREE', 'window', 'AFRAME', body)(THREE, { AFRAME }, AFRAME);
+  if (win) new Function('THREE', 'window', 'AFRAME', body)(THREE, Object.assign(win === true ? {} : win, { AFRAME }), AFRAME);
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
   else new Function('THREE', 'AFRAME', body)(THREE, AFRAME);
   return registry['fit-bounds'];
@@ -898,6 +901,98 @@ describe('fit-bounds normalization', () => {
  * animate — skipping the bake with no mixer would have cost podest the
  * attribute normalization and bought nothing.
  */
+/**
+ * A DROPPED model keeps its own size (owner, 2026-11-16): `keepScale: true`
+ * still centres it and still bakes its node transforms into the vertex data,
+ * but at scale 1, so `positionGeometry` reads the units the model was made in.
+ * The camera follows instead: fit-bounds sets the FRAME (the model's longest
+ * side / 1.6, the size a built-in is normalized to) on `window.__fsFrame`, and
+ * the bridge scales the orbit camera by it (previewCameraFrame.test.ts).
+ */
+describe('fit-bounds keepScale: a dropped model keeps its own size', () => {
+  function fitKeep(root: THREE.Object3D, { regen = false, keepScale = true } = {}): { frame: unknown; comp: FitComponent } {
+    const win: Record<string, unknown> = {};
+    const comp = evalFit(editorFitBody(), win);
+    comp.fit.call({ el: { getObject3D: () => root }, data: { size: 1.6, regen, keepScale } });
+    return { frame: win.__fsFrame, comp };
+  }
+
+  it('keeps a 180-unit statue 180 units, only centred, and frames the camera 112.5x', () => {
+    const root = new THREE.Object3D();
+    root.add(makeBoxMesh(90, [500, 90, -200]));
+    const { frame } = fitKeep(root);
+    const attrs = attributeBounds(root);
+    expect(longestAxis(attrs)).toBeCloseTo(180, 4);
+    const centre = new THREE.Vector3();
+    attrs.getCenter(centre);
+    expect(centre.length()).toBeLessThan(1e-4);
+    expect(frame).toBeCloseTo(180 / 1.6, 6);
+  });
+
+  it('still bakes nested node transforms (a 0.01 node scale is part of the model\'s size)', () => {
+    const root = new THREE.Object3D();
+    const group = new THREE.Object3D();
+    group.scale.setScalar(0.01);
+    group.position.set(3, 0, 0);
+    root.add(group);
+    group.add(makeBoxMesh(100));
+    const { frame } = fitKeep(root);
+    expect(longestAxis(attributeBounds(root))).toBeCloseTo(2, 5);
+    expect(frame).toBeCloseTo(2 / 1.6, 6);
+    // The transforms now live in the vertex data, as on the normalizing path.
+    expect(group.scale.x).toBe(1);
+    expect(group.position.length()).toBe(0);
+  });
+
+  it('welds at the same FRACTION of the model at any size (a millimetre scan is not one blob)', () => {
+    const count = (scale: number, keepScale: boolean): number => {
+      const g = bare(new THREE.SphereGeometry(1, 48, 24)).toNonIndexed();
+      g.scale(scale, scale, scale);
+      const root = new THREE.Object3D();
+      root.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial()));
+      fitKeep(root, { regen: true, keepScale });
+      return (root.children[0] as THREE.Mesh).geometry.attributes.position.count;
+    };
+    const normalized = count(1, false);
+    expect(count(0.001, true)).toBe(normalized);
+    expect(count(1000, true)).toBe(normalized);
+  });
+
+  it('centres an ANIMATED model on its Object3D without touching its scale', () => {
+    const root = new THREE.Object3D();
+    root.add(makeBoxMesh(10, [40, 0, 0]));
+    (root as THREE.Object3D & { animations: THREE.AnimationClip[] }).animations = [
+      new THREE.AnimationClip('Walk', 1, [new THREE.VectorKeyframeTrack('.position', [0, 1], [0, 0, 0, 5, 0, 0])]),
+    ];
+    const { frame } = fitKeep(root);
+    expect(root.scale.x).toBe(1);
+    expect(root.position.x).toBeCloseTo(-40, 6);
+    expect(longestAxis(attributeBounds(root))).toBeCloseTo(20, 5);
+    expect(frame).toBeCloseTo(20 / 1.6, 6);
+  });
+
+  it('a normalized model, a splat and an empty subtree all frame at 1', () => {
+    const huge = new THREE.Object3D();
+    huge.add(makeBoxMesh(90));
+    expect(fitKeep(huge, { keepScale: false }).frame).toBe(1);
+    const splat = new THREE.Object3D();
+    splat.add(makeSplatStub());
+    expect(fitKeep(splat).frame).toBe(1);
+    expect(fitKeep(new THREE.Object3D()).frame).toBe(1);
+  });
+
+  it('clamps an absurd model\'s frame, and removing the component resets it to 1', () => {
+    const root = new THREE.Object3D();
+    root.add(makeBoxMesh(1e9));
+    const win: Record<string, unknown> = {};
+    const comp = evalFit(editorFitBody(), win);
+    comp.fit.call({ el: { getObject3D: () => root }, data: { size: 1.6, regen: false, keepScale: true } });
+    expect(win.__fsFrame).toBe(1e5);
+    comp.remove!();
+    expect(win.__fsFrame).toBe(1);
+  });
+});
+
 describe('podest fit-bounds twin', () => {
   function loadPodestComponent(): FitComponent {
     // The payloads quote with " so the single-quoted host string needs no
@@ -1095,7 +1190,7 @@ describe('podest fit-bounds twin', () => {
     expect(line).toContain('root.traverse(function(node){if(node.isGaussianSplat){splatSeen=true;return;}if(!node.isMesh||!node.geometry)return;');
     expect(line).toContain('});if(splatSeen)return;if(skinned||animated){');
     expect(FIT_BOUNDS_SCRIPT).toContain('if (node.isGaussianSplat) { splatSeen = true; return; }');
-    expect(FIT_BOUNDS_SCRIPT).toContain('if (splatSeen) return;');
+    expect(FIT_BOUNDS_SCRIPT).toContain('if (splatSeen) { setFrame(1); return; }');
   });
 });
 

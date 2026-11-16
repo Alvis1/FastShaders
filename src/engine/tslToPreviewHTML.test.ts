@@ -88,7 +88,8 @@ describe('tslToPreviewHTML — sandboxed preview vs XR popup emission', () => {
       geometry: 'custom',
       customModel: { kind: 'glb', id: 7 },
     });
-    expect(html).toContain(esc('fit-bounds="size: 1.6; regen: false"'));
+    // A dropped model keeps its OWN size (the camera scales instead).
+    expect(html).toContain(esc('fit-bounds="size: 1.6; regen: false; keepScale: true"'));
     expect(html).toContain('var __fsExpectedObj = "custom:7";');
     expect(html).toContain('entity.setAttribute("gltf-model"');
     // No network model URL — bytes arrive via the postMessage feed only.
@@ -102,7 +103,7 @@ describe('tslToPreviewHTML — sandboxed preview vs XR popup emission', () => {
       geometry: 'custom',
       customModel: { kind: 'obj', id: 3 },
     });
-    expect(html).toContain(esc('fit-bounds="size: 1.6; regen: true"'));
+    expect(html).toContain(esc('fit-bounds="size: 1.6; regen: true; keepScale: true"'));
     expect(html).toContain('var __fsExpectedObj = "custom:3";');
   });
 
@@ -193,8 +194,12 @@ describe('tslToPreviewHTML — sandboxed preview vs XR popup emission', () => {
     expect(html).toContain('if (window.parent !== window) window.addEventListener("message"');
     // The survivors.
     expect(html).toContain('function scheduleResizeKicks()');
-    expect(html).toContain('cam.position.set(saved.x, saved.y, saved.z);');
+    expect(html).toContain('cam.position.set(saved.x * frameK, saved.y * frameK, saved.z * frameK);');
     expect(html).toContain('window.__savedCameraPos = {"x":1,"y":2,"z":3};');
+    // The camera frame (a dropped model at its own size) is applied in the
+    // popup too: it sits BEFORE the top-level return.
+    const body = html.slice(html.indexOf('function applyFrame()'));
+    expect(body.indexOf('window.addEventListener("fs-frame", applyFrame);')).toBeLessThan(body.indexOf('if (window.parent === window) return;'));
   });
 
   it('sandbox: the same guards are present and are all satisfied there', () => {
