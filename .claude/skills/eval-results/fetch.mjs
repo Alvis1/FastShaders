@@ -11,8 +11,11 @@
  *
  * "Already have it" = a file of the same name (ignoring a browser's " (1)" suffix) anywhere
  * under private/evalTests/, or a name listed in private/evalTests/ignored.txt (the owner's
- * own test runs). New packages land in private/evalTests/new/<YYYY-MM-DD>/ for the owner
- * to file into a group folder.
+ * own test runs). A P-coded package (`fastshaders-eval-p<N>-...zip`, the evalpro arm) always
+ * lands in private/evalTests/evalp/ — one folder, never dated, never split by date. Every
+ * other package lands directly in private/evalTests/<YYYYMM>/<YYYY-MM-DD>/ — never a staging
+ * "new/" folder — matching the existing dated folders; the owner moves one of those into a
+ * group folder (e.g. 202610/JRMS/4gr) only once they've named the group.
  *
  * Packages are participant-made, i.e. untrusted: they are read with `unzip -p` (nothing is
  * extracted or executed) and only parsed as JSON.
@@ -108,7 +111,9 @@ function summarise(zip) {
 }
 
 const day = new Date().toISOString().slice(0, 10);
-const dest = join(ARCHIVE, 'new', day);
+const datedDest = join(ARCHIVE, day.slice(0, 7).replace('-', ''), day);
+const EVALP_DEST = join(ARCHIVE, 'evalp'); // every P-coded (evalpro) package lands here, always — never a dated folder
+const destFor = (name) => (/^fastshaders-eval-p\d+-/i.test(name) ? EVALP_DEST : datedDest);
 let fresh = 0;
 let failed = 0;
 
@@ -128,6 +133,7 @@ for (const b of inboxes) {
       console.log(`- ${n}`);
       continue;
     }
+    const dest = destFor(n);
     mkdirSync(dest, { recursive: true });
     const tmp = join(dest, n + '.part');
     const out = join(dest, n);
@@ -147,5 +153,5 @@ for (const b of inboxes) {
   }
 }
 
-if (!LIST_ONLY) console.log(`\n${fresh} downloaded${fresh ? ` to ${dest}` : ''}${failed ? `, ${failed} FAILED` : ''}.`);
+if (!LIST_ONLY) console.log(`\n${fresh} downloaded${failed ? `, ${failed} FAILED` : ''}.`);
 process.exit(failed ? 1 : 0);
