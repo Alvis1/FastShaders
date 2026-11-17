@@ -30,7 +30,7 @@ import {
   isTeapotGeometry,
   tslToPreviewHTML,
 } from '@/engine/tslToPreviewHTML';
-import type { CameraPosition, FpvPose, GeometryType, LightingMode, PreviewOptions, PreviewStage, StageWords } from '@/engine/tslToPreviewHTML';
+import type { CameraPosition, FpvPose, GeometryType, LightingMode, PreviewOptions, PreviewStage } from '@/engine/tslToPreviewHTML';
 import {
   SUBDIVISION_DEFAULT,
   SUBDIVISION_STEPS,
@@ -227,11 +227,6 @@ function isValidCssColor(v: string): boolean {
  *  file, and removed by the study clean slate. */
 function validateStage(v: string | null): PreviewStage {
   return isPreviewStage(v) ? v : 'none';
-}
-
-/** The readout's two words in the UI language (STAGE_SCRIPT prints them). */
-function stageWords(language: Parameters<typeof t>[1]): StageWords {
-  return { cell: t('Grid square', language), size: t('Size', language) };
 }
 
 /** What the background button says: what is on, and what a click brings. */
@@ -2414,7 +2409,7 @@ export function ShaderPreview() {
    *   · effectiveSubdivision                       → fs:geometry
    *   · marchWindow (the a-sphere radius)          → fs:geometry
    *   · bgColor                                    → fs:bg-color
-   *   · stage (+ the readout's words, by language)  → fs:stage
+   *   · stage                                      → fs:stage
    *   · effLighting                                → fs:lighting
    *   · playing                                    → fs:playing
    *   · uniform values                             → fs:uniform
@@ -2503,7 +2498,6 @@ export function ShaderPreview() {
       bgColor,
       // The XR popup has no backdrop; this is the pane's document only.
       stage,
-      stageWords: stageWords(language),
       lighting: effLighting,
       subdivision: effectiveSubdivision,
       customModel: previewGeometry === 'custom' && previewMesh
@@ -2737,14 +2731,11 @@ export function ShaderPreview() {
     );
   }, [bgColor]);
 
-  // The backdrop, and the words its readout prints. A document still in
-  // `none` ignores a `none`, so the mount post costs it nothing (STAGE_SCRIPT).
+  // The backdrop. A document still in `none` ignores a `none`, so the mount
+  // post costs it nothing (STAGE_SCRIPT).
   useEffect(() => {
-    iframeRef.current?.contentWindow?.postMessage(
-      { type: STAGE_MESSAGE, mode: stage, words: stageWords(language) },
-      '*',
-    );
-  }, [stage, language]);
+    iframeRef.current?.contentWindow?.postMessage({ type: STAGE_MESSAGE, mode: stage }, '*');
+  }, [stage]);
 
   useEffect(() => {
     iframeRef.current?.contentWindow?.postMessage(
@@ -3089,7 +3080,7 @@ export function ShaderPreview() {
     >
       {/* The control bar SCROLLS rather than wrapping or clipping: the pane is
           user-resizable down to a couple of hundred px, and at that width the
-          Light/Model/Subd controls and the WGSL/FPS/Uniforms group cannot all
+          Light/Model/Subd controls and the WGSL/FPS/Properties group cannot all
           fit. Same treatment as the asset browser's two rows, through the same
           implementation (components/Layout/ScrollArrows.tsx) — including the
           wheel-to-horizontal mapping, since the bar is one line tall and a
@@ -3248,9 +3239,9 @@ export function ShaderPreview() {
               // with it shut an override would have no affordance anywhere.
               className={`shader-preview__props-btn${showUniforms ? ' shader-preview__props-btn--active' : ''}${overrideCount ? ' shader-preview__props-btn--override' : ''}`}
               onClick={() => setShowUniforms((v) => !v)}
-              title={showUniforms ? t('Hide uniforms', language) : t('Show uniforms', language)}
+              title={showUniforms ? t('Hide properties', language) : t('Show properties', language)}
             >
-              {t('Uniforms', language)}
+              {t('Properties', language)}
             </button>
           )}
         </div>
@@ -3460,7 +3451,7 @@ export function ShaderPreview() {
               type="button"
               className="shader-preview__reset-btn"
               onClick={handleReset}
-              title={t('Reset camera, lighting, subdivision, and uniform values to defaults', language)}
+              title={t('Reset camera, lighting, subdivision, and property values to defaults', language)}
               aria-label={t('Reset', language)}
             >
               {'✕'}

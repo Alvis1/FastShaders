@@ -600,7 +600,7 @@ export const TUTORIALS: readonly TutorialDef[] = [
   {
     id: 'tut-parameter',
     title: 'Exposed Parameter',
-    summary: 'A Property node turns a number into a knob: tune the shader from the 3D view\'s Uniforms panel without touching the graph.',
+    summary: 'A Property node turns a number into a knob: tune the shader from the 3D view\'s Properties panel without touching the graph.',
     steps: [
       look('idea', 'A parameter is a number you tune without editing the graph. Unreal calls it a Material Instance parameter, Unity an exposed property, Blender a group input.'),
       add('perlin', 'noise', 'perlin', 'Add a Perlin Noise node.', HINT_PERLIN),
@@ -608,7 +608,7 @@ export const TUTORIALS: readonly TutorialDef[] = [
       add('knob', 'knob', 'property_float', 'Add a Property (float) node. It is a named number, property1, that the shader exposes as a knob.', 'Palette > Inputs > Property (float), or right-click the canvas and type property'),
       set('value', 'knob', 'value', 4, 'Set the Property\'s value to 4.', 'The number box on the Property node'),
       wire('w2', ['knob', 'out'], ['noise', 'scale'], 'Wire the Property into the noise\'s scale input: the dimmed socket on its left edge, hidden until a wire needs it.', 'Hidden inputs show while a wire is dragged near a node; or right-click it and tick scale'),
-      look('slide', 'The 3D view now lists property1 in its Uniforms panel. Drag its slider: the noise rescales live, and the graph does not change.'),
+      look('slide', 'The 3D view now lists property1 in its Properties panel. Drag its slider: the noise rescales live, and the graph does not change.'),
       look('try', 'Try: press Set as default to write the slider\'s value back into the node. An exported shader keeps property1 as a knob anyone can turn.'),
     ],
   },

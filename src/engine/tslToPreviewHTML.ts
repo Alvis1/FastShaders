@@ -204,14 +204,12 @@ export interface PreviewOptions {
   initialFpv?: { pose: FpvPose | null } | null;
   /**
    * The backdrop the sandboxed preview draws around the object (STAGE_SCRIPT):
-   * a light checker room, a floor grid with a metre ruler, or nothing (the
-   * default — the document is then what it was before the stage existed). HOT:
-   * switched live by `fs:stage`, baked here only so a fresh document starts in
-   * it. Ignored by the XR popup.
+   * a light checker room, a numbered floor grid, or nothing (the default —
+   * the document is then what it was before the stage existed). HOT: switched
+   * live by `fs:stage`, baked here only so a fresh document starts in it.
+   * Ignored by the XR popup.
    */
   stage?: PreviewStage;
-  /** The two words the grid's readout prints, in the UI language. */
-  stageWords?: StageWords;
   /**
    * Build the top-level immersive-VR page instead of the sandboxed preview.
    * WebXR cannot start in the opaque-origin iframe, so ShaderPreview opens an
@@ -2820,16 +2818,8 @@ export type PreviewStage = 'none' | 'room' | 'grid';
 /** The order the preview's background button steps through. */
 export const PREVIEW_STAGES: readonly PreviewStage[] = ['none', 'room', 'grid'];
 
-/** Parent → stage: `{ type, mode, words }` switches the backdrop live. */
+/** Parent → stage: `{ type, mode }` switches the backdrop live. */
 export const STAGE_MESSAGE = 'fs:stage';
-
-/** The readout's two words: "Grid square" and "Size", in the UI language. */
-export interface StageWords {
-  cell: string;
-  size: string;
-}
-
-export const DEFAULT_STAGE_WORDS: StageWords = { cell: 'Grid square', size: 'Size' };
 
 export function isPreviewStage(v: unknown): v is PreviewStage {
   return v === 'none' || v === 'room' || v === 'grid';
@@ -2853,12 +2843,6 @@ export function nextPreviewStage(s: PreviewStage): PreviewStage {
   return s === 'room' ? 'grid' : s === 'grid' ? 'none' : 'room';
 }
 
-/** A readout word as the stage may print it: a short plain string or the
- *  English default (it is written with textContent either way). */
-function stageWord(v: unknown, fallback: string): string {
-  return typeof v === 'string' && v.length > 0 && v.length <= 40 ? v : fallback;
-}
-
 /**
  * The 3D view's BACKDROP, for the SANDBOXED editor preview only (owner,
  * 2026-11-16/17: "a light checker grid box interior, a ground plane grid wire
@@ -2876,8 +2860,9 @@ function stageWord(v: unknown, fallback: string): string {
  *    Blender's floor grid runs through its default cube (minor, major and
  *    centre lines, in strengths of the background's contrast colour), its
  *    major lines numbered by small flat labels lying ON the grid along both
- *    centre lines — the unit printed on the first one each way — and a small
- *    readout of the square's size and the object's;
+ *    centre lines, the unit printed on the first one each way (owner,
+ *    2026-11-17: no readout over the view — a top-centre line printing the
+ *    square's and the object's size was removed);
  *  - in both, a GIZMO at the top left: the object's OWN X / Y / Z axes as the
  *    camera sees them, so it turns with the turntable — exactly the axes the
  *    shader's Position reads;
@@ -2897,8 +2882,7 @@ function stageWord(v: unknown, fallback: string): string {
  *
  * The gizmo is SVG over the canvas, redrawn only on a frame the camera or the
  * object turned. Nothing here posts anything, reads anything from the parent
- * but the mode and two words (written with textContent), or touches the
- * object's own entity — whose subtree the shader loader walks — beyond its
+ * but the mode, or touches the object's own entity — whose subtree the shader loader walks — beyond its
  * `rotation`.
  */
 export const STAGE_SCRIPT = `<script>
@@ -2910,7 +2894,6 @@ export const STAGE_SCRIPT = `<script>
     var AXIS_CSS = ["#e53935", "#43a047", "#1e88e5"];
     var AXIS_NAMES = ["X", "Y", "Z"];
     var SVGNS = "http://www.w3.org/2000/svg";
-    var words = window.__fsStageWords || { cell: "Grid square", size: "Size" };
 
     function nice(x) {
       if (!(x > 0) || !isFinite(x)) return 1;
@@ -2930,18 +2913,13 @@ export const STAGE_SCRIPT = `<script>
       return s.charAt(0) === "-" ? "\\u2212" + s.slice(1) : s;
     }
     function fmtLen(v, step) { return fmtNum(v, step) + " " + unitOf(step)[0]; }
-    function fmtSize(sz, step) {
-      var u = unitOf(step);
-      function n(v) { return String(Number((v * u[1]).toPrecision(3))); }
-      return n(sz.x) + " \\u00d7 " + n(sz.y) + " \\u00d7 " + n(sz.z) + " " + u[0];
-    }
 
-    // The object, measured in its own entity's space: bounding radius and box.
+    // The object, measured in its own entity's space: its bounding radius.
     var mv = new T.Vector3(), mm = new T.Matrix4(), minv = new T.Matrix4();
     function measure(obj, k) {
       obj.updateWorldMatrix(true, true);
       minv.copy(obj.matrixWorld).invert();
-      var r2 = 0, box = new T.Box3(), count = 0, instanced = false;
+      var r2 = 0, count = 0, instanced = false;
       obj.traverse(function (o) {
         var g = o.geometry;
         if (!g || !(o.isMesh || o.isLine || o.isPoints)) return;
@@ -2953,14 +2931,12 @@ export const STAGE_SCRIPT = `<script>
         for (var i = 0; i < pos.count; i += stride) {
           mv.fromBufferAttribute(pos, i).applyMatrix4(mm);
           if (!isFinite(mv.x) || !isFinite(mv.y) || !isFinite(mv.z)) continue;
-          box.expandByPoint(mv);
           var d = mv.lengthSq();
           if (d > r2) r2 = d;
           count++;
         }
       });
-      if (!count || instanced) return { r: 0.8 * k, size: null };
-      return { r: Math.sqrt(r2), size: box.getSize(new T.Vector3()) };
+      return !count || instanced ? 0.8 * k : Math.sqrt(r2);
     }
 
     // The object stands UPRIGHT while a backdrop is drawn, so its axes are
@@ -3188,22 +3164,14 @@ export const STAGE_SCRIPT = `<script>
         this.overlay = document.createElement("div");
         this.overlay.setAttribute("aria-hidden", "true");
         this.overlay.style.cssText = "position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;overflow:hidden;z-index:5;display:none;";
-        this.readout = document.createElement("div");
-        this.readout.style.cssText = "position:absolute;top:8px;left:50%;transform:translateX(-50%);padding:1px 6px;background:rgba(0,0,0,0.38);color:rgba(255,255,255,0.92);font:10px/1.5 system-ui,sans-serif;white-space:nowrap;";
-        this.overlay.appendChild(this.readout);
         this.gizmo = buildGizmo(this.overlay);
         document.body.appendChild(this.overlay);
-        this.words = words;
       },
       update: function () {
         if (!MODES[this.data.mode]) this.data.mode = "none";
         this.sig = null;
         var ent = this.entity();
         if (ent && ent.setAttribute) ent.setAttribute("rotation", shownTilt(restTilt(ent), this.data.mode));
-      },
-      setWords: function (w) {
-        this.words = w;
-        this.sig = null;
       },
       remove: function () {
         disposeTree(this.world);
@@ -3234,8 +3202,8 @@ export const STAGE_SCRIPT = `<script>
       },
       rebuild: function (ent, mode, bgStr) {
         var k = window.__fsFrame > 0 && isFinite(window.__fsFrame) ? window.__fsFrame : 1;
-        var shape = measure(ent.object3D, k);
-        var r = shape.r > 1e-6 && isFinite(shape.r) ? shape.r : 0.8 * k;
+        var r = measure(ent.object3D, k);
+        if (!(r > 1e-6) || !isFinite(r)) r = 0.8 * k;
         var step = nice(r / 2);
         var m = {
           step: step,
@@ -3243,7 +3211,6 @@ export const STAGE_SCRIPT = `<script>
           half: step * 10,
           // Past the camera's home (8 frames out) and well past the object.
           room: step * Math.ceil(Math.max(12 * k, 6 * r) / step),
-          size: shape.size,
         };
         this.m = m;
         disposeTree(this.world);
@@ -3251,12 +3218,6 @@ export const STAGE_SCRIPT = `<script>
         try { bg.set(bgStr); } catch (e) { bg.set(0x808080); }
         if (mode === "room") buildRoom(this.world, m);
         else buildGrid(this.world, m, bg);
-        if (mode === "grid") {
-          this.readout.style.display = "";
-          this.readout.textContent = this.words.cell + " " + fmtLen(m.minor, m.step) + (m.size ? " \\u00b7 " + this.words.size + " " + fmtSize(m.size, m.step) : "");
-        } else {
-          this.readout.style.display = "none";
-        }
         this.version++;
       },
       tock: function () {
@@ -3281,16 +3242,11 @@ export const STAGE_SCRIPT = `<script>
       },
     });
 
-    // The parent's switch: a mode from the closed list, and the readout's
-    // two words (short strings only, printed as text).
+    // The parent's switch: a mode from the closed list.
     window.addEventListener("message", function (e) {
       if (e.source !== window.parent) return;
       var msg = e.data;
       if (!msg || msg.type !== "${STAGE_MESSAGE}" || typeof msg.mode !== "string" || !Object.prototype.hasOwnProperty.call(MODES, msg.mode)) return;
-      var wd = msg.words;
-      if (wd && typeof wd.cell === "string" && typeof wd.size === "string" && wd.cell.length <= 40 && wd.size.length <= 40) {
-        words = { cell: wd.cell, size: wd.size };
-      }
       var mode = msg.mode;
       var whenBooted = window.__fsWhenSceneBooted || function (f) { f(); };
       whenBooted(function () {
@@ -3298,7 +3254,6 @@ export const STAGE_SCRIPT = `<script>
         if (!scene) return;
         var comp = scene.components && scene.components["fs-stage"];
         if (!comp && mode === "none") return;
-        if (comp) comp.setWords(words);
         if (!comp || comp.data.mode !== mode) scene.setAttribute("fs-stage", "mode", mode);
       });
     });
@@ -3962,14 +3917,8 @@ export function tslToPreviewHTML(
 
   // The backdrop (STAGE_SCRIPT): sandboxed documents only, registered before
   // the scene is injected so a document built in a drawn mode can name it on
-  // the <a-scene>. Its two readout words go first — the script reads them at
-  // parse time — with the `<` escape every inlined string here gets.
+  // the <a-scene>.
   if (!xr) {
-    const words: StageWords = {
-      cell: stageWord(options.stageWords?.cell, DEFAULT_STAGE_WORDS.cell),
-      size: stageWord(options.stageWords?.size, DEFAULT_STAGE_WORDS.size),
-    };
-    lines.push(`<script>window.__fsStageWords = ${JSON.stringify(words).replace(/</g, '\\u003C')};<${''}/script>`);
     lines.push(STAGE_SCRIPT);
     lines.push('');
   }

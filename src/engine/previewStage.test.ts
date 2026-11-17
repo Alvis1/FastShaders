@@ -2,7 +2,7 @@
  * The 3D view's backdrop (STAGE_SCRIPT, tslToPreviewHTML.ts): which documents
  * carry it, and what the component draws — evaluated against the real three
  * with a stub A-Frame and a few-line DOM, so the measuring, the grid step,
- * the ruler text and the message gate are pinned rather than eyeballed.
+ * the grid's numbers and the message gate are pinned rather than eyeballed.
  */
 import { describe, it, expect } from 'vitest';
 import vm from 'node:vm';
@@ -48,7 +48,6 @@ describe('which documents carry it', () => {
   it('the XR popup has none of it', () => {
     const xr = tslToPreviewHTML(TSL, { geometry: 'sphere', xr: true, stage: 'room' });
     expect(xr).not.toContain('fs-stage');
-    expect(xr).not.toContain('__fsStageWords');
   });
 
   it('a drawn backdrop bakes the object UPRIGHT and keeps its resting tilt on the entity', () => {
@@ -71,11 +70,6 @@ describe('which documents carry it', () => {
     expect(uprightTilt('45 45 0', 'none')).toBe('45 45 0');
     expect(uprightTilt('45 45 0', 'room')).toBe(UPRIGHT_TILT);
     expect(uprightTilt('15 35 0', 'grid')).toBe(UPRIGHT_TILT);
-  });
-
-  it('bakes the readout words as data, escaped, with a fallback for junk', () => {
-    const html = tslToPreviewHTML(TSL, { stage: 'grid', stageWords: { cell: '</script><b>', size: 'x'.repeat(41) } });
-    expect(html).toContain('window.__fsStageWords = {"cell":"\\u003C/script>\\u003Cb>","size":"Size"};');
   });
 });
 
@@ -109,7 +103,7 @@ interface StageComponent {
   data: { mode: string };
   m: { step: number; minor: number; half: number; room: number };
   world: THREE.Group;
-  readout: { textContent: string; style: Record<string, string> };
+  overlay: Fake;
   gizmo: { root: Fake; parts: { g: Fake; dot: Fake; depth: number }[] };
   init(): void;
   update(): void;
@@ -198,7 +192,9 @@ describe('what it draws', () => {
     const { comp } = stage(new THREE.Mesh(new THREE.SphereGeometry(0.8, 48, 24)), 'grid', { spinDeg: [45, 45, 0] });
     expect(comp.m.step).toBe(0.5);
     expect(comp.m.minor).toBeCloseTo(0.1);
-    expect(comp.readout.textContent).toBe('Grid square 0.1 m · Size 1.6 × 1.6 × 1.6 m');
+    // Over the view, the gizmo alone (owner, 2026-11-17: the top-centre
+    // readout of the square's and the object's size is gone).
+    expect(comp.overlay.children).toEqual([comp.gizmo.root]);
     // Minor, major and centre lines, every vertex on y = 0.
     const lines = comp.world.children.filter((c) => (c as THREE.LineSegments).isLineSegments) as THREE.LineSegments[];
     expect(lines).toHaveLength(3);
@@ -226,12 +222,10 @@ describe('what it draws', () => {
   it('a 10 cm model reads in centimetres; an instanced cloud falls back to the 1.6 box', () => {
     const small = stage(new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.06, 0.04)), 'grid');
     expect(small.comp.m.step).toBeCloseTo(0.05);
-    expect(small.comp.readout.textContent).toBe('Grid square 1 cm · Size 10 × 6 × 4 cm');
     expect(labels(small.comp.world).map(labelText)).toContain('5 cm');
     const quad = new THREE.InstancedBufferGeometry().copy(new THREE.PlaneGeometry(4, 4) as unknown as THREE.InstancedBufferGeometry);
     const cloud = stage(new THREE.Mesh(quad), 'grid');
     expect(cloud.comp.m.step).toBe(0.5);
-    expect(cloud.comp.readout.textContent).toBe('Grid square 0.1 m');
   });
 
   it('room: a checker cube centred on the object, seen from inside, the camera inside it', () => {
@@ -242,7 +236,7 @@ describe('what it draws', () => {
     expect(box.position.toArray()).toEqual([0, 0, 0]);
     expect(comp.m.room).toBeGreaterThan(8);
     expect((box.material as THREE.Material[])[0].side).toBe(THREE.BackSide);
-    expect(comp.readout.style.display).toBe('none');
+    expect(comp.overlay.children).toEqual([comp.gizmo.root]);
   });
 
   it('the gizmo shows the object’s own axes as the camera sees them, nearest on top', () => {

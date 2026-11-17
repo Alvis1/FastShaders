@@ -130,7 +130,7 @@
   font-size: 14px;
 }
 
-/* The toggles of the top control bar (WGSL/GLSL, FPS, Uniforms, the model ✕). */
+/* The toggles of the top control bar (WGSL/GLSL, FPS, Properties, the model ✕). */
 .shader-preview__props-btn {
   padding: 0 10px;
   font-weight: 600;
@@ -729,7 +729,7 @@
   outline-offset: 1px;
 }
 
-/* The right-hand toggle group (WGSL/GLSL + FPS + Uniforms). The auto margin lives HERE
+/* The right-hand toggle group (WGSL/GLSL + FPS + Properties). The auto margin lives HERE
    rather than on the buttons: two auto-margined flex siblings divide the free
    space between them instead of both being pushed right, so putting it on each
    button would strand them at opposite ends of the bar. */
