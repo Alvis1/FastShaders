@@ -107,6 +107,10 @@ export function codeToGraph(code: string): CodeToGraphResult {
       sourceType: 'module',
       plugins: ['typescript'],
       errorRecovery: true,
+      // A bare shader BODY (`const a = …; return { color: a };`) is accepted
+      // input; without this its `return` is a recovered error, and recovered
+      // errors are reported below.
+      allowReturnOutsideFunction: true,
     });
   } catch (e: unknown) {
     const err = e as { message: string; loc?: { line: number; column: number } };
@@ -114,6 +118,21 @@ export function codeToGraph(code: string): CodeToGraphResult {
       nodes: [],
       edges: [],
       errors: [{ message: err.message, line: err.loc?.line }],
+    };
+  }
+
+  // `errorRecovery` lets Babel parse PAST some mistakes (a `cosnt` typo, a
+  // missing semicolon, `mix(a,, b)`) and lists them in `ast.errors` instead of
+  // throwing. They are syntax errors like any other: unreported, an Apply
+  // dropped the mistyped line with `errors: []` (a study participant's "Apply
+  // deletes code", 2026-11-19) and a hole in an argument list surfaced as an
+  // internal TypeError with no line.
+  const recovered = (ast as { errors?: Array<{ message: string; loc?: { line: number } }> }).errors ?? [];
+  if (recovered.length > 0) {
+    return {
+      nodes: [],
+      edges: [],
+      errors: recovered.map((e) => ({ message: e.message, line: e.loc?.line })),
     };
   }
 

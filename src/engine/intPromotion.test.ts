@@ -362,7 +362,10 @@ describe('codeToGraph: a hand-written float() the graph cannot hold is announced
   it('a duplicate declaration is a parse error, never a throw', () => {
     const g = parse('  const a = int(3);\n  const a = int(4);\n  return vec3(float(a));');
     expect(g.nodes).toEqual([]);
-    expect(g.errors[0].message).toMatch(/Duplicate declaration/);
+    // Babel's own recovered error now (codeToGraph reports `ast.errors`); the
+    // scope crawl's "Duplicate declaration" throw stays as the backstop.
+    expect(g.errors[0].message).toMatch(/already been declared|Duplicate declaration/);
+    expect(g.errors[0].severity).not.toBe('warning');
   });
 });
 

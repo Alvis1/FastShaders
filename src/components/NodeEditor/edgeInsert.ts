@@ -18,6 +18,8 @@ import { pickSpliceInputPort } from './edgeSplice';
 import { primaryInputId } from '@/utils/primaryInput';
 import { splitWaypointsAtNode } from './edges/bezierGeometry';
 import { inheritedImageUv } from './imageUvHandoff';
+import { appendTrimmedOperands } from '@/utils/appendCapacity';
+import { getEdgeOutputShape, getTargetEdges } from '@/engine/cpuEvaluator';
 import type { AppNode, AppEdge, NodeDefinition } from '@/types';
 import { getNodeValues } from '@/types';
 
@@ -190,6 +192,42 @@ export function connectNodes(
   store.setEdges([...filtered, ...added] as AppEdge[]);
   exposeConnectedTarget(target, targetHandle);
   if (uv) exposeConnectedTarget(source, 'uv');
+  announceAppendTrim(target, targetHandle);
+}
+
+/**
+ * A wire into Append that the 4-channel vector cannot hold whole is trimmed by
+ * the emitter (`vec4(position, vec31.x)`), and nothing on the canvas showed it:
+ * the socket took the wire and the rest of the vector reached nothing. Say so
+ * once, where the wire was just made — the canvas note, and never over a note
+ * that is still up (the sink/model notice's rule). Widths are the EMITTER's
+ * (`getEdgeOutputShape`), so the note describes the generated code.
+ */
+function announceAppendTrim(target: string, targetHandle: string | null): void {
+  const store = useAppStore.getState();
+  if (store.importNote) return;
+  const node = store.nodes.find((n) => n.id === target);
+  const def = node ? NODE_REGISTRY.get(node.data.registryType) : undefined;
+  if (!node || !def) return;
+  // A socket reads its FIRST wire, as codegen does.
+  const wires = new Map<string, AppEdge>();
+  for (const e of getTargetEdges(store.nodes, store.edges, target)) {
+    if (typeof e.targetHandle === 'string' && !wires.has(e.targetHandle)) wires.set(e.targetHandle, e);
+  }
+  const trims = appendTrimmedOperands(def, wires.keys(), Object.keys(getNodeValues(node)), (portId) => {
+    const e = wires.get(portId);
+    return e ? getEdgeOutputShape(e, store.nodes, store.edges) : undefined;
+  });
+  // The wire just made when it is one of them, else the first it pushed out.
+  const trim = trims.find((x) => x.portId === targetHandle) ?? trims[0];
+  if (!trim) return;
+  const sourceId = wires.get(trim.portId)?.source;
+  const sourceNode = store.nodes.find((n) => n.id === sourceId);
+  const label = sourceNode?.data.label;
+  // `nodeVarNames` is read by a node id from a file: only a string is a name.
+  const varName = sourceId ? store.nodeVarNames[sourceId] : undefined;
+  const name = (typeof varName === 'string' && varName) || (typeof label === 'string' && label) || trim.portId;
+  store.showImportNote([{ kind: 'append-trimmed', name, kept: trim.kept }]);
 }
 
 /** Which end of a wire the add-node menu was opened from. React Flow's own

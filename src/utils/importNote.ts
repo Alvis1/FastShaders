@@ -54,6 +54,11 @@ export type ImportNoteLine =
    *  "Include unconnected nodes" row was unticked), so the file reopens without
    *  them. Posted by `announceExportDelivered` after the download. */
   | { kind: 'export-left-out'; count: number }
+  /** A wire into Append does not fit the 4-channel vector whole
+   *  (utils/appendCapacity.ts `appendTrimmedOperands`): only the first `kept`
+   *  channels of the source called `name` are used, none when 0. Posted by
+   *  `connectNodes` at the moment the wire is made. */
+  | { kind: 'append-trimmed'; name: string; kept: number }
   /** A wire made the DRIVING output unfit for the model on screen
    *  (utils/sinkModelFit.ts) — posted by the preview at that moment; the pane
    *  keeps the same sentence up while it lasts. `name` is the dropped model's
@@ -152,6 +157,16 @@ export function importNoteLineText(line: ImportNoteLine, lang: Language): string
             name: '\u201c' + line.name + '\u201d',
             n: line.nodes,
           });
+    case 'append-trimmed': {
+      // `name` is a variable name or a node label (file data): capped here,
+      // quoted here, filled in one pass.
+      const chars = Array.from(typeof line.name === 'string' ? line.name : '');
+      const name = '\u201c' + (chars.length > 40 ? chars.slice(0, 39).join('') + '\u2026' : chars.join('')) + '\u201d';
+      const kept = Math.min(Math.max(Math.floor(Number(line.kept)) || 0, 0), 3);
+      return kept > 0
+        ? fillTemplate(t('Append holds 4 numbers: only {part} of {name} is used', lang), { part: 'XYZ'.slice(0, kept), name })
+        : fillTemplate(t('Append holds 4 numbers: {name} does not fit', lang), { name });
+    }
     case 'export-left-out':
       // The count sits at the END, so neither language has to agree a noun
       // with it ("1 nodes").

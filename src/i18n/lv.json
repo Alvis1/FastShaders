@@ -833,6 +833,8 @@
     "Yes": "Jā",
     "No": "Nē",
     "Not optimized — stored as {fmt}": "Nav optimizēts — saglabāts kā {fmt}",
+    "Append holds 4 numbers: only {part} of {name} is used": "Mezglā “Apvienot” ietilpst 4 skaitļi: no {name} izmanto tikai {part}",
+    "Append holds 4 numbers: {name} does not fit": "Mezglā “Apvienot” ietilpst 4 skaitļi: {name} tajā vairs neietilpst",
     "Not optimized (set to “Never”) — stored as {fmt}": "Nav optimizēts (iestatīts “Nekad”) — saglabāts kā {fmt}",
     "Optimize on import": "Optimizēt importējot",
     "Ask each time": "Jautāt katru reizi",

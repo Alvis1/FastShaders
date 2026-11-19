@@ -2550,8 +2550,18 @@ export const useAppStore = create<AppState>()((set, get) => ({
       // `codeNodeSpans`, the text and its node spans as one value.
       const emitted = meta?.emitted ?? null;
       const names = emitted ? meta?.names ?? null : null;
+      // A BLOCKING error describes the text a failed Apply left in the panel,
+      // and this write replaces that text: kept, the panel showed "Unexpected
+      // token (10:39)" over generated code with no such line. Warnings stay —
+      // they say what a SUCCESSFUL Apply did, and that Apply's own regeneration
+      // lands here a moment later. Same array when nothing goes (a scrub frame).
+      const errors = get().codeErrors;
+      const keptErrors = errors.some((e) => e.severity !== 'warning')
+        ? errors.filter((e) => e.severity === 'warning')
+        : errors;
       set({
         code,
+        codeErrors: keptErrors,
         previewCode: previewCode ?? code,
         syncSource: source,
         codeEmitted: emitted,

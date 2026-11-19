@@ -95,3 +95,45 @@ export function appendGrowthExhausted(
   const emitted = effectiveInputs(def, connectedHandles, false, valuedHandles);
   return appendChannelsUsed(emitted.map((p) => p.id), channelOf) >= VECTOR_CHANNEL_LIMIT;
 }
+
+/** One WIRED operand the vector has no room for: `kept` of its `of` channels
+ *  reach the constructor (0 = the whole operand is dropped). */
+export interface AppendTrim {
+  portId: string;
+  kept: number;
+  of: number;
+}
+
+/**
+ * The wired operands the EMITTER trims, in socket order — the same walk as
+ * graphToCode's `buildAppendConstructor` (an overflowing operand is swizzled
+ * down to the room left, later ones are dropped), so the canvas can SAY what
+ * the constructor does: `append(vec3, vec3)` is `vec4(a, b.x)`, and a Time
+ * wired into that second vector's Z reached nothing (a study participant's
+ * "vector add seemed not to work", 2026-11-19). `appendTrim.test.ts` holds the
+ * two walks together against the emitted text. Empty for every other node.
+ */
+export function appendTrimmedOperands(
+  def: NodeDefinition | undefined,
+  connectedHandles: Iterable<string>,
+  valuedHandles: Iterable<string>,
+  channelOf: ChannelOf,
+): AppendTrim[] {
+  if (!def || !concatenatesOperands(def)) return [];
+  const out: AppendTrim[] = [];
+  let total = 0;
+  for (const port of effectiveInputs(def, connectedHandles, false, valuedHandles)) {
+    const ch = channelOf(port.id);
+    const wired = ch !== undefined;
+    const width = wired && Number.isFinite(ch) && (ch as number) >= 1 ? Math.floor(ch as number) : 1;
+    const room = VECTOR_CHANNEL_LIMIT - total;
+    if (width <= room) {
+      total += width;
+      continue;
+    }
+    // An unwired operand past the limit is a `0` nobody asked for: not news.
+    if (wired) out.push({ portId: port.id, kept: Math.max(room, 0), of: width });
+    total = VECTOR_CHANNEL_LIMIT;
+  }
+  return out;
+}

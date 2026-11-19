@@ -58,7 +58,7 @@ describe('every helper text parses cleanly with codeToGraph\'s EXACT options', (
   // lookahead and RECOVER silently — a clean round trip alone would not show a recovered error.
   for (const [name, h] of MODULE_HELPERS) {
     it(`${name}: ast.errors is empty`, () => {
-      const ast = parse(h.lines.join('\n'), { sourceType: 'module', plugins: ['typescript'], errorRecovery: true });
+      const ast = parse(h.lines.join('\n'), { sourceType: 'module', plugins: ['typescript'], errorRecovery: true, allowReturnOutsideFunction: true });
       expect(ast.errors ?? []).toEqual([]);
     });
   }
