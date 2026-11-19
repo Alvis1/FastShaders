@@ -8,15 +8,23 @@
  * other shader, and a failed open left the host believing the editor held a
  * document it did not.
  *
- *   - `superwxr:open { id }` — the graph IS that document until it is replaced.
+ *   - `superwxr:open { id }` — the graph IS that document until it is replaced
+ *     (a bare module's only once its graph landed). An open that does not
+ *     become the document says so instead: `superwxr:open-failed { id,
+ *     reason, retry }`, the reason cleaned here (`openFailedReason`), `retry`
+ *     whether the same bytes may open another time (the failure was not the
+ *     file's).
  *   - A file opened INSIDE the editor (a dropped shader's Open, NEW) is another
  *     document, and none of the host's: it gets an id MINTED here plus
- *     `replaced`, the id of the document it took the place of, so the host can
- *     keep the old one and file the new one beside it. Minted, not null,
- *     because every later edit of that document has to name the same thing —
- *     a null would make each one look like a fresh arrival.
+ *     `replaced`, the id of the document it took the place of (null when that
+ *     was none), so the host can keep the old one and file the new one beside
+ *     it. Minted, not null, because every later edit of that document has to
+ *     name the same thing — a null would make each one look like a fresh
+ *     arrival.
  *   - The graph the editor started with came from no open and replaced
- *     nothing: `id: null`, which a host ignores.
+ *     nothing: `id: null`, which a host ignores. So is the graph a bare
+ *     module's open leaves on the canvas until its own landed (for good, when
+ *     it failed): the previous document's, which is no longer any document.
  *
  * A LEAF (imports nothing): `engine/exportShader.ts` stamps the id on EXPORT's
  * bytes without pulling the bridge chunk, and the rules are unit-tested here
@@ -24,11 +32,54 @@
  * one page, one editor, one document.
  */
 
-/** Hosts read this off `superwxr:ready`: 2 = every message names its document. */
-export const EMBED_PROTOCOL = 2;
+/**
+ * Hosts read this off `superwxr:ready`. 2: every message names its document.
+ * 3 adds, over 2: `superwxr:appearance` (the host's theme, kept whatever a
+ * document was saved in, and the canvas opacity over a transparent page) and
+ * `superwxr:rename`; host messages handled in arrival order; a host open
+ * starting a fresh undo history; the module of a host-opened document
+ * carrying that document's own `ui` block, and its own `preview` block; a
+ * bare module that is the document only once its graph landed; and
+ * `superwxr:open-failed` (with `retry`) for every host open that is not
+ * (EmbedBridge.tsx has the list).
+ */
+export const EMBED_PROTOCOL = 3;
 
 /** A host id is echoed on every message, so it is bounded like the name is. */
 export const EMBED_ID_MAX = 200;
+
+/** The longest `reason` a `superwxr:open-failed` carries. */
+export const EMBED_REASON_MAX = 200;
+
+/** What a failed open says when its cause says nothing usable. */
+export const OPEN_FAILED_FALLBACK = 'the shader could not be opened';
+
+/**
+ * Why an open failed, as a host shows it (`superwxr:open-failed`'s `reason`):
+ * ONE plain line of at most EMBED_REASON_MAX characters. An Error gives its
+ * message, a string itself. Line breaks and control characters become spaces;
+ * `<` and `>` are drawn as `‹` `›`, so the line is never markup (a JSON error
+ * quotes the text it stopped at); a parser's trailing `(line:column)` goes —
+ * it counts lines of the module CONVERTED from the file (scriptToTSL), which
+ * the host never sees. Cut with an ellipsis, never inside a surrogate pair.
+ */
+export function openFailedReason(cause: unknown): string {
+  const raw = cause instanceof Error ? cause.message : typeof cause === 'string' ? cause : '';
+  let line = raw
+    .replace(/[\u0000-\u001F\u007F-\u009F]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/</g, '‹')
+    .replace(/>/g, '›')
+    .trim()
+    .replace(/\s*\(\d+:\d+\)$/, '');
+  if (!line) return OPEN_FAILED_FALLBACK;
+  if (line.length > EMBED_REASON_MAX) {
+    line = line.slice(0, EMBED_REASON_MAX - 1);
+    if (/[\uD800-\uDBFF]$/.test(line)) line = line.slice(0, -1);
+    line = `${line.trimEnd()}…`;
+  }
+  return line;
+}
 
 /** Ids minted here start with this, so a host can never mistake one for its own. */
 export const MINTED_ID_PREFIX = 'fastshaders-doc-';

@@ -107,6 +107,7 @@ import { edgeIdFromError008 } from './flowErrors';
 import { CostBar } from '@/components/Layout/CostBar';
 import { PreviewLink } from '@/components/Layout/PreviewLink';
 import { isEmbedMode } from '@/embed/embedMode';
+import { canvasBackground } from '@/embed/embedLook';
 import { PreviewRail } from '@/components/Layout/PreviewRail';
 import { RAIL_ADD_OUTPUT_EVENT, RAIL_FOCUS_EVENT, focusRequestId } from '@/components/Layout/previewRailEvents';
 import { canvasInkColor, canvasInkShadow, canvasGridColor } from '@/utils/colorUtils';
@@ -4063,7 +4064,9 @@ export function NodeEditor() {
           minZoom={VIEWPORT_MIN_ZOOM}
           maxZoom={VIEWPORT_MAX_ZOOM}
           proOptions={PRO_OPTIONS}
-          style={{ background: nodeEditorBgColor }}
+          // Embedded, the host's 3D view shows through the canvas at the
+          // host's opacity (embed/embedLook.ts); elsewhere the colour itself.
+          style={{ background: canvasBackground(nodeEditorBgColor, isEmbedMode()) }}
         >
           <Background
             variant={BackgroundVariant.Cross}

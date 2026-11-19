@@ -100,3 +100,27 @@
 .app-layout--embed .output-node__preview-socket {
   display: none;
 }
+
+/* Embedded, the page is SEE-THROUGH: the host's 3D view is the scene, and only
+   the canvas backdrop covers it, at the host's opacity (NodeEditor's
+   `canvasBackground`, embed/embedLook.ts). `html.fs-embed` is set by
+   EmbeddedLayout alone (AppLayout.tsx), so a full FastShaders page is
+   untouched. Every full-size ancestor of the canvas that paints goes clear:
+   <html> (index.html's pre-paint script paints it INLINE, which only
+   !important outranks), body, #root, the layout and the node editor; React
+   Flow's own layers paint nothing opaque by default, and are held to it here.
+   Every plate ON the canvas keeps its own opaque background — the asset bar,
+   the canvas bar, NEW / IMPORT, the cost pill, menus, dialogs, tooltips, the
+   node cards. */
+html.fs-embed {
+  background: transparent !important;
+}
+html.fs-embed body,
+html.fs-embed #root,
+html.fs-embed .app-layout--embed,
+html.fs-embed .node-editor,
+html.fs-embed .react-flow__pane,
+html.fs-embed .react-flow__renderer,
+html.fs-embed .react-flow__background {
+  background: transparent;
+}

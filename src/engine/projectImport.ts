@@ -113,14 +113,68 @@ function ingestImages(
  * `moduleText` is the file WITHOUT its block (extractProjectState's
  * `stripped`): the module whose `data:` literals a block's `imageRefs` may
  * name. It is only scanned when the block has a ref to resolve.
+ *
+ * `freshHistory` (importShaderText's): nothing is recorded, and the graph
+ * write that ends the import empties the undo history in the same `set` — so
+ * an apply that throws half way leaves the history exactly as it was.
+ *
+ * The block is READ first — migrations and every sanitizer, writing nothing —
+ * and only then written, in the order the writes always ran and the graph
+ * last: a block that throws while it is read leaves the editor as it was (its
+ * name, device, look, preview settings, notices, history and preview model).
+ * The gate in extractProjectState is there so none does; this order keeps one
+ * that did from leaving half a document behind — the embed bridge's failed
+ * open keeps the document the editor held. `keepPreviewMesh` is
+ * importShaderText's: the model is cleared with the other writes.
  */
 function applyProjectToStore(
   project: FastShadersProject,
   moduleText = '',
   nameFallback = '',
+  freshHistory = false,
+  keepPreviewMesh = false,
 ): void {
   const store = useAppStore.getState();
-  store.pushHistory();
+
+  // Folded node types first (registry/legacyNodeTypes.ts), before anything
+  // reads a def; then param ports that arrive with edges are exposed.
+  project.graph.nodes = migrateLegacyNodeTypes(project.graph.nodes);
+  autoExposeConnectedParamPorts(project.graph.nodes, project.graph.edges);
+
+  // Imported files are adversarial input: image payloads are bounded before
+  // they enter the store, and every picture that does not come back is announced.
+  const images = ingestImages(project, moduleText, project.graph.nodes, project.graph.edges, store.ignoreImageLimits);
+
+  // Data-node CSV blobs and Data Range formulas are bounded for SIZE here; the
+  // grammar gate that stops a formula becoming code lives at the emitter.
+  const dataSanitized = sanitizeDataNodes(images.nodes);
+  dataSanitized.nodes = sanitizeDataRangeNodes(dataSanitized.nodes);
+
+  // Per-mesh bindings reach GENERATED CODE. Emission re-validates every name;
+  // this bounds what the STORE carries and COUNTS what it drops.
+  const secs = sanitizeOutputMaterialsReport(dataSanitized.nodes);
+  dataSanitized.nodes = secs.nodes;
+
+  // Board drawings and palettes are adversarial too. An ABSENT palette block
+  // sanitizes to [], which REPLACES the previous shader's palettes: they must
+  // not ride onto an unrelated shader and into its next export.
+  const drawings = sanitizeDrawings(project.drawings);
+  const palettes = sanitizePalettes(project.palettes);
+
+  // Edge `data` likewise: waypoints arrive unchecked, and TypedEdge maps them
+  // during render (docs/dev/canvas-interaction.md).
+  const edges = sanitizeEdgeExtras(project.graph.edges);
+
+  // The restore chain: sanitize → unfold → normalize, then prune the `m<k>:`
+  // wires no material owns (docs/dev/outputs-and-materials.md).
+  const split = unfoldOutputMaterials(dataSanitized.nodes, edges);
+  const nodes = normalizeActiveOutput(split.nodes);
+  const prunedEdges = pruneOrphanMaterialEdges(nodes, split.edges).edges;
+
+  // ── The writes, from here on: the block has been read whole. ──
+  // A text import carries no model (importShaderText says why it goes).
+  if (!keepPreviewMesh) store.setPreviewMesh(null);
+  if (!freshHistory) store.pushHistory();
 
   // The AUTHORED name wins, the dropped file's stem is the fallback, and with
   // neither the name is not touched (utils/shaderDropName.ts). The block is
@@ -156,47 +210,16 @@ function applyProjectToStore(
   if (p.cameraPos) writeLs('fs:previewCameraPos', JSON.stringify(p.cameraPos));
   if (p.rotation) writeLs('fs:previewRotation', JSON.stringify(p.rotation));
 
-  // Folded node types first (registry/legacyNodeTypes.ts), before anything
-  // reads a def; then param ports that arrive with edges are exposed.
-  project.graph.nodes = migrateLegacyNodeTypes(project.graph.nodes);
-  autoExposeConnectedParamPorts(project.graph.nodes, project.graph.edges);
-
-  // Imported files are adversarial input: image payloads are bounded before
-  // they enter the store, and every picture that does not come back is announced.
-  const images = ingestImages(project, moduleText, project.graph.nodes, project.graph.edges, store.ignoreImageLimits);
   enqueueCount('images-stripped', images.stripped);
   enqueueCount('images-missing', images.missing);
-
-  // Data-node CSV blobs and Data Range formulas are bounded for SIZE here; the
-  // grammar gate that stops a formula becoming code lives at the emitter.
-  const dataSanitized = sanitizeDataNodes(images.nodes);
-  dataSanitized.nodes = sanitizeDataRangeNodes(dataSanitized.nodes);
-
-  // Per-mesh bindings reach GENERATED CODE. Emission re-validates every name;
-  // this bounds what the STORE carries and COUNTS what it drops.
-  const secs = sanitizeOutputMaterialsReport(dataSanitized.nodes);
-  dataSanitized.nodes = secs.nodes;
-
-  // Board drawings and palettes are adversarial too. An ABSENT palette block
-  // sanitizes to [], which REPLACES the previous shader's palettes: they must
-  // not ride onto an unrelated shader and into its next export.
-  const drawings = sanitizeDrawings(project.drawings);
-  const palettes = sanitizePalettes(project.palettes);
-
-  // Edge `data` likewise: waypoints arrive unchecked, and TypedEdge maps them
-  // during render (docs/dev/canvas-interaction.md).
-  const edges = sanitizeEdgeExtras(project.graph.edges);
-
-  // The restore chain: sanitize → unfold → normalize, then prune the `m<k>:`
-  // wires no material owns (docs/dev/outputs-and-materials.md).
-  const split = unfoldOutputMaterials(dataSanitized.nodes, edges);
-  const nodes = normalizeActiveOutput(split.nodes);
-  const prunedEdges = pruneOrphanMaterialEdges(nodes, split.edges).edges;
   // No slot: the words say "in the opened file".
   enqueueCount('output-sections-trimmed', secs.trimmed);
 
   // Restore graph last — switching syncSource to 'graph' will trigger
   // graphToCode in useSyncEngine, regenerating the editor code to match.
+  // Another document: a code→graph pass still on its way (a bare script's
+  // conversion, an Apply) was asked for under the old count and writes
+  // nothing when it lands (the store's `documentEpoch`).
   useAppStore.setState({
     nodes,
     edges: prunedEdges,
@@ -204,6 +227,8 @@ function applyProjectToStore(
     shaderPalettes: palettes,
     syncSource: 'graph',
     isUndoRedo: false,
+    documentEpoch: useAppStore.getState().documentEpoch + 1,
+    ...(freshHistory ? { past: [], future: [] } : {}),
   });
 
   // typeof guard: this module is also exercised by node-env unit tests.
@@ -360,6 +385,20 @@ export function preloadShaderImport(): Promise<ScriptToTSLModule | null> {
  */
 let scriptImportSeq = 0;
 
+/** Why a bare script could not be converted at all: its chunk is not here (`preloadShaderImport`). */
+export const SHADER_CONVERTER_MISSING = 'the shader converter could not be loaded';
+
+/**
+ * Why `refuseDroppedCode` refused a bare script: one line, quoting the first
+ * line of code its conversion would lose (at most 80 characters of it, cut
+ * between code points).
+ */
+function droppedCodeReason(dropped: readonly string[]): string {
+  const chars = Array.from(dropped[0] ?? '');
+  const line = chars.length > 80 ? `${chars.slice(0, 79).join('')}…` : chars.join('');
+  return `only the default function's body can be shown as a graph, and this would be lost: ${line}`;
+}
+
 /**
  * Import shader source text: a FASTSHADERS_PROJECT_V1 block restores the full
  * project; a bare shaderloader script is parsed back to TSL and re-synced.
@@ -371,6 +410,29 @@ let scriptImportSeq = 0;
  * Synchronous up to the return, the announcement included. Only the
  * bare-script CONVERSION can land later, on the first one of a session:
  * `await preloadShaderImport()` first to have it settled on return.
+ *
+ * `freshHistory`: the import starts a FRESH undo history — the embed bridge's
+ * host open (embed/EmbedBridge.tsx), where the host holds the document and an
+ * undo must never reach the one the editor held before (it was posted back as
+ * the new one's module). Past and future are emptied in the write that
+ * replaces the graph, and the import records nothing: a block's apply skips
+ * its `pushHistory`, a bare script's conversion asks the sync engine for a
+ * code→graph pass that leaves no history (`requestCodeSync({ history: false })`
+ * — that pass lands AFTER the clear, and is where the bare script's one undo
+ * entry comes from everywhere else; it records nothing and empties past and
+ * future again as it lands, so an edit of the graph still on screen meanwhile
+ * cannot undo back to the previous document). An import that throws first
+ * leaves the history alone. Absent, every other caller's history is what it
+ * was.
+ *
+ * `refuseDroppedCode`: a bare script whose conversion would LOSE code
+ * (scriptToTSL's `dropped` — code at module scope, or sharing a line with the
+ * default function's `{` or `}`) is refused: the import throws, before it has
+ * written anything. The embed bridge's host open, whose graph goes back to
+ * the host AS that file: measured, a hand-written module with a `const K` at
+ * module scope opened without an error and went back reading `K` with nothing
+ * declaring it. Needs the converter chunk (`preloadShaderImport`); without it
+ * the import throws SHADER_CONVERTER_MISSING.
  */
 export function importShaderText(
   text: string,
@@ -380,16 +442,28 @@ export function importShaderText(
     /** `extractProjectState(text)`, when the caller already ran it — a block
      *  with embedded images is megabytes of JSON, parsed once, not twice. */
     parsed?: ReturnType<typeof extractProjectState>;
+    freshHistory?: boolean;
+    refuseDroppedCode?: boolean;
   },
 ): 'project' | 'script' {
   const projectResult = opts?.parsed !== undefined ? opts.parsed : extractProjectState(text);
-  // Clear AFTER the parse — an import that dies in extractProjectState (the
-  // throw propagates to the caller's error surface) must not wipe the mesh.
-  if (!opts?.keepPreviewMesh) useAppStore.getState().setPreviewMesh(null);
+  const freshHistory = opts?.freshHistory === true;
+  // A bare script is converted FIRST when its chunk is here — pure, and before
+  // anything is written, so a script refused here leaves the editor as it was.
+  const converted = !projectResult && scriptToTSL ? scriptToTSL.scriptToTSLWithSettings(text) : null;
+  if (!projectResult && opts?.refuseDroppedCode) {
+    if (!converted) throw new Error(SHADER_CONVERTER_MISSING);
+    if (converted.dropped.length > 0) throw new Error(droppedCodeReason(converted.dropped));
+  }
+  // The mesh is cleared AFTER the parse — an import that dies in
+  // extractProjectState (the throw propagates to the caller's error surface)
+  // must not wipe it — and for a block with the rest of its writes, once the
+  // block has been read whole (applyProjectToStore).
   if (projectResult) {
-    applyProjectToStore(projectResult.project, projectResult.stripped, opts?.nameFallback ?? '');
+    applyProjectToStore(projectResult.project, projectResult.stripped, opts?.nameFallback ?? '', freshHistory, opts?.keepPreviewMesh === true);
     return 'project';
   }
+  if (!opts?.keepPreviewMesh) useAppStore.getState().setPreviewMesh(null);
   // A bare script's graph does not exist yet; the canvas ARMS its fit on this
   // event. Announced BEFORE the conversion, which may land a tick later: a
   // listener reading it inside its own synchronous bracket (the Work folder's
@@ -400,25 +474,34 @@ export function importShaderText(
   // Last import wins: a second one started while the chunk was in flight owns
   // the document, and this one's continuation must not overwrite it.
   const seq = ++scriptImportSeq;
-  if (scriptToTSL) {
-    applyConvertedScript(scriptToTSL.scriptToTSLWithSettings(text));
+  if (converted) {
+    applyConvertedScript(converted, freshHistory);
   } else {
     void preloadShaderImport().then((m) => {
       if (!m || seq !== scriptImportSeq) return;
-      applyConvertedScript(m.scriptToTSLWithSettings(text));
+      applyConvertedScript(m.scriptToTSLWithSettings(text), freshHistory);
     });
   }
   return 'script';
 }
 
-/** Commit a converted bare script; also runs from the converter chunk's continuation. */
+/**
+ * Commit a converted bare script; also runs from the converter chunk's
+ * continuation. `freshHistory` (importShaderText's): the history is emptied
+ * in the write below, and the code→graph pass it requests leaves none. That
+ * pass is an IMPORT's (`imported`): the graph still on the canvas is the
+ * previous document's, and nothing of it is carried into this one but the
+ * material settings stamped below (hooks/useSyncEngine.ts doCodeSync).
+ */
 function applyConvertedScript(
   converted: { code: string; materialSettings?: MaterialSettings },
+  freshHistory = false,
 ): void {
   const store = useAppStore.getState();
   // Stamp the file's OWN material settings (or `undefined`, which CLEARS the
-  // previous shader's) on the Output BEFORE the code→graph pass: mergeMatch
-  // carries whatever sits on the old node. See docs/dev/codegen.md § Alpha.
+  // previous shader's) on the Output BEFORE the code→graph pass: the import's
+  // pass carries what sits on that node onto the file's own module-settings
+  // Output, and nothing else of the old graph. See docs/dev/codegen.md § Alpha.
   //
   // A raw setState, not updateNodeData (that pushes history and sets
   // syncSource 'graph'). `syncSource: 'code'` is LOAD-BEARING: with 'graph' the
@@ -445,9 +528,17 @@ function applyConvertedScript(
     // syncSource 'code' the graph→code effect never reaches the `finally` that
     // clears it, and pushHistory bails while it is set (no undo for the import).
     isUndoRedo: false,
+    // Another document: a pass asked for before this write writes nothing;
+    // the one requested below is asked for under this count.
+    documentEpoch: s.documentEpoch + 1,
+    ...(freshHistory ? { past: [], future: [] } : {}),
   }));
   store.setCode(converted.code, 'code');
-  store.requestCodeSync();
+  // The bare script's ONE undo entry is recorded by this pass (the sync
+  // engine's doCodeSync), which lands after the write above; with a fresh
+  // history it records none and empties past and future again as it lands.
+  // An import's pass: never skipped, and blind to the old graph (above).
+  store.requestCodeSync({ history: !freshHistory, imported: true });
 }
 
 export function isZipFile(file: File): boolean {

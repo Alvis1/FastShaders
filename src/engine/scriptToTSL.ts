@@ -53,6 +53,48 @@ const SPLAT_FN_DECL_RE = /^const\s+sp\d+(?:Shade|Shape|Size|Feather)\s*=\s*Fn\s*
  *  built ONCE from the table so a new row is preserved without touching this file. */
 const MODULE_HELPER_DECL = new RegExp(`^\\s*const\\s+(${[...MODULE_HELPER_NAMES].join('|')})\\s*=\\s*(?:Fn\\(|\\()`);
 
+/**
+ * The module's `threeRevision` export in its plain form: left out like every
+ * module-scope line, but nothing is lost — every module FastShaders writes
+ * declares its own (tslCodeProcessor.ts).
+ */
+const THREE_REVISION_DECL = /^export\s+const\s+threeRevision\s*=\s*(?:(['"])[\w.-]*\1|\d+)\s*;?$/;
+
+/** At most this many `dropped` lines are listed: the first one is what a caller names. */
+const DROPPED_MAX = 20;
+
+/**
+ * A module-scope line the conversion leaves out that holds CODE (`dropped`):
+ * not a blank, a comment, a lone `;`, a 'use strict' directive or the
+ * `threeRevision` export. Read on the MASKED line, so a comment is never code.
+ */
+function isDroppedModuleCode(trimmed: string, maskedTrimmed: string): boolean {
+  if (maskedTrimmed.replace(/;/g, '').trim() === '') return false;
+  if (THREE_REVISION_DECL.test(trimmed)) return false;
+  return !/^(['"])use strict\1\s*;?$/.test(trimmed);
+}
+
+/**
+ * Whether the default function's OPENING line (masked, trimmed) holds code
+ * after the body's `{` — which the conversion does not carry: it writes the
+ * `Fn(() => {` line in its place. A `{` on the next line (no `{` here after
+ * the parameters) is not this; that module does not parse once converted.
+ */
+function codeAfterOpener(masked: string): boolean {
+  const open = masked.indexOf('(');
+  if (open < 0) return false;
+  let depth = 0;
+  for (let i = open; i < masked.length; i++) {
+    const ch = masked[i];
+    if (ch === '(') depth++;
+    else if (ch === ')' && --depth === 0) {
+      const rest = masked.slice(i + 1).trimStart();
+      return rest.startsWith('{') && rest.slice(1).trim() !== '';
+    }
+  }
+  return false;
+}
+
 /** Net brace depth change across `s`: every `{` minus every `}`. */
 function braceDelta(s: string): number {
   let d = 0;
@@ -100,10 +142,21 @@ export function scriptToTSL(scriptCode: string): string {
  * `return { … }; // comment` never reaches the strip site — the objReturn
  * regex rejects the trailing comment and the line passes through verbatim,
  * keys and all. Do not assume every module is covered.
+ *
+ * `dropped`: the lines of CODE the conversion leaves out (trimmed, the first
+ * DROPPED_MAX) — only the default function's body becomes the graph, so code
+ * at module scope (anything but an import, the schema, a module helper, the
+ * `threeRevision` export, a comment or a blank) and code sharing a line with
+ * that function's opening `{` or closing `}` is lost. Lost silently, the graph
+ * read a constant nothing declared any more (`float(K)` without `const K`), and
+ * the module it turns back into threw. A caller that hands the result on as
+ * the file (the embed bridge's host open, `importShaderText`'s
+ * `refuseDroppedCode`) refuses such a file instead. Not a fidelity check of the
+ * body: what codeToGraph cannot represent there is its own warnings' business.
  */
 export function scriptToTSLWithSettings(
   scriptCode: string,
-): { code: string; materialSettings?: MaterialSettings } {
+): { code: string; materialSettings?: MaterialSettings; dropped: string[] } {
   /** Raw source text of each stripped material key, filled at the strip site below. */
   const rawMaterial: Record<string, string> = {};
   /** True when positionNode was the RAW-offset form, not the along-normal one. */
@@ -121,7 +174,7 @@ export function scriptToTSLWithSettings(
     !/^\s*export\s+default\s+function\s*\(/m.test(scriptCode) &&
     /\bFn\s*\(/.test(scriptCode)
   ) {
-    return { code: scriptCode };
+    return { code: scriptCode, dropped: [] };
   }
 
   // Pre-pass: collapse multi-line `import { ... } from '...'` statements onto a
@@ -190,6 +243,11 @@ export function scriptToTSLWithSettings(
   let keepSplatFn = 0;
   let keepHelper = false;
   let helperBraces = 0;
+  // The code this conversion leaves out (see the doc above).
+  const dropped: string[] = [];
+  const drop = (line: string): void => {
+    if (dropped.length < DROPPED_MAX) dropped.push(line.trim());
+  };
 
   for (let li = 0; li < lines.length; li++) {
     const line = lines[li];
@@ -266,6 +324,8 @@ export function scriptToTSLWithSettings(
     if (!insideFn && /^export\s+default\s+function\s*\(/.test(trimmed)) {
       insideFn = true;
       fnBraceDepth = 1;
+      // The line is replaced whole: code after its `{` is not carried.
+      if (codeAfterOpener(maskedTrimmed)) drop(line);
       outLines.push('const shader = Fn(() => {');
       continue;
     }
@@ -305,8 +365,9 @@ export function scriptToTSLWithSettings(
         continue;
       }
 
-      // Closing brace
+      // Closing brace — the line is replaced whole: code before its `}` is not carried.
       if (fnBraceDepth <= 0) {
+        if (maskedTrimmed.replace(/\}\s*;?$/, '').trim() !== '') drop(line);
         outLines.push('});');
         outLines.push('');
         outLines.push('export default shader;');
@@ -384,7 +445,9 @@ export function scriptToTSLWithSettings(
       continue;
     }
 
-    // Outside function — skip stray lines (already emitted export default shader above)
+    // Outside function — skip stray lines (already emitted export default
+    // shader above). One that holds code is lost with it: `dropped`.
+    if (isDroppedModuleCode(trimmed, maskedTrimmed)) drop(line);
   }
 
   // Clean up trailing blank lines
@@ -395,6 +458,7 @@ export function scriptToTSLWithSettings(
   return {
     code: outLines.join('\n') + '\n',
     materialSettings: materialSettingsFromSource(rawMaterial, displacementOffset),
+    dropped,
   };
 }
 

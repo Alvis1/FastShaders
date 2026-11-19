@@ -1525,6 +1525,17 @@ export interface CodeScope {
   readonly names: ReadonlyMap<string, string>;
 }
 
+/**
+ * How a code→graph REQUEST ended (the store's `codeSyncOutcome`). `epoch` is
+ * the `documentEpoch` it was asked under (its `codeSyncEpoch`); `ok`, that the
+ * graph on the canvas is now that text's; `error`, one line saying why no
+ * graph of it was written; `retry`, that the reason was not the text — the
+ * parser chunk could not be fetched, another document replaced the graph
+ * first — so the same text may land another time (false: it does not parse,
+ * or has no graph).
+ */
+export type CodeSyncOutcome = { epoch: number; ok: true } | { epoch: number; ok: false; error: string; retry: boolean };
+
 /** How many recent passes' scopes `codeScopes` keeps — the panel shows at most
  *  one write behind the newest (useNodeCodeHighlight keeps the same ring). */
 const CODE_SCOPE_RING = 4;
@@ -1838,7 +1849,58 @@ interface AppState {
   setCode: (code: string, source?: SyncSource, previewCode?: string, meta?: SetCodeMeta) => void;
   setCodeErrors: (errors: ParseError[]) => void;
   codeSyncRequested: boolean;
-  requestCodeSync: () => void;
+  /**
+   * Whether the requested code→graph pass records its own undo entry (the sync
+   * engine reads it WITH the request and puts it back to true). False only for
+   * an import that starts a fresh history (engine/projectImport.ts
+   * `freshHistory`, the embed bridge's host open): its bare script's
+   * conversion lands after the history was cleared, and the pass leaves NO
+   * history — it records nothing and empties past and future as it lands.
+   */
+  codeSyncHistory: boolean;
+  /**
+   * Whether the requested code→graph pass is an IMPORT's — a bare script's
+   * conversion (engine/projectImport.ts `applyConvertedScript`): ANOTHER
+   * document, whose pass is never skipped as done and carries nothing of the
+   * graph still on the canvas (no pairing, group, carried node, wire or
+   * waypoint, its board drawings cleared) but the material settings the import
+   * stamped on that graph's Output. Read WITH the request and put back to
+   * false, like `codeSyncHistory`.
+   */
+  codeSyncImported: boolean;
+  /**
+   * Counts the times ANOTHER document replaced the graph: an import's write
+   * (engine/projectImport.ts — a project block's, a bare script's conversion)
+   * and NEW's, each bumping it in that same write. A code→graph pass asked for
+   * under an older count parses the text of a document that is gone, and
+   * writes nothing (hooks/useSyncEngine.ts): landing late, it put that
+   * document's graph over the one that replaced it (the embed bridge then
+   * posted it as the new one's module).
+   */
+  documentEpoch: number;
+  /** The `documentEpoch` the pending code→graph request was made under (written by every request). */
+  codeSyncEpoch: number;
+  /**
+   * How the last code→graph request ENDED, and under which document (its
+   * `epoch`): `ok` when the graph on the canvas is now that text's — the pass
+   * wrote it, or the request was skipped because it already was (the sync
+   * engine's `lastSyncedCodeRef` names no other text; an import's never is) —
+   * otherwise `error`, why nothing was written: the parse's first blocking
+   * error, the parser chunk that could not be fetched, direct material
+   * assignments (no graph has them), another document replacing the graph
+   * first; and `retry`, whether that was the text's doing. Written by the sync
+   * engine (hooks/useSyncEngine.ts) as the request ends — a pass's in the
+   * very `set` that clears `syncInProgress` — so whoever sees a pass land
+   * reads how it ended: the embed bridge decides on it whether a host-opened
+   * bare module became the document (embed/EmbedBridge.tsx). Null until one
+   * ends. Session-only, never in history.
+   */
+  codeSyncOutcome: CodeSyncOutcome | null;
+  /**
+   * Ask for a code→graph pass of `code`; `{ history: false }`: one that leaves
+   * no undo history; `{ imported: true }`: an import's (`codeSyncImported`).
+   */
+  requestCodeSync: (opts?: { history?: boolean; imported?: boolean }) => void;
 
   // Complexity actions
   importCostProfile: (parsed: ParsedCostFile) => void;
@@ -2051,6 +2113,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
   syncSource: 'graph',
   syncInProgress: false,
   codeSyncRequested: false,
+  codeSyncHistory: true,
+  codeSyncImported: false,
+  documentEpoch: 0,
+  codeSyncEpoch: 0,
+  codeSyncOutcome: null,
   past: [],
   future: [],
   isUndoRedo: false,
@@ -2354,6 +2421,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
       shaderPalettes: [],
       syncSource: 'graph',
       isUndoRedo: false,
+      // Another document: a code→graph pass still on its way writes nothing.
+      documentEpoch: state.documentEpoch + 1,
     }));
     // The imported preview MODEL goes too (owner, 2026-09-10: "when pressed
     // new, delete also the imported model"). `setPreviewMesh(null)` clears the
@@ -2569,7 +2638,18 @@ export const useAppStore = create<AppState>()((set, get) => ({
   // NB deliberately NO evalLog here: projectImport also calls this on the
   // bare-script import path, which would conflate imports with user Applies —
   // the 'code-apply' event is logged at CodeEditor's two Apply gestures.
-  requestCodeSync: () => set({ codeSyncRequested: true, previewCode: get().code }),
+  // `codeSyncHistory` is written by EVERY request, so a no-history one can
+  // never lend its answer to the next (an Apply records, as it always did);
+  // `codeSyncImported` likewise (an Apply is never an import's); `codeSyncEpoch`
+  // too, so the pass knows which document it was asked for.
+  requestCodeSync: (opts) =>
+    set({
+      codeSyncRequested: true,
+      codeSyncHistory: opts?.history !== false,
+      codeSyncImported: opts?.imported === true,
+      codeSyncEpoch: get().documentEpoch,
+      previewCode: get().code,
+    }),
 
   // (`totalCost` has no setter: the cost effect in useSyncEngine.ts and
   // `setSelectedHeadsetId` each write it inside their own setState.)

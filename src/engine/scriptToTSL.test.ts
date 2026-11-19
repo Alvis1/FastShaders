@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { parse } from '@babel/parser';
 import { scriptToTSL, scriptToTSLWithSettings } from './scriptToTSL';
 import { codeToGraph } from './codeToGraph';
@@ -799,5 +801,96 @@ export default shader;
     const again = tslToShaderModule(back);
     expect(count(again, THREE_IMPORT)).toBe(1);
     expect(count(again, DECL)).toBe(1);
+  });
+});
+
+describe('scriptToTSLWithSettings: the code a conversion leaves out (`dropped`)', () => {
+  // Only the default function's BODY becomes the graph. MEASURED (the embed's
+  // review, 2026-11-18): a hand-written module's `const K = 0.5;` at module
+  // scope was left out with no error and no warning, the graph read `float(K)`
+  // with nothing declaring `K`, and the module it turned back into threw — the
+  // embed bridge posted that module over the host's file on a mere open. The
+  // list is what lets a caller refuse such a file (projectImport.ts
+  // `refuseDroppedCode`).
+  const mod = (top: string, body = "  return { colorNode: color('#cfd3d8') };", tail = '') =>
+    `import { color, float } from 'three/tsl';\n${top}export default function() {\n${body}\n}\n${tail}`;
+
+  it('names every line of code at module scope it does not carry', () => {
+    expect(scriptToTSLWithSettings(mod('const K = 0.5;\n', "  return { colorNode: color('#cfd3d8').mul(float(K)) };")).dropped)
+      .toEqual(['const K = 0.5;']);
+    expect(scriptToTSLWithSettings(mod("const base = color('#cfd3d8');\n", '  return { colorNode: base };')).dropped)
+      .toEqual(["const base = color('#cfd3d8');"]);
+    expect(scriptToTSLWithSettings(mod('function tint(a) {\n  return a.mul(2);\n}\n')).dropped)
+      .toEqual(['function tint(a) {', 'return a.mul(2);', '}']);
+    // After the function too: nothing past its closing `}` is carried either.
+    expect(scriptToTSLWithSettings(mod('', undefined, "console.log('loaded');\nexport const K = 2;\n")).dropped)
+      .toEqual(["console.log('loaded');", 'export const K = 2;']);
+  });
+
+  it('names code sharing a line with the default function\'s `{` or `}`, which the conversion replaces whole', () => {
+    const opener = "import { color } from 'three/tsl';\nexport default function() { const c = color('#cfd3d8');\n  return { colorNode: c };\n}\n";
+    expect(scriptToTSLWithSettings(opener).dropped).toEqual(["export default function() { const c = color('#cfd3d8');"]);
+    const closer = "import { color } from 'three/tsl';\nexport default function() {\n  const c = color('#cfd3d8');\n  return { colorNode: c }; }\n";
+    expect(scriptToTSLWithSettings(closer).dropped).toEqual(['return { colorNode: c }; }']);
+    // A brace on its own line, a comment after it, destructured parameters: nothing.
+    for (const opened of ['export default function() { // the shader', 'export default function({ a, b } = {}) {', 'export default function (params) {']) {
+      expect(scriptToTSLWithSettings(`import { color } from 'three/tsl';\n${opened}\n  return { colorNode: color(0xffffff) };\n}; // end\n`).dropped, opened)
+        .toEqual([]);
+    }
+  });
+
+  it('names nothing that changes nothing: comments, blanks, imports, the schema, a module helper, threeRevision, a lone `;`', () => {
+    const text = [
+      '// TSL Shader Module — the header every export carries',
+      '/**',
+      ' * a block comment, with code in it: const K = 1;',
+      ' */',
+      "'use strict';",
+      "import { color, Fn, mul } from 'three/tsl';",
+      "import * as THREE from 'three/webgpu';",
+      '',
+      `export const threeRevision = '${THREE_REVISION}';`,
+      '',
+      'export const schema = {',
+      "  amount: { type: 'number', default: 0.5 },",
+      '};',
+      '',
+      'const hsl = Fn(([h, s, l]) => {',
+      '  return mul(h, s, l);',
+      '});',
+      ';',
+      '',
+      'export default function(params) {',
+      "  return { colorNode: color('#cfd3d8').mul(params.amount) };",
+      '}',
+      '/* FASTSHADERS_PROJECT_V1 { a block that did not pass the gate } END_FASTSHADERS_PROJECT */',
+      '',
+    ].join('\n');
+    expect(scriptToTSLWithSettings(text).dropped).toEqual([]);
+    // A module the emitter writes, and editor TSL (passed through whole).
+    expect(scriptToTSLWithSettings(buildShaderModule("import { color, Fn } from 'three/tsl';\n\nconst shader = Fn(() => {\n  const color1 = color(0xcfd3d8);\n\n  return color1;\n});\n\nexport default shader;\n", {})).dropped)
+      .toEqual([]);
+    expect(scriptToTSLWithSettings("import { Fn, color } from 'three/tsl';\nconst K = 1;\nconst shader = Fn(() => color(0xffffff));\nexport default shader;\n").dropped)
+      .toEqual([]);
+  });
+
+  it('names nothing in any module of the hand-written corpus (tests/corpus/)', () => {
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory()) walk(`${dir}/${entry.name}`);
+        else if (entry.name.endsWith('.js')) files.push(`${dir}/${entry.name}`);
+      }
+    };
+    walk(fileURLToPath(new URL('../../tests/corpus', import.meta.url)));
+    expect(files.length).toBeGreaterThan(20);
+    for (const file of files) expect(scriptToTSLWithSettings(readFileSync(file, 'utf8')).dropped, file).toEqual([]);
+  });
+
+  it('lists at most DROPPED_MAX (20) lines, the first one first', () => {
+    const many = Array.from({ length: 30 }, (_, i) => `const k${i} = ${i};\n`).join('');
+    const { dropped } = scriptToTSLWithSettings(mod(many));
+    expect(dropped).toHaveLength(20);
+    expect(dropped[0]).toBe('const k0 = 0;');
   });
 });

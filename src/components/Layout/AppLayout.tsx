@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useState } from 'react';
 import { SplitPane, clampPreviewSplit } from './SplitPane';
 import { Toolbar } from './Toolbar';
 import { NodeEditor } from '@/components/NodeEditor/NodeEditor';
@@ -11,6 +11,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { lazyOr } from '@/utils/lazyOr';
 import { isEmbedMode } from '@/embed/embedMode';
+import { EMBED_ROOT_CLASS } from '@/embed/embedLook';
 import './AppLayout.css';
 
 // Monaco (a ~3.7MB chunk + its CSS) rides CodeEditor's import graph; loading
@@ -125,8 +126,19 @@ export function AppLayout() {
  * mounted rather than hidden, so no second renderer runs behind the host's;
  * nothing else depends on it, the module the bridge broadcasts comes from the
  * store (previewCode).
+ *
+ * The page is see-through, so the host's 3D view shows behind the canvas:
+ * `EMBED_ROOT_CLASS` on <html>, before the first paint of this layout, is what
+ * AppLayout.css makes every full-size ancestor of the canvas transparent by
+ * (embed/embedLook.ts). An explicit class rather than a `:has()` guess, and
+ * only here, so a full FastShaders page never gets it.
  */
 function EmbeddedLayout() {
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    root.classList.add(EMBED_ROOT_CLASS);
+    return () => root.classList.remove(EMBED_ROOT_CLASS);
+  }, []);
   return (
     <div className="app-layout app-layout--embed">
       {CANVAS_PANE}

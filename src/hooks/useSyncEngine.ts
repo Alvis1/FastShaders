@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { useAppStore } from '@/store/useAppStore';
+import { useAppStore, type CodeSyncOutcome } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { panelCodegen } from '@/engine/panelCode';
 import { onUnknownExpressionValidated, loadUnknownExpressionValidator } from '@/engine/unknownExpression';
@@ -23,6 +23,22 @@ import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { previewGraph, resolveNodePreview } from '@/utils/nodePreview';
 import { keepsNativeUndo } from '@/utils/isTypingTarget';
 
+/**
+ * Why a code→graph request wrote no graph, where no parse error says it (the
+ * store's `codeSyncOutcome`). One plain line each: the embed bridge hands
+ * them to its host as the reason an open failed.
+ */
+const REPLACED_FIRST = 'another document replaced the graph before it was parsed';
+const DIRECT_ASSIGNMENT = 'direct material assignments (model.material.…Node = …) have no graph';
+const PASS_THREW = 'the code could not be turned into a graph';
+
+/**
+ * Record how a code→graph request ended, outside a pass (the effect's skip and
+ * drop, direct assignments). `retry`: the failure was not the text's.
+ */
+function requestEnded(epoch: number, error?: string, retry = false): void {
+  useAppStore.setState({ codeSyncOutcome: error === undefined ? { epoch, ok: true } : { epoch, ok: false, error, retry } });
+}
 
 export function useSyncEngine() {
   const nodes = useAppStore((s) => s.nodes);
@@ -40,7 +56,12 @@ export function useSyncEngine() {
   const nodePreview = useAppStore((s) => s.nodePreview);
   const prevPreviewRef = useRef(nodePreview);
 
-  // Track last synced code to prevent sync loops
+  // Track last synced code to prevent sync loops. Outside a code→graph pass
+  // it names only a text whose graph IS the one on the canvas (a graph→code
+  // pass's, a code→graph pass that wrote its graph): a pass that wrote none
+  // forgets it, so the request effect's skip below always means "the graph
+  // already is this text's" (no request is taken while a pass runs). An
+  // import's request is never skipped: its text is another document's.
   const lastSyncedCodeRef = useRef('');
 
   // Undo / Redo keyboard shortcuts
@@ -190,9 +211,15 @@ export function useSyncEngine() {
     }
   }, [nodes, edges, syncSource, syncInProgress, setCode, exprEpoch, nodePreview]);
 
-  // Code → Graph (with stable node matching)
+  // Code → Graph (with stable node matching). `recordHistory` false (a request
+  // made with `{ history: false }`, below): the pass leaves NO undo history.
+  // `epoch`: the store's `documentEpoch` the request was made under — a pass
+  // that lands after another document replaced the graph writes nothing.
+  // `imported` (a request made with `{ imported: true }`, a bare script's
+  // conversion): the graph on the canvas is ANOTHER document's, and nothing
+  // of it is matched or carried (the success branch says what that means).
   const doCodeSync = useCallback(
-    async (codeStr: string, skipHistory = false) => {
+    async (codeStr: string, recordHistory: boolean, epoch: number, imported: boolean) => {
       // A code→graph pass ends Preview mode: `requestCodeSync` has already
       // put the panel's text on the preview, and with `syncSource` at 'code'
       // the graph→code effect above — the only thing that emits the
@@ -204,9 +231,18 @@ export function useSyncEngine() {
       useAppStore.getState().setNodePreview(null);
       if (isDirectAssignmentCode(codeStr)) {
         setCodeErrors([]);
+        // Such code has no graph: the one on the canvas stays, and is not
+        // this text's, so the text is forgotten as a failed pass's is (below).
+        lastSyncedCodeRef.current = '';
+        requestEnded(epoch, DIRECT_ASSIGNMENT);
         return;
       }
 
+      // How this pass ends (the store's `codeSyncOutcome`), written in the one
+      // `set` that clears `syncInProgress` (the `finally`): whoever sees the
+      // pass land reads how it ended. One that throws half way wrote no graph
+      // of this text.
+      let outcome: CodeSyncOutcome = { epoch, ok: false, error: PASS_THREW, retry: false };
       // Armed ABOVE the await below: a graph edit landing inside the chunk
       // fetch must not regenerate the text this pass is about to parse.
       setSyncInProgress(true);
@@ -222,27 +258,54 @@ export function useSyncEngine() {
           // otherwise emit as the fail-closed fallback. Not awaited.
           void loadUnknownExpressionValidator();
         } catch {
-          setCodeErrors([
-            {
-              message: t('The TSL parser could not be loaded — reload the app and apply again.', useAppStore.getState().language),
-              severity: 'error',
-            },
-          ]);
+          const message = t('The TSL parser could not be loaded — reload the app and apply again.', useAppStore.getState().language);
+          setCodeErrors([{ message, severity: 'error' }]);
+          outcome = { epoch, ok: false, error: message, retry: true };
+          return;
+        }
+        // The chunk takes its time: the first pass of a page fetches it, and
+        // even a loaded one resolved, in Chrome, only after a host message
+        // already queued behind the open that asked for this pass. If another
+        // document has replaced the graph since the request — a host open in
+        // the embed, a file opened inside the editor, NEW — this text is not
+        // that graph's: parsed in, it put the previous document over the new
+        // one, which the embed bridge then posted as the new one's module.
+        // Nothing is written, and the text is forgotten (the `finally`), so
+        // the next request for it is never skipped as done.
+        if (useAppStore.getState().documentEpoch !== epoch) {
+          outcome = { epoch, ok: false, error: REPLACED_FIRST, retry: true };
           return;
         }
         const result = codeToGraph(codeStr);
-        const hasBlockingErrors = result.errors.some(e => e.severity !== 'warning');
-        if (!hasBlockingErrors) {
-          if (!skipHistory) {
+        // The first error that keeps the graph from being written (a warning does not).
+        const blocking = result.errors.find((e) => e.severity !== 'warning');
+        if (!blocking) {
+          if (recordHistory) {
             useAppStore.getState().pushHistory();
+          } else {
+            // A fresh history (a host open's bare module) stays fresh: what was
+            // recorded while this pass was on its way — an edit of the graph
+            // still on screen, the previous document's — would undo back to it.
+            useAppStore.setState({ past: [], future: [] });
           }
-          const oldNodes = useAppStore.getState().nodes;
+          // The graph on the canvas. An IMPORT's pass (`imported`) matches and
+          // carries NOTHING of it: it is the previous document. Every carry
+          // below — pairing (ids, exposed ports, stored values), groups,
+          // orphaned properties, parked sinks, dormant light wires, waypoints
+          // — reads it, the leftovers only where every parsed node paired,
+          // the gate that was to keep imports out; a small module's parse
+          // paired whole (measured: the previous document's group frame round
+          // the new file's colour node, and its ink, posted by the embed
+          // bridge as the new file's module). Only the material settings the
+          // import stamped on its Output ride across (below).
+          const canvasNodes = useAppStore.getState().nodes;
+          const oldNodes = imported ? [] : canvasNodes;
           // Routing waypoints live on edge.data and aren't reconstructable from
           // the code text — carry them across the resync by matching edges on
           // their (source,sourceHandle,target,targetHandle) tuple, mirroring how
           // group nodes are preserved below. Keyed on the OLD node ids (the
           // remapped edges resolve back to those via idMap).
-          const oldEdges = useAppStore.getState().edges;
+          const oldEdges = imported ? [] : useAppStore.getState().edges;
           const waypointKey = (s: string, sh: string | null | undefined, t: string, th: string | null | undefined) =>
             `${s}\0${sh ?? 'out'}\0${t}\0${th ?? 'in'}`;
           const oldWaypoints = new Map<string, Array<{ x: number; y: number }>>();
@@ -626,6 +689,24 @@ export function useSyncEngine() {
           // Exactly one active sink, whatever the carry produced.
           finalNodes = normalizeActiveOutput(finalNodes);
 
+          if (imported) {
+            // The file's OWN material settings, which the import stamped on
+            // the previous graph's module-settings Output (projectImport.ts
+            // applyConvertedScript), onto the file's: the per-key rule a
+            // paired Output follows (`carryMaterialSettings`).
+            const stamped = moduleSettingsOutput(canvasNodes);
+            if (stamped && parsedOwnerId !== null) {
+              finalNodes = finalNodes.map((n) => {
+                if (n.id !== parsedOwnerId) return n;
+                const owner = { ...n, data: { ...n.data } } as AppNode;
+                carryMaterialSettings(owner, stamped, true);
+                return owner;
+              });
+            }
+            // The board drawings are the previous graph's too; recorded above,
+            // with it, by the undo entry an import makes.
+            useAppStore.setState({ drawings: [] });
+          }
           setNodes(finalNodes, 'code');
           setEdges(remappedEdges, 'code');
           // The text now on the panel is the one just parsed, and nothing
@@ -643,11 +724,16 @@ export function useSyncEngine() {
             });
           }
         }
-        if (!skipHistory) {
-          setCodeErrors(result.errors);
-        }
+        // The parse's errors either way: whether the pass records history says
+        // nothing about whether its text parsed.
+        setCodeErrors(result.errors);
+        outcome = blocking ? { epoch, ok: false, error: blocking.message, retry: false } : { epoch, ok: true };
       } finally {
-        setSyncInProgress(false);
+        // A pass that wrote no graph forgets its text: asked for again, it is
+        // parsed again — never skipped as done by the effect below, which
+        // would then call the graph still on the canvas that text's.
+        if (!outcome.ok) lastSyncedCodeRef.current = '';
+        useAppStore.setState({ syncInProgress: false, codeSyncOutcome: outcome });
       }
     },
     [setNodes, setEdges, setCodeErrors, setSyncInProgress]
@@ -656,17 +742,42 @@ export function useSyncEngine() {
   // Code → Graph (manual Save trigger)
   useEffect(() => {
     if (!codeSyncRequested || syncInProgress) return;
-    useAppStore.setState({ codeSyncRequested: false });
+    // Taken WITH the request it belongs to, and put back for the next one: an
+    // import that starts a fresh undo history (projectImport.ts `freshHistory`,
+    // the embed bridge's host open) asks for a pass that leaves no history —
+    // its bare script's conversion lands here AFTER that history was cleared,
+    // and one entry would let an undo put the previous document's graph back.
+    // So is the document it was asked for (`codeSyncEpoch`), and whether it is
+    // an import's (`codeSyncImported`).
+    const { codeSyncHistory: recordHistory, codeSyncEpoch: epoch, codeSyncImported: imported } = useAppStore.getState();
+    useAppStore.setState({ codeSyncRequested: false, codeSyncHistory: true, codeSyncImported: false });
+
+    // Every request ends with how it ended (the store's `codeSyncOutcome`):
+    // the two below here, any other in doCodeSync.
+
+    // Asked for under a document another has replaced since (an import, NEW):
+    // its text is not this graph's, so there is nothing to parse into it.
+    if (epoch !== useAppStore.getState().documentEpoch) {
+      requestEnded(epoch, REPLACED_FIRST, true);
+      return;
+    }
 
     // Skip code→graph sync if the code hasn't been manually edited
-    // (i.e. it was generated from the graph — nothing to parse back)
-    if (code === lastSyncedCodeRef.current) return;
+    // (i.e. it was generated from the graph — nothing to parse back). The
+    // graph on the canvas already IS this text's (`lastSyncedCodeRef` names
+    // no other), so the request ends as one whose graph landed. Never an
+    // import's: whatever is on the canvas — the same file opened under
+    // another name, with ink drawn on it since — is another document's.
+    if (!imported && code === lastSyncedCodeRef.current) {
+      requestEnded(epoch);
+      return;
+    }
 
     lastSyncedCodeRef.current = code;
     // Fire-and-forget: doCodeSync is async only because it fetches the parser
     // chunk, it owns its own error reporting, and there is nothing here to do
     // once it lands — `syncInProgress` is what the rest of the hook waits on.
-    void doCodeSync(code);
+    void doCodeSync(code, recordHistory, epoch, imported);
   }, [codeSyncRequested, syncInProgress, doCodeSync, code]);
 
   // Recalculate complexity (use ref to avoid double-run when updating output node cost)
