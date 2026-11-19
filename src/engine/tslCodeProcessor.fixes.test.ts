@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { parse } from '@babel/parser';
 import { buildShaderModule } from './tslCodeProcessor';
 import { tslToShaderModule } from './tslToShaderModule';
 import { scriptToTSL } from './scriptToTSL';
@@ -476,5 +477,75 @@ export default shader;
     expect(out).toContain('colorNode: __pixel(cond, vec3(0, 1, 0))');
     expect(out).toContain('emissiveNode: vec3(0, 1, 0)');
     expect(out).not.toContain('vec3(1, 1, 1)');
+  });
+});
+
+describe('#14: a local named `params` never re-declares the module wrapper parameter', () => {
+  // buildShaderModule wraps the body in `export default function(params)`
+  // whenever a uniform exists and reads each uniform as `const X = params.<key>`.
+  // A property NAMED `params` emitted `const params = params.params;` there —
+  // a const re-declaring the wrapper's own parameter, so the module never loaded
+  // (preview, export, podest). fixTDZ renames the local like an import
+  // collision; the schema key, the property's name and the panel code stay
+  // `params`.
+  const parses = (mod: string): void => {
+    expect(() => parse(mod, { sourceType: 'module' })).not.toThrow();
+  };
+  const p = makeNode('p', 'property_float', { name: 'params', value: 0.5 });
+  const out = makeNode('out', 'output');
+  const { code } = graphToCode([p, out], [makeEdge('p', 'out', 'out', 'opacity')]);
+
+  it('the panel code keeps the property name (the fix is MODULE-only)', () => {
+    expect(code).toContain('const params = uniform(0.5);');
+  });
+  it('the auto-detect (preview) module parses, with no self-referential const', () => {
+    const mod = tslToShaderModule(code);
+    expect(mod).not.toContain('const params = params.params;');
+    parses(mod);
+  });
+  it('the export keeps schema key "params" for the renamed local', () => {
+    const mod = tslToShaderModule(code, undefined, [
+      { name: 'params', type: 'float', defaultValue: 0.5 },
+    ]);
+    expect(mod).toContain('const _params = params.params;');
+    expect(mod).toContain("params: { type: 'number', default: 0.5 },");
+    expect(mod).not.toContain("_params: { type: 'number'");
+    parses(mod);
+  });
+  it('a property named `_params` beside it keeps its own name and value', () => {
+    const src = `import { Fn, uniform, add, vec3 } from 'three/tsl';
+const shader = Fn(() => {
+  const params = uniform(1);
+  const _params = uniform(2);
+  const sum1 = add(params, _params);
+  return vec3(sum1, 0, 0);
+});
+export default shader;
+`;
+    const mod = buildShaderModule(src, {});
+    expect(mod).toContain('const _params2 = params.params;');
+    expect(mod).toContain('const _params = params._params;');
+    expect(mod).toContain('add(_params2, _params)');
+    parses(mod);
+  });
+  it('a hand-typed non-uniform `params` local is renamed with every read', () => {
+    const src = `import { Fn, uniform, vec3 } from 'three/tsl';
+const shader = Fn(() => {
+  const k = uniform(2);
+  const params = vec3(1, 0, 0);
+  return params.mul(k);
+});
+export default shader;
+`;
+    const mod = buildShaderModule(src, {});
+    expect(mod).toContain('const _params = vec3(1, 0, 0);');
+    expect(mod).toContain('_params.mul(k)');
+    parses(mod);
+  });
+  it('an exported module re-imports with the property named `params` again', () => {
+    const mod = tslToShaderModule(code, undefined, [
+      { name: 'params', type: 'float', defaultValue: 0.5 },
+    ]);
+    expect(scriptToTSL(mod)).toContain('const params = uniform(0.5);');
   });
 });

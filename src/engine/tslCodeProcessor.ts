@@ -371,11 +371,19 @@ function extractFnBody(tslCode: string, tslNames: string[]): ExtractedFn {
   return { body, preambleImports, preambleDecls };
 }
 
+/**
+ * The default export's one parameter (`export default function(params)`),
+ * through which every uniform is read (`const X = params.<key>`). No local of
+ * the body may share it: fixTDZ renames one that does.
+ */
+const MODULE_PARAMS = 'params';
+
 interface TDZResult {
   body: string;
   /**
-   * Locals renamed because they shadowed an imported TSL name, mapped
-   * original → renamed (e.g. a property named `mix` → `_mix`). buildShaderModule
+   * Locals renamed because they shadowed an imported TSL name or the module's
+   * own parameter (MODULE_PARAMS), mapped original → renamed (e.g. a property
+   * named `mix` → `_mix`, one named `params` → `_params`). buildShaderModule
    * reverses this so a renamed property uniform still resolves to a `params.<X>`
    * keyed by its *original* name (the name the live overlay & shaderloader
    * auto-detect from the un-rewritten generated code).
@@ -386,7 +394,8 @@ interface TDZResult {
 /**
  * Fix TDZ (Temporal Dead Zone) issues in generated code:
  * 1. Remove self-referencing bare declarations (const X = X;)
- * 2. Rename local variables that shadow imported function names
+ * 2. Rename `const` locals that shadow imported function names or the
+ *    module's own parameter (MODULE_PARAMS)
  * 3. Fix bare numeric first-arg in MaterialX noise calls
  */
 function fixTDZ(body: string, tslNames: string[]): TDZResult {
@@ -402,21 +411,35 @@ function fixTDZ(body: string, tslNames: string[]): TDZResult {
     (whole, name: string) => (importedNames.has(name) ? '' : whole),
   );
 
-  // 2. Rename local variables that shadow imported function names
+  // 2. Rename local variables that shadow imported function names — and a
+  // local named MODULE_PARAMS: the body runs inside
+  // `export default function(params)`, so a property named `params` emitted
+  // `const params = params.params;`, which re-declares the parameter, and the
+  // module never loaded. Its schema key stays `params` (reverseRename).
   const declRe = /\bconst\s+(\w+)\s*=/g;
   const conflicting = new Set<string>();
   let dm: RegExpExecArray | null;
   while ((dm = declRe.exec(processedBody)) !== null) {
-    if (importedNames.has(dm[1])) {
+    if (importedNames.has(dm[1]) || dm[1] === MODULE_PARAMS) {
       conflicting.add(dm[1]);
     }
   }
+  // Every identifier-like token in the body, collected ONCE: the free-name
+  // search below must stay linear even for a hostile body declaring
+  // `_params`, `_params2`, … (a RegExp per candidate rescanned it each time).
+  const tokens = new Set(conflicting.size ? processedBody.match(/[A-Za-z_$][\w$]*/g) : null);
   for (const name of conflicting) {
+    // `_<name>`, else `_<name>2`, `_<name>3`… — a body may already declare
+    // `_<name>` (a property named `_params` beside one named `params`), and
+    // renaming onto it would declare it twice.
+    let renamed = `_${name}`;
+    for (let n = 2; importedNames.has(renamed) || tokens.has(renamed); n++) renamed = `_${name}${n}`;
+    tokens.add(renamed);
     processedBody = processedBody.replace(
       new RegExp(`\\b${name}\\b(?!\\s*[:(])`, 'g'),
-      `_${name}`,
+      renamed,
     );
-    renames.set(name, `_${name}`);
+    renames.set(name, renamed);
   }
 
   // 3. Fix bare numeric first-arg in MaterialX noise calls — default to uv()
@@ -832,7 +855,7 @@ export function buildShaderModule(
       const [, indent, codeVar, hex] = mc;
       const schemaKey = reverseRename.get(codeVar) ?? codeVar;
       schemaEntries[schemaKey] = `#${hex.toLowerCase()}`;
-      return `${indent}const ${codeVar} = params.${schemaKey};`;
+      return `${indent}const ${codeVar} = ${MODULE_PARAMS}.${schemaKey};`;
     }
     const m = line.match(uniformLineRe);
     if (!m) return line;
@@ -840,7 +863,7 @@ export function buildShaderModule(
     const schemaKey = reverseRename.get(codeVar) ?? codeVar;
     const v = parseFloat(rawVal);
     schemaEntries[schemaKey] = isNaN(v) ? 0 : v;
-    return `${indent}const ${codeVar} = params.${schemaKey};`;
+    return `${indent}const ${codeVar} = ${MODULE_PARAMS}.${schemaKey};`;
   });
   const hasParams = Object.keys(schemaEntries).length > 0;
 
@@ -1190,7 +1213,7 @@ export function buildShaderModule(
   // that follow read the code the module will actually carry.
   let code = [
     ...(preambleDecls.length ? [...preambleDecls, ''] : []),
-    `export default function(${hasParams ? 'params' : ''}) {`,
+    `export default function(${hasParams ? MODULE_PARAMS : ''}) {`,
     ...nonDiscardLines.map((l) => '  ' + l.trimStart()),
     ...pixelFnLines,
     // The displaced-normal Fns (positionNodeOf), one pair per material that needs them.
