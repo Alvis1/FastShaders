@@ -374,6 +374,31 @@ describe('implicitRootOf — the reads an UNWIRED input makes', () => {
     expect(implicitRootOf(poisoned, none)).toBe('positionGeometry');
   });
 
+  /**
+   * The stored position is emitted BARE as a TSL argument, and three wraps a
+   * function-valued argument in `Fn` and calls it at build time — so a shape
+   * check alone let a shared file name ANY global function (`print`, `close`,
+   * `Function`) for the generated module to call, at the app's real origin in
+   * the VR popup. Membership: a three/tsl node value, or a root type one of the
+   * partition's scopes binds (the splat's `uv`, the march's `rayDirection`),
+   * which is what codeToGraph stores.
+   */
+  it('a stored position names a TSL node value or a scope root, never another global', async () => {
+    const { noisePosIdentifier, implicitRootOf, scopeRootTypes, MARCH_SCOPES, SPLAT_SCOPES } = await import('./sdfPartition');
+    for (const global of ['print', 'close', 'Function', 'alert', 'open', 'fetch', 'Reflect', 'constructor', '__proto__', 'toString', 'window', 'globalThis'])
+      expect(noisePosIdentifier(global), global).toBe('positionGeometry');
+    // A pasted shader's own variable that the parser could not resolve threw
+    // `x is not defined` at load; it now reads the default position instead.
+    expect(noisePosIdentifier('myPos')).toBe('positionGeometry');
+    for (const ok of ['positionLocal', 'positionWorld', 'positionView', 'normalWorld', 'screenUV', 'time', 'cameraPosition'])
+      expect(noisePosIdentifier(ok), ok).toBe(ok);
+    // Every root a scope binds survives, so the splat and march round trips
+    // keep their stored identifier (codeToGraph's `implicitIdentifierOf`).
+    for (const spec of [...MARCH_SCOPES, ...SPLAT_SCOPES])
+      for (const root of scopeRootTypes(spec)) expect(noisePosIdentifier(root), root).toBe(root);
+    expect(implicitRootOf(makeNode('n', 'perlin', { pos: 'print' }), none)).toBe('positionGeometry');
+  });
+
   it('the uv readers: Image (unless UV or Direction is wired), the value-ramps, the samplers', async () => {
     const { implicitRootOf } = await import('./sdfPartition');
     expect(implicitRootOf(makeNode('i', 'imageNode'), none)).toBe('uv');

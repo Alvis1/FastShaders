@@ -26,6 +26,7 @@ rule in CLAUDE.md looks arbitrary, the answer is in the matching file below.
 | [preview-and-runtime.md](preview-and-runtime.md) | The sandboxed preview, shaderloader 0.8, podest, XR, preview geometries, `fit-bounds` |
 | [models-and-gltf.md](models-and-gltf.md) | Dropped models, the trusted-side glTF reader, GLB import/export, decoders, zip limits |
 | [splats.md](splats.md) | Gaussian splats: the `fs-splat-0.1.js` runtime, the no-fork vertex hook, loader 0.8's `splat` key, the Splat Output, splat ingest and caps |
+| [node-generator.md](node-generator.md) | "Generate nodes from text" (`src/llm/`): the routes and what is sent where, the parse-then-re-emit gate and its semantic round trip, the built-in corpus it is held to, placement through the dropped-shader ADD, the in-memory API key, the per-build CSP and the dev server's proxy — and what is still owed |
 | [discovery-and-i18n.md](discovery-and-i18n.md) | Node search ranking, editor visibility, optional categories, the Latvian overlay, the locale-proof number fields |
 | [project-structure.md](project-structure.md) | The full annotated source tree — several rules exist only in these annotations |
 | [testing.md](testing.md) | Test harness contracts (`isolate: false`, the shared factories, the loader and LUT-helper harnesses, the `projectDocs` claim pins, mounting a hook with the real renderer) and the coverage inventory |

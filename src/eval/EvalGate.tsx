@@ -19,6 +19,7 @@ import { ConsentModal } from './ConsentModal';
 import { VIEWPORT_KEY } from '@/utils/viewportMemory';
 import { DEFAULT_OPTIONAL_CATEGORIES, OPTIONAL_CATEGORY_KEYS } from '@/registry/optionalCategories';
 import { ALLOW_MANY_MATERIALS_KEY } from '@/utils/glbImportLimits';
+import { GENERATOR_STORAGE_KEYS } from '@/utils/generatorFlag';
 
 /**
  * Orchestrates eval-mode boot. Mounted by App.tsx ONLY when `isEvalMode()` —
@@ -130,6 +131,11 @@ function cleanSlateForStudy(): void {
     // The 3D view's backdrop (room / grid, ShaderPreview's fs:previewStage):
     // every participant starts on the plain colour the study was run with.
     localStorage.removeItem('fs:previewStage');
+    // "Generate nodes from text" (src/llm/) is absent from study sessions by
+    // decision (docs/dev/eval-mode.md): its opt-in and remembered choices go,
+    // so a '1' left by a previous user cannot reach the next normal-mode
+    // session on this machine either.
+    for (const key of GENERATOR_STORAGE_KEYS) localStorage.removeItem(key);
   } catch {
     /* storage blocked — nothing persisted to leak either */
   }
@@ -137,6 +143,7 @@ function cleanSlateForStudy(): void {
     past: [], future: [],
     optionalCategories: DEFAULT_OPTIONAL_CATEGORIES,
     allowManyMaterials: false,
+    nodeGenerator: false,
     tutorial: null,
     tutorialsDone: [],
   });

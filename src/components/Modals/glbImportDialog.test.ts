@@ -243,7 +243,9 @@ describe('Toolbar', () => {
     expect(block).not.toContain('materials');
     expect(code).toContain('const ALLOW_MANY_MATERIALS_HINT =');
     expect(code).toContain('prefsHeight(prefsRows)');
-    expect(code).toContain('const prefsRows = 1 + OPTIONAL_CATEGORIES.length + 1;');
+    // The GLB row counts in every session; the generator's rows that follow
+    // count only where they are drawn (generatorWiring.test.ts).
+    expect(code).toMatch(/const prefsRows = 1 \+ OPTIONAL_CATEGORIES\.length \+ 1\s*(?:;|\+ \(generatorRow \? 1 : 0\))/);
     expect(code).not.toContain('PREFS_H ');
   });
 });

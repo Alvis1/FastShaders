@@ -2,6 +2,7 @@
 import { defineConfig, type Plugin, type Connect } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import http from 'node:http';
 import { cpSync, readFileSync, writeFileSync, existsSync, rmSync } from 'fs';
 import { execFileSync } from 'child_process';
 
@@ -67,9 +68,10 @@ const versionHtmlPlugin = (): Plugin => ({
  *     `new Function`; without it the editor and live preview don't render.
  *   - `'wasm-unsafe-eval'` — A-Frame's WebGPU build instantiates Wasm.
  *   - `'unsafe-inline'` for script-src — the preview iframe is loaded via
- *     `srcdoc`, which inherits the parent CSP, and the generated preview
- *     HTML uses several inline <script> blocks (shader-blob setup,
- *     fit-bounds component, postMessage glue). Hashing them all is
+ *     `srcdoc`, which inherits the parent CSP (on top of its OWN policy,
+ *     SANDBOX_CSP in src/engine/tslToPreviewHTML.ts — both are enforced),
+ *     and the generated preview HTML uses several inline <script> blocks
+ *     (shader-blob setup, fit-bounds component, postMessage glue). Hashing them all is
  *     brittle because they change with every render. The iframe sandbox
  *     (allow-scripts only, no allow-same-origin) is what actually
  *     contains user code; 'unsafe-inline' here just lets the
@@ -82,20 +84,23 @@ const versionHtmlPlugin = (): Plugin => ({
  *     @fontsource imports in styles/fonts.ts) — no CDN origins in the policy. The
  *     app must work fully offline (and in the desktop build), so never
  *     reintroduce cdn.jsdelivr.net / fonts.googleapis.com here.
- *   - `https://alvis1.github.io` — the sandboxed preview iframe has an
- *     opaque origin, so `'self'` resolves to `null` for fetches it makes
- *     under the inherited CSP. The deployed prod origin therefore has to
- *     be listed explicitly so the iframe can fetch /FastShaders/models/*
- *     OBJs across the sandbox boundary. Update this list (or move CSP
- *     emission behind a build-time env var) if the deploy URL changes.
+ *   - `https://alvis1.github.io` — once
+ *     listed so the opaque-origin preview iframe could fetch
+ *     /FastShaders/models/* OBJs across the sandbox boundary. Now INERT for
+ *     the preview: the parent fetches the models and decoders and posts them
+ *     as bytes, and the preview documents carry their own policy
+ *     (SANDBOX_CSP: `connect-src blob: data:`), which intersects with this one
+ *     and refuses every network fetch on every build. It only widens the
+ *     PAGE's connect-src now (its per-deploy twin, FS_PREVIEW_ORIGIN, was
+ *     removed 2026-11-19); dropping it too is a separate reviewed change.
+ *     A widening here reaches shader code in neither the preview nor the VR
+ *     popup (which inherits this policy and adds XR_CSP, `'self'` only).
  *
  * `frame-src 'self' blob:` authorizes the user-shader iframe;
  * `worker-src 'self' blob:` covers Monaco's web workers.
  */
 // Deploy-target overrides so one repo builds for both GitHub Pages and self-hosting.
 //   FS_BASE           — path the app is served under (default keeps the GitHub Pages build identical)
-//   FS_PREVIEW_ORIGIN — extra origin(s) the sandboxed preview iframe may fetch from at the deploy domain
-//                       (space-separated; the iframe's opaque origin means each must be listed explicitly)
 //   FS_EVAL_UPLOAD_URL — where a finished study package is POSTed. Unset (or empty) = DEFAULT_EVAL_UPLOAD_URL,
 //                       ViA's endpoint on imgame.va.lv, for EVERY build — the host consent-16 names as where
 //                       the data goes. Its origin joins connect-src. Override only to test against a
@@ -109,8 +114,21 @@ const versionHtmlPlugin = (): Plugin => ({
 //                       popover) serves to headsets on the local network. Also exposed to the
 //                       app as __FS_DESKTOP__ so desktop-irrelevant UI ("Download app" button,
 //                       SC link) can hide itself.
+//   FS_LLM_CLOUD_ORIGINS — https origin(s) the CLAUDE route of "Generate nodes from text" talks to
+//                       (space-separated; https://api.anthropic.com). They join connect-src, and the SAME
+//                       value turns that route on (`__FS_LLM_CLOUD__`, llmCloudDefinePlugin), so the option
+//                       never shows where the policy would refuse it. EMPTY by default: a forgotten env hides
+//                       the feature rather than widening a policy. NO hosted build sets it (owner, 2026-11-19):
+//                       `npm run deploy`, deploy-alvismisjuns.sh and deploy-sferas.sh set it EMPTY and
+//                       release.yml leaves it unset, so the route is offered on the desktop app and the dev
+//                       server only.
+//                       Shader code never inherits it: the preview documents carry `connect-src blob: data:`
+//                       and the VR popup `'self' blob: data:` (SANDBOX_CSP / XR_CSP). docs/dev/node-generator.md
+//   FS_LLM_DEV_TARGET — DEV SERVER ONLY: the model server its same-origin proxy forwards the local route to
+//                       (llmDevProxyPlugin; unset or empty = http://127.0.0.1:1234, LM Studio), so the
+//                       generator can be exercised in a browser. No web BUILD offers the local route.
 // Example self-host build:
-//   FS_BASE=/fastshaders/ FS_PREVIEW_ORIGIN='https://alvismisjuns.lv https://www.alvismisjuns.lv' npm run build
+//   FS_BASE=/fastshaders/ npm run build
 // Desktop build:
 //   FS_DESKTOP=1 npm run build
 // The Tauri CLI exports TAURI_ENV_* for its beforeDev/beforeBuild hooks, so
@@ -118,7 +136,6 @@ const versionHtmlPlugin = (): Plugin => ({
 // profile automatically — no cross-platform env-prefix headaches on Windows.
 const FS_DESKTOP = process.env.FS_DESKTOP === '1' || !!process.env.TAURI_ENV_PLATFORM;
 const FS_BASE = process.env.FS_BASE ?? (FS_DESKTOP ? '/' : '/FastShaders/');
-const FS_PREVIEW_ORIGIN = process.env.FS_PREVIEW_ORIGIN ?? '';
 
 /**
  * Where EVERY build posts a finished study package. Since 2026-11-10 (owner)
@@ -159,9 +176,25 @@ const FS_EVAL_UPLOAD_URL = checkedEvalUploadUrl(process.env.FS_EVAL_UPLOAD_URL |
 /** The endpoint's origin when it lives on ANOTHER host — it must join connect-src. */
 const EVAL_UPLOAD_ORIGIN = /^https?:\/\//.test(FS_EVAL_UPLOAD_URL) ? new URL(FS_EVAL_UPLOAD_URL).origin : '';
 
-/** 'self' plus every extra origin, each listed once (the preview's may already name the endpoint's host). */
+/**
+ * FS_LLM_CLOUD_ORIGINS, checked when the config loads: each entry exactly
+ * `https://<host>` — a path, a port, a wildcard or `http:` fails the BUILD
+ * rather than widening connect-src in a way nobody reviewed.
+ */
+function checkedCloudOrigins(raw: string): string[] {
+  const list = raw.trim().split(/\s+/).filter(Boolean);
+  for (const o of list) {
+    if (!/^https:\/\/[a-z0-9.-]+$/.test(o)) throw new Error(`FS_LLM_CLOUD_ORIGINS entries must be https://<host>: ${o}`);
+  }
+  return [...new Set(list)];
+}
+const FS_LLM_CLOUD_ORIGINS = checkedCloudOrigins(process.env.FS_LLM_CLOUD_ORIGINS ?? '');
+/** The build's policy lets the page reach the Claude API. */
+const LLM_CLOUD_IN_CSP = FS_LLM_CLOUD_ORIGINS.includes('https://api.anthropic.com');
+
+/** 'self' plus every extra origin, each listed once. */
 const CONNECT_SRC = [
-  ...new Set(["'self'", 'blob:', 'https://alvis1.github.io', ...FS_PREVIEW_ORIGIN.split(/\s+/), EVAL_UPLOAD_ORIGIN]),
+  ...new Set(["'self'", 'blob:', 'https://alvis1.github.io', EVAL_UPLOAD_ORIGIN, ...FS_LLM_CLOUD_ORIGINS]),
 ]
   .filter(Boolean)
   .join(' ');
@@ -186,6 +219,94 @@ const cspHtmlPlugin = (): Plugin => ({
   transformIndexHtml(html) {
     const meta = `<meta http-equiv="Content-Security-Policy" content="${CSP_DIRECTIVES}" />`;
     return html.replace('<head>', `<head>\n    ${meta}`);
+  },
+});
+
+/**
+ * `__FS_LLM_CLOUD__`: may this build offer the Claude route of "Generate nodes
+ * from text" (src/llm/registry.ts)? The dev server (no page CSP), the desktop
+ * app (no page CSP), or a web build whose policy names the API — ONE value
+ * drives the policy and the option (llmCspContract.test.ts).
+ */
+const llmCloudDefinePlugin = (): Plugin => ({
+  name: 'fs-llm-cloud-define',
+  config(_, { command }) {
+    return { define: { __FS_LLM_CLOUD__: JSON.stringify(command === 'serve' || FS_DESKTOP || LLM_CLOUD_IN_CSP) } };
+  },
+});
+
+/** The model routes the dev proxy forwards — the ones the local provider uses. */
+const LLM_DEV_ROUTES = new Set(['/v1/models', '/api/v1/models', '/v1/chat/completions']);
+/** A request's `Host` the dev proxy answers: a loopback name, an optional port. */
+const LOOPBACK_HOST_RE = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/;
+
+/**
+ * DEV SERVER ONLY: a same-origin proxy for the generator's local route, so the
+ * dialog can be exercised in a browser against LM Studio (the desktop app
+ * reaches it through Rust, src-tauri/src/llm.rs; no web build offers it).
+ *
+ * It answers THIS dev server's own pages only. Two attacks reach it from
+ * another website open in the same browser: a cross-site request — even one
+ * whose answer the page cannot read can still START a generation (a no-cors
+ * POST) — refused by its `Sec-Fetch-Site` and its `Origin`; and DNS
+ * REBINDING, where the attacker's own name resolves to 127.0.0.1, so the
+ * browser counts its requests as SAME-origin and both of those checks pass —
+ * refused by the `Host`, which must be a loopback name. (Vite's own host check
+ * does not cover this middleware: it is registered before Vite's.) Like the
+ * Rust bridge, it forwards no `Origin` of its own and only the three routes,
+ * to a loopback http target.
+ */
+const llmDevProxyPlugin = (): Plugin => ({
+  name: 'fs-llm-dev-proxy',
+  apply: 'serve',
+  configureServer(server) {
+    const raw = process.env.FS_LLM_DEV_TARGET || 'http://127.0.0.1:1234';
+    let target: URL;
+    try {
+      target = new URL(raw);
+    } catch {
+      throw new Error(`FS_LLM_DEV_TARGET is not a URL: ${raw}`);
+    }
+    if (target.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(target.hostname) || target.pathname !== '/') {
+      throw new Error(`FS_LLM_DEV_TARGET must be a loopback http base: ${target.href}`);
+    }
+    server.middlewares.use((req, res, next) => {
+      const route = (req.url ?? '').split('?')[0];
+      if (!LLM_DEV_ROUTES.has(route)) return next();
+      const site = req.headers['sec-fetch-site'];
+      const origin = req.headers.origin;
+      const host = req.headers.host ?? '';
+      if (!LOOPBACK_HOST_RE.test(host) || (site && site !== 'same-origin') || (origin && origin !== `http://${host}`)) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end('{"error":"the dev server\'s LLM proxy answers its own pages only"}');
+        return;
+      }
+      const upstream = http.request(
+        {
+          host: target.hostname.replace(/^\[|\]$/g, ''),
+          port: Number(target.port || 80),
+          method: req.method,
+          path: route,
+          headers: {
+            host: target.host,
+            accept: req.headers.accept ?? '*/*',
+            ...(req.headers['content-type'] ? { 'content-type': req.headers['content-type'] } : {}),
+          },
+        },
+        (up) => {
+          res.writeHead(up.statusCode ?? 502, { 'Content-Type': up.headers['content-type'] ?? 'application/octet-stream', 'Cache-Control': 'no-cache' });
+          up.pipe(res);
+        },
+      );
+      upstream.on('error', () => {
+        if (res.headersSent) { res.end(); return; }
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `Nothing answers at ${target.host} (FS_LLM_DEV_TARGET)` }));
+      });
+      // A closed page or a Cancel ends the upstream request, so the model stops.
+      res.on('close', () => upstream.destroy());
+      req.pipe(upstream);
+    });
   },
 });
 
@@ -971,6 +1092,8 @@ export default defineConfig({
     nodeDesignerEndpointPlugin(),
     publicEntryDevIndexPlugin(),
     entryDirDevRedirectPlugin(),
+    llmCloudDefinePlugin(),
+    llmDevProxyPlugin(),
   ],
   resolve: {
     alias: {
@@ -984,6 +1107,7 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(pkg.version),
     __FS_DESKTOP__: JSON.stringify(FS_DESKTOP),
     __FS_EVAL_UPLOAD_URL__: JSON.stringify(FS_EVAL_UPLOAD_URL),
+    // __FS_LLM_CLOUD__ comes from llmCloudDefinePlugin: it depends on the command.
   },
   server: {
     port: 5173,
@@ -1062,6 +1186,11 @@ export default defineConfig({
           if (/node_modules\/(react|react-dom|scheduler|use-sync-external-store)\//.test(id)) return 'vendor-react';
           if (id.includes('node_modules/@xyflow/') || id.includes('node_modules/d3-')) return 'vendor-xyflow';
           if (id.includes('node_modules/@dagrejs/')) return 'vendor-dagre';
+          // The Claude route's SDK — reached only through import() from the
+          // generator (llm/registry.ts), so it loads on that route's first use.
+          // Only on builds that offer the route: elsewhere registry.ts's build
+          // constant drops the import, and naming the chunk would emit it empty.
+          if ((FS_DESKTOP || LLM_CLOUD_IN_CSP) && id.includes('node_modules/@anthropic-ai/')) return 'vendor-anthropic';
         },
       },
     },

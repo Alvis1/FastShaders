@@ -6,11 +6,13 @@
 #
 # Same shape as deploy-alvismisjuns.sh, two differences:
 #   • base is `/` — that host serves the app at its ROOT, not under a subpath;
-#     FS_PREVIEW_ORIGIN names this host, so the sandboxed preview iframe (an
-#     opaque origin, hence never `'self'`) may fetch the built-in models;
 #   • the target is /var/www/fs/src, the docroot of the dedicated `fs`
 #     container (nginx). NB `/var/www/sferas/src` is a DIFFERENT, shared
 #     directory holding a dozen unrelated projects — never deploy there.
+# Like every hosted build it sets FS_LLM_CLOUD_ORIGINS EMPTY: the study host
+# never offers "Generate nodes from text", and setting it empty here means a
+# stale shell export cannot widen the study build's connect-src. The verify
+# step fails if the served page names the API.
 # Like every build it posts study packages to ViA's endpoint on imgame.va.lv
 # (DEFAULT_EVAL_UPLOAD_URL in vite.config.ts, which also puts its origin in
 # connect-src). This host is static nginx with no endpoint of its own; until
@@ -45,7 +47,7 @@ if [ "${1:-}" != "--no-build" ]; then
   echo "==> building (base /, CSP for fs.sferas.lv, study uploads to $UPLOAD_URL)"
   cd "$ROOT"
   FS_BASE=/ \
-  FS_PREVIEW_ORIGIN="$ORIGIN" \
+  FS_LLM_CLOUD_ORIGINS= \
     npm run build
   rm -rf "$DIST"
   cp -R "$ROOT/dist" "$DIST"
@@ -83,11 +85,12 @@ EOF
 # Hard gate, exactly as the alvismisjuns script documents: a clean psftp exit
 # proves nothing about what the site actually serves. The CSP line is the
 # study upload's other half: the served page's CSP must let it reach the
-# endpoint (whose preflight was checked before the upload). The last check is
-# the device-comparison page, a DIRECTORY url like /evalp/ but its own Vite
-# entry (dist/compare/index.html): it must answer 200 with ITS page at the
-# version just built — the title names it, because a host that fell back to
-# index.html would answer 200 with the right version too.
+# endpoint (whose preflight was checked before the upload). The page must NOT
+# name the Claude API anywhere: the study host never offers the generator. The
+# last check is the device-comparison page, a DIRECTORY url like /evalp/ but
+# its own Vite entry (dist/compare/index.html): it must answer 200 with ITS
+# page at the version just built — the title names it, because a host that
+# fell back to index.html would answer 200 with the right version too.
 echo "==> verifying"
 EXPECTED="$(node -p "require('$ROOT/package.json').version")"
 PAGE="$(curl -sS -H 'Cache-Control: no-cache' "$ORIGIN/index.html?cb=$(date +%s)")"
@@ -95,6 +98,7 @@ SERVED="$(printf '%s' "$PAGE" | sed -n 's/.*<meta name="version" content="\([^"]
 EVALP="$(curl -sS -o /dev/null -w '%{http_code}' "$ORIGIN/evalp/")"
 UPLOAD_ORIGIN="$(node -p "new URL('$UPLOAD_URL').origin")"
 CSP_OK="$(printf '%s' "$PAGE" | grep -o "connect-src [^;\"]*" | grep -cF "$UPLOAD_ORIGIN" || true)"
+LLM_ABSENT="$(printf '%s' "$PAGE" | grep -cF 'api.anthropic.com' || true)"
 COMPARE="$(curl -sS -H 'Cache-Control: no-cache' -w '\n%{http_code}' "$ORIGIN/compare/?cb=$(date +%s)" || true)"
 COMPARE_CODE="$(printf '%s' "$COMPARE" | tail -n 1)"
 COMPARE_VER="$(printf '%s' "$COMPARE" | sed -n 's/.*<meta name="version" content="\([^"]*\)".*/\1/p')"
@@ -102,8 +106,9 @@ COMPARE_OK="$(printf '%s' "$COMPARE" | grep -c 'Device comparison' || true)"
 echo "  version served: ${SERVED:-none} (expected $EXPECTED)"
 echo "  /evalp/       : $EVALP"
 echo "  CSP names the upload origin: $([ "$CSP_OK" -ge 1 ] && echo yes || echo NO)"
+echo "  page names the Claude API  : $([ "$LLM_ABSENT" -eq 0 ] && echo no || echo YES)"
 echo "  /compare/     : ${COMPARE_CODE:-none}, version ${COMPARE_VER:-none}$([ "$COMPARE_OK" -ge 1 ] || echo ', NOT the comparison page')"
-[ "$SERVED" = "$EXPECTED" ] && [ "$EVALP" = "200" ] && [ "$CSP_OK" -ge 1 ] \
+[ "$SERVED" = "$EXPECTED" ] && [ "$EVALP" = "200" ] && [ "$CSP_OK" -ge 1 ] && [ "$LLM_ABSENT" -eq 0 ] \
   && [ "$COMPARE_CODE" = "200" ] && [ "$COMPARE_VER" = "$EXPECTED" ] && [ "$COMPARE_OK" -ge 1 ] \
   && echo "fs.sferas.lv live ✓" \
   || { echo "MISMATCH — check the output above" >&2; exit 1; }

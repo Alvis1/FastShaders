@@ -178,6 +178,24 @@ describe('the main app boot wave', () => {
     expect(offenders).toEqual([]);
   });
 
+  it('never reaches the text-to-nodes generator (src/llm/) or the Anthropic SDK', () => {
+    // The generator is opt-in and off by default: its only boot-path pieces
+    // are the leaf flag (utils/generatorFlag.ts) and the launcher the toolbar's
+    // Settings row opens (components/Layout/GeneratorLauncher.tsx), which loads
+    // the dialog with import(). A static edge into src/llm/ would ship the
+    // gate, the protocol code — and through providers/claude.ts the SDK — to
+    // every visitor.
+    const llm = join(SRC, 'llm') + '/';
+    expect(existsSync(llm)).toBe(true);
+    const reached = [...graph.importerOf.keys()].filter((f) => f.startsWith(llm)).map((f) => chainTo(graph, f));
+    expect(reached).toEqual([]);
+    const sdk = [...graph.packages].filter(([spec]) => spec.startsWith('@anthropic-ai/')).map(([spec, f]) => `${spec} ← ${chainTo(graph, f)}`);
+    expect(sdk).toEqual([]);
+    // Not vacuous: the launcher and the flag ARE on the wave.
+    expect(graph.importerOf.has(join(SRC, 'components/Layout/GeneratorLauncher.tsx'))).toBe(true);
+    expect(graph.importerOf.has(join(SRC, 'utils/generatorFlag.ts'))).toBe(true);
+  });
+
   it('the Babel-bearing list is true: each one does reach @babel/*', () => {
     for (const file of BABEL_BEARING) {
       const own = walkStatic(join(SRC, file));

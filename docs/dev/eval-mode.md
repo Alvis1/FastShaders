@@ -18,6 +18,7 @@
 - The 2026-11-02 `consent-15` questionnaire & `/evalp` condition alignment
 - The 2026-11-09 move of the upload to ViA's server (`consent-16`)
 - The 2026-11-10 round 2: every arm gets the whole app, `/evalp` differs only in the points
+- The text-to-nodes generator is absent from a study session, by decision (2026-11-19)
 
 ---
 
@@ -113,3 +114,10 @@
 - **Telemetry**: no event type was added. `import` gains an optional `how` for the three merges that newly reach a study — `add` (a dropped shader parked beside the graph), `model` (Mesh with Materials), `splat` (Clear graph) — read from the `detail` that `announceGraphMerged(how)` now carries on `fs:graph-merged`; the lesson takeover's detail-less dispatch is NOT logged again (it is `tutorial-start`). A bare `import` is still Open (`fs:graph-imported`). The package README names both forms. `CONSENT_TEXT_VERSION` stays `consent-16`: no host has served consent-16 yet (2026-11-10), and its disclosure already lists "dropped assets" and "tutorial steps used", which cover the new fields.
 - **Comparing rounds**: a round-1 package and a round-2 one were made in different editors — the panel's text, the menus, the dialogs, the lesson library on `/eval`/`/evalp`, and what a drop does all differ. Pool them only by the package's app version, never blind; within round 2, `/eval` and `/evalp` differ in the points alone.
 
+### The text-to-nodes generator is absent from a study session, by decision (2026-11-19)
+
+Round 2's rule (above) is that a new feature reaches a study session by default, and that gating one there is a study-design decision. "Generate nodes from text" (docs/dev/node-generator.md) is gated off on purpose. The decision is the owner's from 2026-10-01, re-confirmed for the port to main (2026-11-19):
+- **Why** (the generator's plan, `private/docs/llm-generator/PLAN.md`): a written request would change what a participant does, since a session measures building a shader from nodes, and controlled studies link one-shot generation to lower skill gain. The study host's build also names no cloud API in its CSP.
+- **The gates** (each refuses on its own; `generatorWiring.test.ts` pins them): the toolbar's Settings rows that switch it on and open it (`generatorRow`: `!isEvalMode() && !isEmbedMode() && …`); the launcher that loads the dialog (`components/Layout/GeneratorLauncher.tsx`); the run (`runGeneration` refuses with `inStudy`); the add (`addGeneratedGroup`); `offeredRoutes`, which returns no route. On the study host the build itself has no Claude route (no hosted build has): `deploy-sferas.sh` sets `FS_LLM_CLOUD_ORIGINS` EMPTY and fails if the served page names the API (`llmCspContract.test.ts`).
+- **The clean slate** removes every key in `GENERATOR_STORAGE_KEYS` (the `fs:nodeGenerator` opt-in and the four `fs:llm*` choices) and sets the store's `nodeGenerator` to false. A `'1'` left by the previous user of a study machine therefore cannot reach the next ordinary session there either.
+- **Telemetry**: nothing. No file in `src/llm`, nor the launcher, calls `evalLog`, and no event type was added.

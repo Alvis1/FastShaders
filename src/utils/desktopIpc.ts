@@ -9,7 +9,9 @@
  * Zero-cost on the web: every importer is desktop-only — the Work-folder
  * control, `utils/desktopAutosave.ts` and the store's `desktopAutosaveBoot.ts`,
  * all reached only behind `__FS_DESKTOP__` — and this module imports nothing
- * but two leaves.
+ * but two leaves. The one exception is the local-LLM block below, which
+ * `llm/transport/fetchTransport.ts` (the probe under node, the dev server)
+ * reads as well, so every transport enforces ONE set of routes and caps.
  */
 import { DESKTOP_MAX_TOTAL_UNCOMPRESSED } from './zipReader';
 import { errorText } from './tauriBridge';
@@ -30,6 +32,44 @@ export const ARCHIVE_SLACK_BYTES = 8 * 1024 * 1024;
  *  (`READ_MAX_ARCHIVE_BYTES` in a desktop build). `work_folder_read` refuses a
  *  larger file with `E_TOO_LARGE <size> <limit>` before reading it. */
 export const DESKTOP_MAX_READ_BYTES = DESKTOP_MAX_TOTAL_UNCOMPRESSED + ARCHIVE_SLACK_BYTES;
+
+// --- The local-LLM bridge (src-tauri/src/llm.rs) ---------------------------
+// The desktop app reaches a model server on this computer through Rust, never
+// through the webview's fetch. Every value here is pinned against llm.rs's
+// text by desktopIpcContract.test.ts.
+
+/** GET an allow-listed path: `{ base, path, requestId }` → the raw body. */
+export const LLM_LOCAL_MODELS = 'llm_local_models';
+/** POST a chat request: `{ base, path, body, requestId, onEvent: Channel }`;
+ *  the answer streams over the channel (frames below). */
+export const LLM_LOCAL_CHAT = 'llm_local_chat';
+/** `{ requestId }`: cancel that request (also one that has not started yet). */
+export const LLM_LOCAL_CANCEL = 'llm_local_cancel';
+
+/** = Rust `GET_ROUTES`, the exact paths a GET may request. */
+export const LLM_LOCAL_GET_ROUTES = ['/v1/models', '/api/v1/models', '/api/tags', '/api/version'] as const;
+/** = Rust `POST_ROUTES`. */
+export const LLM_LOCAL_POST_ROUTES = ['/v1/chat/completions', '/api/chat'] as const;
+/** = Rust `LOOPBACK_HOSTS`: the only host spellings a base may use. */
+export const LLM_LOOPBACK_HOSTS = ['127.0.0.1', 'localhost', '[::1]'] as const;
+
+/** = Rust `MAX_REQUEST_BYTES`: a larger chat body is refused before invoking. */
+export const LLM_MAX_REQUEST_BYTES = 1024 * 1024;
+/** = Rust `MAX_STREAM_BYTES`: the most body bytes one chat answer may stream. */
+export const LLM_MAX_STREAM_BYTES = 8 * 1024 * 1024;
+/** = Rust `MAX_MODEL_LIST_BYTES`: the largest GET body. */
+export const LLM_MAX_MODEL_LIST_BYTES = 1024 * 1024;
+
+/**
+ * Channel frames of `llm_local_chat` (Rust `FRAME_DATA` / `FRAME_END`): every
+ * message is raw bytes whose first byte is one of these tags. DATA carries
+ * response-body bytes in order; END — exactly one, always last — carries the
+ * final status as UTF-8: empty for success, else an `E_…` string. Completion
+ * is END, never the invoke promise: frames of 1 KiB or more are fetched by the
+ * webview asynchronously and can arrive after that promise resolves.
+ */
+export const LLM_FRAME_DATA = 1;
+export const LLM_FRAME_END = 2;
 
 export interface DesktopError {
   /** The code without its `E_` prefix: `TOO_LARGE`, `BAD_NAME`, … */

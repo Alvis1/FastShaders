@@ -711,11 +711,20 @@ describe('graphToCode — stored values never reach the module as code', () => {
     expect(badCode).toContain('const noise1 = mx_noise_float(positionGeometry);');
     expect(badCode).not.toContain('__pwned');
     oneStatementPerLine(badCode);
-    // codeToGraph stores the unresolved variable NAME of a pasted noise call —
-    // an identifier must survive verbatim or those graphs change on every save.
-    const ok = makeNode('n', 'perlin', { pos: 'myUnresolvedVar', scale: 1 });
+    // codeToGraph stores the bare NAME a pasted noise call read its position
+    // from — a TSL node value must survive verbatim or those graphs change on
+    // every save.
+    const ok = makeNode('n', 'perlin', { pos: 'positionWorld', scale: 1 });
     expect(graphToCode([ok, out()], [makeEdge('n', 'out', 'out', 'color')]).code)
-      .toContain('const noise1 = mx_noise_float(myUnresolvedVar);');
+      .toContain('const noise1 = mx_noise_float(positionWorld);');
+    // …but never a name three would CALL: a function-valued TSL argument is
+    // wrapped in `Fn` and invoked, so a global function (or a name nothing
+    // declares, which threw at load) reads the default position instead.
+    for (const pos of ['print', 'Function', 'constructor', 'myUnresolvedVar']) {
+      const n = makeNode('n', 'perlin', { pos, scale: 1 });
+      expect(graphToCode([n, out()], [makeEdge('n', 'out', 'out', 'color')]).code, pos)
+        .toContain('const noise1 = mx_noise_float(positionGeometry);');
+    }
   });
 
   it.each(['channel', 'tilingU', 'tilingV', 'rotation'])(

@@ -19,6 +19,11 @@
 # endpoint from both of this host's origins BEFORE anything is built or
 # uploaded, and the served CSP must let the page reach it.
 #
+# The Claude route of "Generate nodes from text" is offered by NO hosted build
+# (owner, 2026-11-19): FS_LLM_CLOUD_ORIGINS is set EMPTY, so a stale shell
+# export cannot add the API to connect-src or turn the option on (one value,
+# vite.config.ts), and the verify step fails if the served page names the API.
+#
 # NB: psftp has no --delete; superseded content-hashed assets accumulate on
 # the server over time. Harmless (index.html always points at the current
 # ones), but prune /var/www/alvis/src/fastshaders/assets/ manually once in a
@@ -51,7 +56,7 @@ if [ "${1:-}" != "--no-build" ]; then
   echo "==> building (base /fastshaders/, CSP for alvismisjuns.lv, study uploads to $UPLOAD_URL)"
   cd "$ROOT"
   FS_BASE=/fastshaders/ \
-  FS_PREVIEW_ORIGIN='https://alvismisjuns.lv https://www.alvismisjuns.lv' \
+  FS_LLM_CLOUD_ORIGINS= \
     npm run build
   rm -rf "$DIST"
   cp -R "$ROOT/dist" "$DIST"
@@ -112,6 +117,17 @@ if [ "$CSP_OK" -ge 1 ]; then
   echo "CSP names the upload origin $UPLOAD_ORIGIN ✓"
 else
   echo "DEPLOY VERIFICATION FAILED: the served CSP's connect-src does not name $UPLOAD_ORIGIN, so no study package can upload" >&2
+  exit 1
+fi
+
+# The generator's Claude route: the option is built in only together with the
+# API in connect-src, and no hosted build offers it, so the page must not name
+# the API at all.
+LLM_ABSENT="$(printf '%s' "$PAGE" | grep -cF 'api.anthropic.com' || true)"
+if [ "$LLM_ABSENT" -eq 0 ]; then
+  echo "page names no Claude API ✓"
+else
+  echo "DEPLOY VERIFICATION FAILED: the served page names api.anthropic.com (FS_LLM_CLOUD_ORIGINS must be empty)" >&2
   exit 1
 fi
 

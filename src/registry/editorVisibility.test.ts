@@ -198,11 +198,12 @@ describe('hiding actually filters (mocked non-empty file)', () => {
 });
 
 describe('no add surface reads the unfiltered registry', () => {
-  it('nothing under components/NodeEditor imports getAllDefinitions', () => {
+  it('nothing under components/NodeEditor or llm/ imports getAllDefinitions', () => {
     // The whole feature is one accessor swap, so the only way it regresses is a
-    // new (or reverted) list built from getAllDefinitions(). Everything in this
-    // directory that lists definitions is a surface the user can add from.
-    const offenders = sourceFiles(srcDir + 'components/NodeEditor/').filter((f) =>
+    // new (or reverted) list built from getAllDefinitions(). Everything in these
+    // directories that lists definitions is a surface the user can add from —
+    // the text-to-nodes generator's node list included.
+    const offenders = [...sourceFiles(srcDir + 'components/NodeEditor/'), ...sourceFiles(srcDir + 'llm/')].filter((f) =>
       /\bgetAllDefinitions\b/.test(codeOnly(readFileSync(f, 'utf8')))
     );
     expect(offenders.map((f) => f.slice(srcDir.length))).toEqual([]);

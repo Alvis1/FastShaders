@@ -12,6 +12,16 @@ rejected approaches — moved out of the always-loaded context. See
 [dev/README.md](dev/README.md) for the index. These are prose, not images, but they
 belong here for the same reason: nothing in `docs/` ships with the app.
 
+## `desktop-ipc-probe.js`
+
+A shader you open by hand in a BUILT desktop app (the macOS `.dmg`, the Windows
+install) to check that code in the sandboxed preview frame cannot invoke a Tauri
+command. Its header says how to read the colour it paints; record the result in
+[dev/platform-and-release.md](dev/platform-and-release.md) ("Desktop IPC from the
+preview frame"). `src/utils/desktopIpcContract.test.ts` builds it the way the
+preview does and runs it, so a change to the module builder cannot quietly
+turn it into a probe that never runs.
+
 ## `fastshaders-function-diagram.{png,svg}`
 
 The architecture / data-flow diagram in the root [README](../README.md):

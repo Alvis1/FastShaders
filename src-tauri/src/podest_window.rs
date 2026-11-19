@@ -10,13 +10,23 @@
 //! Deliberately a Rust command rather than the frontend's `WebviewWindow` API:
 //! creating a window from JS needs `core:webview:allow-create-webview-window`
 //! in `capabilities/default.json`, and this project keeps that file at bare
-//! `core:default` — app commands registered in `invoke_handler` are covered by
-//! it, so this route adds a window without widening the webview's ACL at all.
+//! `core:default` — app commands registered in `invoke_handler` sit outside
+//! that ACL altogether, so this route adds a window without widening it.
 //!
-//! The new window is labelled `podest` and is therefore NOT listed in the
-//! capability's `windows` array, so its webview gets no IPC permissions
-//! whatsoever. That is correct and intentional: podest.html is a self-contained
-//! page that never invokes a Tauri command.
+//! The new window is labelled `podest` and is NOT listed in the capability's
+//! `windows` array, so its webview gets none of the CORE permissions. That
+//! does not fence off the APP commands: Tauri allows every command registered
+//! in `invoke_handler` in every window, from a local URL, unless build.rs
+//! declares an `AppManifest` (it does not), so the podest webview could call
+//! the work-folder and autosave commands. Nothing uses that today — podest.html
+//! never invokes a command, runs dropped shader code only in an opaque
+//! sandboxed frame, and its `window.open` returns null in this shell (no
+//! new-window handler) — but it is a reachable surface, not an absent one.
+//!
+//! Navigation: the allow-list in main.rs (`navigation_guard`) is a plugin
+//! hook, which Tauri runs for EVERY webview, this one included — so the
+//! builder below needs no `on_navigation` of its own. On macOS it is what
+//! stops podest's stage frame navigating itself off the stage document.
 
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 

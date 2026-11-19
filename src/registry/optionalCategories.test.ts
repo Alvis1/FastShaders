@@ -281,7 +281,9 @@ describe('every add surface passes the hidden set', () => {
     // hiddenOptionalCategories(...) call itself, or an identifier bound from
     // one in the same file (via useMemo or directly).
     const offenders: string[] = [];
-    for (const f of sourceFiles(editorDir)) {
+    // src/llm/ is an add surface too: the generator's node list
+    // (llm/catalogue.ts) offers exactly what the palette offers.
+    for (const f of [...sourceFiles(editorDir), ...sourceFiles(root('src/llm'))]) {
       const src = codeOnly(readFileSync(f, 'utf8'));
       const bound = new Set(
         [...src.matchAll(/\b(?:const|let)\s+(\w+)\s*=\s*(?:useMemo\(\s*\(\)\s*=>\s*)?hiddenOptionalCategories\(/g)].map((m) => m[1]),
@@ -295,9 +297,10 @@ describe('every add surface passes the hidden set', () => {
         if (args.length < 2 || !fed(args.slice(1).join(','))) offenders.push(`${f}: searchNodes(${m[1]})`);
       }
     }
-    expect(offenders.map((o) => o.slice(editorDir.length + 1))).toEqual([]);
+    expect(offenders.map((o) => o.slice(root('src').length + 1))).toEqual([]);
     // The rule has teeth only if the surfaces actually call the accessors.
     expect(codeOnly(read('src/components/NodeEditor/menus/AddNodeMenu.tsx'))).toMatch(/\bsearchNodes\(/);
+    expect(codeOnly(read('src/llm/catalogue.ts'))).toMatch(/\bgetEditorDefinitions\(hiddenOptionalCategories\(/);
     expect(codeOnly(read('src/components/NodeEditor/ContentBrowser.tsx'))).toMatch(/\bgetEditorDefinitions\(/);
   });
 

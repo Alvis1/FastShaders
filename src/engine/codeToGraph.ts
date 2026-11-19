@@ -1695,8 +1695,13 @@ const SINGLE_COMPONENT = /^[xyzwrgba]$/;
  * ALONE (`div(float(a), b)`, written for the fraction), the operation is
  * whole-number — `lostIntConversions` says so once the graph is built, which is
  * what knows whether the call became a node at all. The others keep their value.
+ *
+ * Exported for ONE other reader: the text→node generator's gate walks
+ * graphToCode's re-emission with its own walker (llm/dialect.ts, `trusted`)
+ * and must read it exactly as this parse does — a second copy of the rule
+ * would drift from this one.
  */
-function stripIntPromotions(ast: t.File, code: string): Map<t.Node, string> {
+export function stripIntPromotions(ast: t.File, code: string): Map<t.Node, string> {
   const candidates = new Map<t.Node, string>();
   const scalars = new WeakSet<Binding>();
   // What a strip left behind, and bindings declared from one (`const c =

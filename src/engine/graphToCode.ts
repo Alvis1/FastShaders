@@ -3104,9 +3104,10 @@ function resolveExposedParam(
   // `pos` is the ONE identifier-bearing key that reaches here: codeToGraph
   // stores the unresolved variable NAME of a noise call's position argument
   // (codeToGraph.ts `extractedValues.pos = posArg.name`), so it is legitimately
-  // `positionGeometry` — or any other identifier a pasted shader used. The
-  // noise branch then normalizes a non-identifier back to positionGeometry and
-  // adds the import, byte-identically to the old numeric fallback.
+  // `positionGeometry` — or another three/tsl node value or scope root a
+  // pasted shader used; any other name (a global function three would call)
+  // reads positionGeometry. The noise branch then adds that import,
+  // byte-identically to the old numeric fallback.
   // The ONE rule (utils/sdfPartition.ts noisePosIdentifier), shared with the
   // partition that decides whether the noise reads a splat root implicitly.
   if (key === 'pos') return noisePosIdentifier(raw);

@@ -361,6 +361,56 @@ export const MODEL_MODULE_LATCH =
   'try{if(window.FastShaders&&typeof FastShaders.disableModelModules==="function")FastShaders.disableModelModules();}catch(e){}';
 
 /**
+ * The sandboxed preview document's OWN Content-Security-Policy, emitted right
+ * after `<meta charset>` so nothing before it can fetch. Until 2026-11-19 the
+ * srcdoc only INHERITED the parent's policy, which exists on web builds alone:
+ * in dev, in the desktop app and in podest, shader code could fetch from, open
+ * a WebSocket to, or beacon any host — a local LLM server included — and on a
+ * web build it could reach every origin the PAGE's connect-src names. podest's
+ * stage document carries the BYTE-EQUAL twin (`sandboxCsp.test.ts`).
+ *
+ * Scheme sources and keywords ONLY, and no `script-src`/`default-src`: the
+ * vendored bundles load by `<script src>` from the app's real origin, which on
+ * desktop is a custom scheme WebKit matches unreliably in a meta policy (see
+ * vite.config.ts), and `'self'` in this frame is its OPAQUE origin, which
+ * matches none of them. So inline scripts, eval and wasm stay exactly as they
+ * were. Nothing in the document reads the network: the parent fetches the
+ * bunny, the intro models and the decoders at its own origin and POSTS them,
+ * with dropped models and image payloads, as bytes the document turns into
+ * `blob:` URLs (a few images as `data:`); Draco/KTX2 decode in `blob:` workers
+ * and meshopt is an `import()` of a `blob:` URL; the teapot, the backdrop and
+ * every label are drawn in-document.
+ *
+ * Scope (docs/dev/preview-and-runtime.md): it refuses fetch, XHR, WebSocket,
+ * EventSource and beacons to any network URL, and nested frames. Form posts
+ * were already impossible — the iframe's sandbox grants no `allow-forms`;
+ * `form-action` only restates it. A remote `<script>`, `import()`, a stylesheet
+ * and prefetch hints remain GET-only channels, WebRTC is not covered, and a
+ * meta policy does not survive the frame navigating ITSELF: only the embedder
+ * can stop that (the iframe's `csp` attribute in Chromium, the web build's
+ * `frame-src`, podest's page-level `frame-src 'none'`, and in the macOS
+ * desktop app the shell's navigation allow-list, src-tauri/src/main.rs).
+ */
+export const SANDBOX_CSP =
+  "connect-src blob: data:; img-src data: blob:; media-src data: blob:; font-src data:; worker-src blob:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
+
+/**
+ * The XR popup's policy (the editor's and podest's alike). The popup is a
+ * top-level document at the app's REAL origin, where `'self'` resolves, and it
+ * reads only same-origin URLs (the bunny, the decoders) and `blob:`/`data:`
+ * ones (a dropped model, inlined images) — its URL modifier allows nothing
+ * else — so fetches are fenced to exactly those. The editor offers it on web
+ * builds only (no custom scheme to match), and it still holds the origin's
+ * storage: the confirm in ShaderPreview's handleOpenVR is that gate.
+ */
+export const XR_CSP = "connect-src 'self' blob: data:; object-src 'none'; base-uri 'none'";
+
+/** The ONE spelling of the policy meta, shared by both documents (podest's twins match it byte for byte). */
+export function cspMetaTag(policy: string): string {
+  return `<meta http-equiv="Content-Security-Policy" content="${policy}">`;
+}
+
+/**
  * The sandboxed model document's decoder configuration, emitted right after the
  * loader's <script src>, before any gltf-model can initialise. The resolver
  * reads a null-prototype table that the model feed fills with blob: URLs of the
@@ -2624,10 +2674,12 @@ const DRAG_FORWARD_SCRIPT = `  <script>
 /**
  * SECURITY: the loader URL allowlist. A dropped .gltf/.glb can name buffers or
  * textures by ABSOLUTE http(s) URL, and GLTFLoader would fetch them, leaking
- * the viewer's IP (no CSP in dev or desktop builds, so this is the control). A
- * blocked URL lands on an inert data: URL: the request never leaves the page
- * and the loader surfaces a normal parse error. The sandbox allows blob:/data:
- * only; the XR popup (`sameOrigin`) has REAL network access, so it also allows
+ * the viewer's IP. The document's own CSP (SANDBOX_CSP / XR_CSP) refuses such
+ * a fetch too; this is the layer that decides it first, inside three, on every
+ * engine and build, so the refusal is a quiet warning rather than a policy
+ * violation. A blocked URL lands on an inert data: URL: the request never
+ * leaves the page and the loader surfaces a normal parse error. The sandbox
+ * allows blob:/data: only; the XR popup (`sameOrigin`) has REAL network access, so it also allows
  * its own origin, where the built-in models load by real URL. MODEL_MODULE_LATCH
  * goes first in both. Same guard in podest.html.
  */
@@ -3801,6 +3853,9 @@ export function tslToPreviewHTML(
   lines.push('<html lang="en">');
   lines.push('<head>');
   lines.push('  <meta charset="UTF-8">');
+  // The document's own policy, before anything that could fetch: SANDBOX_CSP
+  // for the sandboxed pane, XR_CSP for the top-level VR popup.
+  lines.push(`  ${cspMetaTag(xr ? XR_CSP : SANDBOX_CSP)}`);
   // XR mode no longer hides navigator.gpu here: the scene tag below carries
   // `renderer="backend: webgl"` (the bundle's aframe#5847 carry — see
   // aframeBackendProperty.test.ts), which maps onto WebGPURenderer's

@@ -1,25 +1,33 @@
 /**
- * Generate src/engine/tslExportNames.ts — every name `three/tsl` exports, for
- * the installed three.
+ * Generate src/engine/tslExportNames.ts from the installed three:
  *
- * buildShaderModule completes a module's `three/tsl` import from this list (a
- * called name the list holds, not declared and not already imported, is
- * appended), so a module imported without the shaderloader — plain three.js
- * with an import map — finds every TSL function it calls. The loader recovers
- * a missing name at run time; a bare `import()` does not.
+ *  - TSL_EXPORT_NAMES — every name `three/tsl` exports.
+ *    buildShaderModule completes a module's `three/tsl` import from this list
+ *    (a called name the list holds, not declared and not already imported, is
+ *    appended), so a module imported without the shaderloader — plain
+ *    three.js with an import map — finds every TSL function it calls. The
+ *    loader recovers a missing name at run time; a bare `import()` does not.
+ *    Source: the final `export { … }` clause of
+ *    node_modules/three/build/three.tsl.js (three.tsl.js is
+ *    `import { TSL } from 'three/webgpu'` plus that clause).
  *
- * Source: the final `export { … }` clause of node_modules/three/build/three.tsl.js
- * (three.tsl.js is `import { TSL } from 'three/webgpu'` plus that clause).
- * `engine/tslExportNames.test.ts` compares the result with
- * `Object.keys(await import('three/tsl'))`, so a three bump FAILS until this is
- * re-run — the same change that moves THREE_REVISION.
+ *  - TSL_NODE_VALUE_NAMES — the exports whose value is a NODE
+ *    (positionGeometry, time, cameraPosition …), read from the module itself.
+ *    A noise node's stored position is emitted BARE as a TSL argument, and
+ *    three wraps a FUNCTION-valued argument in `Fn` and calls it, so
+ *    utils/sdfPartition.ts `noisePosIdentifier` accepts a stored name only
+ *    when it is one of these (or a root a partition scope binds).
+ *
+ * `engine/tslExportNames.test.ts` compares both with the installed three, so
+ * a three bump FAILS until this is re-run — the same change that moves
+ * THREE_REVISION.
  *
  * Run: node scripts/gen-tsl-exports.mjs
  */
 import { readFileSync, writeFileSync } from 'fs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
-const TSL = ROOT + 'node_modules/three/build/three.tsl.js';
+const TSL_BUILD = ROOT + 'node_modules/three/build/three.tsl.js';
 const OUT = ROOT + 'src/engine/tslExportNames.ts';
 
 // Read by pattern, not parsed: this script owns none of package.json.
@@ -27,11 +35,11 @@ const pkg = readFileSync(ROOT + 'node_modules/three/package.json', 'utf8');
 const version = /"version"\s*:\s*"([^"]+)"/.exec(pkg)?.[1];
 if (!version) throw new Error('node_modules/three/package.json carries no version');
 
-const src = readFileSync(TSL, 'utf8');
+const src = readFileSync(TSL_BUILD, 'utf8');
 const at = src.lastIndexOf('export {');
-if (at < 0) throw new Error(`no export clause in ${TSL}`);
+if (at < 0) throw new Error(`no export clause in ${TSL_BUILD}`);
 const close = src.indexOf('}', at);
-if (close < 0) throw new Error(`unterminated export clause in ${TSL}`);
+if (close < 0) throw new Error(`unterminated export clause in ${TSL_BUILD}`);
 const names = src
   .slice(at + 'export {'.length, close)
   .split(',')
@@ -43,6 +51,12 @@ for (const n of names) {
   if (!/^[A-Za-z_$][\w$]*$/.test(n)) throw new Error(`unexpected export name: ${n}`);
 }
 const sorted = [...new Set(names)].sort();
+
+// An OBJECT that is a node. `Fn` proxies are functions that also answer
+// `isNode`, and a function is exactly what may never stand where three would
+// call one.
+const TSL = await import('three/tsl');
+const nodeValues = sorted.filter((n) => TSL[n] !== null && typeof TSL[n] === 'object' && TSL[n].isNode === true);
 
 const body = [
   '/**',
@@ -57,7 +71,17 @@ const body = [
   ...sorted.map((n) => `  '${n}',`),
   ']);',
   '',
+  '/**',
+  ' * The exports whose value is a NODE, not a function. A noise node\'s stored',
+  ' * position may name only one of these or a root a partition scope binds',
+  ' * (utils/sdfPartition.ts `noisePosIdentifier`): three wraps a function-valued',
+  ' * argument in `Fn` and calls it.',
+  ' */',
+  'export const TSL_NODE_VALUE_NAMES: ReadonlySet<string> = new Set([',
+  ...nodeValues.map((n) => `  '${n}',`),
+  ']);',
+  '',
 ].join('\n');
 
 writeFileSync(OUT, body);
-console.log(`wrote ${OUT}: ${sorted.length} names from three ${version}`);
+console.log(`wrote ${OUT}: ${sorted.length} names, ${nodeValues.length} node values from three ${version}`);

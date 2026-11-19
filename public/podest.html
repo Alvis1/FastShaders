@@ -2,6 +2,16 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
+<!-- The EMBEDDER's half of the stage's policy. The stage document carries its
+     own CSP (buildStageDoc), but a meta policy does not survive the frame
+     navigating ITSELF to another document, and a nested frame takes its policy
+     from its own response — only this page's frame-src can refuse both. The
+     stage is a srcdoc frame, which frame-src does not govern (the web app's own
+     `frame-src 'self' blob:` runs its srcdoc preview on every engine), so
+     'none' costs podest nothing; it creates no other frame. Keyword-only, so
+     the desktop WKWebView never has to match a custom-scheme origin. The VR
+     popup inherits it and creates no frame either. sandboxCsp.test.ts pins it. -->
+<meta http-equiv="Content-Security-Policy" content="frame-src 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Podest</title>
 <!-- The Podest mark. RELATIVE, not root-absolute: this file lives in public/
@@ -113,7 +123,10 @@
   document (this page, its localStorage, the drop UI) is never reachable by
   shader code; the two sides talk exclusively over postMessage. Blob URLs are
   origin-scoped, so shader source and model bytes are shipped into the iframe
-  and their blob URLs are minted there.
+  and their blob URLs are minted there. The stage document carries its own CSP
+  (no network fetch: blob:/data: only — buildStageDoc) and this page refuses
+  every framed navigation (frame-src 'none', the meta in <head>), because a
+  policy inside the stage does not survive the stage navigating itself.
 
   Self-contained: the iframe loads the SAME vendored A-Frame 1.8.0 + Three.js
   r184 WebGPU bundle and shaderloader 0.8 the app uses (absolute URLs off this
@@ -3652,6 +3665,10 @@
     }
     var L = [];
     L.push('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8" />');
+    // Twin of XR_CSP in src/engine/tslToPreviewHTML.ts: this popup runs at the
+    // page's real origin and reads only same-origin and blob: URLs, so its
+    // fetches are fenced to those (sandboxCsp.test.ts compares the bytes).
+    L.push('<meta http-equiv="Content-Security-Policy" content="connect-src \'self\' blob: data:; object-src \'none\'; base-uri \'none\'">');
     L.push('<title>' + esc(state.titleText || state.shaderName || "Podest VR") + '</title>');
     // Absolute, not relative: this document is written into an about:blank
     // popup, whose base URL is inherited rather than its own — `dir` is the
@@ -4093,6 +4110,13 @@
       : '';
     var L = [];
     L.push('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8" />');
+    // The stage's OWN policy, before anything that could fetch — BYTE-EQUAL
+    // twin of SANDBOX_CSP in src/engine/tslToPreviewHTML.ts (its comment has
+    // the reasoning; sandboxCsp.test.ts runs this builder and compares). Every
+    // stage load arrives as posted bytes turned into blob: URLs here too (this
+    // page fetches the bunny, the teapot and the decoders and posts them), and
+    // script-src stays unset so the vendored <script src> tags keep loading.
+    L.push('<meta http-equiv="Content-Security-Policy" content="connect-src blob: data:; img-src data: blob:; media-src data: blob:; font-src data:; worker-src blob:; frame-src \'none\'; object-src \'none\'; base-uri \'none\'; form-action \'none\'">');
     // Forward uncaught errors + unhandled rejections to the parent so a
     // throwing/failing shader surfaces as an error instead of a misleading "no
     // properties" message. The shaderloader swallows its own import()/build
@@ -4168,8 +4192,10 @@
     L.push('<script src="' + orbit + '" onerror="fsPost(\'Failed to load orbit controls\', true)"><\/script>');
     // SECURITY: a dropped .gltf/.glb can reference buffers/textures by
     // ABSOLUTE http(s) URL — GLTFLoader would fetch them from inside this
-    // sandbox, leaking the viewer's IP to whatever host a shared file names
-    // (this page ships no CSP anywhere it is deployed). Everything the stage
+    // sandbox, leaking the viewer's IP to whatever host a shared file names.
+    // This modifier decides FIRST, inside three, so the request is never
+    // made; the stage's own policy (SANDBOX_CSP, connect-src blob: data:) is
+    // the second layer that would refuse it anyway. Everything the stage
     // legitimately loads through THREE's loading managers is a blob: URL
     // minted here or a data: URI — allowlist exactly those and neutralize the
     // rest to an inert data: URL so the request never leaves the sandbox.

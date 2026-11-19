@@ -25,6 +25,15 @@ Editor
 - Tauri v2 (desktop shell) — MIT OR Apache-2.0. © Tauri Programme within
   The Commons Conservancy.
 
+Generate nodes from text — Claude route (its own chunk, loaded only when used)
+------------------------------------------------------------------------------
+- @anthropic-ai/sdk 0.132.1 — MIT. Copyright 2023 Anthropic, PBC.
+  https://github.com/anthropics/anthropic-sdk-typescript
+- standardwebhooks 1.3.0 (bundled with the SDK) — MIT. © Standard Webhooks.
+- @stablelib/base64 1.0.1 (bundled with the SDK) — MIT. Copyright (C) 2016
+  Dmitry Chestnykh.
+- fast-sha256 1.3.0 (bundled with the SDK) — The Unlicense (public domain).
+
 Fonts (self-hosted woff2 subsets via @fontsource)
 -------------------------------------------------
 - Inter — SIL Open Font License 1.1. © The Inter Project Authors

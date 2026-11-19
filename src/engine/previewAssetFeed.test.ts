@@ -322,7 +322,8 @@ describe('ShaderPreview', () => {
   });
 
   it('the XR popup still inlines the payloads (a top-level document has no parent to feed it)', () => {
-    const call = 'tslToPreviewHTML(inlineImageAssetsFromNodes(previewCode, useAppStore.getState().nodes), {';
+    // `store` is handleOpenVR's ONE store read at the gesture (vrPopupSafety.test.ts).
+    const call = 'tslToPreviewHTML(inlineImageAssetsFromNodes(previewCode, store.nodes), {';
     const at = SRC.indexOf(call);
     expect(at).toBeGreaterThan(-1);
     const xrOptions = SRC.slice(at, SRC.indexOf('w.document.write(html);', at));

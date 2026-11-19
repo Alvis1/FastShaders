@@ -19,6 +19,9 @@ import { evalTask, introInStudy } from '@/eval/evalTask';
 import { openIntro } from '@/intro/introGate';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { GLB_IMPORT_MATERIAL_LIMIT } from '@/utils/glbImportLimits';
+import { generatorBuild } from '@/utils/generatorFlag';
+import { isEmbedMode } from '@/embed/embedMode';
+import { GeneratorLauncher } from './GeneratorLauncher';
 import { WorkFolder } from './WorkFolder';
 import { formatCategoryLabel, t } from '@/i18n';
 import { CATEGORIES } from '@/registry/nodeCategories';
@@ -131,6 +134,16 @@ function prefsHeight(rows: number): number {
  */
 const ALLOW_MANY_MATERIALS_HINT =
   'Lets a dropped model with more than {limit} materials build one Output node per material. Each adds textures and draw calls, and every such import still asks first.';
+
+/**
+ * "Generate nodes from text" (src/llm/, docs/dev/node-generator.md): its own
+ * constant for the same reason as the GLB row's. The row is the generator's
+ * only entry, offered only on a build that can reach a model at all, and never
+ * in a study session (a deliberate gate, docs/dev/eval-mode.md) or the embed.
+ */
+const NODE_GENERATOR_HINT =
+  'Turns a written request into a group of nodes, using a model on this computer or your own Claude API key. Experimental.';
+const NODE_GENERATOR_BUILD = generatorBuild(__FS_DESKTOP__, __FS_LLM_CLOUD__);
 
 /**
  * The right-click list's LIBRARY rows — the palette's optional categories
@@ -384,10 +397,22 @@ export function Toolbar() {
   const setOptionalCategory = useAppStore((s) => s.setOptionalCategory);
   const allowManyMaterials = useAppStore((s) => s.allowManyMaterials);
   const setAllowManyMaterials = useAppStore((s) => s.setAllowManyMaterials);
-  // One row per setting: the wheel mode, the optional categories, the GLB row.
-  const prefsRows = 1 + OPTIONAL_CATEGORIES.length + 1;
+  const nodeGenerator = useAppStore((s) => s.nodeGenerator);
+  const setNodeGenerator = useAppStore((s) => s.setNodeGenerator);
+  // The generator's opt-in row, and — once ticked — the row that opens it.
+  const generatorRow = !isEvalMode() && !isEmbedMode() && NODE_GENERATOR_BUILD;
+  const [generatorOpen, setGeneratorOpen] = useState(false);
+  // One row per setting: the wheel mode, the optional categories, the GLB row,
+  // and the generator's two when they are drawn.
+  const prefsRows = 1 + OPTIONAL_CATEGORIES.length + 1
+    + (generatorRow ? 1 : 0) + (generatorRow && nodeGenerator ? 1 : 0);
   const closePrefs = useCallback(() => setPrefsAt(null), []);
   useDismiss(prefsAt != null, closePrefs, [prefsRef]);
+  const openGenerator = useCallback(() => {
+    setPrefsAt(null);
+    setGeneratorOpen(true);
+  }, []);
+  const closeGenerator = useCallback(() => setGeneratorOpen(false), []);
 
   const openPrefs = useCallback((e: React.MouseEvent) => {
     // Only a right-click on the bar's own DOM. The dialogs this component
@@ -1309,8 +1334,32 @@ export function Toolbar() {
               {fillTemplate(t('Allow more than {limit} materials', language), { limit: GLB_IMPORT_MATERIAL_LIMIT })}
             </span>
           </label>
+          {/* "Generate nodes from text" — off by default; absent in a study
+              session, in the embed and on a build that cannot reach a model.
+              Ticked, the row below it opens the generator: its only entry. */}
+          {generatorRow && (
+            <label className="toolbar__prefs-row" title={t(NODE_GENERATOR_HINT, language)}>
+              <input
+                type="checkbox"
+                checked={nodeGenerator}
+                onChange={(e) => setNodeGenerator(e.target.checked)}
+              />
+              <span className="toolbar__prefs-label">{t('Generate nodes from text', language)}</span>
+            </label>
+          )}
+          {generatorRow && nodeGenerator && (
+            <button
+              type="button"
+              className="toolbar__prefs-open"
+              aria-haspopup="dialog"
+              onClick={openGenerator}
+            >
+              {t('Open the generator…', language)}
+            </button>
+          )}
         </div>
       )}
+      <GeneratorLauncher open={generatorOpen} onClose={closeGenerator} />
     </div>
   );
 }

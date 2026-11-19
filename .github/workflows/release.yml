@@ -183,6 +183,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # No FS_LLM_CLOUD_ORIGINS: no hosted build offers the Claude route of
+      # "Generate nodes from text" (owner, 2026-11-19; docs/dev/node-generator.md).
       - run: npm run build
       - uses: peaceiris/actions-gh-pages@v4
         with:

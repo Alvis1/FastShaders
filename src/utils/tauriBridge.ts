@@ -45,3 +45,34 @@ export function invokeDesktop<T>(
 export function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
+
+/** True inside the desktop app (the wrapper injected the bridge). */
+export function hasDesktopBridge(): boolean {
+  return typeof window !== 'undefined' && window.__TAURI__ !== undefined;
+}
+
+/** A Tauri IPC channel as the frontend holds it (`TauriIpcChannel`). */
+export type DesktopChannel = TauriIpcChannel;
+
+/**
+ * A channel a streaming command sends its output over, or null outside the
+ * desktop app. Pass it INSIDE the command's args (`{ …, onEvent: channel }`;
+ * Tauri serialises it as `__CHANNEL__:<id>`). Tauri's class hands messages to
+ * `onMessage` in the order Rust sent them — it reorders by index, because a
+ * payload of 1 KiB or more is fetched separately and can overtake a smaller
+ * one — and unregisters itself once Rust drops its end.
+ *
+ * A message is whatever Rust sent: for raw bytes an ArrayBuffer, or a number
+ * array on Tauri's postMessage fallback (decode with `desktopBytes`). When
+ * the stream is COMPLETE is the command's own protocol to say, never the
+ * invoke promise: those fetched payloads can land after it resolves.
+ */
+export function createDesktopChannel(onMessage: (message: unknown) => void): DesktopChannel | null {
+  const Channel = hasDesktopBridge() ? window.__TAURI__?.core.Channel : undefined;
+  if (typeof Channel !== 'function') return null;
+  // Assigned rather than passed to the constructor: Tauri 2.0's class took
+  // no argument.
+  const channel = new Channel();
+  channel.onmessage = onMessage;
+  return channel;
+}

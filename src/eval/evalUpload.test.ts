@@ -224,7 +224,6 @@ describe('every build posts to ViA’s endpoint cross-origin', () => {
     // GitHub Pages (the origin vite.config.ts already lists in connect-src).
     const alvisOrigins = alvis.match(/^for ORIGIN in ([^;]+); do$/m)?.[1].trim().split(/\s+/) ?? [];
     expect(alvisOrigins).toEqual(['https://alvismisjuns.lv', 'https://www.alvismisjuns.lv']);
-    expect(alvis).toContain(`FS_PREVIEW_ORIGIN='${alvisOrigins.join(' ')}'`);
     expect(vite).toContain("'https://alvis1.github.io'");
     const appOrigins = [shellVar(sferas, 'ORIGIN'), ...alvisOrigins, 'https://alvis1.github.io'];
     expect([...origins].sort()).toEqual([...appOrigins].sort());

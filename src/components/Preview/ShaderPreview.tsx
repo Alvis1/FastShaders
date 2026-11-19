@@ -15,6 +15,7 @@ import {
   MARCH_WINDOW_GEOMETRY,
   LIGHT_PRESETS,
   RENDER_MODE_MESSAGE,
+  SANDBOX_CSP,
   SHADER_CLOCK_MESSAGE,
   STAGE_MESSAGE,
   isPreviewStage,
@@ -40,6 +41,7 @@ import {
 } from './subdivisionSteps';
 import { shownGeometry, validateGeometry } from './previewGeometryPref';
 import { BOOT_MESH_WAIT_MS, shouldWaitForBootMesh } from './bootMeshWait';
+import { VR_RAW_CODE_CONFIRM_KEY, previewCodeIsGraphCodegen } from './vrPopupTrust';
 import { holdsDocument, useColdRebuildKey, useDebounced, useSettledPreview } from './useSettledPreview';
 import { cameraTarget, cameraTooClose, finiteVec3 } from './finiteVec3';
 import { moduleIsTimeVarying, previewRendersContinuously } from './previewRenderMode';
@@ -2958,10 +2960,18 @@ export function ShaderPreview() {
   // top-level page. An about:blank popup inherits this window's REAL origin,
   // so the local bundle URLs load, the OBJ models fetch same-origin (plain
   // obj-model url() — no message feed), and WebXR is permitted.
-  // SECURITY: the popup runs the APP-GENERATED shader module — the same
-  // safety-gated emission as the preview/export pipeline — at top level in
-  // the app's real origin. That is acceptable for generated code; never
-  // feed raw code-editor text into this path.
+  // SECURITY: the popup runs `previewCode` at top level in the app's REAL
+  // origin. That is usually the graph's own codegen (the validated emission
+  // the preview and the exports run), but after an Apply or a bare-script
+  // import it is the raw text the user applied or opened. So: (1) the popup's
+  // handle on this window is cut BEFORE anything is written (podest's popup
+  // does the same) — code there cannot script the live editor; (2) code the
+  // graph did not generate (vrPopupTrust.ts recomputes, at the click, the
+  // connected-only codegen the sync engine writes) runs only after a confirm
+  // that says it leaves the sandbox and can read this site's saved data —
+  // declining closes the window with nothing written and nothing minted. It
+  // still has the origin's storage — that is what the confirm is for; see
+  // docs/dev/preview-and-runtime.md.
   // Blob URL for the custom mesh in the XR popup. The popup is same-origin,
   // so a parent-minted URL loads directly there. Never revoked while the
   // popup is OPEN — it may still be reading it, and revoking under a live
@@ -2980,6 +2990,27 @@ export function ShaderPreview() {
       window.alert(t('The browser blocked the VR window. Allow popups for this site and try again.', useAppStore.getState().language));
       return;
     }
+    // First, before a byte reaches the popup (see SECURITY above).
+    try { w.opener = null; } catch { /* a browser that refuses the write keeps the default */ }
+    // The code is read at the gesture, like the nodes its images come from —
+    // ONE read, so the code the gate vouches for is the code that runs.
+    const store = useAppStore.getState();
+    const previewCode = store.previewCode;
+    // Code the graph did not generate asks first, and asks IN THE POPUP: that
+    // is the tab the user is now looking at, and a dialog raised by this one —
+    // now in the background — would wait unseen until they came back to it
+    // (on a headset, in another window entirely). The window was opened first,
+    // synchronously in the click, because a popup opened after the dialog's
+    // pause risks the blocker (podest's reasoning). A declined, failed or
+    // suppressed dialog closes it with nothing written and nothing minted.
+    if (!previewCodeIsGraphCodegen(previewCode, store.nodes, store.edges, store.nodePreview)) {
+      let ok = false;
+      try { ok = w.confirm(t(VR_RAW_CODE_CONFIRM_KEY, store.language)); } catch { /* no dialog: declined */ }
+      if (!ok || w.closed) {
+        try { w.close(); } catch { /* already gone */ }
+        return;
+      }
+    }
     // The popup renders what the PANE renders: `previewGeometry`, not the
     // persisted Model choice. While a Raymarch Output drives, that choice is
     // parked and the march window (a sphere of the node's Window radius) is
@@ -2997,9 +3028,7 @@ export function ShaderPreview() {
       vrModelUrlRef.current = URL.createObjectURL(blob);
       customModel = { kind: previewMesh.kind, id: previewMesh.id, url: vrModelUrlRef.current };
     }
-    // The code is read at the gesture, like the nodes its images come from.
-    const previewCode = useAppStore.getState().previewCode;
-    const html = tslToPreviewHTML(inlineImageAssetsFromNodes(previewCode, useAppStore.getState().nodes), {
+    const html = tslToPreviewHTML(inlineImageAssetsFromNodes(previewCode, store.nodes), {
       geometry: previewGeometry,
       marchWindow: marchWindow ?? 1,
       animate: playing,
@@ -3015,7 +3044,7 @@ export function ShaderPreview() {
       title: shaderName,
       // The popup renders what the pane renders, mirrors included (R7): read
       // at the gesture, like the code it is built from.
-      materialPartsMirror: materialPartsMirrorPlanAcross(contributingOutputs(useAppStore.getState().nodes)),
+      materialPartsMirror: materialPartsMirrorPlanAcross(contributingOutputs(store.nodes)),
     });
     w.document.write(html);
     w.document.close();
@@ -3356,11 +3385,25 @@ export function ShaderPreview() {
           // own, so the content runs in the iframe's sandbox-issued opaque
           // origin from the start, and the shader blob URL it mints there is
           // same-origin to itself, which the loader's fetch+import needs.
-          // Static parent assets (OBJ models, A-Frame bundle) load via
-          // cross-origin requests that depend on the server returning CORS
-          // headers — see server.headers in vite.config.ts for the dev side;
-          // GitHub Pages sets Access-Control-Allow-Origin: * on all files.
+          // Nothing in the document fetches from the network: the vendored
+          // bundles are classic <script src> loads (no CORS involved), and
+          // models, decoders and images arrive as posted bytes it turns into
+          // blob: URLs — which is what lets its own policy (SANDBOX_CSP, the
+          // meta right after its charset) refuse every network fetch.
           sandbox="allow-scripts"
+          // The EMBEDDER's half of that policy. A meta policy does not survive
+          // the frame navigating ITSELF to another document. `csp` is CSP
+          // Embedded Enforcement, which only Chromium implements (Chrome,
+          // Edge, WebView2): every document this frame loads must carry the
+          // policy — a srcdoc, blob: or data: one has it enforced, an http(s)
+          // one that does not opt in is refused. WebKit and Gecko ignore the
+          // attribute, so it cannot break WKWebView; there the web build's
+          // page-level frame-src is the embedder's control, in the macOS
+          // desktop app the shell's navigation allow-list (src-tauri/src/
+          // main.rs), and dev in those engines has none
+          // (docs/dev/preview-and-runtime.md). Not in React's iframe types;
+          // React passes it through as is.
+          {...{ csp: SANDBOX_CSP }}
           // Permissions Policy — both default to "denied" on sandboxed
           // frames; without these the browser's fullscreen overlay and any
           // A-Frame enter-VR button fail silently. The explicit `*` matters:

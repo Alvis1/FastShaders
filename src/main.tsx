@@ -9,6 +9,12 @@ import '@xyflow/react/dist/style.css';
 import { applyEvalTaskFlags } from './eval/evalTask';
 import { stripHardReloadMarker } from './utils/hardReload';
 
+// A NAMED editor window can be re-targeted: `window.open('', name)` from any
+// same-origin page — the VR popup runs shader code at this origin with its
+// opener cut — returns a live handle to it. Nothing in the app names its
+// window, so drop a name the tab may have been opened with.
+try { window.name = ''; } catch { /* read-only in an exotic embedder: nothing to clear */ }
+
 // Renderer-triage switches (e.g. the Safari zoom-blur hunt): ?fsdbg=a,b,...
 // injects coarse CSS overrides so a browser-specific compositing culprit can
 // be bisected on the DEPLOYED site without rebuilds. Inert without the param.

@@ -128,7 +128,8 @@ describe('every module path passes the mirror plan (R7)', () => {
     // The module is built from the placeholder code since the image-asset feed
     // (GLB Phase 6 S3) — the mirror key is still a dep beside it.
     expect(preview).toContain('[debouncedPreviewCode, debouncedMaterialSettingsKey, mirrorKey]');
-    expect(preview).toContain('materialPartsMirror: materialPartsMirrorPlanAcross(contributingOutputs(useAppStore.getState().nodes)),');
+    // The XR popup: off handleOpenVR's ONE store read at the gesture (vrPopupSafety.test.ts).
+    expect(preview).toContain('materialPartsMirror: materialPartsMirrorPlanAcross(contributingOutputs(store.nodes)),');
     expect(src('../../../engine/tslToPreviewHTML.ts')).toContain(
       '?? buildPreviewShaderModule(tslCode, materialSettings, options.materialPartsMirror);',
     );

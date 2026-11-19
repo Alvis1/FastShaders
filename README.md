@@ -190,6 +190,15 @@ An exported splat shader needs the splat runtime after the two scripts above, an
 
 `splat-model` scales the scene to a longest side of 1.6 units, the frame the shader was authored in; `size: 0` keeps the file's own units, and every pattern the shader drives from position or UV (a Checker, a noise, an image on Color) then follows those units instead of the ones you previewed.
 
+## Generate nodes from text (experimental)
+
+In the desktop app (the web builds do not offer it), right-click the toolbar and tick **Generate nodes from text**, then choose **Open the generator…**. Describe a shader in English ("glowing lava cracks on dark rock") and the app adds it as one group of ordinary nodes beside your graph, not connected: wire its last node into an Output to see it, then change anything. One Cmd/Ctrl+Z removes it. It is not offered in a study session.
+
+- **This computer**: a model in [LM Studio](https://lmstudio.ai) or llama.cpp's server. Start the server (LM Studio's Developer tab, or `lms server start`) and load the model with at least a 16K context: `lms load <model> --context-length 16384`. Nothing leaves your computer. Recommended: **Gemma 4 E2B** (`google/gemma-4-e2b`, 3.1 GB, runs on a computer with 8 GB of memory): in our tests every request ended with a valid result, about 7 s each. Qwen3-Coder-Next was just as reliable but needs a 64 GB computer; 27–31B dense models were slow and often stalled.
+- **Claude**: your own Anthropic API key, typed into the dialog. Your request, the fixed instructions and the node list go from the app straight to Anthropic, billed to your account; nothing from your graph or files is sent. The key is kept in memory only and is gone when the app reloads; use a dedicated key with a spending limit.
+
+The model writes a small program; the app checks it against the editor's own node list, writes it again in its own words and refuses anything else, so a reply can never run code in the app. A valid result is not always a good one: treat it as a starting point.
+
 ## Tech Stack
 
 - React 18 + TypeScript + Vite

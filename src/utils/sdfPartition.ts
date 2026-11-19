@@ -43,12 +43,13 @@ import type { AppNode, AppEdge } from '@/types';
 // time; wireframeMode.ts imports nothing at all. Both keep this a leaf.
 import { getNodeValues } from '@/types';
 import { isWireframeEdges } from './wireframeMode';
-// Both LEAVES. This module is itself a leaf that `nodeCost` — and through it
+// All three LEAVES. This module is itself a leaf that `nodeCost` — and through it
 // the store — imports, so it must never reach into the store-coupled utils
 // graph (utils/outputMaterials.ts -> exposedPorts -> edgeUtils -> useAppStore):
 // that is the costTable TDZ rule, and `isUntargetedOutput` below is exactly
 // the kind of shared predicate that invites the wrong import direction.
 import { emitRank, isGltfMaterialIndex } from '@/engine/materialPartsContract';
+import { TSL_NODE_VALUE_NAMES } from '@/engine/tslExportNames';
 import { isUsableMeshName } from './meshInventory';
 
 export const MARCH_OUTPUT_TYPE = 'raymarchOutput';
@@ -207,8 +208,9 @@ export function splatScopes(node: AppNode): readonly ScopeSpec[] {
  * The noise family — every registry def in the `noise` category
  * (sdfPartition.test.ts pins the two lists against each other). Its position
  * is an exposed PARAMETER, `pos`, whose unwired default is not a number but a
- * stored IDENTIFIER: `positionGeometry`, or whatever bare global a pasted
- * shader named (codeToGraph stores `posArg.name`).
+ * stored IDENTIFIER: `positionGeometry`, or the bare name a pasted shader read
+ * its position from (codeToGraph stores `posArg.name`), filtered on the way
+ * out by `noisePosIdentifier`.
  */
 export const NOISE_TYPES: ReadonlySet<string> = new Set([
   'perlin', 'perlinVec3', 'fbm', 'fbmVec3', 'cellNoise', 'voronoi', 'voronoiVec2', 'voronoiVec3',
@@ -219,28 +221,47 @@ export const NOISE_POS_DEFAULT = 'positionGeometry';
 
 /**
  * A bare JS identifier — the only NON-NUMERIC shape allowed to reach the
- * emitted module out of stored `values` (the noise `pos` key). Deliberately
- * shape-based rather than a membership whitelist: codeToGraph stores whatever
- * variable name a pasted shader used for a noise position
- * (`extractedValues.pos = posArg.name`), so a membership test would silently
- * rewrite those graphs. The SHAPE is what makes it safe — it can hold no `(`,
- * `)`, `;` or quote, so the worst it can produce is the bare reference the old
- * `String()` already produced (a ReferenceError at load). Moved here from
- * graphToCode.ts with `noisePosIdentifier`, its one reader.
+ * emitted module out of stored `values` (the noise `pos` key). The shape keeps
+ * out `(`, `)`, `;` and quotes; the membership test below keeps out every
+ * global function. Moved here from graphToCode.ts with `noisePosIdentifier`,
+ * its one reader.
  */
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 /**
+ * The names a stored noise position may hold: a three/tsl NODE value (the
+ * default `positionGeometry`, `positionWorld`, `normalWorld`, `screenUV`,
+ * `cameraPosition`, `time` …) or a root type a partition scope binds (the
+ * splat's `uv` and `vertexColor`, the march's `rayDirection`), which is what
+ * codeToGraph stores (`implicitIdentifierOf`). A shape check alone was not
+ * enough: the identifier is emitted BARE as a TSL argument, and three wraps a
+ * function-valued argument in `Fn` and calls it, so a shared file could name
+ * any global function (`print`, `close`, `Function`) for the generated module
+ * to call — at the app's real origin in the VR popup. A `Set`, so `constructor`
+ * and `__proto__` are names like any other.
+ */
+let noisePosNames: ReadonlySet<string> | null = null;
+function allowedNoisePosNames(): ReadonlySet<string> {
+  noisePosNames ??= new Set([
+    ...TSL_NODE_VALUE_NAMES,
+    ...[...MARCH_SCOPES, ...SPLAT_SCOPES].flatMap((sp) => [...scopeRootTypes(sp)]),
+  ]);
+  return noisePosNames;
+}
+
+/**
  * The identifier an UNWIRED noise `pos` emits, from its stored value (already
  * through `getNodeValues`, so it coerces without throwing): the value itself
- * when it is a bare identifier, else the registry default. THE one rule —
- * graphToCode's `resolveExposedParam` calls it for the flat text and
- * `implicitRootOf` for the partition, so the two cannot disagree about which
- * root a noise reads.
+ * when it is one of `allowedNoisePosNames`, else the registry default. A
+ * pasted shader's own variable the parser could not resolve used to be
+ * re-emitted and throw `x is not defined` at load; it now reads the default
+ * position instead. THE one rule — graphToCode's `resolveExposedParam` calls
+ * it for the flat text and `implicitRootOf` for the partition, so the two
+ * cannot disagree about which root a noise reads.
  */
 export function noisePosIdentifier(raw: unknown): string {
   const s = String(raw ?? NOISE_POS_DEFAULT);
-  return IDENTIFIER_RE.test(s) ? s : NOISE_POS_DEFAULT;
+  return IDENTIFIER_RE.test(s) && allowedNoisePosNames().has(s) ? s : NOISE_POS_DEFAULT;
 }
 
 /**
