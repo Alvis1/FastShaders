@@ -1,15 +1,17 @@
 /**
  * Opens "Generate nodes from text" (src/llm/GeneratorDialog.tsx) when the
- * toolbar's Settings list asks — its "Open the generator…" row, shown once the
- * user has ticked the opt-in. This and the leaf flag (utils/generatorFlag.ts)
- * are the generator's ONLY boot-path pieces: everything else is src/llm/,
- * loaded through `lazyOr` when the dialog first opens, so a visitor who never
- * opts in never downloads it (bootWave.test.ts).
+ * store holds a request (`generatorRequest`, written by `openGenerator`): the
+ * asset bar's search, the Space menu's last row, or the Settings list's "Open
+ * the generator…". This, the leaf flag (utils/generatorFlag.ts), the prompt
+ * detector (utils/promptDetect.ts) and the offer hook are the generator's
+ * ONLY boot-path pieces: everything else is src/llm/, loaded through `lazyOr`
+ * when the dialog first opens, so a visitor who never opens it never
+ * downloads it (bootWave.test.ts).
  *
- * It renders nothing unless the build can reach a model, the user switched
- * the feature on, and this is neither a study session nor the embed — the
- * Settings row checks the same, and the dialog's own run and Add refuse in a
- * study again (docs/dev/node-generator.md).
+ * It renders nothing unless the build can reach a model, the feature is not
+ * switched off, and this is neither a study session nor the embed — every
+ * entry checks the same (`useGeneratorOffer`), and the dialog's own run and
+ * Add refuse in a study again (docs/dev/node-generator.md).
  */
 import { Suspense } from 'react';
 import { createPortal } from 'react-dom';
@@ -24,8 +26,12 @@ import { generatorBuild, generatorOffered } from '@/utils/generatorFlag';
 import '@/components/Modals/CsvImportModal.css';
 
 interface DialogProps {
-  /** A request to start from (the asset search, once that entry exists). */
+  /** The request to start from: a search box's query, or '' from Settings. */
   initialPrompt: string;
+  /** Where on the canvas it was asked (flow coords): an unwired group lands there. */
+  at?: { x: number; y: number };
+  /** Start generating as soon as the route is ready (Ctrl/Cmd+Enter). */
+  autostart?: boolean;
   onClose: () => void;
 }
 
@@ -60,12 +66,14 @@ const GeneratorDialog = lazyOr<DialogProps>(
   GeneratorUnavailable,
 );
 
-export function GeneratorLauncher({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const enabled = useAppStore((s) => s.nodeGenerator);
-  if (!open || isEmbedMode() || !generatorOffered(enabled, isEvalMode(), generatorBuild(__FS_DESKTOP__, __FS_LLM_CLOUD__))) return null;
+export function GeneratorLauncher() {
+  const mode = useAppStore((s) => s.nodeGenerator);
+  const request = useAppStore((s) => s.generatorRequest);
+  const closeGenerator = useAppStore((s) => s.closeGenerator);
+  if (!request || isEmbedMode() || !generatorOffered(mode, isEvalMode(), generatorBuild(__FS_DESKTOP__, __FS_LLM_CLOUD__))) return null;
   return (
     <Suspense fallback={null}>
-      <GeneratorDialog initialPrompt="" onClose={onClose} />
+      <GeneratorDialog initialPrompt={request.prompt} at={request.at} autostart={request.autostart} onClose={closeGenerator} />
     </Suspense>
   );
 }

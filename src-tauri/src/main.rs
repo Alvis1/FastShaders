@@ -3,6 +3,7 @@
 
 mod autosave;
 mod bench_server;
+mod engine;
 mod llm;
 mod podest_window;
 mod work_folder;
@@ -24,6 +25,7 @@ fn main() {
         .manage(work_folder::WorkFolderState::default())
         .manage(autosave::CloseState::default())
         .manage(llm::LlmState::default())
+        .manage(engine::EngineState::default())
         .invoke_handler(tauri::generate_handler![
             bench_server::bench_server_start,
             bench_server::bench_server_stop,
@@ -46,7 +48,13 @@ fn main() {
             autosave::autosave_close_ready,
             llm::llm_local_models,
             llm::llm_local_chat,
-            llm::llm_local_cancel
+            llm::llm_local_cancel,
+            llm::llm_engine_chat,
+            engine::llm_engine_survey,
+            engine::llm_engine_status,
+            engine::llm_engine_download,
+            engine::llm_engine_delete,
+            engine::llm_engine_stop
         ])
         // Flush the webview's pending autosave before the MAIN window goes
         // (autosave.rs). Podest's window closes freely: it holds no document.
@@ -75,6 +83,11 @@ fn main() {
                 {
                     api.prevent_exit();
                 }
+            }
+            // The bundled AI engine stops with the app (engine.rs): a loaded
+            // model holds gigabytes, and a download would run on unseen.
+            if let tauri::RunEvent::Exit = &event {
+                app.state::<engine::EngineState>().shutdown();
             }
         });
 }

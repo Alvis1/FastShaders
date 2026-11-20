@@ -6,7 +6,11 @@
  * a web build without the cloud origin (today every hosted one) ships no SDK,
  * and no web build ships the desktop transport.
  *
- *  - local  — a model server on this computer. The desktop app reaches it
+ *  - engine — the BUNDLED llama.cpp (src-tauri/src/engine.rs, P5): the desktop
+ *             app only, offered first ("local first"). No other build carries
+ *             the engine.
+ *  - local  — the user's own model server on this computer (LM Studio,
+ *             Ollama). The desktop app reaches it
  *             through the Rust bridge (src-tauri/src/llm.rs). The dev server
  *             reaches it through its own same-origin proxy (vite.config.ts
  *             `llmDevProxyPlugin`), so the dialog can be exercised in a
@@ -35,6 +39,7 @@ export const buildEnv = (): BuildEnv => ({ desktop: __FS_DESKTOP__, cloud: __FS_
 export function offeredRoutes(env: BuildEnv, evalMode: boolean): RouteId[] {
   if (evalMode) return [];
   const routes: RouteId[] = [];
+  if (env.desktop) routes.push('engine');
   if (env.desktop || env.dev) routes.push('local');
   if (env.desktop || env.cloud) routes.push('claude');
   return routes;
@@ -44,6 +49,12 @@ export function offeredRoutes(env: BuildEnv, evalMode: boolean): RouteId[] {
 export async function loadLocalTransport(): Promise<LocalTransport | null> {
   if (__FS_DESKTOP__) return (await import('./transport/tauriTransport')).tauriTransport();
   if (import.meta.env.DEV) return (await import('./transport/fetchTransport')).fetchTransport();
+  return null;
+}
+
+/** The bundled engine's transport: the desktop app only (it carries the engine). */
+export async function loadEngineTransport(): Promise<LocalTransport | null> {
+  if (__FS_DESKTOP__) return (await import('./transport/tauriTransport')).engineTransport();
   return null;
 }
 

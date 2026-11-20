@@ -126,6 +126,41 @@
   font-weight: 500;
 }
 
+/* "Generate with AI" — beside the search box, only while the query reads as a
+   request (ContentBrowser.tsx). Chrome like the box it follows. */
+.content-browser__ai-btn {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  margin-right: 6px;
+  margin-bottom: 3px;
+  font-size: var(--font-size-xs);
+  font-family: var(--font-sans);
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--bg-raised);
+  border: 1px solid var(--text-secondary);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  align-self: center;
+  white-space: nowrap;
+}
+
+.content-browser__ai-btn:hover,
+.content-browser__ai-btn:focus-visible {
+  background: var(--bg-raised-sub);
+  outline: none;
+}
+
+/* Read by screen readers only (the request announcement). */
+.content-browser__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* Category tabs. These KEEP the folder merge the code panel's TSL/A-Frame tabs
    dropped (`bottom: -1px` plus an active `borderBottomColor` matching the strip
    below — see tabStyle() in ContentBrowser.tsx), and that is not drift: here the

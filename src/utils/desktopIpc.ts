@@ -71,6 +71,47 @@ export const LLM_MAX_MODEL_LIST_BYTES = 1024 * 1024;
 export const LLM_FRAME_DATA = 1;
 export const LLM_FRAME_END = 2;
 
+// --- The bundled engine (src-tauri/src/engine.rs) ----------------------------
+// llama.cpp's llama-server, shipped in the desktop app and pinned file by file
+// in src-tauri/engine.json. Pinned against engine.rs by desktopIpcContract.test.ts.
+
+/** Survey this computer for the bundled engine: no arguments → the survey as
+ *  RAW JSON bytes (`parseEngineSurvey`, src/llm/engineSurvey.ts). */
+export const LLM_ENGINE_SURVEY = 'llm_engine_survey';
+/** The model's and the engine process's state; starts nothing. */
+export const LLM_ENGINE_STATUS = 'llm_engine_status';
+/** `{ action: 'start' | 'pause' | 'cancel' }` — never a repository. */
+export const LLM_ENGINE_DOWNLOAD = 'llm_engine_download';
+export const LLM_ENGINE_DELETE = 'llm_engine_delete';
+export const LLM_ENGINE_STOP = 'llm_engine_stop';
+/** A chat with the bundled engine: a body and a channel, no address (llm.rs). */
+export const LLM_ENGINE_CHAT = 'llm_engine_chat';
+/** = Rust `MODEL_STATES`: every `model.state` a status reports. */
+export const ENGINE_MODEL_STATES = [
+  'none',
+  'partial',
+  'downloading',
+  'offline',
+  'checking',
+  'bad-hash',
+  'low-disk',
+  'ready',
+] as const;
+/** = Rust `SERVER_STATES`. */
+export const ENGINE_SERVER_STATES = ['stopped', 'starting', 'ready', 'failed'] as const;
+/** = Rust `SURVEY_STATES`: every `state` a survey reports. */
+export const ENGINE_SURVEY_STATES = [
+  'ok',
+  'unsupported',
+  'intel-mac',
+  'old-mac',
+  'missing',
+  'tampered',
+  'blocked',
+  'runtime-missing',
+  'failed',
+] as const;
+
 export interface DesktopError {
   /** The code without its `E_` prefix: `TOO_LARGE`, `BAD_NAME`, … */
   code: string;

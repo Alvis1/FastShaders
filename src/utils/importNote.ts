@@ -74,11 +74,11 @@ export type ImportNoteLine =
    *  arriving group drives nothing. `name` is the group's label, already
    *  bounded by `sanitizeDroppedName`. */
   | { kind: 'shader-added'; name: string; nodes: number; droppedSinks: number }
-  /** A group generated from a text prompt was added beside the graph
-   *  (src/llm/place.ts). Its end drives nothing until the user wires it — the
-   *  one thing the note must say. `name` is the group's label (the prompt,
-   *  shortened). */
-  | { kind: 'generated-added'; name: string; nodes: number }
+  /** A group generated from a text prompt was added (src/llm/place.ts).
+   *  `wired` counts the Output sockets it was wired into: 0 means its end
+   *  drives nothing until the user wires it — the one thing the note must
+   *  then say. `name` is the group's label (the prompt, shortened). */
+  | { kind: 'generated-added'; name: string; nodes: number; wired: number }
   /** GLB Phase 7: what a DELIVERED single-GLB export reports — textures
    *  written WebP-only, slots other viewers will show untextured, an
    *  approximated placement (utils/glbExportCopy.ts). The `glb-` prefix gives
@@ -151,10 +151,15 @@ export function importNoteLineText(line: ImportNoteLine, lang: Language): string
     case 'glb-export-ktx2-skipped':
       return glbExportNoteLineText(line, lang);
     case 'generated-added':
-      return fillTemplate(t('Added {name} — {n} nodes, not connected yet. Wire its last node into an Output to see it.', lang), {
-        name: '\u201c' + line.name + '\u201d',
-        n: line.nodes,
-      });
+      return fillTemplate(
+        t(
+          line.wired > 0
+            ? 'Added {name} — {n} nodes, connected to the Output.'
+            : 'Added {name} — {n} nodes, not connected yet. Wire its last node into an Output to see it.',
+          lang,
+        ),
+        { name: '\u201c' + line.name + '\u201d', n: line.nodes },
+      );
     case 'shader-added':
       // Two sentences in one line, because the second is the surprise: the
       // arriving chain is on the canvas but drives nothing until it is wired.

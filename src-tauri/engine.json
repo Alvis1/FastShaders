@@ -1,0 +1,260 @@
+{
+  "$comment": "THE engine manifest (P5, docs/dev/node-generator.md). scripts/fetch-engine.mjs reads it to stage src-tauri/engine-dist/<tag>/, and src-tauri/src/engine.rs compiles it in to verify every file before anything runs. Change a pin here and nowhere else.",
+  "engine": "llama.cpp",
+  "tag": "b12359",
+  "release": "v1.0.0",
+  "platforms": {
+    "macos-arm64": {
+      "server": "llama-server",
+      "asset": "llama-b12359-bin-macos-arm64.tar.gz",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12359/llama-b12359-bin-macos-arm64.tar.gz",
+      "sha256": "82b00abc740160e1b9980e6cc79c117345fa34af058c80e6c0a69aa8ddccde75",
+      "size": 16907811,
+      "files": [
+        {
+          "from": "llama-b12359/llama-server",
+          "to": "llama-server",
+          "sha256": "685941b8df982e4e205fd20492f9aaa9418f2d1224ba3d311a686abd0edb0439",
+          "size": 49984
+        },
+        {
+          "from": "llama-b12359/libllama-server-impl.dylib",
+          "to": "libllama-server-impl.dylib",
+          "sha256": "1f027d62af4fb070413fe20b6e07e7c95520196592e58fceb2a2d84c6a992449",
+          "size": 10016120
+        },
+        {
+          "from": "llama-b12359/libllama-common.1.0.0.dylib",
+          "to": "libllama-common.1.dylib",
+          "sha256": "2a944a59202b6577e694b8d0feb7ecb00d0e48d66ebeb38d6df5d793b0e18aa0",
+          "size": 8175368
+        },
+        {
+          "from": "llama-b12359/libmtmd.1.0.0.dylib",
+          "to": "libmtmd.1.dylib",
+          "sha256": "6707bc4f3e7c403b9416a1a1f18a694de4bfab0fbdd81156c91e776aac883c29",
+          "size": 1728064
+        },
+        {
+          "from": "llama-b12359/libllama.1.0.0.dylib",
+          "to": "libllama.1.dylib",
+          "sha256": "dfc60f3c5001e4cd75fd09dca393c4f825dcce3856709ff0faed57344aab6215",
+          "size": 3806816
+        },
+        {
+          "from": "llama-b12359/libggml.1.0.0.dylib",
+          "to": "libggml.1.dylib",
+          "sha256": "7d3702e5e30ba6a7b342bee26496a018bc289d44c90c6c5627b75dd9862b2cde",
+          "size": 60016
+        },
+        {
+          "from": "llama-b12359/libggml-cpu.1.0.0.dylib",
+          "to": "libggml-cpu.1.dylib",
+          "sha256": "d33d9aba808ea37e279cfc696fcaf4ba63a4133f6e7559748148c5b961d2a319",
+          "size": 959168
+        },
+        {
+          "from": "llama-b12359/libggml-blas.1.0.0.dylib",
+          "to": "libggml-blas.1.dylib",
+          "sha256": "8bfc2b86400db027c4d85571e838c149bd09e66093d707405f9be37fd51bdccc",
+          "size": 58776
+        },
+        {
+          "from": "llama-b12359/libggml-metal.1.0.0.dylib",
+          "to": "libggml-metal.1.dylib",
+          "sha256": "e6cca52435be9682e2473ffa43123549590710c0e8d586e3e12360de80097e7f",
+          "size": 5688296
+        },
+        {
+          "from": "llama-b12359/libggml-rpc.1.0.0.dylib",
+          "to": "libggml-rpc.1.dylib",
+          "sha256": "565efd05cd9960542218c74b6249db43d18d30c81331ee6ce151e692f0096146",
+          "size": 243488
+        },
+        {
+          "from": "llama-b12359/libggml-base.1.0.0.dylib",
+          "to": "libggml-base.1.dylib",
+          "sha256": "27921afe159a36c5fdfd293da51beee0ae83587db99a8434241cd92fd4478e6a",
+          "size": 770760
+        },
+        {
+          "to": "LICENSE",
+          "repo": "engine-licenses/llama.cpp-LICENSE",
+          "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+          "size": 1078
+        }
+      ]
+    },
+    "windows-x64": {
+      "server": "llama-server.exe",
+      "asset": "llama-b12359-bin-win-vulkan-x64.zip",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12359/llama-b12359-bin-win-vulkan-x64.zip",
+      "sha256": "e8d18c6e4210cca87e7307c2ea78363ac8d158e4e1397358ec96ab70b53a0d5e",
+      "size": 38090643,
+      "files": [
+        {
+          "from": "llama-server.exe",
+          "to": "llama-server.exe",
+          "sha256": "38c5affb81c9a8f88f5538c7d11bc445e13bc46a2c6eda05694b8b31a8d45995",
+          "size": 9728
+        },
+        {
+          "from": "llama-server-impl.dll",
+          "to": "llama-server-impl.dll",
+          "sha256": "c81c23738405831cacda737e64ce8f08870d4f44beb63e3aa9515b3ad2e4286e",
+          "size": 10343424
+        },
+        {
+          "from": "llama-common.dll",
+          "to": "llama-common.dll",
+          "sha256": "a0e0b993dede7c95eb1ca79cdcc2a003f2f79ff59fc129cb46ec5daac80fd057",
+          "size": 8507904
+        },
+        {
+          "from": "mtmd.dll",
+          "to": "mtmd.dll",
+          "sha256": "558d7c41475cc6f54d6da41eea23876cd35cfd2e9d8f2b3e637b8c49c9928ed5",
+          "size": 2244096
+        },
+        {
+          "from": "llama.dll",
+          "to": "llama.dll",
+          "sha256": "17b0063b06c4561f46929a809a60bf60c857783bb22f593528145cc1e1108d7d",
+          "size": 3868672
+        },
+        {
+          "from": "ggml.dll",
+          "to": "ggml.dll",
+          "sha256": "92b081cfb031e2efe5cd2a8c71c872e8a92cb1d4a43619ad6614dc30ad357b80",
+          "size": 78848
+        },
+        {
+          "from": "ggml-base.dll",
+          "to": "ggml-base.dll",
+          "sha256": "20e4986ec6fd88eb61630433ff172e08885f8fecfbd0c1960a5d55c8854019e3",
+          "size": 832000
+        },
+        {
+          "from": "libomp.dll",
+          "to": "libomp.dll",
+          "sha256": "a12116ba72d1d6820407cf30be23da04ce79d6bb8a71a5ee71759c5a1faa6f1c",
+          "size": 768000
+        },
+        {
+          "from": "ggml-vulkan.dll",
+          "to": "ggml-vulkan.dll",
+          "sha256": "9cc0d9416bf032caa58af66fc7fe700e35a476b74cab94fcb45e08f4eca8213c",
+          "size": 42138624
+        },
+        {
+          "from": "ggml-cpu-alderlake.dll",
+          "to": "ggml-cpu-alderlake.dll",
+          "sha256": "f4bd2a5bd4c99669a5efcbc0edf5326c6f51cf556c3301ae5c8fc2994b913440",
+          "size": 1459200
+        },
+        {
+          "from": "ggml-cpu-cannonlake.dll",
+          "to": "ggml-cpu-cannonlake.dll",
+          "sha256": "b6a69981682c6e9dfb5fefcfc3677b9e17c112c3c33fc9d59405daa618e63304",
+          "size": 1692160
+        },
+        {
+          "from": "ggml-cpu-cascadelake.dll",
+          "to": "ggml-cpu-cascadelake.dll",
+          "sha256": "488337fb896ac54ec8a74a5e8163b48d8ec4c8e082da4bbb62ebe52139d3b3d8",
+          "size": 1666048
+        },
+        {
+          "from": "ggml-cpu-cooperlake.dll",
+          "to": "ggml-cpu-cooperlake.dll",
+          "sha256": "7d30660f15d288d6da7c1d99ae8418c46f61d1d5036e0082aad6fbf4e461d2bb",
+          "size": 1675264
+        },
+        {
+          "from": "ggml-cpu-haswell.dll",
+          "to": "ggml-cpu-haswell.dll",
+          "sha256": "26dbcf80225fe3c56aa750501247cebdc99b791f323c33d0d8fcd2ed7c4bafcb",
+          "size": 1464320
+        },
+        {
+          "from": "ggml-cpu-icelake.dll",
+          "to": "ggml-cpu-icelake.dll",
+          "sha256": "0a35f7a655bb74ce2d64cbb64e6817b17f62964b060c6a503d3267b2133199bc",
+          "size": 1672192
+        },
+        {
+          "from": "ggml-cpu-ivybridge.dll",
+          "to": "ggml-cpu-ivybridge.dll",
+          "sha256": "2e83b2aa5ad108445a599fcdd46fafcb227a3d2d66743994434b0bcaacb5a714",
+          "size": 1345536
+        },
+        {
+          "from": "ggml-cpu-piledriver.dll",
+          "to": "ggml-cpu-piledriver.dll",
+          "sha256": "851474816a574847b264e018de02410f5905359934c2fa2411f7ff3d7706620c",
+          "size": 1338880
+        },
+        {
+          "from": "ggml-cpu-sandybridge.dll",
+          "to": "ggml-cpu-sandybridge.dll",
+          "sha256": "86b1c9114249492b8d39a1a3d9f9717c8969334a4bd12c279b91248a553cb254",
+          "size": 1314304
+        },
+        {
+          "from": "ggml-cpu-sapphirerapids.dll",
+          "to": "ggml-cpu-sapphirerapids.dll",
+          "sha256": "b049b5672c3c246bb320ec011c735981628a9369687cfd64a4628c5bad238b3b",
+          "size": 1952256
+        },
+        {
+          "from": "ggml-cpu-skylakex.dll",
+          "to": "ggml-cpu-skylakex.dll",
+          "sha256": "183413744426f596c67fb206daf2cab17d666e22076e4a6b9a25d301de871d85",
+          "size": 1686016
+        },
+        {
+          "from": "ggml-cpu-sse42.dll",
+          "to": "ggml-cpu-sse42.dll",
+          "sha256": "5b2f04b3ab1e76b09d887c496eb61b09a0ee4fc77b28c0602e45411906946ccd",
+          "size": 937472
+        },
+        {
+          "from": "ggml-cpu-x64.dll",
+          "to": "ggml-cpu-x64.dll",
+          "sha256": "375434294cb7d22de0bf5da68fe67569fb5f8ca2c11e925850c8be3f52d052fe",
+          "size": 930304
+        },
+        {
+          "from": "ggml-cpu-zen4.dll",
+          "to": "ggml-cpu-zen4.dll",
+          "sha256": "dae5d12772f0213b6d70a3c4db032146b504dea32b1b35bbcc9dff769edf57f7",
+          "size": 1681920
+        },
+        {
+          "from": "LICENSE-LLVM-OpenMP",
+          "to": "LICENSE-LLVM-OpenMP",
+          "sha256": "fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4",
+          "size": 19741
+        },
+        {
+          "to": "LICENSE",
+          "repo": "engine-licenses/llama.cpp-LICENSE",
+          "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+          "size": 1078
+        }
+      ]
+    }
+  },
+  "models": [
+    {
+      "key": "gemma-4-e2b",
+      "label": "Gemma 4 E2B",
+      "repo": "unsloth/gemma-4-E2B-it-GGUF",
+      "quant": "Q4_K_M",
+      "commit": "0314792d7f1f7e229411f620751375812bb9faf2",
+      "file": "gemma-4-E2B-it-Q4_K_M.gguf",
+      "sha256": "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
+      "size": 3106738272
+    }
+  ]
+}

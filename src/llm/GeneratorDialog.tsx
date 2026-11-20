@@ -38,21 +38,41 @@ import { liveUniformNames, storedUniformNames } from './names';
 import { MAX_ROUNDS, runGeneration, type GateOk, type RunStatus } from './orchestrate';
 import { addGeneratedGroup } from './place';
 import { loadGeneratorPrefs, saveGeneratorPref, type RouteId } from './prefs';
-import { buildEnv, loadClaude, loadLocalTransport, offeredRoutes, requestBase } from './registry';
+import { buildEnv, loadClaude, loadEngineTransport, loadLocalTransport, offeredRoutes, requestBase } from './registry';
+import { ENGINE_MODEL_ALIAS } from './engineModel';
 import { checkLocalServer, LOCAL_MIN_CONTEXT, localProvider, type LocalCheck } from './providers/local';
 import { normalizeLocalBase } from './endpoint';
 import { CLAUDE_MODELS, CLAUDE_MODEL_LABELS, type ClaudeModel } from './claudeModels';
 import { clearCloudKey, hasCloudKey, setCloudKey, subscribeCloudKey } from './cloudKey';
 import type { GenerateFailure, GeneratorProvider } from './providerTypes';
+import { EngineSetup } from './EngineSetup';
+import type { SetupAction } from './setupStates';
 import '@/components/Modals/CsvImportModal.css';
 import './GeneratorDialog.css';
 
 export interface GeneratorDialogProps {
-  /** A request to start from ('' from the Settings list: the session's last
-   *  request is offered instead). */
+  /** A request to start from: a search box's query ('' from the Settings
+   *  list: the session's last request is offered instead). */
   initialPrompt: string;
+  /** Where on the canvas the request was made (flow coords): a group that
+   *  cannot be wired into the Output lands there. */
+  at?: { x: number; y: number };
+  /** Start as soon as the route is ready — Ctrl/Cmd+Enter in a search box
+   *  with a route that already worked this session. Never without text. */
+  autostart?: boolean;
   onClose: () => void;
 }
+
+/** Latvian letters in a request: the hint to write in English shows (the
+ *  request is still sent as typed). */
+const LATVIAN_LETTERS = /[āčēģīķļņšūž]/i;
+
+/** The route list's labels (English, through t()). */
+const ROUTE_LABELS: Readonly<Record<RouteId, string>> = {
+  engine: 'On this computer · free',
+  local: 'My LM Studio or Ollama',
+  claude: 'Claude (your API key)',
+};
 
 /** This session's last request — kept in memory only, never stored. */
 let lastPrompt = '';
@@ -70,7 +90,9 @@ type Phase =
 function failureText(f: GenerateFailure, route: RouteId): string {
   switch (f) {
     case 'cancelled': return 'Cancelled.';
-    case 'not-running': return 'Nothing answers at that address. Start LM Studio’s server (Developer tab, or `lms server start`), then press Check.';
+    case 'not-running': return route === 'engine'
+      ? 'The built-in AI could not start on this computer.'
+      : 'Nothing answers at that address. Start LM Studio’s server (Developer tab, or `lms server start`), then press Check.';
     case 'wrong-server': return 'No OpenAI-compatible model server answers at that address — check the port (LM Studio uses 1234).';
     case 'bad-address': return 'Use http://127.0.0.1:<port> or http://localhost:<port> — a server on this computer.';
     case 'busy': return 'Another request to the model is still running. Wait a moment, then try again.';
@@ -100,8 +122,11 @@ function splitAtCost(template: string): [string, string] {
   return at < 0 ? [template, ''] : [template.slice(0, at), template.slice(at + '{cost}'.length)];
 }
 
-export function GeneratorDialog({ initialPrompt, onClose }: GeneratorDialogProps) {
+export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: GeneratorDialogProps) {
   const language = useAppStore((s) => s.language);
+  // 'suggest' until a route has worked once: the first-time line and the
+  // "Don't suggest AI" link show only then.
+  const firstTime = useAppStore((s) => s.nodeGenerator === 'suggest');
   // The result's price prints as every surface prints one: divided by the
   // selected device's budget onto the fixed 100 (utils/budgetPoints.ts).
   const deviceBudget = useDeviceBudget();
@@ -121,6 +146,7 @@ export function GeneratorDialog({ initialPrompt, onClose }: GeneratorDialogProps
   const abortRef = useRef<AbortController | null>(null);
   const checkRef = useRef<AbortController | null>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
+  const routesRef = useRef<HTMLDivElement>(null);
   const downOnBackdrop = useRef(false);
 
   // Local route state.
@@ -133,6 +159,8 @@ export function GeneratorDialog({ initialPrompt, onClose }: GeneratorDialogProps
   const [keyHeld, setKeyHeld] = useState(hasCloudKey);
   const [keyRefused, setKeyRefused] = useState(false);
   useEffect(() => subscribeCloudKey(setKeyHeld), []);
+  // The built-in route: its engine runs here and its model is downloaded and checked.
+  const [engineReady, setEngineReady] = useState(false);
 
   const running = phase.kind === 'running';
   const busy = running || phase.kind === 'adding';
@@ -226,6 +254,10 @@ export function GeneratorDialog({ initialPrompt, onClose }: GeneratorDialogProps
 
   // Check the local server once when the route is first shown.
   const checkedOnce = useRef(false);
+  // An unmount forgets it: React's StrictMode double mount (the dev server)
+  // aborts the first check with the first mount, and a ref that stayed set
+  // left the dialog opening on "Cancelled." until Check was pressed.
+  useEffect(() => () => { checkedOnce.current = false; }, []);
   useEffect(() => {
     if (route === 'local' && !checkedOnce.current) { checkedOnce.current = true; void runCheck(); }
     // Fetch the provider (and the SDK) while the user types, not on Generate.
@@ -233,8 +265,17 @@ export function GeneratorDialog({ initialPrompt, onClose }: GeneratorDialogProps
   }, [route, runCheck]);
 
   const chooseRoute = (r: RouteId) => {
+    autostartRef.current = false;
     setRoute(r);
     saveGeneratorPref('route', r);
+  };
+
+  /** A setup box's way around the built-in route, and "Not now". */
+  const engineAction = (action: SetupAction) => {
+    if (action === 'notNow') onClose();
+    else if (action === 'useOwnServer' && routes.includes('local')) chooseRoute('local');
+    else if (action === 'useApiKey' && routes.includes('claude')) chooseRoute('claude');
+    else routesRef.current?.querySelector<HTMLInputElement>('input:not(:checked)')?.focus();
   };
 
   const takeKey = () => {
@@ -243,10 +284,21 @@ export function GeneratorDialog({ initialPrompt, onClose }: GeneratorDialogProps
     if (ok) setKeyText('');
   };
 
+  // The built-in route is ready once its model is downloaded and checked; the
+  // engine itself starts on the first Generate (its setup boxes say the rest).
   const routeReady = route === 'local'
     ? !!base && typeof check === 'object' && check !== null && check.ok && !!localModel
-    : route === 'claude' && keyHeld;
+    : route === 'claude' ? keyHeld : route === 'engine' && engineReady;
   const canGenerate = !!prepared && !busy && !!prompt.trim() && routeReady;
+
+  // What the search boxes read: their button says "Generate with AI" once the
+  // chosen route has worked this session, and the first time one does the
+  // switch goes from 'suggest' to 'on'.
+  useEffect(() => {
+    const store = useAppStore.getState();
+    store.setGeneratorRouteReady(routeReady);
+    if (routeReady && store.nodeGenerator === 'suggest') store.setNodeGenerator('on');
+  }, [routeReady]);
 
   const generate = useCallback(async () => {
     if (!canGenerate || !prepared || !route) return;
@@ -262,11 +314,17 @@ export function GeneratorDialog({ initialPrompt, onClose }: GeneratorDialogProps
         const transport = await loadLocalTransport();
         if (!transport) throw new Error('no local transport in this build');
         provider = localProvider(transport, requestBase(env, base!), localModel);
-      } else {
+      } else if (route === 'claude') {
         saveGeneratorPref('cloudModel', cloudModel);
         const claude = await loadClaude();
         if (!claude) throw new Error('no cloud route in this build');
         provider = claude.claudeProvider(cloudModel);
+      } else {
+        const transport = await loadEngineTransport();
+        if (!transport) throw new Error('no built-in engine in this build');
+        // The same protocol as a local server; Rust supplies the address.
+        const { ENGINE_BASE } = await import('./transport/tauriTransport');
+        provider = localProvider(transport, ENGINE_BASE, ENGINE_MODEL_ALIAS);
       }
     } catch {
       setPhase({ kind: 'failed', message: failureText('unavailable', route) });
@@ -316,19 +374,34 @@ export function GeneratorDialog({ initialPrompt, onClose }: GeneratorDialogProps
     }
   }, [canGenerate, prepared, route, prompt, env, base, localModel, cloudModel, onClose]);
 
+  // Ctrl/Cmd+Enter from a search box: start once, the first time this dialog
+  // can — and never after the user has touched the request.
+  const autostartRef = useRef(autostart === true && initialPrompt.trim() !== '');
+  useEffect(() => {
+    if (!autostartRef.current || !canGenerate) return;
+    autostartRef.current = false;
+    void generate();
+  }, [canGenerate, generate]);
+
   const add = useCallback(async () => {
     if (phase.kind !== 'result') return;
     const { result: { tsl }, request } = phase;
     setPhase({ kind: 'adding' });
     let r: Awaited<ReturnType<typeof addGeneratedGroup>>;
     try {
-      r = await addGeneratedGroup(tsl, request, isEvalMode);
+      r = await addGeneratedGroup(tsl, request, isEvalMode, at);
     } catch {
       r = { ok: false, reason: 'parse-failed' };
     }
     if (r.ok) { onClose(); return; }
     setPhase({ kind: 'failed', message: r.reason === 'study' ? failureText('unavailable', route ?? 'local') : 'The group could not be added.' });
-  }, [phase, onClose, route]);
+  }, [phase, onClose, route, at]);
+
+  /** "Don't suggest AI": the switch goes off (Settings turns it back on). */
+  const dontSuggest = () => {
+    useAppStore.getState().setNodeGenerator('off');
+    onClose();
+  };
 
   const cancel = () => abortRef.current?.abort();
   const close = () => { if (!busy) onClose(); };
@@ -419,14 +492,27 @@ export function GeneratorDialog({ initialPrompt, onClose }: GeneratorDialogProps
           {t('Generate nodes from text', language)} <span className="generator-dialog__tag">{t('experimental', language)}</span>
         </div>
 
+        {firstTime && (
+          <div className="generator-dialog__disclosure">
+            {t('The AI sees your words, never your graph. On this computer: free and private. Cloud: you pay.', language)}
+          </div>
+        )}
+
         {routes.length > 1 && (
-          <div className="generator-dialog__routes" role="radiogroup" aria-label={t('Model', language)}>
+          <div className="generator-dialog__routes" role="radiogroup" aria-label={t('Model', language)} ref={routesRef}>
             {routes.map((r) => (
               <label key={r} className="generator-dialog__route">
                 <input type="radio" name="generator-route" checked={route === r} disabled={busy} onChange={() => chooseRoute(r)} />
-                {r === 'local' ? t('This computer (LM Studio)', language) : t('Claude (your API key)', language)}
+                {t(ROUTE_LABELS[r], language)}
               </label>
             ))}
+          </div>
+        )}
+
+        {route === 'engine' && (
+          <div className="generator-dialog__section">
+            <EngineSetup language={language} busy={busy} claudeOffered={routes.includes('claude')} onAction={engineAction} onReady={setEngineReady} />
+            <div className="generator-dialog__disclosure">{t('Runs on this computer; nothing leaves it.', language)}</div>
           </div>
         )}
 
@@ -548,8 +634,11 @@ export function GeneratorDialog({ initialPrompt, onClose }: GeneratorDialogProps
           // prompt, the rules and the examples are English), so the example
           // shows the language to write in.
           placeholder="e.g. glowing lava cracks on dark rock"
-          onChange={(e) => setPrompt(e.target.value)}
+          onChange={(e) => { autostartRef.current = false; setPrompt(e.target.value); }}
         />
+        {LATVIAN_LETTERS.test(prompt) && (
+          <div className="generator-dialog__note">{t('Write requests in English.', language)}</div>
+        )}
 
         {!prepared && !prepFailed && <div className="generator-dialog__note">{t('Preparing…', language)}</div>}
         {prepFailed && <div className="generator-dialog__warn">{t('The node list could not be loaded. Check the connection and open this again.', language)}</div>}
@@ -606,7 +695,7 @@ export function GeneratorDialog({ initialPrompt, onClose }: GeneratorDialogProps
                 {fillTemplate(t('Left out {n} unused lines.', language), { n: phase.result.pruned.length })}
               </div>
             )}
-            <div className="generator-dialog__note">{t('The group arrives unconnected: wire its last node into an Output to see it.', language)}</div>
+            <div className="generator-dialog__note">{t('It connects to the Output’s Color if that socket is empty.', language)}</div>
             <details className="generator-dialog__code">
               <summary>{t('Show code', language)}</summary>
               <pre>{phase.result.tsl}</pre>
@@ -614,6 +703,12 @@ export function GeneratorDialog({ initialPrompt, onClose }: GeneratorDialogProps
           </div>
           );
         })()}
+
+        {firstTime && !busy && (
+          <button type="button" className="generator-dialog__link generator-dialog__foot" onClick={dontSuggest}>
+            {t('Don’t suggest AI', language)}
+          </button>
+        )}
 
         <div className="csv-import-modal__buttons">
           {running ? (

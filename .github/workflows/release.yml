@@ -119,6 +119,13 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
+      # The bundled AI engine (llama.cpp's llama-server, P5): downloaded and
+      # checked file by file against src-tauri/engine.json, then bundled as the
+      # resource folder engine/. A pin that does not match stops the release.
+      # macOS stages the arm64 engine (the universal app runs it on Apple
+      # silicon only); Windows the Vulkan + CPU engine.
+      - name: Fetch the AI engine
+        run: npm run fetch:engine
       # The Tauri CLI exports TAURI_ENV_* to the beforeBuildCommand, which
       # flips vite.config.ts into the FS_DESKTOP profile (base '/', no CSP
       # meta, no ShaderCarousel) automatically.
@@ -155,11 +162,14 @@ jobs:
             # Windows is the exe's own directory — tauri-build lays bundle
             # resources out NEXT TO the exe (target/release/ShaderCarousel),
             # it never embeds them in the binary. A bare exe would ship the
-            # VR bench feature permanently broken; zipping the two together
+            # VR bench feature permanently broken; zipping them together
             # preserves the layout resource_dir() expects.
             mkdir portable
             cp src-tauri/target/release/fastshaders.exe portable/FastShaders.exe
             cp -r src-tauri/target/release/ShaderCarousel portable/ShaderCarousel
+            # The AI engine sits beside the exe the same way (engine.rs reads
+            # resource_dir()/engine/<tag>/).
+            cp -r src-tauri/target/release/engine portable/engine
             (cd portable && 7z a ../FastShaders-Windows-Portable.zip .)
             gh release upload "$GITHUB_REF_NAME" FastShaders-Windows-Setup.exe FastShaders-Windows-Portable.zip --clobber
           fi

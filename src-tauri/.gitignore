@@ -8,3 +8,7 @@
 # anything compiles (an empty dir is skipped gracefully).
 /carousel-dist/*
 !/carousel-dist/.gitkeep
+# The bundled AI engine, staged by scripts/fetch-engine.mjs from the pins in
+# engine.json (npm run fetch:engine). Same .gitkeep reason as above.
+/engine-dist/*
+!/engine-dist/.gitkeep

@@ -812,6 +812,7 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 name = "fastshaders"
 version = "0.0.0"
 dependencies = [
+ "libc",
  "local-ip-address",
  "percent-encoding",
  "serde",
@@ -821,6 +822,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tiny_http",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

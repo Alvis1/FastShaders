@@ -1,8 +1,9 @@
 /**
  * Source pins for how the generator is wired into the app: its gates in a
- * study session and the embed, its one entry (the toolbar's Settings list) and
- * one commit path, the key that never leaves memory, the keys the dialog holds
- * back from the canvas, and model text that is never markup. Read as text —
+ * study session and the embed, its three entries (both search boxes and the
+ * toolbar's Settings list) through ONE opener, its one commit path, the key
+ * that never leaves memory, the keys the dialog holds back from the canvas,
+ * and model text that is never markup. Read as text —
  * these are properties of the code's SHAPE that a unit test of each module
  * cannot see.
  */
@@ -30,8 +31,15 @@ function files(dir: string, out: string[] = []): string[] {
 }
 
 const LLM = files('src/llm');
-/** The one boot-path piece besides the leaf flag: it loads the dialog with import(). */
+/** The boot-path piece that loads the dialog, with import(). */
 const LAUNCHER = 'src/components/Layout/GeneratorLauncher.tsx';
+/** The two search boxes that offer it, and what they share. */
+const ASSET_BAR = 'src/components/NodeEditor/ContentBrowser.tsx';
+const ADD_MENU = 'src/components/NodeEditor/menus/AddNodeMenu.tsx';
+const OFFER_HOOK = 'src/hooks/useGeneratorOffer.ts';
+const KNOWN_NAMES = 'src/components/NodeEditor/promptKnownNames.ts';
+const DETECTOR = 'src/utils/promptDetect.ts';
+const ENTRY = [ASSET_BAR, ADD_MENU, OFFER_HOOK, KNOWN_NAMES, DETECTOR];
 const DIALOG = 'src/llm/GeneratorDialog.tsx';
 const TOOLBAR = 'src/components/Layout/Toolbar.tsx';
 
@@ -45,7 +53,7 @@ describe('absent in a study session', () => {
       expect(offeredRoutes({ desktop, cloud, dev }, true)).toEqual([]);
     }
     expect(offeredRoutes({ desktop: false, cloud: false, dev: false }, false)).toEqual([]);
-    expect(offeredRoutes({ desktop: true, cloud: false, dev: false }, false)).toEqual(['local', 'claude']);
+    expect(offeredRoutes({ desktop: true, cloud: false, dev: false }, false)).toEqual(['engine', 'local', 'claude']);
     expect(offeredRoutes({ desktop: false, cloud: true, dev: false }, false)).toEqual(['claude']);
   });
 
@@ -53,21 +61,23 @@ describe('absent in a study session', () => {
     const tb = codeOnly(read(TOOLBAR));
     expect(tb).toContain('const NODE_GENERATOR_BUILD = generatorBuild(__FS_DESKTOP__, __FS_LLM_CLOUD__);');
     expect(tb).toContain('const generatorRow = !isEvalMode() && !isEmbedMode() && NODE_GENERATOR_BUILD;');
-    const at = tb.indexOf("t('Generate nodes from text', language)");
+    const at = tb.indexOf("t('Suggest AI in search', language)");
     expect(at).toBeGreaterThan(-1);
     const row = tb.slice(tb.lastIndexOf('{generatorRow && (', at), at);
-    expect(row).toContain('checked={nodeGenerator}');
-    expect(row).toContain('setNodeGenerator(e.target.checked)');
+    // Ticked in both 'suggest' and 'on'; only 'off' unticks it.
+    expect(tb).toContain("const generatorOn = nodeGenerator !== 'off';");
+    expect(row).toContain('checked={generatorOn}');
+    expect(row).toContain("setNodeGenerator(e.target.checked ? 'on' : 'off')");
     const open = tb.indexOf("t('Open the generator…', language)");
     expect(open).toBeGreaterThan(at);
-    expect(tb.slice(tb.lastIndexOf('{generatorRow && nodeGenerator && (', open), open)).toContain('onClick={openGenerator}');
+    expect(tb.slice(tb.lastIndexOf('{generatorRow && generatorOn && (', open), open)).toContain('onClick={openGenerator}');
     // Each counts toward the popover's height clamp only when it is drawn.
-    expect(tb).toMatch(/const prefsRows = [^;]*\(generatorRow \? 1 : 0\)[^;]*\(generatorRow && nodeGenerator \? 1 : 0\);/);
+    expect(tb).toMatch(/const prefsRows = [^;]*\(generatorRow \? 1 : 0\)[^;]*\(generatorRow && generatorOn \? 1 : 0\);/);
   });
 
-  it('the launcher checks the opt-in, the study and the embed again, and reaches the dialog only through import()', () => {
+  it('the launcher checks the switch, the study and the embed again, and reaches the dialog only through import()', () => {
     const src = codeOnly(read(LAUNCHER));
-    expect(src).toMatch(/if \(!open \|\| isEmbedMode\(\) \|\| !generatorOffered\(enabled, isEvalMode\(\), generatorBuild\(__FS_DESKTOP__, __FS_LLM_CLOUD__\)\)\) return null;/);
+    expect(src).toMatch(/if \(!request \|\| isEmbedMode\(\) \|\| !generatorOffered\(mode, isEvalMode\(\), generatorBuild\(__FS_DESKTOP__, __FS_LLM_CLOUD__\)\)\) return null;/);
     expect(src).toMatch(/lazyOr<DialogProps>\(\s*\(\) => import\('@\/llm\/GeneratorDialog'\)/);
     // No static edge into src/llm/ (bootWave.test.ts walks the whole graph).
     expect(src).not.toMatch(/^import[^;]*from '@\/llm\//m);
@@ -80,7 +90,46 @@ describe('absent in a study session', () => {
     const gate = read('src/eval/EvalGate.tsx');
     const body = gate.slice(gate.indexOf('function cleanSlateForStudy'), gate.indexOf('\nexport function EvalGate'));
     expect(body).toMatch(/for \(const key of GENERATOR_STORAGE_KEYS\) localStorage\.removeItem\(key\);/);
-    expect(body).toMatch(/nodeGenerator: false/);
+    expect(body).toMatch(/nodeGenerator: 'off',\s*generatorRequest: null/);
+  });
+
+  it('both search boxes ask ONE hook, which is false in a study, the embed and a running lesson', () => {
+    const hook = codeOnly(read(OFFER_HOOK));
+    expect(hook).toMatch(/const inLesson = useAppStore\(\(s\) => s\.tutorial != null\);/);
+    expect(hook).toMatch(/if \(inLesson \|\| isEmbedMode\(\)\) return false;/);
+    expect(hook).toMatch(/return generatorOffered\(mode, isEvalMode\(\), generatorBuild\(__FS_DESKTOP__, __FS_LLM_CLOUD__\)\);/);
+    for (const f of [ASSET_BAR, ADD_MENU]) {
+      const src = codeOnly(read(f));
+      expect(src, f).toContain('const aiOffered = useGeneratorOffer();');
+      // Detection, the keys and the entry all stand behind it.
+      expect(src, f).toMatch(/if \(!aiOffered \|\|/);
+    }
+    // The asset bar: no detection without the hook's yes, and no entry without detection.
+    const bar = codeOnly(read(ASSET_BAR));
+    expect(bar).toMatch(/if \(!aiOffered \|\| !libraries \|\| !hasQuery\) return null;/);
+    expect(bar).toMatch(/if \(!aiKnown \|\| !q\) return false;/);
+    expect(bar).toMatch(/\{promptDetected && \(\s*<button/);
+    // The menu: never on a menu opened by a dropped wire or an edge's Insert node.
+    expect(codeOnly(read(ADD_MENU))).toMatch(/if \(!aiOffered \|\| sourceNodeId \|\| spliceEdgeId\) return false;/);
+  });
+
+  it('the entry never reaches src/llm, the network or the study telemetry: it only opens the dialog', () => {
+    for (const f of ENTRY) {
+      const src = codeOnly(read(f));
+      expect(src, f).not.toMatch(/from '@\/llm\//);
+      expect(src, f).not.toMatch(/\bfetch\(|\binvoke\(|XMLHttpRequest|\bimport\('@\/llm/);
+    }
+    for (const f of [OFFER_HOOK, KNOWN_NAMES, DETECTOR]) expect(codeOnly(read(f)), f).not.toMatch(/\bevalLog\(/);
+    // The detector is a leaf: the search fold is its only import.
+    const imports = [...codeOnly(read(DETECTOR)).matchAll(/^import[^;]*from '([^']+)';/gm)].map((m) => m[1]);
+    expect(imports).toEqual(['./searchFold']);
+  });
+
+  it('ONE opener: the two search boxes and the Settings row call the store\'s openGenerator, nothing else does', () => {
+    const callers = files('src')
+      .filter((f) => /\.openGenerator\(/.test(codeOnly(read(f))))
+      .sort();
+    expect(callers).toEqual([TOOLBAR, ASSET_BAR, ADD_MENU].sort());
   });
 
   it('the run and the commit refuse in a study session themselves', () => {
@@ -99,8 +148,11 @@ describe('one commit path', () => {
       expect(src, f).not.toMatch(/\bsetCode\(|\brequestCodeSync\(|\bsetNodes\(|\bpushHistory\(/);
       if (!f.endsWith('place.ts')) expect(src, f).not.toMatch(/\baddDroppedShader\(/);
     }
-    expect(codeOnly(read('src/llm/place.ts'))).toMatch(/await addDroppedShader\(file\)/);
-    expect(codeOnly(read(DIALOG))).toMatch(/addGeneratedGroup\(tsl, request, isEvalMode\)/);
+    // `wire`: into the live Output's EMPTY sockets only (a pressed Preset's rule).
+    expect(codeOnly(read('src/llm/place.ts'))).toMatch(/await addDroppedShader\(file, \{ wire: true, at \}\)/);
+    expect(codeOnly(read(DIALOG))).toMatch(/addGeneratedGroup\(tsl, request, isEvalMode, at\)/);
+    // A dropped file's own Add never asks for it.
+    expect(codeOnly(read('src/components/Modals/ShaderImportModal.tsx'))).toMatch(/await addDroppedShader\(item\.file\)/);
   });
 });
 
@@ -148,8 +200,16 @@ describe('the dialog', () => {
     }
     const tb = codeOnly(read(TOOLBAR));
     keys.add(/const NODE_GENERATOR_HINT =\s*'([^']*)';/.exec(tb)![1]);
-    keys.add('Generate nodes from text');
+    keys.add('Suggest AI in search');
     keys.add('Open the generator…');
+    // The search-box entry's own strings.
+    for (const f of [ASSET_BAR, ADD_MENU]) {
+      for (const m of codeOnly(read(f)).matchAll(/'((?:[^'\\\n]|\\.)*\bAI\b(?:[^'\\\n]|\\.)*)'/g)) keys.add(m[1]);
+    }
+    keys.add('Search nodes and assets');
+    for (const k of ['✦ Set up AI…', '✦ Generate with AI', 'Generate “{query}” with AI', 'No matches for “{query}”. Press Enter to make it with AI.', 'Request detected. Press Enter to make it with AI.']) {
+      expect(keys.has(k), k).toBe(true);
+    }
     expect(keys.size).toBeGreaterThan(60);
     const missing = [...keys].filter((k) => !ui[k]);
     expect(missing).toEqual([]);

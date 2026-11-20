@@ -30,6 +30,16 @@ serde_json = "1"
 # their SHA-256, which Rust computes and re-verifies on every read.
 sha2 = "0.10"
 
+# The bundled AI engine (src/engine.rs): memory, free disk, the OS version and
+# the quarantine mark and the process group on macOS; memory, free disk and the
+# Job Object that ends the engine with the app on Windows. Both crates
+# were already in the tree (sha2 → cpufeatures → libc; tauri → dirs → windows-sys).
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security"] }
+
 [profile.release]
 # Small-binary settings: the shell is a thin webview host, favor size.
 codegen-units = 1

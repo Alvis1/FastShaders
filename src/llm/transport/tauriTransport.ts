@@ -25,6 +25,7 @@
  * the real one, one `invokeDesktop` per command constant.
  */
 import {
+  LLM_ENGINE_CHAT,
   LLM_FRAME_DATA,
   LLM_FRAME_END,
   LLM_LOCAL_CANCEL,
@@ -249,4 +250,26 @@ export function tauriTransport(bridge: LlmDesktopBridge = tauriLlmBridge): Local
       });
     },
   };
+}
+
+/**
+ * The BUNDLED engine (src-tauri/src/engine.rs): the same channel protocol and
+ * the same cancel, but the chat command takes NO address and no path — Rust
+ * starts the engine it verified, on a port and with a key only Rust knows, and
+ * posts to the one chat route itself. `ENGINE_BASE` only has to pass this
+ * file's loopback check; nothing connects to it.
+ */
+export const ENGINE_BASE = 'http://127.0.0.1:1';
+
+export const tauriEngineChatBridge: LlmDesktopBridge = {
+  available: hasDesktopBridge,
+  channel: createDesktopChannel,
+  // The engine has no model list to read: one pinned model, one alias.
+  models: () => Promise.reject(new Error('E_BAD_ROUTE')),
+  chat: ({ body, requestId, onEvent }) => invokeDesktop(LLM_ENGINE_CHAT, { body, requestId, onEvent }),
+  cancel: (args) => invokeDesktop(LLM_LOCAL_CANCEL, args),
+};
+
+export function engineTransport(bridge: LlmDesktopBridge = tauriEngineChatBridge): LocalTransport {
+  return tauriTransport(bridge);
 }

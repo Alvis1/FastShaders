@@ -143,7 +143,8 @@ function cleanSlateForStudy(): void {
     past: [], future: [],
     optionalCategories: DEFAULT_OPTIONAL_CATEGORIES,
     allowManyMaterials: false,
-    nodeGenerator: false,
+    nodeGenerator: 'off',
+    generatorRequest: null,
     tutorial: null,
     tutorialsDone: [],
   });

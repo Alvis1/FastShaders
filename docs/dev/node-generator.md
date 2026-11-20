@@ -1,6 +1,6 @@
 # Text → node generator (`src/llm/`)
 
-"Generate nodes from text": the user types a request ("glowing lava cracks on dark rock"), a model writes a small TSL program, and the app turns it into ONE group of ordinary nodes parked beside the graph, wired to nothing. It is experimental, **off by default** (`fs:nodeGenerator`, exact `'1'`, `utils/generatorFlag.ts`) and **absent in study sessions and the embed**. The planning record (research, designs, the skeptic reviews, the spike) lives in the gitignored `private/docs/llm-generator/`. This file is the reasoning for what was built.
+"Generate nodes from text": the user types a request ("glowing lava cracks on dark rock"), a model writes a small TSL program, and the app turns it into ONE group of ordinary nodes, wired into the Output's Color when that socket is empty and parked beside the graph otherwise. It is experimental, **suggested by default where a model can be reached** (`fs:nodeGenerator`, three states, `utils/generatorFlag.ts`: a search that reads as a request offers it, and nothing is loaded or sent before the dialog's Generate) and **absent in study sessions, the embed and a running lesson**. The planning record (research, designs, the skeptic reviews, the spike) lives in the gitignored `private/docs/llm-generator/`. This file is the reasoning for what was built.
 
 **What is in the app (2026-11-19).**
 - The core: the gate, the prompt and examples, the repair rounds, the placement, both providers, the fetch transport, the preferences and the opt-in leaf.
@@ -9,6 +9,7 @@
 - The per-build policy: `FS_LLM_CLOUD_ORIGINS` puts the Claude API in a web build's `connect-src` and turns the route on. No hosted build sets it (owner, 2026-11-19), and the host deploys check what is served (below).
 - The dialog (`llm/GeneratorDialog.tsx`), the store flag and its ONE entry: the toolbar's right-click Settings list (below, "The dialog and its entry").
 - The study clean slate's generator keys.
+- The bundled engine (P5, below, "The bundled engine"): llama.cpp packaged into the desktop app, pinned file by file; the survey the built-in route shows; the one pinned model, downloaded on the user's yes and hashed by the app; and the engine that serves it, started on the first Generate and stopped when idle.
 
 Still to come: the search-box entry, which replaces the Settings row as the way in.
 
@@ -18,7 +19,8 @@ The generator was built on v0.3.36 in a worktree and ported to main on 2026-11-1
 
 | Route | Where | Carried by | What leaves the machine |
 |---|---|---|---|
-| **This computer** (LM Studio, llama.cpp — the OpenAI-compatible API) | desktop app; dev server | desktop: the Rust bridge `src-tauri/src/llm.rs`, loopback only, through its client `transport/tauriTransport.ts`; dev: `transport/fetchTransport.ts` to the dev server's own same-origin proxy (`llmDevProxyPlugin`) | nothing |
+| **On this computer · free** (the bundled llama.cpp, P5; being built) | desktop app only | `src-tauri/src/engine.rs` runs llama.cpp's own `llama-server`, shipped in the app | nothing (the model download itself, from Hugging Face, comes next) |
+| **My LM Studio or Ollama** (LM Studio, llama.cpp — the OpenAI-compatible API) | desktop app; dev server | desktop: the Rust bridge `src-tauri/src/llm.rs`, loopback only, through its client `transport/tauriTransport.ts`; dev: `transport/fetchTransport.ts` to the dev server's own same-origin proxy (`llmDevProxyPlugin`) | nothing |
 | **Claude** with the user's own API key | desktop app and dev server; a web build only where its CSP names `https://api.anthropic.com`, which no hosted build does (owner, 2026-11-19) | the official `@anthropic-ai/sdk` (pinned EXACTLY at 0.132.1), straight from the browser (`dangerouslyAllowBrowser`, which sends the direct-browser-access header the API's CORS answer needs) | the request text, the fixed rules, the node list and worked examples. **Nothing from the user's graph or files** |
 
 Deliberately NOT offered:
@@ -137,14 +139,21 @@ The worktree's own versions of those fixes were not ported.
 
 So a generated group gets exactly what a dropped one does:
 - the ingest sanitizers;
-- the Output left out (there is nothing to drive yet);
+- its own Output left out;
 - fresh ids;
-- one frame parked beside the graph;
+- one frame;
 - ONE undo entry and `fs:graph-merged`.
 
 **A change to that path changes this one; that coupling is the point.**
 
-The canonical text is comment-free (no project block for the ADD to find), `Fn`-shaped (scriptToTSL passes it through), image-free and zero-warning. So the ADD parses exactly the graph the gate verified; `scriptToTSLWithSettings(tsl).code === tsl` is pinned. It posts its own note (`generated-added`: "wire its last node into an Output to see it"). It refuses in a study session. Its only caller is the dialog's Add.
+**The one thing it asks for on top is `wire`** (owner, 2026-11-20: "it should automatically connect to the Output, if nothing was connected there before"). A dropped file's Add never passes it.
+- `planShaderGroup` keeps what fed the arriving PLAIN Output as `outputWires` (re-sourced onto the fresh ids). A generated program returns ONE value, so that is one wire into Color.
+- `addDroppedShader({ wire: true })` re-targets them at the LIVE Output with a pressed Preset's own helpers (`utils/libraryAutoWire.ts`): `libraryWireOutput` (the active sink, only a plain Output, never one hidden in a collapsed group), `takenOutputChannels` + `libraryWireEdges` (a socket that has a wire is never touched), `exposeWiredChannels` and `makeOpacityReadable`.
+- A wired frame lands beside that Output (`LIBRARY_WIRE_GAP` left of it, then `freeFrameSpot`), so the 3D view shows the result at once. The wire, the frame and the Output's change are the SAME undo entry.
+- No free socket, or no plain Output in charge (a driving SDF or Splat Output, an empty canvas): the group is parked unwired as before — at `at` when the request came from a spot on the canvas (the Space menu), nearest free spot — and the note says to wire it.
+- Everything is asked AFTER the last `await`: the Output may have been wired or deleted while the text was parsed.
+
+The canonical text is comment-free (no project block for the ADD to find), `Fn`-shaped (scriptToTSL passes it through), image-free and zero-warning. So the ADD parses exactly the graph the gate verified; `scriptToTSLWithSettings(tsl).code === tsl` is pinned. It posts its own note (`generated-added`: "connected to the Output", or "wire its last node into an Output to see it"). It refuses in a study session. Its only caller is the dialog's Add.
 
 ## The prompt and the repair rounds
 
@@ -208,6 +217,66 @@ On the dev server the local route goes through a same-origin proxy, so the dialo
   - DNS REBINDING: the attacker's own name resolves to 127.0.0.1, so the browser counts its requests as same-origin and both checks above pass. Refused by the `Host`, which must be `localhost`, `127.0.0.1` or `[::1]` with an optional port. Vite's own host check does not cover this middleware, because a plugin's middleware runs before Vite's.
 - **Checked** by `llmCspContract.test.ts`, which runs the real middleware against a stand-in model server on loopback, and on 2026-11-19 against a running dev server (port 5194): a rebinding `Host`, a cross-site request and a foreign `Origin` got 403; a request from its own page reached a stand-in server, which saw no `Origin`. It has not yet run against a real LM Studio.
 
+## The bundled engine (P5, desktop)
+
+The desktop app's main route ("On this computer · free", route id `engine`) runs llama.cpp's `llama-server`, shipped INSIDE the app, so a user installs nothing. It is packaged and surveyed (the first half below), then its model is downloaded and it is run (the second half, "The model and the running engine"). Design record: SEARCH-AI-PLAN §7, §11.5, §12.1.
+
+**One manifest, `src-tauri/engine.json`.** It pins one llama.cpp build (b12359, the build behind llama.cpp's v1.0.0 release) for two platforms: the release asset's URL, sha256 and size, and every shipped file's sha256 and size.
+- **macOS arm64**, Metal: 12 files, 31.6 MB unpacked. The universal `.dmg` carries it; the x64 slice reports `intel-mac` and touches no file (D19: llama.cpp's x64 macOS build has no Metal).
+- **Windows x64**, Vulkan + CPU: 25 files, 89.6 MB unpacked, all 14 CPU variants, since ggml picks the best one for the processor at run time. The RPC backend (`ggml-rpc.dll`) is left out: on Windows it is a loadable backend, and nothing here uses it.
+- The llama.cpp licence ships on both from `src-tauri/engine-licenses/` (the Windows archive has none).
+- Files ship UNEDITED: no `lipo`, `install_name_tool` or re-signing. The macOS archive's `libggml.1.dylib -> libggml.1.0.0.dylib` links are replaced by the real file under the name the loader asks for, which changes no byte.
+
+**Staging: `npm run fetch:engine`** (`scripts/fetch-engine.mjs`). It downloads the asset (cached in `node_modules/.cache/fetch-engine/`), checks its sha256, unpacks it with the system `tar`, and writes exactly the listed files into `src-tauri/engine-dist/<tag>/`. Then it checks every staged file against its pin. A failed run leaves the folder EMPTY. `tauri.conf.json` bundles `engine-dist/` as the resource folder `engine/`. The binaries are gitignored; the tracked `.gitkeep` keeps the folder present, because tauri-build resolves resources on every cargo run. The release job runs the script before each desktop build, and the Windows portable zip copies `engine/` beside the exe. A build made without the script carries no engine, and the survey says so (`missing`).
+
+**The survey** (`llm_engine_survey`, main webview only, one at a time). It answers raw JSON bytes, like the model list, because device names are the GPU driver's words.
+1. The host: no engine for this OS or architecture, or macOS below 13.3 (the engine's own `minos`).
+2. The files: every file's size and SHA-256 must match the compiled-in pin in the folder it will run from. A difference, a missing file or an extra one is `tampered`, and nothing runs.
+3. Two read-only runs, `--version` and `--list-devices`. The environment is CLEARED (llama reads `LLAMA_ARG_*`, `HF_ENDPOINT`, `MODEL_ENDPOINT` and more from it) except for the few variables the OS needs (`KEPT_ENV`). There is no stdin, the output is capped, and there is a 20 s deadline; a run past it is killed and reported `blocked`.
+4. Memory, free disk where the model will go, and the OS version, read in Rust (`libc` on macOS, `windows-sys` on Windows; both were already in the dependency tree).
+
+**macOS runs the app's OWN copy.** A browser marks a downloaded `.dmg` with `com.apple.quarantine`. Mounting it passes the mark to every file inside, and dragging the app out keeps it. "Open Anyway" approves the APP; a quarantined Mach-O the app then spawns is assessed on its own. Measured 2026-11-19 on macOS 27: a quarantined, ad-hoc-signed `llama-server` held its exec on a Gatekeeper prompt, and `spctl` said "rejected". So `install_copy` copies the engine into `app_data_dir()/engine/<tag>/`, hashing every file AS IT IS WRITTEN and renaming it into place only when it matched. A file this process writes carries no mark, and a mark that does appear is removed only after the file matched. Older tags are deleted. The `#[ignore]`d `real_quarantined_engine_runs_from_its_own_copy` marks every staged file as a download and surveys it: `ok`, Metal device found. The copy also works when macOS runs the app from a read-only translocated path.
+
+**Windows runs it in place.** The installer writes the files, so they carry no Mark of the Web. ggml loads every `ggml-*.dll` beside the executable, so the folder must hold exactly the pinned set: an extra file is `tampered`. The tag is in the path, so an update never mixes two versions. Every engine DLL imports the Visual C++ runtime (MSVCP140, VCRUNTIME140, VCRUNTIME140_1). A Windows without it exits with STATUS_DLL_NOT_FOUND or STATUS_ENTRYPOINT_NOT_FOUND, and the survey reports `runtime-missing`.
+
+**What the user sees** (`EngineSetup.tsx`, `SetupBox.tsx`): ONE box from `setupStates.ts`, a pure leaf (SEARCH-AI-PLAN §13 R-a):
+- "Checking this computer…" while it runs;
+- a ✓ line naming the GPU it found;
+- or one error box whose primary button is the fix or the way around: Check again, Use LM Studio / Ollama, or Use an API key.
+
+`setupStates.test.ts` holds every box to one primary action, a Latvian entry with the same placeholders, and at most 2 sentences and 20 words. An `ok` survey is kept for the session.
+
+### The model and the running engine
+
+One pinned model (`engine.json` `models[0]`: Gemma 4 E2B, Q4_K_M, 3.1 GB, Apache-2.0) and at most ONE engine process at a time. Everything was measured on the real b12359 binary on 2026-11-20, not inferred.
+
+**The pin** names where the engine's downloader finds the file (a Hugging Face repository and quantisation; `POST /models` takes no revision) and what the file must BE: its size and SHA-256, read from the repository at the recorded commit. Every field is a plain path segment or lowercase hex (`valid_model`), so nothing in it can smuggle a path, a query string or a second repository.
+
+**Download: the engine fetches, the app only watches.** The app has no HTTP-over-TLS crate, and gains none: `llama-server` runs in ROUTER mode with `LLAMA_CACHE` set to a staging folder and `--no-models-autoload`, so nothing is ever loaded there. It gets ONE request, `POST /models`, whose body Rust builds from the pin (`download_body`: the pinned repository, `sidecars: []`). The webview sends an action word (`start`, `pause`, `cancel`), never a repository.
+- The downloader names its file by the SHA-256 the repository claims: `<sha256>.downloadInProgress`, then `<sha256>`. So `scan_blobs` reads the folder by name and size only, never through a link, and a name other than the pinned hash means the file changed upstream — refused before a byte of it is kept (`bad-hash`, the staging folder deleted).
+- No progress stream is read. Progress is the partial file's size; "no connection" is 45 s without a partial file or 60 s without growth (`offline`, the partial kept).
+- Pause kills the router and keeps the partial; posting again resumes from it (measured: 25.8 MB kept across a `kill -9`, the next run continued from there). Cancel also deletes the staging folder. An app that exits mid-download leaves a `partial`, shown as "Download paused at N%".
+- A download that would leave under 2 GiB free is refused (`low-disk`); the pane checks the same before offering.
+
+**Check: llama.cpp never hashes what it downloads, so the app does.** The router is stopped first. `check_and_place` hashes the file against the pin; only a match is renamed into `models/` and given a marker (`<file>.ok`: hash, size, modified time). A mismatch is deleted. `model_ready` trusts a file only with a matching marker, which spares every later start a 3 GB re-hash and makes a swapped file (another size or time) unknown again.
+
+**Serve: single-model mode, offline.** `llama-server -m <the checked file> --offline`, never the router: a router's per-model workers answer WITHOUT the key. Flags (`serve_args`): loopback, a free port, `--no-webui --no-slots`, `--cors-origins localhost` (measured: a foreign origin's preflight gets no `Access-Control-Allow-Origin`), `--no-mmproj`, and a pinned `-c 16384 -np 1` (room for the prompt, its output and a repair round; it also stops `--fit` taking all GPU memory). The key is made per start and travels in the ENVIRONMENT (`LLAMA_API_KEY`), never as an argument other programs could read. Never `--rpc`, `--tools`, `--agent`, `--props`, `--sleep-idle-seconds` or `--connect`.
+- **A chat** is `llm_engine_chat` in llm.rs: a body, a request id and a channel — no address and no path, so there is no query string to strip. It takes the bridge's one-at-a-time slot (so `llm_local_cancel` and the page-load guard cover it), asks `Runner::ensure_ready` under the request's own cancel flag, and posts to `/v1/chat/completions` with the key as a bearer token. The port and the key never reach the webview. On the JS side it is the local provider over `engineTransport()` (`transport/tauriTransport.ts`), the same protocol code as LM Studio.
+- **Start on demand.** Nothing runs at app start. The first chat spawns the engine and polls `GET /health` (503 while loading, measured) for up to 180 s; a warm load took 2.1 s here.
+- **Idle stop.** After 10 minutes without a chat a watcher thread stops it ("wakes on Generate"). A chat in flight holds a `Session`, which keeps the timer off it.
+- **Failures.** A start that fails, or a run that dies, is counted; 3 in 10 minutes and the app stops retrying by itself (`failed`, "Start again" clears the count).
+- **Stopping with the app.** `RunEvent::Exit` calls `EngineState::shutdown`. On macOS every engine process leads its own process GROUP, and the group is what is killed (the downloader is a child of the router). On Windows every engine process lives in its own Job Object flagged kill-on-close: a stop ends the whole tree (`TerminateJobObject`), and the system closes the handle, ending it, however the app ends. macOS has no such object: the live pids are written to `llm/engine.pid`, and the next launch kills what a crash left — only a pid that is still THIS server binary (`proc_pidpath`), so a reused pid is never touched.
+
+**Where it lives:** `app_local_data_dir()/llm/` — `staging/` (the download), `models/` (the checked file and its marker), `engine.pid`. Never a roaming or synced folder.
+
+**What the user sees** (`modelSetupBox` in `setupStates.ts`, under the survey's ✓ line): the offer, which IS the consent ("Download the AI model (3.1 GB)" with the model's name and the free space; nothing is ever downloaded silently) → the download with a bar, Pause and Cancel → "Checking the download…" → "✓ AI model downloaded (3.1 GB)", and "Delete model (3.1 GB)" behind an inline confirm. `EngineSetup.tsx` reads `llm_engine_status` every 0.5 s while something moves and every 2.5 s at rest; the status call starts nothing. The route is ready to Generate when the survey passed, the model is `ready` and the engine is not `failed`.
+
+**Commands** (all main-webview only, each answering the status as raw JSON bytes): `llm_engine_status`, `llm_engine_download`, `llm_engine_delete`, `llm_engine_stop`; the chat is `llm_engine_chat`.
+
+**Not built:** the "memory is tight" check before a load, the idle-time setting (fixed at 10 minutes), the preview's slow-down while the AI computes, the grammar and the fixed seed (P3), a model already on disk reused by hash (D24), and the other models' probe runs.
+
+**Pinned on both sides.** `desktopIpcContract.test.ts`: the command's registration, the caller check before anything runs, the survey states, raw-only answers, the cleared environment and the two runs; for the model and the engine: the four commands behind one caller check, the state lists, no repository, address or key from the webview, the hash before any load, the offline flags and the exit hook. `engineBundle.test.ts`: the manifest's shape, the resource mapping, the gitignore, the script holding no pin of its own, and the release job's order. `engine.rs`'s own tests: copying, refusing, pruning, links, the probe's deadline and cleared environment, and the device parser.
+
 ## The cloud route
 
 `providers/claude.ts` is reached only through `import()`. How it sends a request:
@@ -258,7 +327,7 @@ The Claude route is the app's first request to a third-party origin, so whether 
 
 ## Preferences
 
-`prefs.ts` reads `fs:llmRoute`, `fs:llmLocalBase`, `fs:llmLocalModel` and `fs:llmCloudModel`. Each is VALIDATED, never coerced, and falls back when it is not a known value. `GENERATOR_STORAGE_KEYS` (`utils/generatorFlag.ts`) lists them all after the opt-in key, for the study clean slate.
+`prefs.ts` reads `fs:llmRoute` (`engine`, `local` or `claude`), `fs:llmLocalBase`, `fs:llmLocalModel` and `fs:llmCloudModel`. Each is VALIDATED, never coerced, and falls back when it is not a known value. `GENERATOR_STORAGE_KEYS` (`utils/generatorFlag.ts`) lists them all after the opt-in key, for the study clean slate.
 
 The dialog writes them through `saveGeneratorPref`:
 - `fs:llmRoute` when a route is picked;
@@ -267,11 +336,53 @@ The dialog writes them through `saveGeneratorPref`:
 
 Nothing secret is stored: the API key never is.
 
-## The dialog and its entry
+## The search-box entry
 
-**The entry is the toolbar's right-click Settings list.** "Generate nodes from text" is a checkbox row there (the opt-in, `setNodeGenerator`). Once it is ticked, a second row, "Open the generator…", opens the dialog. The rows are drawn only where `!isEvalMode() && !isEmbedMode() && NODE_GENERATOR_BUILD` (a build that can reach a model). The search-box entry will replace this as the way in.
+Both search boxes offer the generator when a query reads as a REQUEST (owner, 2026-11-20). It only OFFERS: detection loads nothing and sends nothing, Enter opens the dialog and never starts it, and the request leaves the machine only on the dialog's own Generate.
+
+**The switch has three states** under `fs:nodeGenerator` (`utils/generatorFlag.ts`, validated, never coerced):
+- absent = `suggest`, the default: a detected query offers "✦ Set up AI…";
+- exact `'1'` = `on`: written the first time a route works (`GeneratorDialog`'s `routeReady` effect);
+- exact `'0'` = `off`: the Settings row "Suggest AI in search" unticked, or the dialog's "Don't suggest AI" link (shown while `suggest`). Every entry is gone.
+
+Anything else stored reads as absent. `generatorOffered(mode, evalMode, build)` is true unless `off`.
+
+**Detection** is the leaf `utils/promptDetect.ts` (its only import is the search fold), on the words of the folded query:
+
+| Rule | Condition |
+|---|---|
+| T1 | 4+ words, not part of a known name |
+| T2 | exactly 3 words, no ordinary result, not part of a known name |
+| T3 | exactly 2 words, no ordinary result, and a trailing `?` or a request verb first |
+
+- One word is never a request (the intro's search scene types "noise").
+- Request verbs are English only (make, create, generate, build, give, want, need, how, i). Never "add" or "show": those are search verbs.
+- **"No ordinary result" alone would misfire.** Search matches the whole phrase as ONE substring, so most multi-word names typed as plain words ("perlin noise vec3") find nothing. Hence the name guard, `partOfKnownName`: the query's words run along a known name's words, in order, from any word, the last one possibly unfinished. `promptDetect.test.ts` types every multi-word node, preset, texture and lesson name, in both languages, word by word and letter-short, and none is detected.
+- **Known names** (`components/NodeEditor/promptKnownNames.ts`): every registry node's label in both languages and its `Also:` aliases, the lesson titles, the note's words; the asset bar adds preset, recipe and texture names and the saved groups'. A hidden node's name still counts.
+
+**The asset bar** (`ContentBrowser.tsx`):
+- detects on the SETTLED query and waits for the built-in libraries, which every live search loads anyway (their names are known names, and "no result" is said only once they were searched). The names list is built only under a live query, so an idle tab never pays the preset parse;
+- "an ordinary result" is the All tab's: nodes, the note, presets, textures;
+- one button after the input, drawn only while detected: "✦ Generate with AI" once the dialog's route has worked this session (`generatorRouteReady`, session-only), else "✦ Set up AI…";
+- the All tab's no-match line gains "Press Enter to make it with AI.";
+- Enter on a detected, settled query opens the dialog. Ctrl/Cmd+Enter opens it for ANY query (an empty box opens it empty) and starts at once only when the route already worked this session and there is text;
+- one polite live-region announcement when a query becomes detected; when the dialog closes, focus returns to the box that opened it.
+
+**The Space / right-click menu** (`menus/AddNodeMenu.tsx`): a LAST row under a divider, "Generate “…” with AI". Last, so a real match keeps the Enter key; with no match it is the only row. It passes the menu's canvas point as `at`, where an unwired result lands. Never on a menu opened by a dropped wire or an edge's Insert node: a generated group cannot take that wire's place.
+
+**One opener.** Both boxes and the Settings row call the store's `openGenerator({ prompt, at?, autostart? })`, which writes the session-only `generatorRequest`; `GeneratorLauncher` renders the dialog from it and `closeGenerator` clears it. Opening is not an edit: no history entry, nothing stored. `generatorWiring.test.ts` pins that nothing else calls it and that no entry file reaches `src/llm`, the network or the study telemetry.
+
+**One offer rule.** Both boxes ask `hooks/useGeneratorOffer.ts`: a build that can reach a model, the switch not `off`, and never a study session, the embed or a running lesson.
+
+Not built yet: a picture pasted or dropped on the search box (P9), and the info-box setup panes for the LM Studio / Ollama and Claude routes (their forms are still P1's).
+
+## The dialog and its Settings rows
+
+**The toolbar's right-click Settings list** holds the switch, "Suggest AI in search" (ticked in `suggest` and `on`; `setNodeGenerator('on' | 'off')`), and under it, while not `off`, "Open the generator…", which opens the dialog empty. The rows are drawn only where `!isEvalMode() && !isEmbedMode() && NODE_GENERATOR_BUILD` (a build that can reach a model).
 
 The Toolbar mounts `components/Layout/GeneratorLauncher.tsx`, which checks the same conditions again and loads the dialog with `lazyOr`. If the chunk cannot be fetched, it shows its own small modal fallback.
+
+The dialog takes `{ initialPrompt, at?, autostart? }`. `autostart` fires once, the first time this dialog can generate, and is dropped the moment the user edits the request or changes the route. While the switch is `suggest`, the dialog shows one first-time line (what the AI sees, what is free) and the "Don't suggest AI" link. A request holding a Latvian letter shows "Write requests in English." and is still sent as typed.
 
 **The dialog** (`GeneratorDialog.tsx`) has these parts:
 - the route;
@@ -292,13 +403,14 @@ How it behaves:
 ## Absent in a study session and the embed
 
 This is a deliberate study decision, recorded in docs/dev/eval-mode.md: since 2026-11-10 a new feature reaches a study by default, and this one does not. Each gate refuses on its own:
+- both search boxes (`useGeneratorOffer`: no detection, no button, no row, no key);
 - the Settings rows (`generatorRow`);
 - `GeneratorLauncher`, the dialog's render site;
 - `runGeneration` (the dialog passes `inStudy: isEvalMode`);
 - `addGeneratedGroup`;
 - `offeredRoutes` returns `[]`;
 - `generatorOffered` is false;
-- `cleanSlateForStudy` removes every key in `GENERATOR_STORAGE_KEYS` and turns the flag off, so a `'1'` left by a previous user cannot reach the next session on that machine.
+- `cleanSlateForStudy` removes every key in `GENERATOR_STORAGE_KEYS` and sets the store's switch to `off` with no open request. The next ordinary session on that machine starts at the default, `suggest`, with no route or choice remembered.
 
 No file in `src/llm`, nor the launcher, calls `evalLog`.
 
@@ -341,4 +453,8 @@ These were measured on the v0.3.36 engine, on this Mac through LM Studio. The ow
 - **The cloud route.** No real Claude call has been made on main. Make one with a key against a BUILT `dist` (`FS_LLM_CLOUD_ORIGINS=https://api.anthropic.com npm run build`, then `vite preview`), since the dev server has no CSP and cannot catch a mismatch; and from the desktop app, for CORS from `tauri://localhost` and `http://tauri.localhost`.
 - **The dev server's proxy** against a real LM Studio (so far only a stand-in server).
 - **Safari and Firefox.** The dialog was smoke-tested in Chrome only. Owed in both: the dialog itself, and the Claude route's streaming and CORS.
-- **The served policies.** The next deploys' own verify steps check them: the API on alvismisjuns.lv, and nowhere on fs.sferas.lv.
+- **The served policies.** The next deploys' own verify steps check them: no host's page may name the API.
+- **The bundled engine in the real desktop app.** `engine.rs`'s ignored tests ran the whole path against the real engine on a development Mac (2026-11-20): a real download checked and placed, a wrong pin refused, the pinned model served and stopped. Not yet run through the WEBVIEW in a built app: the offer, the progress bar, Pause / Resume / Cancel, a Generate through the engine, the idle stop after 10 minutes, and quitting mid-download.
+- **Windows, all of it.** The Job Object, `CREATE_NO_WINDOW` and the in-place run compile and lint for `x86_64-pc-windows-msvc` and have never run.
+- **The bundled engine on a clean Mac** (P5's go/no-go): a `.dmg` downloaded through a browser, opened with "Open Anyway", the built-in route's survey reaching `ok`. The copy-out was measured on a development Mac with every file marked, not yet on a machine that has never run a developer tool.
+- **The bundled engine on Windows**: the installer and the portable zip both reaching `ok`; a machine without the Visual C++ runtime showing `runtime-missing`; a laptop with integrated graphics listing its Vulkan device.

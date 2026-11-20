@@ -95,10 +95,10 @@ use tauri::ipc::{Channel, InvokeResponseBody, Response};
 use tauri::webview::PageLoadEvent;
 use tauri::Manager;
 
-/// The only webview these commands answer.
-const MAIN_WEBVIEW: &str = "main";
+/// The only webview these commands answer (engine.rs uses it too).
+pub(crate) const MAIN_WEBVIEW: &str = "main";
 /// The refusal for any other caller; it never reaches the main window.
-const FORBIDDEN: &str = "E_FORBIDDEN";
+pub(crate) const FORBIDDEN: &str = "E_FORBIDDEN";
 
 /// Paths a GET may request (`LLM_LOCAL_GET_ROUTES`). `/api/v1/models` is LM
 /// Studio's native list, the only route that reports a loaded model's context
@@ -336,6 +336,7 @@ pub async fn llm_local_models(
             method: Method::Get,
             path: &path,
             body: &[],
+            bearer: None,
         };
         let mut body = Vec::new();
         let result = perform(&shared, request_id, &request, LIST_TIMEOUTS, &mut |batch| {
@@ -374,6 +375,7 @@ pub async fn llm_local_chat(
             method: Method::Post,
             path: &path,
             body: body.as_bytes(),
+            bearer: None,
         };
         perform(&shared, request_id, &request, CHAT_TIMEOUTS, &mut |batch| {
             // A failed send means the webview is gone: stop, the server sees
@@ -407,6 +409,122 @@ pub async fn llm_local_cancel(
     }
     state.0.cancel(request_id);
     Ok(())
+}
+
+/// POST a chat request to the BUNDLED engine (engine.rs) and stream the answer
+/// like `llm_local_chat`. The webview sends no address and no path: Rust
+/// starts the engine if it is not running (under this request's cancel flag),
+/// and only Rust knows its port and its key. The same one-at-a-time slot, so
+/// `llm_local_cancel` and the page-load guard cover it.
+#[tauri::command]
+pub async fn llm_engine_chat(
+    webview: tauri::Webview,
+    state: tauri::State<'_, LlmState>,
+    engine: tauri::State<'_, crate::engine::EngineState>,
+    body: String,
+    request_id: u64,
+    on_event: Channel<InvokeResponseBody>,
+) -> Result<(), String> {
+    if webview.label() != MAIN_WEBVIEW {
+        return Err(FORBIDDEN.to_string());
+    }
+    let shared = Arc::clone(&state.0);
+    let runner = engine.runner();
+    let events = on_event.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        if body.len() > MAX_REQUEST_BYTES {
+            return Err(Failure::TooLarge {
+                n: body.len() as u64,
+                limit: MAX_REQUEST_BYTES as u64,
+            });
+        }
+        let lease = shared.acquire(request_id)?;
+        let session = runner.ensure_ready(&lease.cancel).map_err(|e| match e {
+            crate::engine::StartError::Cancelled => Failure::Cancelled,
+            crate::engine::StartError::Failed(why) => Failure::Unreachable(why),
+        })?;
+        let base = Base {
+            host: LOOPBACK_HOSTS[0],
+            port: session.port(),
+        };
+        let request = HttpRequest {
+            base: "",
+            method: Method::Post,
+            path: ENGINE_CHAT_ROUTE,
+            body: body.as_bytes(),
+            bearer: Some(session.key()),
+        };
+        exchange(
+            &base,
+            &request,
+            MAX_STREAM_BYTES,
+            CHAT_TIMEOUTS,
+            &lease.cancel,
+            &mut |batch| {
+                events
+                    .send(InvokeResponseBody::Raw(frame(FRAME_DATA, &batch)))
+                    .is_ok()
+            },
+        )
+    })
+    .await
+    .unwrap_or_else(|e| Err(Failure::BadResponse(format!("bridge task failed: {e}"))));
+    // Exactly one END, always last.
+    let _ = on_event.send(InvokeResponseBody::Raw(frame(
+        FRAME_END,
+        end_status(&outcome).as_bytes(),
+    )));
+    Ok(())
+}
+
+/// The one route a chat with the bundled engine uses. Fixed here: the webview
+/// names no path, so there is no query string to strip.
+const ENGINE_CHAT_ROUTE: &str = "/v1/chat/completions";
+
+/// One short request from engine.rs to an engine process it started itself
+/// (`/health`, the router's `POST /models`): loopback, the given port, the
+/// engine's own key, a small answer. `Err` is the `E_…` status text.
+pub(crate) fn engine_call(
+    port: u16,
+    key: &str,
+    post: Option<(&str, &[u8])>,
+    get: &str,
+    cancel: &AtomicBool,
+) -> Result<Vec<u8>, String> {
+    let base = Base {
+        host: LOOPBACK_HOSTS[0],
+        port,
+    };
+    let request = match post {
+        Some((path, body)) => HttpRequest {
+            base: "",
+            method: Method::Post,
+            path,
+            body,
+            bearer: Some(key),
+        },
+        None => HttpRequest {
+            base: "",
+            method: Method::Get,
+            path: get,
+            body: &[],
+            bearer: Some(key),
+        },
+    };
+    let mut body = Vec::new();
+    exchange(
+        &base,
+        &request,
+        MAX_MODEL_LIST_BYTES,
+        LIST_TIMEOUTS,
+        cancel,
+        &mut |batch| {
+            body.extend_from_slice(&batch);
+            true
+        },
+    )
+    .map(|()| body)
+    .map_err(|f| f.status())
 }
 
 fn frame(tag: u8, payload: &[u8]) -> Vec<u8> {
@@ -535,6 +653,9 @@ struct HttpRequest<'a> {
     method: Method,
     path: &'a str,
     body: &'a [u8],
+    /// `Authorization: Bearer …` — only the bundled engine's own key, which
+    /// Rust made and never hands to the webview (`engine_call`).
+    bearer: Option<&'a str>,
 }
 
 /// Validate, take the slot, run the exchange. Body bytes of a 200 answer go to
@@ -566,13 +687,17 @@ fn perform(
 
 fn request_bytes(base: &Base, request: &HttpRequest<'_>) -> Vec<u8> {
     let host = base.host_header();
+    let auth = match request.bearer {
+        Some(key) => format!("Authorization: Bearer {key}\r\n"),
+        None => String::new(),
+    };
     let head = match request.method {
         Method::Get => format!(
-            "GET {} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
+            "GET {} HTTP/1.1\r\nHost: {host}\r\n{auth}Accept: application/json\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
             request.path
         ),
         Method::Post => format!(
-            "POST {} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccept: text/event-stream, application/x-ndjson, application/json\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
+            "POST {} HTTP/1.1\r\nHost: {host}\r\n{auth}Content-Type: application/json\r\nContent-Length: {}\r\nAccept: text/event-stream, application/x-ndjson, application/json\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
             request.path,
             request.body.len()
         ),
@@ -1142,7 +1267,7 @@ fn parse_decimal(value: &[u8]) -> Option<u64> {
 /// Display text for an error body: lossy UTF-8; every run of control or
 /// whitespace characters becomes one space; bidi controls, zero-width and
 /// other invisible characters are dropped; at most `limit` characters.
-fn excerpt_text(bytes: &[u8], limit: usize) -> String {
+pub(crate) fn excerpt_text(bytes: &[u8], limit: usize) -> String {
     let text = String::from_utf8_lossy(bytes);
     let mut out = String::new();
     let mut gap = false;
@@ -1437,6 +1562,7 @@ mod tests {
             method,
             path,
             body,
+            bearer: None,
         };
         let mut frames = Vec::new();
         let result = perform(&shared, 1, &request, t, &mut |batch| {
@@ -2052,6 +2178,7 @@ mod tests {
                     method: Method::Post,
                     path: "/v1/chat/completions",
                     body: b"{}",
+                    bearer: None,
                 };
                 perform(&shared, 7, &request, quick(), &mut |batch| {
                     tx.send(batch).is_ok()
@@ -2093,6 +2220,7 @@ mod tests {
                     method: Method::Post,
                     path: "/api/chat",
                     body: b"{}",
+                    bearer: None,
                 };
                 perform(&shared, 1, &request, quick(), &mut |batch| {
                     tx.send(batch).is_ok()
@@ -2150,6 +2278,7 @@ mod tests {
             method: Method::Get,
             path: "/v1/models",
             body: &[],
+            bearer: None,
         };
         let result = perform(&shared, 9, &request, quick(), &mut |_| true);
         assert_eq!(result, Err(Failure::Cancelled));
@@ -2211,6 +2340,7 @@ mod tests {
             method: Method::Get,
             path: "/v1/models",
             body: &[],
+            bearer: None,
         };
         perform(&shared, 1, &models, LIST_TIMEOUTS, &mut |b| {
             list.extend_from_slice(&b);
@@ -2256,6 +2386,7 @@ mod tests {
             method: Method::Post,
             path: "/v1/chat/completions",
             body: short.as_bytes(),
+            bearer: None,
         };
         perform(&shared, 3, &request, CHAT_TIMEOUTS, &mut |b| {
             frames += 1;
@@ -2280,6 +2411,7 @@ mod tests {
                     method: Method::Post,
                     path: "/v1/chat/completions",
                     body: long.as_bytes(),
+                    bearer: None,
                 };
                 perform(&shared, 4, &request, CHAT_TIMEOUTS, &mut |b| {
                     tx.send(b).is_ok()

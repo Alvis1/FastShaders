@@ -89,7 +89,7 @@ import {
 // never glbImportGate or glbImportCopy, which reach the store's own cycle.
 import { ALLOW_MANY_MATERIALS_KEY, allowManyMaterialsFrom } from '@/utils/glbImportLimits';
 // Another import-free leaf (the generator's opt-in), read at module scope too.
-import { GENERATOR_FLAG_KEY, generatorEnabledFrom } from '@/utils/generatorFlag';
+import { GENERATOR_FLAG_KEY, generatorModeFrom, type GeneratorMode, type GeneratorRequest } from '@/utils/generatorFlag';
 import {
   exceedsImageBudget,
   makeImageNodeFromEncode,
@@ -1633,14 +1633,23 @@ interface AppState {
    */
   allowManyMaterials: boolean;
   /**
-   * The opt-in for "Generate nodes from text" (src/llm/,
-   * docs/dev/node-generator.md): off = no way to open the generator. On, the
-   * toolbar's Settings list shows "Open the generator…". Persisted to
-   * fs:nodeGenerator (exact '1'); offered only on builds that can reach a
-   * model, never in a study session or the embed, and cleared by
-   * cleanSlateForStudy (utils/generatorFlag.ts).
+   * The switch for "Generate nodes from text" (src/llm/,
+   * docs/dev/node-generator.md), three states under fs:nodeGenerator
+   * (utils/generatorFlag.ts): 'suggest' (absent, the default) and 'on' (exact
+   * '1', a route was set up once) both let a search that reads as a request
+   * offer the dialog; 'off' (exact '0') hides every entry. Offered only on
+   * builds that can reach a model, never in a study session, the embed or a
+   * running lesson, and cleared by cleanSlateForStudy.
    */
-  nodeGenerator: boolean;
+  nodeGenerator: GeneratorMode;
+  /** The open generator dialog's request, or null while it is closed.
+   *  Session-only; `openGenerator` is the ONE way in for every entry (both
+   *  search boxes and the Settings row). */
+  generatorRequest: GeneratorRequest | null;
+  /** Did the dialog's chosen route work this session (a local server answered
+   *  with a model, or a key is held)? Session-only: it only words the search
+   *  button — "Generate with AI" or "Set up AI…". */
+  generatorRouteReady: boolean;
   /** Which OPTIONAL palette categories are on (Textures, Distance fields) —
    *  both off by default, persisted per category. An ADD-SURFACE preference
    *  only: see registry/optionalCategories.ts. */
@@ -1935,7 +1944,14 @@ interface AppState {
   setTrackpadScroll: (v: boolean) => void;
   setOptionalCategory: (id: OptionalCategory, on: boolean) => void;
   setAllowManyMaterials: (v: boolean) => void;
-  setNodeGenerator: (v: boolean) => void;
+  /** The Settings row and "Don't suggest AI" write 'off'; ticking the row, or
+   *  a route working for the first time, writes 'on'. */
+  setNodeGenerator: (v: 'on' | 'off') => void;
+  /** Open the generator dialog (the launcher still refuses in a study, the
+   *  embed and on a build with no route). */
+  openGenerator: (request?: Partial<GeneratorRequest>) => void;
+  closeGenerator: () => void;
+  setGeneratorRouteReady: (v: boolean) => void;
   setImageConvertMode: (v: 'ask' | 'always' | 'never') => void;
   setHideImageConvertNotice: (v: boolean) => void;
   setSplitRatio: (ratio: number) => void;
@@ -2077,7 +2093,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   hideImageDownscaleWarning: loadFlag('fs:hideImageDownscaleWarning'),
   trackpadScroll: loadFlag('fs:trackpadScroll'),
   allowManyMaterials: allowManyMaterialsFrom(loadString(ALLOW_MANY_MATERIALS_KEY, '0')),
-  nodeGenerator: generatorEnabledFrom(loadString(GENERATOR_FLAG_KEY, '0')),
+  nodeGenerator: generatorModeFrom(loadString(GENERATOR_FLAG_KEY, '')),
+  generatorRequest: null,
+  generatorRouteReady: false,
   // Only the exact string '0' turns it off, so a junk value fails SAFE (on) —
   // the same validate-never-coerce rule the optional categories follow.
   optionalCategories: loadOptionalCategories((key) => loadString(key, '0')),
@@ -2982,8 +3000,25 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   setNodeGenerator: (v) => {
-    saveFlag(GENERATOR_FLAG_KEY, v);
+    saveFlag(GENERATOR_FLAG_KEY, v === 'on');
     set({ nodeGenerator: v });
+  },
+
+  openGenerator: (request) => {
+    const at = request?.at;
+    set({
+      generatorRequest: {
+        prompt: typeof request?.prompt === 'string' ? request.prompt : '',
+        ...(at && Number.isFinite(at.x) && Number.isFinite(at.y) ? { at: { x: at.x, y: at.y } } : {}),
+        ...(request?.autostart === true ? { autostart: true } : {}),
+      },
+    });
+  },
+
+  closeGenerator: () => set({ generatorRequest: null }),
+
+  setGeneratorRouteReady: (v) => {
+    if (get().generatorRouteReady !== v) set({ generatorRouteReady: v });
   },
 
 

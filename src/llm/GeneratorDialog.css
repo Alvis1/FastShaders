@@ -109,6 +109,58 @@
   background: var(--bg-surface);
 }
 
+/* A setup step (SEARCH-AI-PLAN §13 R-a): ONE box for the current step. It
+   sits inside the panel, so it has no shadow; square like every surface. */
+.generator-dialog__box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  line-height: 1.45;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--border-focus);
+  background: var(--bg-surface);
+}
+
+.generator-dialog__box--error {
+  border-left-color: var(--cost-high);
+}
+
+.generator-dialog__box-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* The secondary action: a text link, the tutorial panel's. */
+.generator-dialog__link {
+  padding: 0;
+  font: inherit;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.generator-dialog__link:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* A transient line (checking, starting) and a finished step's ✓ line. */
+.generator-dialog__step {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.generator-dialog__step--done {
+  color: var(--text-primary);
+}
+
 .generator-dialog__detail {
   margin-top: 4px;
   font-size: var(--font-size-xs);
@@ -214,4 +266,29 @@
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   white-space: pre;
+}
+
+/* "Don't suggest AI": a quiet link above the buttons, left-aligned. */
+.generator-dialog__foot {
+  align-self: flex-start;
+}
+
+/* A box's second, quieter line (the download offer's facts). */
+.generator-dialog__box-body {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  margin-top: var(--space-1);
+}
+
+/* The download's progress: a flat bar, square like every corner here. */
+.generator-dialog__bar {
+  height: 6px;
+  margin-top: var(--space-2);
+  background: var(--bg-raised-sub);
+  border: 1px solid var(--border-subtle);
+}
+
+.generator-dialog__bar-fill {
+  height: 100%;
+  background: var(--text-secondary);
 }

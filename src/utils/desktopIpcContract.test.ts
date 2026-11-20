@@ -693,7 +693,8 @@ describe('the local-LLM bridge (llm.rs)', () => {
   });
 
   it('the exchange runs off the async workers, on a non-blocking socket', () => {
-    expect([...shipped.matchAll(/tauri::async_runtime::spawn_blocking\(/g)].length).toBe(2);
+    // The model list, a local chat, and the bundled engine's chat.
+    expect([...shipped.matchAll(/tauri::async_runtime::spawn_blocking\(/g)].length).toBe(3);
     expect(shipped).toContain('set_nonblocking(true)');
     expect(shipped).not.toMatch(/set_read_timeout|set_write_timeout/);
     expect(shipped).not.toMatch(/to_socket_addrs|lookup_host/); // no DNS
@@ -715,5 +716,122 @@ describe('the local-LLM bridge (llm.rs)', () => {
       expect(cargoToml, crate).not.toMatch(new RegExp(String.raw`^\s*${crate}\s*=`, 'm'));
       expect(lockEntry![0], crate).not.toMatch(new RegExp(String.raw`"${crate}(?: [^"]*)?"`));
     }
+  });
+});
+
+describe('the bundled engine (engine.rs)', () => {
+  const engineRs = readTauri('src/engine.rs');
+  const shipped = rustCode(engineRs.slice(0, engineRs.indexOf('#[cfg(test)]')));
+
+  it('registers the survey from engine.rs, async, and refuses any webview but main first', () => {
+    expect(registeredCommands().get(ipc.LLM_ENGINE_SURVEY)).toBe('engine');
+    expect(engineRs).toMatch(new RegExp(String.raw`#\[tauri::command\]\s*pub\s+async\s+fn\s+${ipc.LLM_ENGINE_SURVEY}\b`));
+    expect(mainRs).toMatch(/^mod engine;$/m);
+    expect(mainRs).toContain('.manage(engine::EngineState::default())');
+    const at = engineRs.indexOf(`pub async fn ${ipc.LLM_ENGINE_SURVEY}(`);
+    const body = engineRs.slice(at, engineRs.indexOf('\n}\n', at));
+    const check = body.indexOf('if webview.label() != MAIN_WEBVIEW {');
+    expect(check).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(body.indexOf('state.survey'));
+    expect(check).toBeLessThan(body.indexOf('spawn_blocking'));
+    // MAIN_WEBVIEW is llm.rs's one constant, not a second spelling.
+    expect(shipped).toContain('use crate::llm::{engine_call, excerpt_text, FORBIDDEN, MAIN_WEBVIEW};');
+    expect(shipped).not.toMatch(/const MAIN_WEBVIEW/);
+  });
+
+  it('the survey states are the same on both sides', () => {
+    const m = /pub const SURVEY_STATES: \[&str; (\d+)\] = \[([\s\S]*?)\];/.exec(engineRs);
+    expect(m).not.toBeNull();
+    const states = [...m![2].matchAll(/"([^"]*)"/g)].map((x) => x[1]);
+    expect(states.length).toBe(Number(m![1]));
+    expect(states).toEqual([...ipc.ENGINE_SURVEY_STATES]);
+  });
+
+  it('the survey and every status cross as Raw bytes, never the Json variant', () => {
+    expect(engineRs).not.toContain('InvokeResponseBody::Json');
+    const responses = [...shipped.matchAll(/Response::new\(/g)].length;
+    // The survey, and the ONE helper every model/engine command answers through.
+    expect(responses).toBe(2);
+    expect([...shipped.matchAll(/Response::new\(InvokeResponseBody::Raw\(bytes\)\)/g)].length).toBe(2);
+  });
+
+  it('registers the model and engine commands, each behind the main-webview check', () => {
+    for (const name of [ipc.LLM_ENGINE_STATUS, ipc.LLM_ENGINE_DOWNLOAD, ipc.LLM_ENGINE_DELETE, ipc.LLM_ENGINE_STOP]) {
+      expect(registeredCommands().get(name), name).toBe('engine');
+      const at = engineRs.indexOf(`pub async fn ${name}(`);
+      expect(at, name).toBeGreaterThan(-1);
+      // Each is one call into the shared helper, which checks the caller first.
+      expect(engineRs.slice(at, engineRs.indexOf('\n}\n', at)), name).toMatch(/engine_command\(webview, state, /);
+    }
+    const helper = shipped.slice(shipped.indexOf('async fn engine_command('));
+    const check = helper.indexOf('if webview.label() != MAIN_WEBVIEW {');
+    expect(check).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(helper.indexOf('spawn_blocking'));
+    // The chat lives in llm.rs: the same slot, cancel and frames as a local chat.
+    expect(registeredCommands().get(ipc.LLM_ENGINE_CHAT)).toBe('llm');
+  });
+
+  it('the model and server states are the same on both sides', () => {
+    for (const [rust, js] of [['MODEL_STATES', ipc.ENGINE_MODEL_STATES], ['SERVER_STATES', ipc.ENGINE_SERVER_STATES]] as const) {
+      const m = new RegExp(String.raw`pub const ${rust}: \[&str; (\d+)\] = \[([\s\S]*?)\];`).exec(engineRs);
+      expect(m, rust).not.toBeNull();
+      const states = [...m![2].matchAll(/"([^"]*)"/g)].map((x) => x[1]);
+      expect(states.length, rust).toBe(Number(m![1]));
+      expect(states, rust).toEqual([...js]);
+    }
+  });
+
+  it('the webview names no repository, address or key: one pin, and Rust holds the rest', () => {
+    // The download command takes an action word and nothing else.
+    const dl = engineRs.slice(engineRs.indexOf(`pub async fn ${ipc.LLM_ENGINE_DOWNLOAD}(`));
+    expect(dl.slice(0, dl.indexOf(') -> Result'))).toMatch(/state: tauri::State<'_, EngineState>,\s*action: String,\s*$/);
+    expect(shipped).toContain('fn download_body(pin: &ModelPin) -> Vec<u8>');
+    // The engine chat takes a body, an id and a channel — no base, no path.
+    const llmRs = readTauri('src/llm.rs');
+    const chat = llmRs.slice(llmRs.indexOf(`pub async fn ${ipc.LLM_ENGINE_CHAT}(`));
+    const params = chat.slice(0, chat.indexOf(') -> Result'));
+    expect(params).not.toMatch(/\bbase: String|\bpath: String/);
+    expect(params).toMatch(/body: String,\s*request_id: u64,\s*on_event: Channel<InvokeResponseBody>,/);
+    // The key travels in the environment, never as an argument or to the webview.
+    expect(shipped).toContain('("LLAMA_API_KEY", os(key))');
+    expect(shipped).not.toMatch(/"--api-key"/);
+    expect(shipped).not.toMatch(/Serialize[^}]*\bkey: String,\s*\n\s*port/);
+  });
+
+  it('the model is hashed by the app before it is ever loaded, and served offline', () => {
+    expect(shipped).toContain('fn check_and_place(');
+    expect(shipped).toMatch(/match matches_pin\(from, &as_file_pin\(pin\)\)/);
+    const serve = shipped.slice(shipped.indexOf('fn serve_args('), shipped.indexOf('fn engine_env('));
+    for (const flag of ['"--offline"', '"--no-webui"', '"--no-slots"', '"localhost"']) expect(serve, flag).toContain(flag);
+    const router = shipped.slice(shipped.indexOf('fn router_args('), shipped.indexOf('fn serve_args('));
+    expect(router).toContain('"--no-models-autoload"');
+    // Never a flag that opens it up.
+    expect(shipped).not.toMatch(/"--(rpc|tools|agent|props|sleep-idle-seconds|connect|mcp-[a-z-]+)"/);
+    // It stops with the app.
+    expect(mainRs).toMatch(/tauri::RunEvent::Exit = &event[\s\S]{0,120}engine::EngineState>\(\)\.shutdown\(\)/);
+  });
+
+  it('runs the engine with a cleared environment, no stdin and a deadline', () => {
+    expect(shipped).toContain('.env_clear()');
+    expect(shipped).toContain('.stdin(Stdio::null())');
+    expect(shipped).toMatch(/const PROBE_TIMEOUT: Duration = Duration::from_secs\(\d+\);/);
+    // Only the survey's two read-only runs: no model, no server, no network.
+    const runs = [...shipped.matchAll(/probe\(&server, &\[("[^"]*")\]/g)].map((x) => x[1]);
+    expect(runs).toEqual(['"--version"', '"--list-devices"']);
+  });
+
+  it('compiles in the one manifest and checks a file before it runs', () => {
+    expect(shipped).toContain('include_str!("../engine.json")');
+    expect(shipped).toContain('fn matches_pin(');
+    // macOS runs its own copy; each file is hashed AS IT IS WRITTEN.
+    expect(shipped).toContain('const COPY_OUT: bool = cfg!(target_os = "macos");');
+    expect(shipped).toContain('fn copy_verified(');
+  });
+
+  it('Cargo.toml adds only crates that were already in the tree', () => {
+    expect(cargoToml).toMatch(/\[target\.'cfg\(target_os = "macos"\)'\.dependencies\]\nlibc = "0\.2"/);
+    expect(cargoToml).toMatch(/\[target\.'cfg\(windows\)'\.dependencies\]\nwindows-sys = \{ version = "0\.61"/);
+    // No HTTP-over-TLS crate: the engine's own downloader fetches the model.
+    expect(cargoToml).not.toMatch(/^(reqwest|ureq|rustls|native-tls|hyper|curl)\b/m);
   });
 });

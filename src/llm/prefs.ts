@@ -9,7 +9,9 @@ import { DEFAULT_LOCAL_BASE, normalizeLocalBase } from './endpoint';
 import { isUsableModelId } from './protocol/openaiCompat';
 import { DEFAULT_CLAUDE_MODEL, isClaudeModel, type ClaudeModel } from './claudeModels';
 
-export type RouteId = 'local' | 'claude';
+/** `engine` — the bundled llama.cpp (desktop only, P5); `local` — the user's own
+ *  LM Studio / Ollama; `claude` — the user's API key. */
+export type RouteId = 'engine' | 'local' | 'claude';
 
 export interface GeneratorPrefs {
   route: RouteId | null;
@@ -35,7 +37,7 @@ export function loadGeneratorPrefs(read: (key: string) => string | null): Genera
   const model = get(PREF_KEYS.localModel);
   const cloud = get(PREF_KEYS.cloudModel);
   return {
-    route: route === 'local' || route === 'claude' ? route : null,
+    route: route === 'engine' || route === 'local' || route === 'claude' ? route : null,
     localBase: (base !== null && normalizeLocalBase(base)) || DEFAULT_LOCAL_BASE,
     localModel: model !== null && isUsableModelId(model) ? model : '',
     cloudModel: isClaudeModel(cloud) ? cloud : DEFAULT_CLAUDE_MODEL,

@@ -27,6 +27,10 @@ import { useDeviceBudget } from '@/hooks/useDeviceBudget';
 import { Points } from '@/components/Points/Points';
 import { evalTask } from '@/eval/evalTask';
 import { noteMatchesQuery } from '../noteSearch';
+import { detectPrompt, shortPrompt } from '@/utils/promptDetect';
+import { fillTemplate } from '@/utils/fillTemplate';
+import { useGeneratorOffer } from '@/hooks/useGeneratorOffer';
+import { knownNodeNames } from '../promptKnownNames';
 
 /** Selected nodes eligible for grouping: not groups, not notes (annotations). */
 const isGroupable = (n: AppNode) => !!n.selected && n.type !== 'group' && n.type !== 'note';
@@ -49,6 +53,7 @@ type ActionItem =
   | { kind: 'group'; key: string; run: () => void }
   | { kind: 'output'; key: string; run: () => void }
   | { kind: 'note'; key: string; run: () => void }
+  | { kind: 'ai'; key: string; run: () => void }
   | { kind: 'def'; key: string; def: NodeDefinition; run: () => void };
 
 export function AddNodeMenu() {
@@ -113,6 +118,23 @@ export function AddNodeMenu() {
   }, [query, hidden]);
 
   const noteMatches = useMemo(() => noteMatchesQuery(query), [query]);
+
+  // "Generate “…” with AI": the LAST row, when the query reads as a request
+  // (utils/promptDetect.ts; docs/dev/node-generator.md § The search-box
+  // entry). Never on a menu opened by a dropped wire or an edge's Insert
+  // node — a generated group cannot take that wire's place.
+  const aiOffered = useGeneratorOffer();
+  const aiDetected = useMemo(() => {
+    if (!aiOffered || sourceNodeId || spliceEdgeId) return false;
+    return detectPrompt(query, { hasResults: results.length > 0 || noteMatches, known: knownNodeNames() });
+  }, [aiOffered, sourceNodeId, spliceEdgeId, query, results, noteMatches]);
+  /** Open the generator on this query; an unwired result lands where the menu
+   *  was opened. `autostart` is Ctrl/Cmd+Enter with a route that already works. */
+  const handleGenerate = useCallback((autostart = false) => {
+    const at = screenToFlowPosition({ x: contextMenu.x, y: contextMenu.y });
+    closeContextMenu();
+    useAppStore.getState().openGenerator({ prompt: query.trim(), at, autostart });
+  }, [screenToFlowPosition, contextMenu.x, contextMenu.y, closeContextMenu, query]);
 
   // Group by category when not searching
   const grouped = useMemo(() => {
@@ -295,6 +317,7 @@ export function AddNodeMenu() {
         items.push({ kind: 'def', key: def.type, def, run: () => handleAddNode(def) });
       }
       items.push({ kind: 'note', key: '__note__', run: handleAddNote });
+      if (aiDetected) items.push({ kind: 'ai', key: '__ai__', run: () => handleGenerate() });
       return items;
     }
     for (const def of recentDefs) {
@@ -312,8 +335,11 @@ export function AddNodeMenu() {
         items.push({ kind: 'def', key: def.type, def, run: () => handleAddNode(def) });
       }
     }
+    // Last, so a real match keeps the Enter key; with no match it is the only
+    // row and Enter opens the generator (it never sends).
+    if (aiDetected) items.push({ kind: 'ai', key: '__ai__', run: () => handleGenerate() });
     return items;
-  }, [query, noteMatches, canGroup, canOrganize, grouped, results, recentDefs, handleGroupSelection, handleOrganizeSelection, handleAddNode, handleAddNote]);
+  }, [query, noteMatches, canGroup, canOrganize, grouped, results, recentDefs, handleGroupSelection, handleOrganizeSelection, handleAddNode, handleAddNote, aiDetected, handleGenerate]);
 
   // Reset focus to the first item whenever the visible list changes (typing in
   // the search box, selection toggling, output-node presence flipping, etc.).
@@ -354,6 +380,12 @@ export function AddNodeMenu() {
       e.preventDefault();
       if (actionItems.length === 0) return;
       setFocusedIndex(actionItems.length - 1);
+    } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      // The explicit door, for any query: open the generator on it, and start
+      // at once when a route already worked this session.
+      if (!aiOffered || sourceNodeId || spliceEdgeId || e.nativeEvent.isComposing || e.repeat) return;
+      e.preventDefault();
+      handleGenerate(useAppStore.getState().generatorRouteReady && query.trim() !== '');
     } else if (e.key === 'Enter') {
       if (actionItems.length === 0) return;
       e.preventDefault();
@@ -568,6 +600,21 @@ export function AddNodeMenu() {
             <span>{t('Add Note', language)}</span>
             <span className="context-menu__item-category">{t('note', language)}</span>
           </button>
+        )}
+
+        {aiDetected && (
+          <>
+            <div className="context-menu__divider" />
+            <button
+              className={itemClass('__ai__')}
+              data-add-node-focused={focusedAttr('__ai__')}
+              aria-haspopup="dialog"
+              onClick={() => handleGenerate()}
+              onMouseEnter={() => hoverFocus('__ai__')}
+            >
+              <span>{fillTemplate(t('Generate “{query}” with AI', language), { query: shortPrompt(query) })}</span>
+            </button>
+          </>
         )}
       </div>
     </>

@@ -136,13 +136,14 @@ const ALLOW_MANY_MATERIALS_HINT =
   'Lets a dropped model with more than {limit} materials build one Output node per material. Each adds textures and draw calls, and every such import still asks first.';
 
 /**
- * "Generate nodes from text" (src/llm/, docs/dev/node-generator.md): its own
- * constant for the same reason as the GLB row's. The row is the generator's
- * only entry, offered only on a build that can reach a model at all, and never
- * in a study session (a deliberate gate, docs/dev/eval-mode.md) or the embed.
+ * "Suggest AI in search" (src/llm/, docs/dev/node-generator.md): its own
+ * constant for the same reason as the GLB row's. The row switches the
+ * generator's entries — the two search boxes and the row under it — and is
+ * offered only on a build that can reach a model at all, never in a study
+ * session (a deliberate gate, docs/dev/eval-mode.md) or the embed.
  */
 const NODE_GENERATOR_HINT =
-  'Turns a written request into a group of nodes, using a model on this computer or your own Claude API key. Experimental.';
+  'Long searches offer an AI button. Nothing is sent until you press Generate.';
 const NODE_GENERATOR_BUILD = generatorBuild(__FS_DESKTOP__, __FS_LLM_CLOUD__);
 
 /**
@@ -399,20 +400,19 @@ export function Toolbar() {
   const setAllowManyMaterials = useAppStore((s) => s.setAllowManyMaterials);
   const nodeGenerator = useAppStore((s) => s.nodeGenerator);
   const setNodeGenerator = useAppStore((s) => s.setNodeGenerator);
-  // The generator's opt-in row, and — once ticked — the row that opens it.
+  // The generator's switch row, and — while it is not off — the row that opens it.
   const generatorRow = !isEvalMode() && !isEmbedMode() && NODE_GENERATOR_BUILD;
-  const [generatorOpen, setGeneratorOpen] = useState(false);
+  const generatorOn = nodeGenerator !== 'off';
   // One row per setting: the wheel mode, the optional categories, the GLB row,
   // and the generator's two when they are drawn.
   const prefsRows = 1 + OPTIONAL_CATEGORIES.length + 1
-    + (generatorRow ? 1 : 0) + (generatorRow && nodeGenerator ? 1 : 0);
+    + (generatorRow ? 1 : 0) + (generatorRow && generatorOn ? 1 : 0);
   const closePrefs = useCallback(() => setPrefsAt(null), []);
   useDismiss(prefsAt != null, closePrefs, [prefsRef]);
   const openGenerator = useCallback(() => {
     setPrefsAt(null);
-    setGeneratorOpen(true);
+    useAppStore.getState().openGenerator();
   }, []);
-  const closeGenerator = useCallback(() => setGeneratorOpen(false), []);
 
   const openPrefs = useCallback((e: React.MouseEvent) => {
     // Only a right-click on the bar's own DOM. The dialogs this component
@@ -1334,20 +1334,21 @@ export function Toolbar() {
               {fillTemplate(t('Allow more than {limit} materials', language), { limit: GLB_IMPORT_MATERIAL_LIMIT })}
             </span>
           </label>
-          {/* "Generate nodes from text" — off by default; absent in a study
+          {/* "Suggest AI in search" — on unless unticked; absent in a study
               session, in the embed and on a build that cannot reach a model.
-              Ticked, the row below it opens the generator: its only entry. */}
+              While ticked, a search that reads as a request offers the
+              generator, and the row below opens it empty. */}
           {generatorRow && (
             <label className="toolbar__prefs-row" title={t(NODE_GENERATOR_HINT, language)}>
               <input
                 type="checkbox"
-                checked={nodeGenerator}
-                onChange={(e) => setNodeGenerator(e.target.checked)}
+                checked={generatorOn}
+                onChange={(e) => setNodeGenerator(e.target.checked ? 'on' : 'off')}
               />
-              <span className="toolbar__prefs-label">{t('Generate nodes from text', language)}</span>
+              <span className="toolbar__prefs-label">{t('Suggest AI in search', language)}</span>
             </label>
           )}
-          {generatorRow && nodeGenerator && (
+          {generatorRow && generatorOn && (
             <button
               type="button"
               className="toolbar__prefs-open"
@@ -1359,7 +1360,7 @@ export function Toolbar() {
           )}
         </div>
       )}
-      <GeneratorLauncher open={generatorOpen} onClose={closeGenerator} />
+      <GeneratorLauncher />
     </div>
   );
 }

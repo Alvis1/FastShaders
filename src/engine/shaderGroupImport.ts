@@ -68,6 +68,15 @@ export interface ShaderGroupPlan {
   droppedSinks: number;
   /** Arriving singleton nodes re-pointed onto the live one. */
   redirectedSingletons: number;
+  /**
+   * The wires that fed a dropped PLAIN Output, re-sourced onto the fresh ids
+   * (their `target` is still the dropped node's id, their `targetHandle` its
+   * channel). The Add itself never uses them — a dropped shader arrives wired
+   * to nothing. They are for the ONE caller that may wire an arriving chain
+   * into the LIVE Output's empty sockets: a generated group
+   * (`addDroppedShader`'s `wire`, llm/place.ts).
+   */
+  outputWires: AppEdge[];
 }
 
 function sizeOf(n: AppNode): { w: number; h: number } {
@@ -221,9 +230,17 @@ export function planShaderGroup(
     }),
   );
 
+  const plainSinks = new Set(
+    incoming.nodes.filter((n) => sinks.has(n.id) && n.data?.registryType === 'output').map((n) => n.id),
+  );
   const edges: AppEdge[] = [];
+  const outputWires: AppEdge[] = [];
   for (const e of incoming.edges) {
     const source = idMap.get(e.source);
+    if (source !== undefined && plainSinks.has(e.target) && typeof e.targetHandle === 'string') {
+      outputWires.push({ ...e, source, selected: false });
+      continue;
+    }
     const target = idMap.get(e.target);
     if (source === undefined || target === undefined) continue;
     // A singleton redirected onto itself (both ends folded to the live node)
@@ -259,5 +276,5 @@ export function planShaderGroup(
     } as GroupNodeData,
   } as AppNode;
 
-  return { group, members, edges, droppedSinks: sinks.size, redirectedSingletons };
+  return { group, members, edges, droppedSinks: sinks.size, redirectedSingletons, outputWires };
 }

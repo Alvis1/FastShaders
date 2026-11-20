@@ -9,7 +9,9 @@ import { describe, it, expect } from 'vitest';
 import { LLM_FRAME_DATA, LLM_FRAME_END, LLM_MAX_REQUEST_BYTES } from '@/utils/desktopIpc';
 import type { DesktopChannel } from '@/utils/tauriBridge';
 import {
+  ENGINE_BASE,
   RUST_TRANSPORT_CODES,
+  engineTransport,
   failureFromStatus,
   nextRequestId,
   tauriLlmBridge,
@@ -333,5 +335,41 @@ describe('the pieces', () => {
   it('the real bridge is unavailable under node (no window)', () => {
     expect(tauriLlmBridge.available()).toBe(false);
     expect(tauriLlmBridge.channel(() => {})).toBeNull();
+  });
+});
+
+describe('the bundled engine’s transport', () => {
+  it('is the same channel protocol, with a base that only has to pass the loopback check', async () => {
+    const bridge = new FakeBridge();
+    const got: string[] = [];
+    const sent = engineTransport(bridge).post(
+      ENGINE_BASE,
+      '/v1/chat/completions',
+      '{"model":"fastshaders"}',
+      (chunk) => got.push(new TextDecoder().decode(chunk)),
+      new AbortController().signal,
+    );
+    await tick();
+    expect(bridge.calls.map((c) => c.cmd)).toEqual(['chat']);
+    const ch = bridge.channels[0];
+    ch.onmessage(data('hello'));
+    ch.onmessage(end());
+    expect(await sent).toEqual({ ok: true, value: undefined });
+    expect(got).toEqual(['hello']);
+  });
+
+  it('the real bridge sends the chat no address and no path, and has no model list', async () => {
+    const { tauriEngineChatBridge } = await import('./tauriTransport');
+    const src = (await import('node:fs')).readFileSync('src/llm/transport/tauriTransport.ts', 'utf8');
+    expect(src).toMatch(/chat: \(\{ body, requestId, onEvent \}\) => invokeDesktop\(LLM_ENGINE_CHAT, \{ body, requestId, onEvent \}\),/);
+    await expect(tauriEngineChatBridge.models({ base: ENGINE_BASE, path: '/v1/models', requestId: 1 })).rejects.toThrow();
+  });
+
+  it('a start that failed in Rust arrives as a failure value, never a throw', async () => {
+    const bridge = new FakeBridge();
+    const sent = engineTransport(bridge).post(ENGINE_BASE, '/v1/chat/completions', '{}', () => {}, new AbortController().signal);
+    await tick();
+    bridge.channels[0].onmessage(end('E_UNREACHABLE the model is not downloaded'));
+    expect(await sent).toEqual({ ok: false, code: 'UNREACHABLE', detail: 'the model is not downloaded' });
   });
 });

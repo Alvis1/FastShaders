@@ -33,6 +33,9 @@ import { registerAssetBarDrag } from '@/components/Layout/assetBarDrag';
 import { assetText, formatCategoryLabel, t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { foldSearchText } from '@/utils/searchFold';
+import { detectPrompt } from '@/utils/promptDetect';
+import { useGeneratorOffer } from '@/hooks/useGeneratorOffer';
+import { knownNamesWith } from './promptKnownNames';
 import type { AppNode, NodeCategory, NodeDefinition } from '@/types';
 import { CAT_HEX } from '@/utils/colorUtils';
 import { assetCostPoints, freshNodeCost } from '@/utils/nodeCost';
@@ -877,6 +880,64 @@ export const ContentBrowser = memo(function ContentBrowser() {
     return all.filter((p) => assetMatches(p, q));
   }, [q, activeCategory, optional.presets2, libraries, byCost]);
 
+  // ── "Generate with AI" (docs/dev/node-generator.md § The search-box entry) ──
+  // A settled query that reads as a REQUEST offers the generator: a button
+  // after the box, and Enter. Detection only offers — nothing is loaded or
+  // sent until the dialog's own Generate. It waits for the libraries (their
+  // names are part of what a search already answers to), which every live
+  // search loads anyway, and it is off wherever the generator is
+  // (`useGeneratorOffer`: a study session, the embed, a running lesson).
+  const aiOffered = useGeneratorOffer();
+  const aiReady = useAppStore((s) => s.generatorRouteReady);
+  const hasQuery = q !== '';
+  const aiKnown = useMemo(() => {
+    // Only under a live query: the first getBuiltinPresets() call is the
+    // ~95 ms parse, which a search pays anyway and an idle tab must not.
+    if (!aiOffered || !libraries || !hasQuery) return null;
+    return knownNamesWith([
+      ...libraries.getBuiltinPresets().map((p) => p.name),
+      ...libraries.getBuiltinTextures().map((x) => x.name),
+      ...savedGroups.map((g) => g.name),
+    ]);
+  }, [aiOffered, libraries, savedGroups, hasQuery]);
+  const promptDetected = useMemo(() => {
+    if (!aiKnown || !q) return false;
+    // "An ordinary result" is the ALL tab's: nodes, the note, ready-made assets.
+    const hasResults =
+      rankDefs(allDefs).length > 0 || noteMatchesQuery(q) ||
+      filteredPresets.length + filteredPresets2.length + filteredTextures.length > 0;
+    return detectPrompt(settledSearch, { hasResults, known: aiKnown });
+  }, [aiKnown, q, settledSearch, rankDefs, allDefs, filteredPresets, filteredPresets2, filteredTextures]);
+  const searchRef = useRef<HTMLInputElement>(null);
+  /** Did THIS box open the dialog? Then its closing hands the focus back. */
+  const openedGeneratorRef = useRef(false);
+  const generatorOpen = useAppStore((s) => s.generatorRequest != null);
+  useEffect(() => {
+    if (generatorOpen || !openedGeneratorRef.current) return;
+    openedGeneratorRef.current = false;
+    searchRef.current?.focus();
+  }, [generatorOpen]);
+  const openGeneratorFromSearch = useCallback((autostart: boolean) => {
+    openedGeneratorRef.current = true;
+    useAppStore.getState().openGenerator({ prompt: search.trim(), autostart });
+  }, [search]);
+  const onSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!aiOffered || e.key !== 'Enter' || e.nativeEvent.isComposing || e.repeat) return;
+    // Ctrl/Cmd+Enter: the explicit door, for any query — an empty box opens
+    // the dialog with no text. It starts at once only with a route that
+    // already worked this session.
+    if (e.metaKey || e.ctrlKey) {
+      e.preventDefault();
+      openGeneratorFromSearch(aiReady && search.trim() !== '');
+      return;
+    }
+    // Plain Enter: only on a detected, settled query. It opens, never sends.
+    if (promptDetected && search === settledSearch) {
+      e.preventDefault();
+      openGeneratorFromSearch(false);
+    }
+  }, [aiOffered, aiReady, promptDetected, search, settledSearch, openGeneratorFromSearch]);
+
   const onDragStart = useCallback((event: React.DragEvent, def: NodeDefinition) => {
     event.dataTransfer.setData('application/reactflow-type', def.type);
     event.dataTransfer.effectAllowed = 'move';
@@ -974,7 +1035,9 @@ export const ContentBrowser = memo(function ContentBrowser() {
       : activeCategory === 'all';
     items = defCards.length + assetCards.length === 0 && !noteCard
       ? (q
-        ? (libraries ? noMatch('No matches for “{query}”.') : null)
+        ? (libraries
+          ? noMatch(promptDetected ? 'No matches for “{query}”. Press Enter to make it with AI.' : 'No matches for “{query}”.')
+          : null)
         : empty(t('Nothing here yet.', language)))
       : q
         ? [...defCards, ...(noteCard ? [<NoteTileCard key="__note__" />] : []), ...assetCards]
@@ -1015,12 +1078,34 @@ export const ContentBrowser = memo(function ContentBrowser() {
         {tabsArrows.canLeft && <ScrollArrow direction="left" onClick={() => tabsArrows.scrollBy(-1)} />}
         <div className="content-browser__categories" ref={tabsRef}>
           <input
+            ref={searchRef}
             className="content-browser__search"
             type="text"
             placeholder={t('Search…', language)}
+            aria-label={t('Search nodes and assets', language)}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={onSearchKeyDown}
           />
+          {/* Shown only while the query reads as a request. "Set up AI…" until
+              a route has worked this session. */}
+          {promptDetected && (
+            <button
+              type="button"
+              className="content-browser__ai-btn"
+              aria-haspopup="dialog"
+              onClick={() => openGeneratorFromSearch(false)}
+            >
+              {t(aiReady ? '✦ Generate with AI' : '✦ Set up AI…', language)}
+            </button>
+          )}
+          {/* One polite announcement when a query becomes a request — the
+              region is always mounted, so the text CHANGE is what is read. */}
+          {aiOffered && (
+            <span className="content-browser__sr-only" aria-live="polite">
+              {promptDetected ? t('Request detected. Press Enter to make it with AI.', language) : ''}
+            </span>
+          )}
           <button
             className={`content-browser__cat-btn ${activeCategory === 'all' ? 'content-browser__cat-btn--active' : ''}`}
             style={

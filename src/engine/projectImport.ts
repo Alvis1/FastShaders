@@ -57,6 +57,17 @@ import { extractProjectState, type FastShadersProject } from './fastShadersProje
 import { moduleImageLiterals, resolveProjectImageRefs, splitImageLosses } from './projectImageRefs';
 import { droppedGroupLabel, sanitizeDroppedName, shaderDropStem } from '@/utils/shaderDropName';
 import { planShaderGroup } from './shaderGroupImport';
+import {
+  LIBRARY_WIRE_GAP,
+  exposeWiredChannels,
+  freeFrameSpot,
+  libraryWireEdges,
+  libraryWireOutput,
+  makeOpacityReadable,
+  placementObstacles,
+  takenOutputChannels,
+} from '@/utils/libraryAutoWire';
+import { absoluteNodePosition, groupFrameSize } from '@/utils/groupFrame';
 import { splatStarterNode } from '@/utils/splatGraphStart';
 import type { AppEdge, AppNode, MaterialSettings } from '@/types';
 
@@ -714,7 +725,7 @@ export async function openDroppedShader(
 }
 
 export type ShaderAddOutcome =
-  | { ok: true; added: number; droppedSinks: number; groupLabel: string }
+  | { ok: true; added: number; droppedSinks: number; groupLabel: string; wired: number }
   | { ok: false; reason: 'no-shader' | 'nothing-to-add' | 'parse-failed' | 'over-budget' };
 
 /**
@@ -762,10 +773,19 @@ async function droppedShaderGraph(
  * every sink). The image budget counts the LIVE graph plus the arrivals and is
  * checked BEFORE `pushHistory`. ONE undo entry; `fs:graph-merged`, never
  * `fs:graph-imported`. See docs/dev/graph-and-store.md § A dropped shader ASKS.
+ *
+ * `wire` is the generated group's (llm/place.ts), never a dropped file's: the
+ * chain that fed the arriving Output is wired into every socket of the LIVE
+ * plain Output that is still EMPTY — a pressed Preset's rule and helpers
+ * (utils/libraryAutoWire.ts): no wire is replaced, a wired channel is exposed,
+ * a wire into Opacity ticks Transparent — and the frame lands beside that
+ * Output, all in the same undo entry. No free socket, or no plain Output in
+ * charge: today's unwired parking. `at` (flow coords) asks for the frame's
+ * top-left there instead of the parking spot — the nearest free one.
  */
 export async function addDroppedShader(
   file: File,
-  opts?: { overBudgetOk?: boolean },
+  opts?: { overBudgetOk?: boolean; wire?: boolean; at?: { x: number; y: number } },
 ): Promise<ShaderAddOutcome> {
   const text = await readDroppedShaderText(file);
   if (text === null) return { ok: false, reason: 'no-shader' };
@@ -795,7 +815,7 @@ export async function addDroppedShader(
       id: generateId(),
       kind: 'image-total-cap',
       fileName: file.name,
-      proceed: () => { void addDroppedShader(file, { overBudgetOk: true }); },
+      proceed: () => { void addDroppedShader(file, { ...opts, overBudgetOk: true }); },
     });
     return { ok: false, reason: 'over-budget' };
   }
@@ -807,12 +827,43 @@ export async function addDroppedShader(
   enqueueCount('images-stripped', images.stripped);
   enqueueCount('images-missing', images.missing);
 
+  // Asked here, after every await: the Output may have been wired, deleted or
+  // replaced while the file was read and parsed.
+  const target = opts?.wire ? libraryWireOutput(store.nodes, store.edges) : null;
+  const wires = target
+    ? libraryWireEdges(
+        plan.outputWires,
+        // Already on the fresh ids — the planner re-sourced them.
+        new Map(plan.outputWires.map((e) => [e.source, e.source])),
+        target.id,
+        takenOutputChannels(store.nodes, store.edges, target.id),
+      )
+    : [];
+  const handles = wires.map((e) => e.targetHandle).filter((h): h is string => !!h);
+  const { w, h } = groupFrameSize(plan.group);
+  let group = plan.group;
+  if (target && wires.length > 0) {
+    // Beside the Output it feeds: top-right corner a gap LEFT of it, tops level.
+    const out = absoluteNodePosition(target, new Map(store.nodes.map((n) => [n.id, n])));
+    const spot = freeFrameSpot({ x: out.x - LIBRARY_WIRE_GAP - w, y: out.y, w, h }, placementObstacles(store.nodes));
+    group = { ...plan.group, position: spot } as AppNode;
+  } else if (opts?.at && Number.isFinite(opts.at.x) && Number.isFinite(opts.at.y)) {
+    const spot = freeFrameSpot({ x: opts.at.x, y: opts.at.y, w, h }, placementObstacles(store.nodes));
+    group = { ...plan.group, position: spot } as AppNode;
+  }
+
   useAppStore.getState().pushHistory();
   useAppStore.setState((state) => ({
     // The frame BEFORE its members — React Flow requires a parent to precede
     // its children, and the planner already ordered the members that way.
-    nodes: [plan.group, ...state.nodes, ...plan.members] as AppNode[],
-    edges: [...state.edges, ...plan.edges] as AppEdge[],
+    nodes: [
+      group,
+      ...(target && wires.length > 0
+        ? state.nodes.map((n) => (n.id === target.id ? makeOpacityReadable(exposeWiredChannels(n, handles), handles) : n))
+        : state.nodes),
+      ...plan.members,
+    ] as AppNode[],
+    edges: [...state.edges, ...plan.edges, ...wires] as AppEdge[],
     syncSource: 'graph' as const,
     isUndoRedo: false,
   }));
@@ -822,6 +873,7 @@ export async function addDroppedShader(
     added: plan.members.length,
     droppedSinks: plan.droppedSinks,
     groupLabel,
+    wired: wires.length,
   };
 }
 

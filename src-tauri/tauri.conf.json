@@ -30,7 +30,8 @@
     "active": true,
     "targets": ["nsis", "dmg"],
     "resources": {
-      "carousel-dist/": "ShaderCarousel/"
+      "carousel-dist/": "ShaderCarousel/",
+      "engine-dist/": "engine/"
     },
     "category": "DeveloperTool",
     "shortDescription": "TSL visual shader editor",

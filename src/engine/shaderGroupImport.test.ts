@@ -48,6 +48,27 @@ describe('planShaderGroup: the sinks are dropped', () => {
     expect(plan.droppedSinks).toBe(1);
   });
 
+  it('remembers what fed a PLAIN Output, on the fresh ids — for the one caller that may wire it', () => {
+    const incoming = {
+      nodes: [at('n1', 'noise', 0, 0), at('n2', 'noise', 0, 200), at('out', 'output', 400, 0), at('rm', 'raymarchOutput', 400, 300)],
+      edges: [
+        makeEdge('n1', 'out', 'out', 'color'),
+        makeEdge('n2', 'out', 'out', 'roughness'),
+        makeEdge('n2', 'out', 'rm', 'field'),
+      ],
+    };
+    const plan = planShaderGroup(incoming, [], 'waves', { rand })!;
+    // Never among the group's own edges: the Add itself arrives wired to nothing.
+    expect(plan.edges).toHaveLength(0);
+    // A Raymarch Output's channels are not material channels — left out.
+    expect(plan.outputWires.map((e) => e.targetHandle)).toEqual(['color', 'roughness']);
+    const memberIds = new Set(plan.members.map((m) => m.id));
+    for (const e of plan.outputWires) {
+      expect(memberIds.has(e.source)).toBe(true);
+      expect(e.target).toBe('out');
+    }
+  });
+
   it('answers null for a file with nothing but an Output, so no empty frame lands', () => {
     const incoming = { nodes: [at('out', 'output', 0, 0)], edges: [] };
     expect(planShaderGroup(incoming, [], 'empty', { rand })).toBeNull();
