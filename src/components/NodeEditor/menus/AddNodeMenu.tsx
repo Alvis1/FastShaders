@@ -31,6 +31,7 @@ import { detectPrompt, shortPrompt } from '@/utils/promptDetect';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { useGeneratorOffer } from '@/hooks/useGeneratorOffer';
 import { knownNodeNames } from '../promptKnownNames';
+import { pictureFrom } from '@/utils/pictureTransfer';
 
 /** Selected nodes eligible for grouping: not groups, not notes (annotations). */
 const isGroupable = (n: AppNode) => !!n.selected && n.type !== 'group' && n.type !== 'note';
@@ -135,6 +136,20 @@ export function AddNodeMenu() {
     closeContextMenu();
     useAppStore.getState().openGenerator({ prompt: query.trim(), at, autostart });
   }, [screenToFlowPosition, contextMenu.x, contextMenu.y, closeContextMenu, query]);
+
+  // A picture pasted on the box (a screenshot, or a file copied in Finder) is
+  // a request too: it opens the dialog with that picture and the typed words,
+  // as the palette's box does. Without this the browser's own paste wrote the
+  // FILE NAME into the box. Pasted text goes on as before.
+  const onPaste = useCallback((e: React.ClipboardEvent<HTMLInputElement>) => {
+    if (!aiOffered || sourceNodeId || spliceEdgeId) return;
+    const picture = pictureFrom(e.clipboardData);
+    if (!picture) return;
+    e.preventDefault();
+    const at = screenToFlowPosition({ x: contextMenu.x, y: contextMenu.y });
+    closeContextMenu();
+    useAppStore.getState().openGenerator({ prompt: query.trim(), at, picture });
+  }, [aiOffered, sourceNodeId, spliceEdgeId, screenToFlowPosition, contextMenu.x, contextMenu.y, closeContextMenu, query]);
 
   // Group by category when not searching
   const grouped = useMemo(() => {
@@ -490,6 +505,7 @@ export function AddNodeMenu() {
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={onKeyDown}
+        onPaste={onPaste}
         autoFocus
       />
       <div className="context-menu__list" ref={listRef}>

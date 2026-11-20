@@ -6,7 +6,7 @@
  * and feeds the analyser sizes and data a hostile file could bring.
  */
 import { describe, it, expect } from 'vitest';
-import { analyzePicture, pictureHintWords, pictureLines, type PixelGrid } from './imageAnalysis';
+import { analyzePicture, pictureHintWords, pictureLines, pictureSeenLines, type PixelGrid } from './imageAnalysis';
 import { estimateTokens } from './prompt';
 import { wordsOf } from './examples';
 
@@ -222,6 +222,39 @@ describe('pictureLines: the only thing of a picture a model is sent', () => {
 
   it('every hint has words that can pick a worked example', () => {
     for (const [, p] of pictures) expect(wordsOf(pictureHintWords(facts(p))).length).toBeGreaterThan(0);
+  });
+});
+
+describe('pictureSeenLines: the block beside a picture a model SEES', () => {
+  const stripes = paint(192, 192, (u) => (Math.floor(u * 12) % 2 === 0 ? DARK : ORANGE));
+  const noise = (() => { const r = seeded(3); return paint(128, 128, () => [r() * 255, r() * 255, r() * 255]); })();
+  const blobs = paint(128, 128, (u, v) => { const g = 110 + 60 * Math.sin(u * 5) * Math.sin(v * 3.1 + u * 2); return [g * 0.4, g, g * 0.2]; });
+
+  it('asks the model to name what it sees, and gives the colours', () => {
+    for (const p of [stripes, noise, blobs]) {
+      const lines = pictureSeenLines(facts(p));
+      expect(lines[0]).toBe('PICTURE (attached: look at it)');
+      expect(lines[1]).toMatch(/^- Start your plan with one sentence that names the main surface pattern you see/);
+      expect(lines[2]).toMatch(/^- Colours the app measured over the whole picture, most common first: #[0-9a-f]{6} \d+%/);
+      const text = lines.join('\n');
+      expect(text).toMatch(/^[\x20-\x7e\n…]+$/);
+      // Never the blind block's claim, and never its guess at the KIND of pattern.
+      expect(text).not.toMatch(/you cannot see it|looks like/);
+      expect(estimateTokens(text)).toBeLessThanOrEqual(190);
+    }
+  });
+
+  it('carries the measured layout only where the app found a regular structure', () => {
+    expect(pictureSeenLines(facts(stripes))).toContain(
+      '- The app measured its layout: about 6 light-and-dark features across, under 1 down; the features run vertically; edges: hard.',
+    );
+    // A scene, a photo, grain: the grid's averages describe the FRAME, and
+    // beside the picture they talked two models out of what they saw.
+    for (const p of [noise, blobs]) {
+      const f = facts(p);
+      expect(f.regular).toBe(false);
+      expect(pictureSeenLines(f).join('\n')).not.toMatch(/measured its layout/);
+    }
   });
 });
 

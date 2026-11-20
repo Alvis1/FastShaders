@@ -39,7 +39,7 @@ import { exampleCorpus, type Example } from './examples';
 import { liveUniformNames, storedUniformNames } from './names';
 import { MAX_ROUNDS, runGeneration, type GateOk, type RunStatus } from './orchestrate';
 import { addGeneratedGroup, PICTURE_GROUP_LABEL } from './place';
-import { pictureHintWords, pictureLines } from './imageAnalysis';
+import { pictureHintWords, pictureLines, pictureSeenLines } from './imageAnalysis';
 import { isDocumentFile, pictureFrom, readPicture, type HeldPicture } from './picture';
 import { loadGeneratorPrefs, saveGeneratorPref, type RouteId } from './prefs';
 import { buildEnv, loadClaude, loadEngineTransport, loadLocalTransport, offeredRoutes } from './registry';
@@ -99,6 +99,9 @@ const PORT_FIELD_ID = 'generator-local-port';
 /** Shown under the Port field while it holds no port, and for a refused address. */
 const BAD_PORT_TEXT = 'Type the port of an AI server on this computer: 1234 for LM Studio, 11434 for Ollama.';
 
+const PICTURE_BLIND_TEXT = 'This model can’t see pictures: it gets the measured colours, scale and direction.';
+const PICTURE_STAYS_TEXT = 'The picture stays on this computer.';
+
 /** What each failure tells the user, per route. English keys through t(). */
 function failureText(f: GenerateFailure, route: RouteId): string {
   switch (f) {
@@ -121,6 +124,8 @@ function failureText(f: GenerateFailure, route: RouteId): string {
     case 'network': return 'The model could not be reached.';
     case 'unavailable': return 'This route is not available right now.';
     case 'bad-response': return 'The model sent something unreadable.';
+    // Never the end of a run (orchestrate.ts goes on with the measurements).
+    case 'no-vision': return PICTURE_BLIND_TEXT;
   }
 }
 
@@ -178,6 +183,8 @@ export function GeneratorDialog({ initialPrompt, at, autostart, initialPicture, 
   // The request's picture (picture.ts): one, measured on this computer.
   const [picture, setPicture] = useState<HeldPicture | null>(null);
   const [pictureNote, setPictureNote] = useState<{ text: string; warn: boolean } | null>(null);
+  /** Local models that were sent a picture and could not take it. */
+  const [blindModels, setBlindModels] = useState<ReadonlySet<string>>(() => new Set());
   const fileRef = useRef<HTMLInputElement>(null);
   const pictureSeq = useRef(0);
   const heldPicture = useRef(false);
@@ -361,6 +368,18 @@ export function GeneratorDialog({ initialPrompt, at, autostart, initialPicture, 
   const routeReady = route === 'local'
     ? !!base && typeof check === 'object' && check !== null && check.ok && !!localModel
     : route === 'claude' ? keyHeld : route === 'engine' && engineReady;
+  // Does the chosen model SEE the held picture? Only a server on this
+  // computer is ever sent it (the Port field's loopback address), and only a
+  // model that server's list marks as seeing (LM Studio's `capabilities.vision`)
+  // — or the picture would be attached to a model that ignores it, with the
+  // measured layout left out. A model that refused one this session is blind.
+  const localModelInfo = typeof check === 'object' && check !== null && check.ok
+    ? check.models.find((m) => m.id === localModel)
+    : undefined;
+  const pictureSight: 'sees' | 'blind' | 'unknown' = route === 'engine' ? 'blind'
+    : route !== 'local' ? 'unknown'
+      : blindModels.has(localModel) || localModelInfo?.vision === false ? 'blind'
+        : localModelInfo?.vision === true && !!picture?.seeUrl ? 'sees' : 'unknown';
   const hasInput = !!prompt.trim() || !!picture;
   const canGenerate = !!prepared && !busy && hasInput && routeReady;
 
@@ -415,8 +434,18 @@ export function GeneratorDialog({ initialPrompt, at, autostart, initialPicture, 
       r = await runGeneration({
         provider,
         request,
-        // The picture as MEASURED here: a few lines of numbers, never pixels.
-        ...(picture ? { picture: { lines: pictureLines(picture.facts), hintWords: pictureHintWords(picture.facts) } } : {}),
+        // The picture as MEASURED here: a few lines of numbers. The picture
+        // ITSELF goes along only to a model that sees, on this computer.
+        ...(picture ? {
+          picture: {
+            lines: pictureLines(picture.facts),
+            hintWords: pictureHintWords(picture.facts),
+            ...(route === 'local' && pictureSight === 'sees' && picture.seeUrl
+              ? { seen: { lines: pictureSeenLines(picture.facts), image: picture.seeUrl } }
+              : {}),
+          },
+          onPictureRefused: () => setBlindModels((s) => new Set(s).add(localModel)),
+        } : {}),
         catalogue: prepared.catalogue,
         corpus: prepared.corpus,
         takenNames,
@@ -449,7 +478,7 @@ export function GeneratorDialog({ initialPrompt, at, autostart, initialPicture, 
     } else {
       onClose();
     }
-  }, [canGenerate, prepared, route, prompt, picture, base, localModel, cloudModel, onClose]);
+  }, [canGenerate, prepared, route, prompt, picture, pictureSight, base, localModel, cloudModel, onClose]);
 
   // Ctrl/Cmd+Enter from a search box: start once, the first time this dialog
   // can — and never after the user has touched the request.
@@ -649,7 +678,7 @@ export function GeneratorDialog({ initialPrompt, at, autostart, initialPicture, 
                 <select value={localModel} disabled={busy} onChange={(e) => setLocalModel(e.target.value)}>
                   {check.models.map((m) => (
                     <option key={m.id} value={m.id}>
-                      {m.id}{m.loaded ? ` · ${t('loaded', language)}` : ''}
+                      {m.id}{m.loaded ? ` · ${t('loaded', language)}` : ''}{m.vision ? ` · ${t('sees pictures', language)}` : ''}
                     </option>
                   ))}
                 </select>
@@ -754,7 +783,11 @@ export function GeneratorDialog({ initialPrompt, at, autostart, initialPicture, 
                   </button>
                 </span>
                 <span className="generator-dialog__note">
-                  {t('The AI gets only the measured colours, scale and direction. The picture stays on this computer.', language)}
+                  {pictureSight === 'sees'
+                    ? `${t('This model can see the picture.', language)} ${t(PICTURE_STAYS_TEXT, language)}`
+                    : pictureSight === 'blind'
+                      ? `${t(PICTURE_BLIND_TEXT, language)} ${t(PICTURE_STAYS_TEXT, language)}`
+                      : t('The AI gets only the measured colours, scale and direction. The picture stays on this computer.', language)}
                 </span>
                 <span>
                   <button

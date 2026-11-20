@@ -64,6 +64,31 @@ describe('localProvider', () => {
       .toMatchObject({ ok: false, failure: 'cancelled' });
   });
 
+  it('attaches the picture, and a model that cannot take one is its own outcome', async () => {
+    const base = 'http://127.0.0.1:1234';
+    const image = 'data:image/jpeg;base64,/9j/4AAQSkZJRg==';
+    let sent = '';
+    await localProvider(fake({ stream: sse(delta('x', 'stop')), onPost: (b) => { sent = b; } }), base, 'm').generate({ ...req(), image });
+    expect(JSON.parse(sent).messages[1].content).toEqual([{ type: 'text', text: 'U' }, { type: 'image_url', image_url: { url: image } }]);
+    // LM Studio, llama.cpp and Ollama, as each words its refusal.
+    for (const detail of [
+      '400: {"error":{"message":"The provided messages contain images, but qwen/qwen3-coder-next does not support image inputs."}}',
+      '400: {"error":{"message":"image input is not supported - hint: if this is unexpected, you may need to provide the mmproj"}}',
+      '400: {"error":"this model does not support images"}',
+    ]) {
+      expect(await localProvider(fake({ post: { ok: false, code: 'HTTP', detail } }), base, 'm').generate({ ...req(), image }))
+        .toEqual({ ok: false, failure: 'no-vision' });
+    }
+    expect(await localProvider(fake({ stream: 'data: {"error":{"message":"model has no vision support"}}\n\n' }), base, 'm').generate({ ...req(), image }))
+      .toEqual({ ok: false, failure: 'no-vision' });
+    // Without a picture in the request the same words are an ordinary error,
+    // and a 5xx is never read as "cannot see".
+    expect(await localProvider(fake({ post: { ok: false, code: 'HTTP', detail: '400: {"error":"this model does not support images"}' } }), base, 'm').generate(req()))
+      .toMatchObject({ ok: false, failure: 'bad-response' });
+    expect(await localProvider(fake({ post: { ok: false, code: 'HTTP', detail: '500: image decoder crashed' } }), base, 'm').generate({ ...req(), image }))
+      .toMatchObject({ ok: false, failure: 'bad-response' });
+  });
+
   it('a reply cut off before its program closes is truncated; an empty one is bad', async () => {
     const base = 'http://127.0.0.1:1234';
     expect(await localProvider(fake({ stream: sse(delta('```js\nconst a = 1;', 'length')) }), base, 'm').generate(req()))

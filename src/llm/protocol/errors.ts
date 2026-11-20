@@ -10,6 +10,13 @@ import type { GenerateFailure } from '../providerTypes';
 const CONTEXT_RE = /context (?:length|window|size|overflow)|n_ctx|exceeds? (?:the )?(?:context|maximum)|too many tokens|prompt is too long|tokens? limit/i;
 const NO_MODEL_RE = /no models? (?:is |are )?loaded|model .*not (?:found|loaded)|failed to load model|unknown model|model_not_found|no such model/i;
 
+/** A server saying the model cannot take the attached picture: LM Studio's
+ *  "does not support image inputs", llama.cpp's "image input is not supported
+ *  … mmproj", Ollama's "does not support images". Asked ONLY of a request
+ *  that carried one (providers/local.ts). */
+const NO_VISION_RE = /\bimages?\b|\bvision\b|multimodal|mmproj/i;
+export const refusesPicture = (message: string): boolean => NO_VISION_RE.test(message);
+
 /** An HTTP error body or a stream error message → its failure kind. */
 export function classifyServerMessage(status: number | null, message: string): GenerateFailure {
   if (CONTEXT_RE.test(message)) return 'context-too-small';

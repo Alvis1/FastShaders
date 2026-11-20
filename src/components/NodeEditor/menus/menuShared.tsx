@@ -387,6 +387,10 @@ export function NodeActions({ nodeId, preview = true }: { nodeId: string; previe
             }}
           >
             {t('Attach to Output…', language)}
+            {/* It opens a LIST in this menu's place, not an action: the arrow says so. */}
+            <svg className="context-menu__item-arrow" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true">
+              <path d="M0 0L6 5L0 10Z" fill="currentColor" />
+            </svg>
           </button>
         </>
       )}

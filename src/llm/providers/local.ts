@@ -6,7 +6,7 @@
  * measured.
  */
 import type { LocalTransport, TransportFailure } from '../transport/types';
-import { classifyServerMessage, classifyTransportFailure, serverMessage } from '../protocol/errors';
+import { classifyServerMessage, classifyTransportFailure, refusesPicture, serverMessage } from '../protocol/errors';
 import { ChatAccumulator, chatBody, parseModelList, type LocalModel } from '../protocol/openaiCompat';
 import { SseDecoder } from '../protocol/sse';
 import type { ContextClass } from '../prompt';
@@ -78,13 +78,22 @@ export function localProvider(transport: LocalTransport, base: string, model: st
       const sent = await transport.post(
         base,
         '/v1/chat/completions',
-        chatBody({ model, system: req.system, user: req.user, maxOutputTokens: req.maxOutputTokens }),
+        chatBody({ model, system: req.system, user: req.user, maxOutputTokens: req.maxOutputTokens, image: req.image }),
         (chunk) => feed(decoder.push(chunk)),
         req.signal,
       );
-      if (!sent.ok) return fromTransport(sent);
+      // A model that cannot take the picture says so with a 4xx (measured on
+      // LM Studio: 400 "…does not support image inputs"). That is its own
+      // outcome: the run goes on with the measurements (orchestrate.ts).
+      if (!sent.ok) {
+        if (req.image && sent.code === 'HTTP' && /^4\d\d/.test(sent.detail) && refusesPicture(sent.detail)) {
+          return { ok: false, failure: 'no-vision' };
+        }
+        return fromTransport(sent);
+      }
       feed(decoder.end());
       if (acc.error) {
+        if (req.image && refusesPicture(acc.error)) return { ok: false, failure: 'no-vision' };
         return { ok: false, failure: classifyServerMessage(null, acc.error), detail: serverMessage(acc.error) };
       }
       const text = acc.text;

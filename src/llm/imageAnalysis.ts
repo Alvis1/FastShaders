@@ -497,3 +497,32 @@ export function pictureLines(f: PictureFacts): string[] {
   lines.push('Use these colours as color(0x…) values. A coordinate that runs 0 to 1 across the surface, multiplied by N, gives about N features across.');
   return lines;
 }
+
+/**
+ * The block for a model that SEES the picture (it is attached to the same
+ * turn). It asks the model to NAME the pattern it sees before building it,
+ * and gives the measured colours; the measured layout goes along only where
+ * the app found a regular structure (stripes, a grid, an even repeat).
+ *
+ * Why not the whole measurement (measured 2026-11-20, a screenshot of a 3-D
+ * scene, two local vision models): the grid averages a scene into "a few
+ * large soft shapes (like clouds)", and with that line beside the picture the
+ * model built soft noise and ignored what it saw. Without it the same models
+ * named the wall's fine green grid and built that.
+ */
+export function pictureSeenLines(f: PictureFacts): string[] {
+  const lines = ['PICTURE (attached: look at it)'];
+  lines.push('- Start your plan with one sentence that names the main surface pattern you see in the picture (for example: tiles, dots, stripes, scales, waves, marble, bricks). Then build that pattern, not the whole scene.');
+  lines.push(`- Colours the app measured over the whole picture, most common first: ${f.palette.map((c) => `${c.hex} ${Math.max(1, Math.round(c.share * 100))}%`).join(', ')}.`);
+  if (f.regular || f.hint === 'stripes' || f.hint === 'grid') {
+    const d = f.direction;
+    lines.push(`- The app measured its layout: ${count(f.across)} light-and-dark features across, ${count(f.down)} down; ${
+      !d ? 'no one direction'
+        : d.kind === 'horizontal' ? 'the features run horizontally'
+          : d.kind === 'vertical' ? 'the features run vertically'
+            : `the features run diagonally, ${d.kind} to the right at about ${d.angle} degrees`
+    }; edges: ${f.sharp ? 'hard' : 'soft'}.`);
+  }
+  lines.push('Use colours as color(0x…) values. A coordinate that runs 0 to 1 across the surface, multiplied by N, gives about N features across.');
+  return lines;
+}

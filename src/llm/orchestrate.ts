@@ -32,8 +32,18 @@ export interface RunOptions {
   /** The typed request; may be empty when `picture` is given. */
   request: string;
   /** An added picture, as the app measured it (imageAnalysis.ts): the lines
-   *  the request carries, and the words that pick examples when it has none. */
-  picture?: { lines: readonly string[]; hintWords: string };
+   *  the request carries, and the words that pick examples when it has none.
+   *  `seen` is set only for a model that SEES, on a server on this computer:
+   *  the picture itself (picture.ts `seeUrl`) and the block that goes with it
+   *  (`pictureSeenLines`). A model that refuses the picture gets `lines`. */
+  picture?: {
+    lines: readonly string[];
+    hintWords: string;
+    seen?: { lines: readonly string[]; image: string };
+  };
+  /** The model was sent the picture and could not take it; the run went on
+   *  with the measurements. Called at most once. */
+  onPictureRefused?: () => void;
   catalogue: Catalogue;
   corpus: readonly Example[];
   /** Uniform names already in use (live graph + stored tuned values). */
@@ -73,10 +83,13 @@ function safeGate(text: string, catalogue: Catalogue, takenNames: ReadonlySet<st
 export async function runGeneration(o: RunOptions): Promise<RunResult> {
   if (o.inStudy()) return { ok: false, kind: 'study' };
   const budget = CONTEXT_BUDGETS[o.provider.contextClass];
-  const picture = o.picture?.lines ?? [];
+  // The picture travels only while the model takes it; after a refusal the
+  // run is the measured one, as if the picture had never been attached.
+  let seen = o.picture?.seen ?? null;
+  let picture = seen?.lines ?? o.picture?.lines ?? [];
   // With no words, the picture's pattern picks the worked examples.
   const examples = selectExamples(o.request.trim() ? o.request : o.picture?.hintWords ?? '', o.corpus, budget.examples);
-  const prompt = buildPrompt(o.request, o.catalogue, examples, o.provider.contextClass, picture);
+  let prompt = buildPrompt(o.request, o.catalogue, examples, o.provider.contextClass, picture);
   const usage: GenerateUsage[] = [];
   const rounds = Math.max(1, Math.min(o.maxRounds ?? MAX_ROUNDS, MAX_ROUNDS));
   let user = prompt.user;
@@ -85,15 +98,27 @@ export async function runGeneration(o: RunOptions): Promise<RunResult> {
   for (let round = 1; round <= rounds; round++) {
     if (o.signal.aborted) return { ok: false, kind: 'provider', failure: 'cancelled', rounds: round - 1 };
     o.onStatus?.({ round, phase: 'connecting' });
-    const reply = await safeGenerate(o.provider, {
+    const reply: GenerateResult = await safeGenerate(o.provider, {
       system: prompt.system,
       user,
+      ...(seen ? { image: seen.image } : {}),
       maxOutputTokens: budget.output,
       signal: o.signal,
       onProgress: (p) => o.onStatus?.(p.phase === 'thinking' || p.phase === 'writing'
         ? { round, phase: p.phase, chars: p.chars }
         : { round, phase: p.phase }),
     });
+    if (!reply.ok && reply.failure === 'no-vision' && seen) {
+      // The same round again, blind: the measured block, and the program a
+      // repair round was quoting stays quoted.
+      seen = null;
+      picture = o.picture?.lines ?? [];
+      prompt = buildPrompt(o.request, o.catalogue, examples, o.provider.contextClass, picture);
+      user = last ? buildRepairUser(o.request, last.code, last.problems, picture) : prompt.user;
+      o.onPictureRefused?.();
+      round--;
+      continue;
+    }
     if (!reply.ok) return { ok: false, kind: 'provider', failure: reply.failure, detail: reply.detail, rounds: round };
     if (reply.usage) usage.push(reply.usage);
     if (o.signal.aborted) return { ok: false, kind: 'provider', failure: 'cancelled', rounds: round };

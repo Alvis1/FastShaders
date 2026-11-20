@@ -225,17 +225,37 @@ describe('the dialog', () => {
 });
 
 describe('a picture in the request', () => {
-  it('only its measurements reach a model: the file goes to the canvas\'s own picture drop and nowhere else', () => {
+  it('the file goes to the canvas\'s own picture drop and nowhere else; a model gets the measurements', () => {
     const src = codeOnly(read(DIALOG));
     // The one use of the file itself is "Use the picture itself".
     expect(src.match(/picture\.file/g)).toEqual(['picture.file']);
     expect(src).toMatch(/requestPicturePlacement\(\[picture\.file\], at\)/);
-    // What a run is handed: the lines and the hint words, built from the facts.
-    expect(src).toMatch(/picture: \{ lines: pictureLines\(picture\.facts\), hintWords: pictureHintWords\(picture\.facts\) \}/);
-    // No provider, transport or prompt builder takes a File, a Blob or a data URL.
+    // What every run is handed: the lines and the hint words, built from the facts.
+    expect(src).toMatch(/lines: pictureLines\(picture\.facts\),\s+hintWords: pictureHintWords\(picture\.facts\),/);
+    // No provider, transport or prompt builder takes a File or a Blob, or encodes one.
     for (const f of LLM.filter((x) => /providers\/|transport\/|prompt\.ts|orchestrate\.ts/.test(x))) {
       expect(codeOnly(read(f)), f).not.toMatch(/\bFile\b|\bBlob\b|thumbUrl|toDataURL/);
     }
+  });
+
+  it('the picture ITSELF goes only to a model that sees, on a server on this computer', () => {
+    const src = codeOnly(read(DIALOG));
+    // ONE place hands it to a run: the own-server route (the Port field's
+    // loopback address), a model its list marks as seeing.
+    expect(src.match(/image: picture\.seeUrl/g)).toEqual(['image: picture.seeUrl']);
+    expect(src).toMatch(/route === 'local' && pictureSight === 'sees' && picture\.seeUrl\s+\? \{ seen: \{ lines: pictureSeenLines\(picture\.facts\), image: picture\.seeUrl \} \}/);
+    // The built-in model has no eyes (no mmproj is pinned); any other route is unknown, never 'sees'.
+    expect(src).toMatch(/route === 'engine' \? 'blind'\s+: route !== 'local' \? 'unknown'/);
+    expect(src).toMatch(/localModelInfo\?\.vision === true && !!picture\?\.seeUrl \? 'sees' : 'unknown'/);
+    // The cloud provider builds its request from the text alone.
+    const claude = codeOnly(read('src/llm/providers/claude.ts'));
+    expect(claude).toMatch(/req: Pick<GenerateRequest, 'system' \| 'user'>/);
+    expect(claude).not.toMatch(/\bimage\b/);
+    // The copy that travels is the app's own JPEG, checked by the one test the protocol applies too.
+    const reader = codeOnly(read('src/llm/picture.ts'));
+    expect(reader).toMatch(/canvas\.toDataURL\('image\/jpeg', quality\)/);
+    expect(reader).toMatch(/if \(isSeenPictureUrl\(url\)\) return url;/);
+    expect(codeOnly(read('src/llm/protocol/openaiCompat.ts'))).toMatch(/content: isSeenPictureUrl\(o\.image\)/);
   });
 
   it('the reader measures the app\'s own drawing and refuses markup and oversize files before decoding', () => {
@@ -257,6 +277,15 @@ describe('a picture in the request', () => {
     }
     // The palette never imports the generator: the transfer helper is a util.
     expect(bar).toContain("from '@/utils/pictureTransfer'");
+    // The Space menu's box takes a pasted picture too (without it Chrome's own
+    // paste of a file copied in Finder wrote the FILE NAME into the box) —
+    // never while the menu wires or splices.
+    const menu = codeOnly(read(ADD_MENU));
+    const paste = menu.indexOf('const onPaste = useCallback(');
+    expect(paste).toBeGreaterThan(-1);
+    expect(menu.slice(paste, paste + 200)).toMatch(/if \(!aiOffered \|\| sourceNodeId \|\| spliceEdgeId\) return;/);
+    expect(menu).toMatch(/onPaste=\{onPaste\}/);
+    expect(menu).toContain("from '@/utils/pictureTransfer'");
   });
 
   it('the canvas takes a handed-over picture through its one queue, real picture Files only', () => {

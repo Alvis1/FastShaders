@@ -115,5 +115,52 @@ describe('a picture in the run', () => {
     const p = scripted([{ ok: true, text: GOOD }]);
     await run(p);
     expect(p.calls[0].user).toBe('Request: a gradient');
+    expect('image' in p.calls[0]).toBe(false);
+  });
+
+  const image = 'data:image/jpeg;base64,/9j/4AAQSkZJRg==';
+  const seen = { lines: ['PICTURE (attached: look at it)', '- Colours: #112233 100%.'], image };
+
+  it('a model that sees gets the picture and its own block, on every round', async () => {
+    const p = scripted([{ ok: true, text: BAD }, { ok: true, text: GOOD }]);
+    let refused = 0;
+    const r = await run(p, { request: '', picture: { ...picture, seen }, onPictureRefused: () => { refused++; } });
+    expect(r).toMatchObject({ ok: true, rounds: 2 });
+    expect(p.calls.map((c) => c.image)).toEqual([image, image]);
+    expect(p.calls[0].user).toBe('Request: Make a shader that looks like this picture.\n\nPICTURE (attached: look at it)\n- Colours: #112233 100%.');
+    expect(p.calls[1].user).toContain('PICTURE (attached: look at it)');
+    expect(p.calls[1].user).not.toContain('PICTURE (measured)');
+    expect(refused).toBe(0);
+    // Measured only (no `seen`): no picture travels.
+    const blind = scripted([{ ok: true, text: GOOD }]);
+    await run(blind, { request: '', picture });
+    expect('image' in blind.calls[0]).toBe(false);
+  });
+
+  it('a model that refuses the picture gets the measurements instead, in the same round', async () => {
+    const p = scripted([{ ok: false, failure: 'no-vision' }, { ok: true, text: BAD }, { ok: true, text: GOOD }]);
+    let refused = 0;
+    const r = await run(p, { request: '', picture: { ...picture, seen }, onPictureRefused: () => { refused++; } });
+    // The refused call is not a round: two tries were made.
+    expect(r).toMatchObject({ ok: true, rounds: 2 });
+    expect(refused).toBe(1);
+    expect(p.calls).toHaveLength(3);
+    expect(p.calls[0].image).toBe(image);
+    expect('image' in p.calls[1]).toBe(false);
+    expect(p.calls[1].user).toBe('Request: Make a shader that looks like this picture.\n\nPICTURE (measured)\n- colours, most common first: #112233 100%');
+    expect('image' in p.calls[2]).toBe(false);
+    expect(p.calls[2].user).toContain('PICTURE (measured)');
+  });
+
+  it('a refusal in a repair round keeps the quoted program, and can happen only once', async () => {
+    const p = scripted([{ ok: true, text: BAD }, { ok: false, failure: 'no-vision' }, { ok: true, text: GOOD }]);
+    const r = await run(p, { request: '', picture: { ...picture, seen } });
+    expect(r).toMatchObject({ ok: true, rounds: 2 });
+    expect(p.calls[2].user).toContain('PICTURE (measured)');
+    expect(p.calls[2].user).toContain('Your previous program:');
+    // Blind already: the same answer again is an ordinary failure, not a loop.
+    const twice = scripted([{ ok: false, failure: 'no-vision' }, { ok: false, failure: 'no-vision' }]);
+    expect(await run(twice, { request: '', picture: { ...picture, seen } })).toMatchObject({ ok: false, kind: 'provider', failure: 'no-vision', rounds: 1 });
+    expect(twice.calls).toHaveLength(2);
   });
 });

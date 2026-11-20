@@ -13,21 +13,42 @@ export interface ChatRequestOptions {
   system: string;
   user: string;
   maxOutputTokens: number;
+  /** The user's picture for a model that SEES (`isSeenPictureUrl`): attached
+   *  to the user turn. Anything else is left out — never a URL a server
+   *  would fetch (llama.cpp's server downloads an http `image_url`). */
+  image?: string;
 }
+
+/** The longest picture a request carries, as `data:` URL characters: well
+ *  inside `LLM_MAX_REQUEST_BYTES` with the prompt beside it. */
+export const MAX_SEEN_PICTURE_CHARS = 700_000;
+const SEEN_PICTURE_RE = /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/;
+
+/** The ONE form a picture travels in: a base64 JPEG `data:` URL the app
+ *  encoded from its own canvas (picture.ts), within the size cap. */
+export const isSeenPictureUrl = (v: unknown): v is string =>
+  typeof v === 'string' && v.length <= MAX_SEEN_PICTURE_CHARS && SEEN_PICTURE_RE.test(v);
 
 /**
  * The request body. Thinking is switched off through the chat template
  * (`enable_thinking: false` — honoured by the Qwen 3.x and Gemma 4 templates
  * the 2026-10-02 spike ran, ignored by templates that have no such switch);
  * a model that thinks anyway still answers, through the reasoning fallback.
- * Temperature 0.2: the spike's setting.
+ * Temperature 0.2: the spike's setting. With a picture the user turn is the
+ * OpenAI content-part form (text, then `image_url`), which LM Studio, Ollama
+ * and llama.cpp's server all read.
  */
 export function chatBody(o: ChatRequestOptions): string {
   return JSON.stringify({
     model: o.model,
     messages: [
       { role: 'system', content: o.system },
-      { role: 'user', content: o.user },
+      {
+        role: 'user',
+        content: isSeenPictureUrl(o.image)
+          ? [{ type: 'text', text: o.user }, { type: 'image_url', image_url: { url: o.image } }]
+          : o.user,
+      },
     ],
     temperature: 0.2,
     max_tokens: o.maxOutputTokens,
@@ -95,6 +116,9 @@ export interface LocalModel {
   loaded?: boolean;
   /** The context the loaded instance runs with, when the server says. */
   contextLength?: number;
+  /** Can it take a picture? Known only from LM Studio's native list
+   *  (`capabilities.vision`); absent = the server did not say. */
+  vision?: boolean;
 }
 
 /** Longest model id kept (printable ASCII only). */
@@ -105,7 +129,8 @@ export const isUsableModelId = (id: string): boolean =>
 /**
  * Models from either list: OpenAI's `/v1/models` (`{data: [{id}]}`) or LM
  * Studio's native `/api/v1/models` (`{models: [{key, loaded_instances: [{config:
- * {context_length}}]}]}`, the only one that reports a loaded context). Embedding
+ * {context_length}}], capabilities: {vision}}]}`, the only one that reports a
+ * loaded context and whether a model sees pictures). Embedding
  * models are left out — they cannot chat.
  */
 export function parseModelList(body: string): LocalModel[] {
@@ -127,6 +152,8 @@ export function parseModelList(body: string): LocalModel[] {
       const ctx = num(obj(obj(instances[0]).config).context_length);
       if (ctx !== undefined) model.contextLength = ctx;
     }
+    const vision = obj(m.capabilities).vision;
+    if (typeof vision === 'boolean') model.vision = vision;
     out.push(model);
   }
   return out;

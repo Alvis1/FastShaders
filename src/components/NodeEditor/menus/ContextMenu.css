@@ -220,6 +220,13 @@
   color: var(--text-muted);
 }
 
+/* The mark of a row that opens a list in the menu's place (Attach to Output…). */
+.context-menu__item-arrow {
+  flex: none;
+  margin-left: var(--space-3);
+  color: var(--text-muted);
+}
+
 .context-menu__divider {
   height: 1px;
   background: var(--border-subtle);

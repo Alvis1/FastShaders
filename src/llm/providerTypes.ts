@@ -31,7 +31,10 @@ export type GenerateFailure =
   | 'network'
   | 'bad-response'
   /** This route cannot run here (no desktop bridge, its code failed to load). */
-  | 'unavailable';
+  | 'unavailable'
+  /** The request carried a picture and the model cannot take one. The
+   *  orchestrator answers it by sending the measurements instead. */
+  | 'no-vision';
 
 export type GenerateProgress =
   | { phase: 'connecting' }
@@ -43,6 +46,11 @@ export type GenerateProgress =
 export interface GenerateRequest {
   system: string;
   user: string;
+  /** The user's picture, for a model that sees: a JPEG `data:` URL of the
+   *  app's own drawing (picture.ts `seeUrl`). ONLY the local provider reads
+   *  it, and only the dialog's own-server route sets it — a loopback address,
+   *  so the picture stays on this computer. */
+  image?: string;
   maxOutputTokens: number;
   signal: AbortSignal;
   onProgress?: (p: GenerateProgress) => void;

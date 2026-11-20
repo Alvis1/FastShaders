@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SseDecoder } from './sse';
-import { ChatAccumulator, chatBody, parseModelList } from './openaiCompat';
+import { ChatAccumulator, chatBody, isSeenPictureUrl, MAX_SEEN_PICTURE_CHARS, parseModelList } from './openaiCompat';
 import { classifyServerMessage, classifyTransportFailure, serverMessage } from './errors';
 
 /** An OpenAI-compatible stream, as LM Studio sends it (Latvian text included,
@@ -97,6 +97,27 @@ describe('ChatAccumulator', () => {
       chat_template_kwargs: { enable_thinking: false },
     });
   });
+
+  it('attaches a picture as the app\'s own JPEG data URL, and nothing else', () => {
+    const jpeg = 'data:image/jpeg;base64,/9j/4AAQSkZJRg==';
+    const body = JSON.parse(chatBody({ model: 'm', system: 'S', user: 'U', maxOutputTokens: 100, image: jpeg }));
+    expect(body.messages[1]).toEqual({
+      role: 'user',
+      content: [{ type: 'text', text: 'U' }, { type: 'image_url', image_url: { url: jpeg } }],
+    });
+    // A URL a server would FETCH, another type, markup, a stray character or
+    // an oversize picture: the request goes without a picture.
+    for (const bad of [
+      'https://example.test/a.jpg', 'http://127.0.0.1:1234/a.jpg', 'file:///etc/passwd',
+      'data:image/svg+xml;base64,PHN2Zz4=', 'data:image/png;base64,iVBORw0KGgo=', 'data:text/html;base64,PGI+',
+      'data:image/jpeg;base64,/9j/4AAQ"}],"x":"', 'data:image/jpeg;base64,', ' data:image/jpeg;base64,/9j/', 'data:image/jpeg;base64,/9j/\n',
+      `data:image/jpeg;base64,${'A'.repeat(MAX_SEEN_PICTURE_CHARS)}`,
+    ]) {
+      expect(isSeenPictureUrl(bad), bad.slice(0, 40)).toBe(false);
+      expect(JSON.parse(chatBody({ model: 'm', system: 'S', user: 'U', maxOutputTokens: 100, image: bad })).messages[1].content).toBe('U');
+    }
+    for (const bad of [undefined, null, 5, {}, ['data:image/jpeg;base64,/9j/']]) expect(isSeenPictureUrl(bad)).toBe(false);
+  });
 });
 
 describe('parseModelList', () => {
@@ -116,6 +137,25 @@ describe('parseModelList', () => {
     expect(parseModelList(body)).toEqual([
       { id: 'qwen/qwen3-coder-next', loaded: true, contextLength: 16384 },
       { id: 'google/gemma-4-31b', loaded: false },
+    ]);
+  });
+
+  it('reads whether a model sees pictures, as a boolean or not at all', () => {
+    const body = JSON.stringify({
+      models: [
+        { type: 'llm', key: 'sees', loaded_instances: [], capabilities: { vision: true } },
+        { type: 'llm', key: 'blind', loaded_instances: [], capabilities: { vision: false } },
+        { type: 'llm', key: 'silent', loaded_instances: [] },
+        { type: 'llm', key: 'junk', loaded_instances: [], capabilities: { vision: 'yes' } },
+        { type: 'llm', key: 'junk2', loaded_instances: [], capabilities: 'vision' },
+      ],
+    });
+    expect(parseModelList(body)).toEqual([
+      { id: 'sees', loaded: false, vision: true },
+      { id: 'blind', loaded: false, vision: false },
+      { id: 'silent', loaded: false },
+      { id: 'junk', loaded: false },
+      { id: 'junk2', loaded: false },
     ]);
   });
 
