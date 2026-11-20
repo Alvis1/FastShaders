@@ -1,0 +1,5 @@
+# Files pinned by sha256 and size in src-tauri/engine.json: git must check
+# them out byte for byte on every platform. With core.autocrlf (the Windows
+# runner's default) the licence came out CRLF, 1,099 bytes against its
+# 1,078-byte pin, and v0.3.56's Windows build stopped at "Fetch the AI engine".
+src-tauri/engine-licenses/** -text

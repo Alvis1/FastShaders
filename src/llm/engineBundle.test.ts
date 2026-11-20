@@ -60,6 +60,16 @@ describe('src-tauri/engine.json', () => {
     expect(read('src-tauri/engine-licenses/llama.cpp-LICENSE')).toMatch(/^MIT License\n\nCopyright \(c\) 2023-2026 The ggml authors/);
   });
 
+  it('every file pinned from the repo is checked out byte for byte on Windows too', () => {
+    // core.autocrlf on the Windows runner turned the licence's LF into CRLF:
+    // 1,099 bytes against its 1,078-byte pin, and the v0.3.56 build failed.
+    const attrs = read('.gitattributes').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+    expect(attrs).toContain('src-tauri/engine-licenses/** -text');
+    for (const p of Object.values(manifest.platforms)) {
+      for (const f of p.files) if (f.repo !== undefined) expect(f.repo.startsWith('engine-licenses/'), f.repo).toBe(true);
+    }
+  });
+
   it('leaves out the Windows RPC backend (ggml would load any ggml-*.dll beside the exe)', () => {
     expect(manifest.platforms['windows-x64'].files.some((f) => /rpc/i.test(f.to))).toBe(false);
   });
