@@ -124,8 +124,12 @@ function cleanSlateForStudy(): void {
     // lessons to take — or to skip.
     localStorage.removeItem(TUTORIALS_DONE_KEY);
     // The preview's fly-through mode and its remembered camera pose
-    // (ShaderPreview's FPV_ON_KEY / FPV_POSE_KEY): the next participant would
+    // (ShaderPreview's FLY_ON_KEY / FLY_POSE_KEY): the next participant would
     // otherwise open the preview inside the previous one's flight.
+    localStorage.removeItem('fs:previewFly');
+    localStorage.removeItem('fs:previewFlyPose');
+    // ...and their names before the 2026-11-21 rename (FPV → Fly), which the
+    // preview would otherwise adopt into the next participant's session.
     localStorage.removeItem('fs:previewFpv');
     localStorage.removeItem('fs:previewFpvPose');
     // The 3D view's backdrop (room / grid, ShaderPreview's fs:previewStage):

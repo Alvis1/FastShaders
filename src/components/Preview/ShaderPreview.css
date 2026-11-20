@@ -47,7 +47,7 @@
    bordered — and each class below adds only what differs from it. */
 .shader-preview__reset-btn,
 .shader-preview__vr-btn,
-.shader-preview__fpv-btn,
+.shader-preview__fly-btn,
 .shader-preview__stage-btn,
 .shader-preview__play-btn,
 .shader-preview__anim-play,
@@ -85,7 +85,7 @@
 }
 
 .shader-preview__vr-btn:hover,
-.shader-preview__fpv-btn:hover,
+.shader-preview__fly-btn:hover,
 .shader-preview__stage-btn:hover,
 .shader-preview__play-btn:hover,
 .shader-preview__anim-play:hover,
@@ -120,7 +120,7 @@
 /* Lives in the bottom-right display cluster beside Fullscreen. Width is
    text-driven (it is the one lettered control among glyphs). */
 .shader-preview__vr-btn,
-.shader-preview__fpv-btn {
+.shader-preview__fly-btn {
   padding: 0 9px;
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -141,7 +141,7 @@
    disclosure while its menu is open, and "in place" while root motion is
    suppressed. AFTER the deltas above — same specificity, so order decides. */
 .shader-preview__props-btn--active,
-.shader-preview__fpv-btn--active,
+.shader-preview__fly-btn--active,
 .shader-preview__stage-btn--active,
 .shader-preview__anim-clips-btn--active,
 .shader-preview__anim-inplace--active {
@@ -152,7 +152,7 @@
 
 /* The black wash becomes a light one on the dark theme. */
 :root[data-theme="dark"] .shader-preview__props-btn--active,
-:root[data-theme="dark"] .shader-preview__fpv-btn--active,
+:root[data-theme="dark"] .shader-preview__fly-btn--active,
 :root[data-theme="dark"] .shader-preview__stage-btn--active,
 :root[data-theme="dark"] .shader-preview__anim-clips-btn--active,
 :root[data-theme="dark"] .shader-preview__anim-inplace--active {

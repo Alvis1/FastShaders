@@ -25,13 +25,13 @@ import {
   buildPreviewShaderModule,
   buildTeapotAttr,
   decoderAssetUrl,
-  fpvPose,
+  flyPose,
   getBunnyModelUrl,
   isModelGeometry,
   isTeapotGeometry,
   tslToPreviewHTML,
 } from '@/engine/tslToPreviewHTML';
-import type { CameraPosition, FpvPose, GeometryType, LightingMode, PreviewOptions, PreviewStage } from '@/engine/tslToPreviewHTML';
+import type { CameraPosition, FlyPose, GeometryType, LightingMode, PreviewOptions, PreviewStage } from '@/engine/tslToPreviewHTML';
 import {
   SUBDIVISION_DEFAULT,
   SUBDIVISION_STEPS,
@@ -376,26 +376,49 @@ function loadRotation(): CameraPosition | null {
   return loadVec3('fs:previewRotation');
 }
 
-/** Where the fly-through camera was left (`fs:previewFpvPose`), validated like
+/** Where the fly-through camera was left (`fs:previewFlyPose`), validated like
  *  every stored camera value: a `.fastshader` cannot write it, but a stale or
  *  hand-edited one is still never coerced. Junk is removed. */
-function loadFpvPose(): FpvPose | null {
+function loadFlyPose(): FlyPose | null {
+  adoptLegacyFlyKeys();
   try {
-    const raw = localStorage.getItem(FPV_POSE_KEY);
+    const raw = localStorage.getItem(FLY_POSE_KEY);
     if (!raw) return null;
-    const pose = fpvPose(JSON.parse(raw, safeJsonReviver));
-    if (!pose) localStorage.removeItem(FPV_POSE_KEY);
+    const pose = flyPose(JSON.parse(raw, safeJsonReviver));
+    if (!pose) localStorage.removeItem(FLY_POSE_KEY);
     return pose;
   } catch {
     return null;
   }
 }
-const FPV_POSE_KEY = 'fs:previewFpvPose';
-/** FPV mode on/off — `'true'` exactly, anything else is off. A study's clean
+const FLY_POSE_KEY = 'fs:previewFlyPose';
+/** The two keys' names until 2026-11-21, when the mode was renamed from FPV
+ *  to Fly. Read ONCE: a value is moved to its new key only when that key is
+ *  empty (it is then validated on read like any stored value), and the old
+ *  key is always removed. The study clean slate removes both names. */
+const LEGACY_FLY_KEYS: ReadonlyArray<readonly [string, string]> = [
+  ['fs:previewFpv', 'fs:previewFly'],
+  ['fs:previewFpvPose', 'fs:previewFlyPose'],
+];
+let legacyFlyKeysAdopted = false;
+function adoptLegacyFlyKeys(): void {
+  if (legacyFlyKeysAdopted) return;
+  legacyFlyKeysAdopted = true;
+  try {
+    for (const [legacy, key] of LEGACY_FLY_KEYS) {
+      const old = localStorage.getItem(legacy);
+      if (old === null) continue;
+      if (localStorage.getItem(key) === null) localStorage.setItem(key, old);
+      localStorage.removeItem(legacy);
+    }
+  } catch { /* storage unavailable: nothing to adopt */ }
+}
+/** Fly mode on/off — `'true'` exactly, anything else is off. A study's clean
  *  slate removes it with the pose (EvalGate), so no participant inherits it. */
-const FPV_ON_KEY = 'fs:previewFpv';
-function loadFpvOn(): boolean {
-  try { return isTrueFlag(localStorage.getItem(FPV_ON_KEY)); } catch { return false; }
+const FLY_ON_KEY = 'fs:previewFly';
+function loadFlyOn(): boolean {
+  adoptLegacyFlyKeys();
+  try { return isTrueFlag(localStorage.getItem(FLY_ON_KEY)); } catch { return false; }
 }
 
 /** A stored on/off flag that defaults to OFF (turntable, FPS readout, in-place). */
@@ -1218,15 +1241,15 @@ export function ShaderPreview() {
   const cameraTargetRef = useRef<CameraPosition | null>(null);
   const rotationRef = useRef<CameraPosition | null>(loadRotation());
   /**
-   * FPV (fly-through) mode and where the flyer is. BOTH are stored, so a
+   * Fly mode and where the flyer is. BOTH are stored, so a
    * reload comes back flying from the same spot (owner, 2026-11-09), and
-   * switching FPV off and on resumes it too. Both are read through refs when
-   * a document is built (`initialFpv`), like the camera above, so the first
+   * switching Fly mode off and on resumes it too. Both are read through refs when
+   * a document is built (`initialFly`), like the camera above, so the first
    * document and every cold rebuild keep flying without joining the deps.
    */
-  const [fpvOn, setFpvOn] = useState(loadFpvOn);
-  const fpvOnRef = useRef(fpvOn);
-  const fpvPoseRef = useRef<FpvPose | null>(loadFpvPose());
+  const [flyOn, setFlyOn] = useState(loadFlyOn);
+  const flyOnRef = useRef(flyOn);
+  const flyPoseRef = useRef<FlyPose | null>(loadFlyPose());
 
   /**
    * Persist the turntable angle at most once every ROTATION_PERSIST_MS.
@@ -2005,14 +2028,14 @@ export function ShaderPreview() {
           if (isSoundUniformName(name)) continue;
           win.postMessage({ type: 'fs:uniform', name, value }, '*');
         }
-      } else if (data.type === 'fs:fpv-pose') {
+      } else if (data.type === 'fs:fly-pose') {
         // Forgeable like fs:camera: five finite numbers inside the fly radius.
-        // Only while FPV is on — a report the user did not cause is dropped.
-        const pose = fpvOnRef.current ? fpvPose(data) : null;
+        // Only while Fly mode is on — a report the user did not cause is dropped.
+        const pose = flyOnRef.current ? flyPose(data) : null;
         if (pose) {
           lastActivityRef.current = performance.now();
-          fpvPoseRef.current = pose;
-          try { localStorage.setItem(FPV_POSE_KEY, JSON.stringify(pose)); } catch { /* */ }
+          flyPoseRef.current = pose;
+          try { localStorage.setItem(FLY_POSE_KEY, JSON.stringify(pose)); } catch { /* */ }
         }
       } else if (data.type === 'fs:camera') {
         // Forgeable (the document runs the loaded shader): finite numbers only,
@@ -2074,18 +2097,18 @@ export function ShaderPreview() {
   // subdivision, and every property uniform back to its shader-defined value.
   // Min/max bounds and bg color are user preferences, not part of the reset.
   /**
-   * Switch FPV on or off in the live document, resuming the stored pose (or,
+   * Switch Fly mode on or off in the live document, resuming the stored pose (or,
    * with none, starting from the orbit view). The frame gets FOCUS so the keys
    * reach it at once — left on this button, W/A/S/D would land on the node
    * canvas instead (A selects every node).
    */
-  const toggleFpv = useCallback(() => {
-    const on = !fpvOnRef.current;
-    fpvOnRef.current = on;
-    setFpvOn(on);
-    try { localStorage.setItem(FPV_ON_KEY, String(on)); } catch { /* */ }
+  const toggleFly = useCallback(() => {
+    const on = !flyOnRef.current;
+    flyOnRef.current = on;
+    setFlyOn(on);
+    try { localStorage.setItem(FLY_ON_KEY, String(on)); } catch { /* */ }
     const frame = iframeRef.current;
-    frame?.contentWindow?.postMessage({ type: 'fs:fpv', on, pose: on ? fpvPoseRef.current : null }, '*');
+    frame?.contentWindow?.postMessage({ type: 'fs:fly', on, pose: on ? flyPoseRef.current : null }, '*');
     if (on) {
       try { frame?.focus(); } catch { /* */ }
     }
@@ -2100,8 +2123,8 @@ export function ShaderPreview() {
     try { localStorage.removeItem('fs:previewRotation'); } catch { /* */ }
     // The fly-through's saved spot too: the stage puts a flying camera home
     // (facing the object) on the same message, and reports that pose back.
-    fpvPoseRef.current = null;
-    try { localStorage.removeItem(FPV_POSE_KEY); } catch { /* */ }
+    flyPoseRef.current = null;
+    try { localStorage.removeItem(FLY_POSE_KEY); } catch { /* */ }
     const win = iframeRef.current?.contentWindow;
     win?.postMessage({ type: 'fs:reset-camera' }, '*');
 
@@ -2514,7 +2537,7 @@ export function ShaderPreview() {
       initialCameraPosition: cameraPosRef.current,
       initialCameraTarget: cameraTargetRef.current,
       initialRotation: rotationRef.current,
-      initialFpv: fpvOnRef.current ? { pose: fpvPoseRef.current } : null,
+      initialFly: flyOnRef.current ? { pose: flyPoseRef.current } : null,
       // The exact bytes the hot channel will post, so the document's baked
       // module and the channel's idempotency seed cannot differ (see
       // PreviewOptions.shaderModule). It is built from the same code passed
@@ -3456,16 +3479,16 @@ export function ShaderPreview() {
             >
               {playing ? '⏸' : '▶'}
             </button>
-            {/* FPV: fly through the scene instead of orbiting it. */}
+            {/* Fly: fly through the scene instead of orbiting it. */}
             <button
               type="button"
-              className={`shader-preview__fpv-btn${fpvOn ? ' shader-preview__fpv-btn--active' : ''}`}
-              onClick={toggleFpv}
-              aria-pressed={fpvOn}
-              title={t('Fly through (FPV): W A S D or the arrow keys move, Q / E down / up, Shift faster, drag to look around. The position is remembered; Reset (✕) puts it back.', language)}
-              aria-label={t('Fly through (FPV)', language)}
+              className={`shader-preview__fly-btn${flyOn ? ' shader-preview__fly-btn--active' : ''}`}
+              onClick={toggleFly}
+              aria-pressed={flyOn}
+              title={t('Fly through: W A S D or the arrow keys move, Q / E down / up, Shift faster, drag to look around. The position is remembered; Reset (✕) puts it back.', language)}
+              aria-label={t('Fly through', language)}
             >
-              FPV
+              {t('Fly', language)}
             </button>
             {/* `history="none"`: the scene backdrop is a PREVIEW PREFERENCE
                 (`usePersistedState('fs:previewBgColor')`) — it never touches the

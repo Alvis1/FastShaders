@@ -8,7 +8,7 @@
  * `fs-frame`; the bridge then scales the orbit camera with it — position,
  * target, reset home, zoom range and clipping planes — so the model is framed
  * exactly as a built-in is. Every camera value that crosses to or from the
- * parent (`fs:camera`, `fs:fpv-pose`, the baked restores) is in FRAME units,
+ * parent (`fs:camera`, `fs:fly-pose`, the baked restores) is in FRAME units,
  * so the parent's stored view frames whatever model is shown next.
  *
  * The bridge script is extracted from the generated document and run against
@@ -131,10 +131,10 @@ describe('the orbit camera scales with the model it frames', () => {
 
   it('the fly-through takes and reports its pose in frame units, and flies at the model\'s scale', () => {
     const b = runBridge({ geometry: 'custom', customModel: { kind: 'glb', id: 1 } }, { frame: 10 });
-    b.message({ type: 'fs:fpv', on: true, pose: { x: 1, y: 0, z: 5, yaw: 0, pitch: 0 } });
+    b.message({ type: 'fs:fly', on: true, pose: { x: 1, y: 0, z: 5, yaw: 0, pitch: 0 } });
     expect(xyz(b.cam.position)).toEqual([10, 0, 50]);
     b.poll();
-    const r = b.reports('fs:fpv-pose').slice(-1)[0];
+    const r = b.reports('fs:fly-pose').slice(-1)[0];
     expect([r.x, r.y, r.z]).toEqual([1, 0, 5]);
     // A new model while flying: the flyer keeps its place in the frame, and
     // the orbit controls are left alone until the flyer lands.
@@ -143,7 +143,7 @@ describe('the orbit camera scales with the model it frames', () => {
     expect(xyz(b.cam.position)).toEqual([20, 0, 100]);
     expect(b.controls.updates).toBe(updates);
     // Landing returns to the orbit view, scaled with the rest.
-    b.message({ type: 'fs:fpv', on: false });
+    b.message({ type: 'fs:fly', on: false });
     expect(xyz(b.cam.position)).toEqual([0, 0, 160]);
   });
 

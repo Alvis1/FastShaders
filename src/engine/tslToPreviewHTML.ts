@@ -130,7 +130,7 @@ export function buildPreviewShaderModule(
 
 /** The fly-through camera: where it is and where it looks (radians; yaw about
  *  +Y with 0 facing −Z, pitch up positive). */
-export interface FpvPose {
+export interface FlyPose {
   x: number;
   y: number;
   z: number;
@@ -138,27 +138,27 @@ export interface FpvPose {
   pitch: number;
 }
 
-/** How far from the origin the FPV camera may fly (and a stored pose sit), in camera FRAME units (× the shown model's frame inside the stage). */
-export const FPV_MAX_RADIUS = 100;
-const FPV_MAX_PITCH = 1.55;
+/** How far from the origin the flying camera may go (and a stored pose sit), in camera FRAME units (× the shown model's frame inside the stage). */
+export const FLY_MAX_RADIUS = 100;
+const FLY_MAX_PITCH = 1.55;
 
 /**
- * Validate an FPV pose from somewhere the app does not control — the stage's
- * forgeable `fs:fpv-pose` report or the stored `fs:previewFpvPose`: five
- * finite numbers, the position inside FPV_MAX_RADIUS, the pitch clamped short
+ * Validate a fly pose from somewhere the app does not control — the stage's
+ * forgeable `fs:fly-pose` report or the stored `fs:previewFlyPose`: five
+ * finite numbers, the position inside FLY_MAX_RADIUS, the pitch clamped short
  * of straight up/down, the yaw folded into (−π, π]. Validated, never coerced;
  * the result is a FRESH object holding only those five numbers.
  */
-export function fpvPose(p: unknown): FpvPose | null {
+export function flyPose(p: unknown): FlyPose | null {
   if (typeof p !== 'object' || p === null) return null;
   const { x, y, z, yaw, pitch } = p as Record<string, unknown>;
   for (const v of [x, y, z, yaw, pitch]) if (!Number.isFinite(v)) return null;
   const [px, py, pz, ya, pi] = [x, y, z, yaw, pitch] as number[];
-  if (Math.hypot(px, py, pz) > FPV_MAX_RADIUS + 1e-9) return null;
+  if (Math.hypot(px, py, pz) > FLY_MAX_RADIUS + 1e-9) return null;
   const twoPi = Math.PI * 2;
   let w = ((ya % twoPi) + twoPi) % twoPi;
   if (w > Math.PI) w -= twoPi;
-  return { x: px, y: py, z: pz, yaw: w, pitch: Math.max(-FPV_MAX_PITCH, Math.min(FPV_MAX_PITCH, pi)) };
+  return { x: px, y: py, z: pz, yaw: w, pitch: Math.max(-FLY_MAX_PITCH, Math.min(FLY_MAX_PITCH, pi)) };
 }
 
 export interface CameraPosition {
@@ -197,11 +197,11 @@ export interface PreviewOptions {
   /** Spin parent rotation to restore so the object angle survives iframe rebuilds. */
   initialRotation?: CameraPosition | null;
   /**
-   * FPV (fly-through) mode ON at boot, with the pose to fly from — or a null
+   * Fly mode ON at boot, with the pose to fly from — or a null
    * pose to start from the orbit view. Absent/null: the orbit controls, as
-   * always. Ignored by the XR popup (the bridge's FPV half is sandbox-only).
+   * always. Ignored by the XR popup (the bridge's Fly half is sandbox-only).
    */
-  initialFpv?: { pose: FpvPose | null } | null;
+  initialFly?: { pose: FlyPose | null } | null;
   /**
    * The backdrop the sandboxed preview draws around the object (STAGE_SCRIPT):
    * a light checker room, a numbered floor grid, or nothing (the default —
@@ -1907,9 +1907,9 @@ const SHADER_HOT_SWAP_SCRIPT = `<script>
 const BRIDGE_SCRIPT_TEMPLATE = `<script>
   window.__savedCameraPos = __SAVED_CAM__;
   window.__savedCameraTarget = __SAVED_TARGET__;
-  // FPV (fly-through) on at boot, with its pose or null to start from the
+  // Fly mode on at boot, with its pose or null to start from the
   // orbit view — ShaderPreview bakes it so a cold rebuild keeps flying.
-  window.__savedFpv = __SAVED_FPV__;
+  window.__savedFly = __SAVED_FLY__;
   // Deferred until the WebGPU pre-flight injects the <a-scene> (scene-slot
   // script in buildPreviewHTML) — every element ref below is captured at
   // callback time, so the scene must exist first.
@@ -1982,7 +1982,7 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
       // size, so the view scales with it — position, orbit target, reset
       // home, zoom range and clipping planes together, i.e. the same framing
       // at that model's size. Every value that crosses to or from the parent
-      // (fs:camera, fs:fpv-pose and their restores) is in FRAME units, so the
+      // (fs:camera, fs:fly-pose and their restores) is in FRAME units, so the
       // stored view stays valid whatever model is shown next.
       var frameK = 1;
       var saved = window.__savedCameraPos;
@@ -2024,7 +2024,7 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
         }
         // Flying: the flyer keeps its place in the frame (cm.position above),
         // and the orbit view it returns to scales with the rest.
-        var f = window.__fsFpv && window.__fsFpv.state;
+        var f = window.__fsFly && window.__fsFly.state;
         if (f && f.orbitPos) f.orbitPos.multiplyScalar(r);
         if (f && f.orbitTarget) f.orbitTarget.multiplyScalar(r);
         if (c && !(f && f.on)) { try { c.update(); } catch (e) {} }
@@ -2038,165 +2038,165 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
       // for the life of the window.
       if (window.parent === window) return;
 
-      // ── FPV: fly through the scene ─────────────────────────────────────
+      // ── Fly: fly through the scene ──────────────────────────────────────
       // W/A/S/D or the arrows move (forward/left/back/right, along the view),
       // Q/E down/up, Shift ×4, the wheel steps forward/back, and a drag on the
       // canvas turns the view. The orbit controls stand down while it is on
       // (\`controls.enabled = false\`: their tick and every pointer handler
       // check it) and get their own view back when it is switched off. The
-      // pose is reported as fs:fpv-pose (never fs:camera, which is the ORBIT
+      // pose is reported as fs:fly-pose (never fs:camera, which is the ORBIT
       // view the parent stores) and restored by the parent through
-      // __savedFpv / fs:fpv.
-      var fpv = { on: false, yaw: 0, pitch: 0, keys: {}, orbitPos: null, orbitTarget: null, raf: 0, last: 0, drag: null };
-      var FPV_SPEED = 2;
-      var FPV_MAX_R = ${FPV_MAX_RADIUS};
-      var FPV_PITCH = 1.55;
-      function fpvDirty() { try { window.dispatchEvent(new Event("fs-fpv")); } catch (e) {} }
-      function fpvClamp(p) {
+      // __savedFly / fs:fly.
+      var fly = { on: false, yaw: 0, pitch: 0, keys: {}, orbitPos: null, orbitTarget: null, raf: 0, last: 0, drag: null };
+      var FLY_SPEED = 2;
+      var FLY_MAX_R = ${FLY_MAX_RADIUS};
+      var FLY_PITCH = 1.55;
+      function flyDirty() { try { window.dispatchEvent(new Event("fs-fly")); } catch (e) {} }
+      function flyClamp(p) {
         var r = Math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
-        var max = FPV_MAX_R * frameK;
+        var max = FLY_MAX_R * frameK;
         if (r > max) p.multiplyScalar(max / r);
       }
-      function fpvOrient(cam) {
-        fpv.pitch = Math.max(-FPV_PITCH, Math.min(FPV_PITCH, fpv.pitch));
-        cam.rotation.set(fpv.pitch, fpv.yaw, 0, "YXZ");
+      function flyOrient(cam) {
+        fly.pitch = Math.max(-FLY_PITCH, Math.min(FLY_PITCH, fly.pitch));
+        cam.rotation.set(fly.pitch, fly.yaw, 0, "YXZ");
         cam.updateMatrixWorld();
       }
-      function fpvLookFrom(cam, target) {
+      function flyLookFrom(cam, target) {
         var dx = target.x - cam.position.x, dy = target.y - cam.position.y, dz = target.z - cam.position.z;
         var len = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
-        fpv.yaw = Math.atan2(-dx, -dz);
-        fpv.pitch = Math.asin(Math.max(-1, Math.min(1, dy / len)));
+        fly.yaw = Math.atan2(-dx, -dz);
+        fly.pitch = Math.asin(Math.max(-1, Math.min(1, dy / len)));
       }
-      function fpvPose(cam, pose) {
+      function flyPose(cam, pose) {
         if (pose) {
           cam.position.set(pose.x * frameK, pose.y * frameK, pose.z * frameK);
-          fpv.yaw = pose.yaw;
-          fpv.pitch = pose.pitch;
+          fly.yaw = pose.yaw;
+          fly.pitch = pose.pitch;
         }
-        fpvClamp(cam.position);
-        fpvOrient(cam);
+        flyClamp(cam.position);
+        flyOrient(cam);
       }
-      function fpvTick(t) {
-        fpv.raf = 0;
-        if (!fpv.on) return;
-        var dt = fpv.last ? Math.min(0.1, (t - fpv.last) / 1000) : 0;
-        fpv.last = t;
-        var k = fpv.keys;
+      function flyTick(t) {
+        fly.raf = 0;
+        if (!fly.on) return;
+        var dt = fly.last ? Math.min(0.1, (t - fly.last) / 1000) : 0;
+        fly.last = t;
+        var k = fly.keys;
         var f = (k.KeyW || k.ArrowUp ? 1 : 0) - (k.KeyS || k.ArrowDown ? 1 : 0);
         var r = (k.KeyD || k.ArrowRight ? 1 : 0) - (k.KeyA || k.ArrowLeft ? 1 : 0);
         var u = (k.KeyE ? 1 : 0) - (k.KeyQ ? 1 : 0);
         var cam = getCam();
         if (cam && dt > 0 && (f || r || u)) {
-          var step = FPV_SPEED * frameK * (k.ShiftLeft || k.ShiftRight ? 4 : 1) * dt;
-          var cy = Math.cos(fpv.yaw), sy = Math.sin(fpv.yaw);
-          var cp = Math.cos(fpv.pitch), sp = Math.sin(fpv.pitch);
+          var step = FLY_SPEED * frameK * (k.ShiftLeft || k.ShiftRight ? 4 : 1) * dt;
+          var cy = Math.cos(fly.yaw), sy = Math.sin(fly.yaw);
+          var cp = Math.cos(fly.pitch), sp = Math.sin(fly.pitch);
           cam.position.x += (-sy * cp * f + cy * r) * step;
           cam.position.y += (sp * f + u) * step;
           cam.position.z += (-cy * cp * f - sy * r) * step;
-          fpvClamp(cam.position);
+          flyClamp(cam.position);
           // The pacer draws only for a while after input; a held key fires
           // its repeats late or not at all, so each step keeps it drawing.
-          fpvDirty();
+          flyDirty();
         }
-        fpv.raf = requestAnimationFrame(fpvTick);
+        fly.raf = requestAnimationFrame(flyTick);
       }
-      function fpvSet(on, pose) {
+      function flySet(on, pose) {
         var cam = getCam();
         var c = oc.controls;
         if (!cam || !c) return;
-        if (on && !fpv.on) {
-          fpv.orbitPos = cam.position.clone();
-          fpv.orbitTarget = c.target.clone();
+        if (on && !fly.on) {
+          fly.orbitPos = cam.position.clone();
+          fly.orbitTarget = c.target.clone();
           c.enabled = false;
-          fpv.on = true;
-          if (!pose) fpvLookFrom(cam, c.target);
-          fpvPose(cam, pose);
-          fpv.last = 0;
-          if (!fpv.raf) fpv.raf = requestAnimationFrame(fpvTick);
+          fly.on = true;
+          if (!pose) flyLookFrom(cam, c.target);
+          flyPose(cam, pose);
+          fly.last = 0;
+          if (!fly.raf) fly.raf = requestAnimationFrame(flyTick);
         } else if (on && pose) {
-          fpvPose(cam, pose);
-        } else if (!on && fpv.on) {
-          fpv.on = false;
-          fpv.keys = {};
-          fpv.drag = null;
-          if (fpv.orbitPos) cam.position.copy(fpv.orbitPos);
-          if (fpv.orbitTarget) c.target.copy(fpv.orbitTarget);
+          flyPose(cam, pose);
+        } else if (!on && fly.on) {
+          fly.on = false;
+          fly.keys = {};
+          fly.drag = null;
+          if (fly.orbitPos) cam.position.copy(fly.orbitPos);
+          if (fly.orbitTarget) c.target.copy(fly.orbitTarget);
           c.enabled = true;
           try { c.update(); } catch (e) {}
         }
-        fpvDirty();
+        flyDirty();
       }
       // Reset while flying: back to the orbit HOME, facing the object, and
-      // the orbit view kept for leaving FPV is home too.
-      function fpvReset() {
+      // the orbit view kept for leaving Fly mode is home too.
+      function flyReset() {
         var cam = getCam();
         var c = oc.controls;
-        if (!fpv.on || !cam || !c) return;
-        fpv.orbitPos = cam.position.clone();
-        fpv.orbitTarget = c.target.clone();
-        fpvLookFrom(cam, c.target);
-        fpvOrient(cam);
-        fpvDirty();
+        if (!fly.on || !cam || !c) return;
+        fly.orbitPos = cam.position.clone();
+        fly.orbitTarget = c.target.clone();
+        flyLookFrom(cam, c.target);
+        flyOrient(cam);
+        flyDirty();
       }
-      window.__fsFpv = { set: fpvSet, reset: fpvReset, state: fpv };
-      var FPV_KEYS = { KeyW: 1, KeyA: 1, KeyS: 1, KeyD: 1, KeyQ: 1, KeyE: 1, ArrowUp: 1, ArrowDown: 1, ArrowLeft: 1, ArrowRight: 1, ShiftLeft: 1, ShiftRight: 1 };
+      window.__fsFly = { set: flySet, reset: flyReset, state: fly };
+      var FLY_KEYS = { KeyW: 1, KeyA: 1, KeyS: 1, KeyD: 1, KeyQ: 1, KeyE: 1, ArrowUp: 1, ArrowDown: 1, ArrowLeft: 1, ArrowRight: 1, ShiftLeft: 1, ShiftRight: 1 };
       window.addEventListener("keydown", function(e) {
-        if (!fpv.on || !FPV_KEYS[e.code] || e.metaKey || e.ctrlKey || e.altKey) return;
-        fpv.keys[e.code] = true;
+        if (!fly.on || !FLY_KEYS[e.code] || e.metaKey || e.ctrlKey || e.altKey) return;
+        fly.keys[e.code] = true;
         e.preventDefault();
       });
-      window.addEventListener("keyup", function(e) { delete fpv.keys[e.code]; });
-      window.addEventListener("blur", function() { fpv.keys = {}; fpv.drag = null; });
-      var fpvCanvas = sceneEl && sceneEl.canvas;
-      if (fpvCanvas) {
-        fpvCanvas.addEventListener("pointerdown", function(e) {
-          if (!fpv.on) return;
-          fpv.drag = { id: e.pointerId, x: e.clientX, y: e.clientY };
-          try { fpvCanvas.setPointerCapture(e.pointerId); } catch (err) {}
+      window.addEventListener("keyup", function(e) { delete fly.keys[e.code]; });
+      window.addEventListener("blur", function() { fly.keys = {}; fly.drag = null; });
+      var flyCanvas = sceneEl && sceneEl.canvas;
+      if (flyCanvas) {
+        flyCanvas.addEventListener("pointerdown", function(e) {
+          if (!fly.on) return;
+          fly.drag = { id: e.pointerId, x: e.clientX, y: e.clientY };
+          try { flyCanvas.setPointerCapture(e.pointerId); } catch (err) {}
           try { window.focus(); } catch (err) {}
         });
-        fpvCanvas.addEventListener("pointermove", function(e) {
-          var d = fpv.drag;
-          if (!fpv.on || !d || d.id !== e.pointerId) return;
+        flyCanvas.addEventListener("pointermove", function(e) {
+          var d = fly.drag;
+          if (!fly.on || !d || d.id !== e.pointerId) return;
           var cam = getCam();
           if (!cam) return;
-          fpv.yaw -= (e.clientX - d.x) * 0.004;
-          fpv.pitch -= (e.clientY - d.y) * 0.004;
+          fly.yaw -= (e.clientX - d.x) * 0.004;
+          fly.pitch -= (e.clientY - d.y) * 0.004;
           d.x = e.clientX;
           d.y = e.clientY;
-          fpvOrient(cam);
-          fpvDirty();
+          flyOrient(cam);
+          flyDirty();
         });
-        var fpvUp = function(e) { if (fpv.drag && fpv.drag.id === e.pointerId) fpv.drag = null; };
-        fpvCanvas.addEventListener("pointerup", fpvUp);
-        fpvCanvas.addEventListener("pointercancel", fpvUp);
-        fpvCanvas.addEventListener("wheel", function(e) {
-          if (!fpv.on) return;
+        var flyUp = function(e) { if (fly.drag && fly.drag.id === e.pointerId) fly.drag = null; };
+        flyCanvas.addEventListener("pointerup", flyUp);
+        flyCanvas.addEventListener("pointercancel", flyUp);
+        flyCanvas.addEventListener("wheel", function(e) {
+          if (!fly.on) return;
           e.preventDefault();
           var cam = getCam();
           if (!cam) return;
           var step = Math.max(-1, Math.min(1, -e.deltaY * 0.002)) * frameK;
-          var cp = Math.cos(fpv.pitch);
-          cam.position.x += -Math.sin(fpv.yaw) * cp * step;
-          cam.position.y += Math.sin(fpv.pitch) * step;
-          cam.position.z += -Math.cos(fpv.yaw) * cp * step;
-          fpvClamp(cam.position);
-          fpvDirty();
+          var cp = Math.cos(fly.pitch);
+          cam.position.x += -Math.sin(fly.yaw) * cp * step;
+          cam.position.y += Math.sin(fly.pitch) * step;
+          cam.position.z += -Math.cos(fly.yaw) * cp * step;
+          flyClamp(cam.position);
+          flyDirty();
         }, { passive: false });
       }
-      if (window.__savedFpv) fpvSet(true, window.__savedFpv.pose || null);
-      if (window.__fsFpvPending) { fpvSet(window.__fsFpvPending.on, window.__fsFpvPending.pose); window.__fsFpvPending = null; }
+      if (window.__savedFly) flySet(true, window.__savedFly.pose || null);
+      if (window.__fsFlyPending) { flySet(window.__fsFlyPending.on, window.__fsFlyPending.pose); window.__fsFlyPending = null; }
 
       var lx = NaN, ly = NaN, lz = NaN, lyaw = NaN, lpitch = NaN;
       setInterval(function() {
         var c = getCam();
         var p = c && c.position;
-        if (fpv.on) {
-          if (p && (p.x !== lx || p.y !== ly || p.z !== lz || fpv.yaw !== lyaw || fpv.pitch !== lpitch)) {
-            lx = p.x; ly = p.y; lz = p.z; lyaw = fpv.yaw; lpitch = fpv.pitch;
+        if (fly.on) {
+          if (p && (p.x !== lx || p.y !== ly || p.z !== lz || fly.yaw !== lyaw || fly.pitch !== lpitch)) {
+            lx = p.x; ly = p.y; lz = p.z; lyaw = fly.yaw; lpitch = fly.pitch;
             try {
-              window.parent.postMessage({ type: "fs:fpv-pose", x: p.x / frameK, y: p.y / frameK, z: p.z / frameK, yaw: fpv.yaw, pitch: fpv.pitch }, "*");
+              window.parent.postMessage({ type: "fs:fly-pose", x: p.x / frameK, y: p.y / frameK, z: p.z / frameK, yaw: fly.yaw, pitch: fly.pitch }, "*");
             } catch (e) {}
           }
           return;
@@ -2463,11 +2463,11 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
           oc.controls.reset();
         }
         // While flying, Reset puts the FLYER home (facing the object).
-        if (window.__fsFpv) window.__fsFpv.reset();
-      } else if (msg.type === "fs:fpv") {
-        var fpvPoseMsg = msg.pose && typeof msg.pose === "object" ? msg.pose : null;
-        if (window.__fsFpv) window.__fsFpv.set(msg.on === true, fpvPoseMsg);
-        else window.__fsFpvPending = { on: msg.on === true, pose: fpvPoseMsg };
+        if (window.__fsFly) window.__fsFly.reset();
+      } else if (msg.type === "fs:fly") {
+        var flyPoseMsg = msg.pose && typeof msg.pose === "object" ? msg.pose : null;
+        if (window.__fsFly) window.__fsFly.set(msg.on === true, flyPoseMsg);
+        else window.__fsFlyPending = { on: msg.on === true, pose: flyPoseMsg };
       } else if (msg.type === "fs:bg-color") {
         __applyBgColor(msg.color);
       } else if (msg.type === "fs:lighting") {
@@ -3367,7 +3367,7 @@ const RENDER_PACER_SCRIPT = `<script>
       }
       dirty();
     });
-    ["shader-applied", "shader-error", "model-loaded", "model-error", "resize", "fs-fpv", "fs-frame"].forEach(function (t) {
+    ["shader-applied", "shader-error", "model-loaded", "model-error", "resize", "fs-fly", "fs-frame"].forEach(function (t) {
       window.addEventListener(t, dirty);
     });
     ["pointerdown", "pointerup", "pointercancel", "wheel", "keydown", "keyup"].forEach(function (t) {
@@ -3692,7 +3692,7 @@ export function tslToPreviewHTML(
     initialCameraPosition = null,
     initialCameraTarget = null,
     initialRotation = null,
-    initialFpv = null,
+    initialFly = null,
     xr = false,
     forceWebGL2 = false,
     marchWindow = 1,
@@ -4165,10 +4165,10 @@ export function tslToPreviewHTML(
     ? JSON.stringify({ x: initialCameraTarget.x, y: initialCameraTarget.y, z: initialCameraTarget.z })
     : 'null';
 
-  // FPV on at boot: `{ pose }`, the pose re-validated here (finite, inside
-  // FPV_MAX_RADIUS) so nothing but numbers is ever spelled into the document.
-  const fpvBoot = initialFpv ? { pose: fpvPose(initialFpv.pose) } : null;
-  const savedFpvLiteral = fpvBoot ? JSON.stringify(fpvBoot) : 'null';
+  // Fly mode on at boot: `{ pose }`, the pose re-validated here (finite, inside
+  // FLY_MAX_RADIUS) so nothing but numbers is ever spelled into the document.
+  const flyBoot = initialFly ? { pose: flyPose(initialFly.pose) } : null;
+  const savedFlyLiteral = flyBoot ? JSON.stringify(flyBoot) : 'null';
 
   // Seed each hot-update handler's last-applied key with the value baked
   // into the initial HTML. The parent posts these same values from its
@@ -4217,7 +4217,7 @@ export function tslToPreviewHTML(
     BRIDGE_SCRIPT_TEMPLATE
       .replace('__SAVED_CAM__', savedCamLiteral)
       .replace('__SAVED_TARGET__', savedTargetLiteral)
-      .replace('__SAVED_FPV__', savedFpvLiteral)
+      .replace('__SAVED_FLY__', savedFlyLiteral)
       .replace('__INITIAL_BG_KEY__', initialBgKey)
       .replace('__INITIAL_LIGHTING_KEY__', initialLightingKey)
       .replace('__INITIAL_PLAYING_KEY__', initialPlayingKey)
