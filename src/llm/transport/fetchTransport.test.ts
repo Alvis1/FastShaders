@@ -9,7 +9,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { LLM_MAX_MODEL_LIST_BYTES, LLM_MAX_REQUEST_BYTES, LLM_MAX_STREAM_BYTES } from '@/utils/desktopIpc';
-import { excerptText, fetchTransport, type TransportTimeouts } from './fetchTransport';
+import { DEV_PROXY_TARGET_HEADER, devProxyTransport, excerptText, fetchTransport, type TransportTimeouts } from './fetchTransport';
 
 interface Seen {
   method: string;
@@ -294,6 +294,38 @@ describe('fetchTransport.get', () => {
     await new Promise<void>((r) => server.close(() => r()));
     const result = await fetchTransport().get(base, '/v1/models', signal());
     expect(result).toMatchObject({ ok: false, code: 'UNREACHABLE' });
+  });
+});
+
+describe('devProxyTransport (the dev server: same origin, the server named in a header)', () => {
+  it('sends every request to the proxy origin and names the model server', async () => {
+    // The "proxy" here is a plain server: it shows what the page would send.
+    const { base: proxy, seen } = await serve((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{"data":[]}');
+    });
+    const t = devProxyTransport(`${proxy}/`);
+    expect(await t.get('http://127.0.0.1:11434', '/v1/models', signal())).toEqual({ ok: true, value: '{"data":[]}' });
+    expect(await t.post('http://localhost:80', '/v1/chat/completions', '{"x":1}', () => {}, signal())).toEqual({ ok: true, value: undefined });
+    await t.get('http://[::1]:8080/', '/api/v1/models', signal());
+    expect(seen.map((s) => [s.method, s.url, s.headers[DEV_PROXY_TARGET_HEADER]])).toEqual([
+      ['GET', '/v1/models', 'http://127.0.0.1:11434'],
+      // A default port stays spelled out: the proxy insists on one.
+      ['POST', '/v1/chat/completions', 'http://localhost:80'],
+      ['GET', '/api/v1/models', 'http://[::1]:8080'],
+    ]);
+    expect(seen[1].body).toBe('{"x":1}');
+    expect(seen[1].headers['content-type']).toBe('application/json');
+  });
+
+  it('refuses what the plain transport refuses, without asking the proxy', async () => {
+    let asked = 0;
+    const t = devProxyTransport('http://localhost:5173', { fetch: async () => { asked++; return new Response('{}'); } });
+    for (const base of ['http://example.com:1234', 'https://127.0.0.1:1234', 'http://127.0.0.1', 'http://192.168.1.2:1234', '1234', '']) {
+      expect(await t.get(base, '/v1/models', signal()), base).toMatchObject({ ok: false, code: 'BAD_URL' });
+    }
+    expect(await t.get('http://127.0.0.1:1234', '/v1/embeddings' as never, signal())).toMatchObject({ ok: false, code: 'BAD_ROUTE' });
+    expect(asked).toBe(0);
   });
 });
 

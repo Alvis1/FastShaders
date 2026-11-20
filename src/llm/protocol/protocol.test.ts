@@ -138,7 +138,7 @@ describe('error classification', () => {
     [401, 'unauthorized', 'auth'],
     [429, 'slow down', 'rate-limit'],
     [500, 'internal', 'bad-response'],
-    [502, 'Nothing answers at 127.0.0.1:1234 (FS_LLM_DEV_TARGET)', 'not-running'],
+    [502, 'Nothing answers at 127.0.0.1:1234', 'not-running'],
   ])('%i %s → %s', (status, message, failure) => {
     expect(classifyServerMessage(status, message)).toBe(failure);
   });

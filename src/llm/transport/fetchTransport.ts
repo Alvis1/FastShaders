@@ -1,6 +1,7 @@
 /**
  * `LocalTransport` over `fetch`: the probe under node (scripts/llm-probe/) and
- * the dev server. It answers with the SAME codes, details and limits as the
+ * the dev server (through its proxy — `devProxyTransport`, below). It answers
+ * with the SAME codes, details and limits as the
  * Rust bridge (src-tauri/src/llm.rs), so one classifier and one provider serve
  * both and what the probe measured is what the app runs:
  *
@@ -127,6 +128,38 @@ function concat(parts: Uint8Array[], limit: number): Uint8Array {
     at += take.byteLength;
   }
   return out;
+}
+
+/** The request header naming the model server a dev-proxy request is FOR.
+ *  = vite.config.ts `LLM_DEV_TARGET_HEADER` (llmCspContract.test.ts pins the pair). */
+export const DEV_PROXY_TARGET_HEADER = 'x-fs-llm-target';
+
+/**
+ * The dev server's transport. A page cannot reach a model server on another
+ * port itself (the server would have to allow CORS), so every request goes to
+ * the dev server's OWN origin, whose proxy (vite.config.ts `llmDevProxyPlugin`)
+ * forwards it to the loopback server the header names. The caller still passes
+ * the model server's base, so the checks, caps and timers above are unchanged
+ * and the address is the one the Port field holds — as on the desktop app.
+ */
+export function devProxyTransport(proxyOrigin: string, options: FetchTransportOptions = {}): LocalTransport {
+  const send = options.fetch ?? ((input: string, init: RequestInit) => globalThis.fetch(input, init));
+  const origin = proxyOrigin.replace(/\/$/, '');
+  return fetchTransport({
+    ...options,
+    fetch: (input, init) => {
+      // `input` is <base><path>, and the base passed `isLoopbackBase`: it ends
+      // at the first `/` after the scheme. Cut there rather than through
+      // `URL`, which drops a default port (":80") the proxy insists on.
+      const cut = input.indexOf('/', 'http://'.length);
+      const target = cut < 0 ? input : input.slice(0, cut);
+      const path = cut < 0 ? '' : input.slice(cut);
+      return send(origin + path, {
+        ...init,
+        headers: { ...(init.headers as Record<string, string>), [DEV_PROXY_TARGET_HEADER]: target },
+      });
+    },
+  });
 }
 
 export function fetchTransport(options: FetchTransportOptions = {}): LocalTransport {

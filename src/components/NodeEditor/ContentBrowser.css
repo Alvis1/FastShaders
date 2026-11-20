@@ -121,6 +121,18 @@
   border-color: var(--text-secondary);
 }
 
+/* A picture held over the box: it can be let go here. */
+.content-browser__search--drop {
+  border-color: var(--border-focus);
+  outline: 1px solid var(--border-focus);
+}
+
+/* Where AI is offered the placeholder reads "Find nodes or write a prompt"
+   (LV is longer), and a request is a sentence: room for both. */
+.content-browser__search--ai {
+  width: 252px;
+}
+
 .content-browser__search::placeholder {
   color: var(--text-muted);
   font-weight: 500;
@@ -401,6 +413,9 @@
     padding: 8px 10px;
     font-size: 11px;
     width: 140px;
+  }
+  .content-browser__search--ai {
+    width: 270px;
   }
   .saved-group-card__delete {
     display: flex;

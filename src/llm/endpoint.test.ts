@@ -8,7 +8,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { LLM_LOCAL_GET_ROUTES, LLM_LOCAL_POST_ROUTES, LLM_MAX_REQUEST_BYTES } from '@/utils/desktopIpc';
-import { DEFAULT_LOCAL_BASE, isLoopbackBase, normalizeLocalBase, requestRefusal } from './endpoint';
+import { DEFAULT_LOCAL_BASE, baseFromPortInput, isLoopbackBase, normalizeLocalBase, portFieldText, requestRefusal } from './endpoint';
 
 interface UrlCase {
   input: string;
@@ -67,6 +67,49 @@ describe('normalizeLocalBase', () => {
     expect(normalizeLocalBase('http://Kocalhost:1234')).toBeNull();
     expect(normalizeLocalBase('http://localhost:1234 ')).toBe('http://localhost:1234');
     expect(normalizeLocalBase('http://lİcalhost:1234')).toBeNull();
+  });
+});
+
+describe('the Port field (baseFromPortInput, portFieldText)', () => {
+  it('a port alone is that port on 127.0.0.1', () => {
+    expect(baseFromPortInput('1234')).toBe('http://127.0.0.1:1234');
+    expect(baseFromPortInput(' 11434 ')).toBe('http://127.0.0.1:11434');
+    expect(baseFromPortInput('1')).toBe('http://127.0.0.1:1');
+    expect(baseFromPortInput('65535')).toBe('http://127.0.0.1:65535');
+  });
+
+  it('refuses what is not a port', () => {
+    for (const bad of ['', ' ', '0', '65536', '99999', '123456', '01234', '+1234', '-1', '12 34', '1234.0', '1e3', '0x50', '１２３４', ':1234', 'abc']) {
+      expect(baseFromPortInput(bad), JSON.stringify(bad)).toBeNull();
+    }
+  });
+
+  it('forgives a pasted address exactly as normalizeLocalBase does, over every shared case', () => {
+    for (const c of cases) {
+      expect(baseFromPortInput(c.input), `${JSON.stringify(c.input)} (${c.why})`).toBe(c.normalized);
+    }
+    expect(baseFromPortInput('http://localhost:11434/v1')).toBe('http://localhost:11434');
+  });
+
+  it('only ever yields a base the transports accept', () => {
+    for (const input of ['1', '80', '1234', '65535', ...cases.map((c) => c.input)]) {
+      const base = baseFromPortInput(input);
+      if (base !== null) expect(isLoopbackBase(base), JSON.stringify(input)).toBe(true);
+    }
+  });
+
+  it('shows a 127.0.0.1 base as its port and any other loopback base whole', () => {
+    expect(portFieldText(DEFAULT_LOCAL_BASE)).toBe('1234');
+    expect(portFieldText('http://127.0.0.1:11434')).toBe('11434');
+    expect(portFieldText('http://localhost:1234')).toBe('http://localhost:1234');
+    expect(portFieldText('http://[::1]:8080')).toBe('http://[::1]:8080');
+  });
+
+  it('what the field shows reads back as the same base', () => {
+    for (const c of cases) {
+      if (c.normalized === null) continue;
+      expect(baseFromPortInput(portFieldText(c.normalized)), c.normalized).toBe(c.normalized);
+    }
   });
 });
 

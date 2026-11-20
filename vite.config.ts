@@ -124,9 +124,8 @@ const versionHtmlPlugin = (): Plugin => ({
 //                       server only.
 //                       Shader code never inherits it: the preview documents carry `connect-src blob: data:`
 //                       and the VR popup `'self' blob: data:` (SANDBOX_CSP / XR_CSP). docs/dev/node-generator.md
-//   FS_LLM_DEV_TARGET — DEV SERVER ONLY: the model server its same-origin proxy forwards the local route to
-//                       (llmDevProxyPlugin; unset or empty = http://127.0.0.1:1234, LM Studio), so the
-//                       generator can be exercised in a browser. No web BUILD offers the local route.
+// (The dev server's proxy to a local model server takes NO env: each request names its server, the
+//  address the dialog's Port field holds — llmDevProxyPlugin. No web BUILD offers the local route.)
 // Example self-host build:
 //   FS_BASE=/fastshaders/ npm run build
 // Desktop build:
@@ -239,6 +238,16 @@ const llmCloudDefinePlugin = (): Plugin => ({
 const LLM_DEV_ROUTES = new Set(['/v1/models', '/api/v1/models', '/v1/chat/completions']);
 /** A request's `Host` the dev proxy answers: a loopback name, an optional port. */
 const LOOPBACK_HOST_RE = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/;
+/** The request header naming the model server a request is FOR.
+ *  = src/llm/transport/fetchTransport.ts `DEV_PROXY_TARGET_HEADER`. */
+const LLM_DEV_TARGET_HEADER = 'x-fs-llm-target';
+/**
+ * A target the dev proxy forwards to — Rust's `parse_base` rule (llm.rs; its
+ * mirror `isLoopbackBase`, src/llm/endpoint.ts) without the optional trailing
+ * slash: `http://`, a loopback host exactly as spelled, `:` and a port with no
+ * sign or leading zero. The range is checked beside it.
+ */
+const LLM_DEV_TARGET_RE = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):([1-9][0-9]{0,4})$/;
 
 /**
  * DEV SERVER ONLY: a same-origin proxy for the generator's local route, so the
@@ -255,21 +264,18 @@ const LOOPBACK_HOST_RE = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/;
  * does not cover this middleware: it is registered before Vite's.) Like the
  * Rust bridge, it forwards no `Origin` of its own and only the three routes,
  * to a loopback http target.
+ *
+ * WHICH loopback server is the request's to say (`x-fs-llm-target`, the
+ * address the dialog's Port field holds — owner, 2026-11-20), exactly as the
+ * desktop bridge takes its base from the page. A request that names none, or
+ * anything but a loopback base, is refused: a custom header is also one a
+ * cross-site form or no-cors request cannot send. It never forwards to the
+ * dev server's own port (a request that would loop back into this proxy).
  */
 const llmDevProxyPlugin = (): Plugin => ({
   name: 'fs-llm-dev-proxy',
   apply: 'serve',
   configureServer(server) {
-    const raw = process.env.FS_LLM_DEV_TARGET || 'http://127.0.0.1:1234';
-    let target: URL;
-    try {
-      target = new URL(raw);
-    } catch {
-      throw new Error(`FS_LLM_DEV_TARGET is not a URL: ${raw}`);
-    }
-    if (target.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(target.hostname) || target.pathname !== '/') {
-      throw new Error(`FS_LLM_DEV_TARGET must be a loopback http base: ${target.href}`);
-    }
     server.middlewares.use((req, res, next) => {
       const route = (req.url ?? '').split('?')[0];
       if (!LLM_DEV_ROUTES.has(route)) return next();
@@ -281,14 +287,30 @@ const llmDevProxyPlugin = (): Plugin => ({
         res.end('{"error":"the dev server\'s LLM proxy answers its own pages only"}');
         return;
       }
+      const named = req.headers[LLM_DEV_TARGET_HEADER];
+      const target = typeof named === 'string' ? LLM_DEV_TARGET_RE.exec(named) : null;
+      const port = target ? Number(target[2]) : 0;
+      const own = !!target && port === req.socket.localPort;
+      if (!target || port > 65535 || own) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            error: own
+              ? `Port ${port} is this dev server, not a model server`
+              : `${LLM_DEV_TARGET_HEADER} must name a model server on this computer: http://127.0.0.1:<port>`,
+          }),
+        );
+        return;
+      }
+      const targetHost = `${target[1]}:${port}`;
       const upstream = http.request(
         {
-          host: target.hostname.replace(/^\[|\]$/g, ''),
-          port: Number(target.port || 80),
+          host: target[1].replace(/^\[|\]$/g, ''),
+          port,
           method: req.method,
           path: route,
           headers: {
-            host: target.host,
+            host: targetHost,
             accept: req.headers.accept ?? '*/*',
             ...(req.headers['content-type'] ? { 'content-type': req.headers['content-type'] } : {}),
           },
@@ -301,7 +323,7 @@ const llmDevProxyPlugin = (): Plugin => ({
       upstream.on('error', () => {
         if (res.headersSent) { res.end(); return; }
         res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: `Nothing answers at ${target.host} (FS_LLM_DEV_TARGET)` }));
+        res.end(JSON.stringify({ error: `Nothing answers at ${targetHost}` }));
       });
       // A closed page or a Cancel ends the upstream request, so the model stops.
       res.on('close', () => upstream.destroy());

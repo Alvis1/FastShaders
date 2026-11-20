@@ -80,9 +80,15 @@ export interface BuiltPrompt {
  * The richest prompt that fits `cls`: the standard node list with the class's
  * example count, falling back to fewer examples, then to the compact list.
  */
-export function buildPrompt(request: string, catalogue: Catalogue, examples: readonly Example[], cls: ContextClass): BuiltPrompt {
+export function buildPrompt(
+  request: string,
+  catalogue: Catalogue,
+  examples: readonly Example[],
+  cls: ContextClass,
+  picture: readonly string[] = [],
+): BuiltPrompt {
   const budget = CONTEXT_BUDGETS[cls];
-  const user = userText(request);
+  const user = userText(request, picture);
   let best: BuiltPrompt | null = null;
   for (const level of ['standard', 'compact'] as const) {
     for (let k = Math.min(budget.examples, examples.length); k >= 0; k--) {
@@ -101,13 +107,33 @@ export function buildPrompt(request: string, catalogue: Catalogue, examples: rea
   return best!;
 }
 
-/** The request line. The text is the user's DATA, quoted verbatim. */
-export const userText = (request: string): string => `Request: ${request.trim()}`;
+/**
+ * The request the APP sends for a picture with no words. Never shown and
+ * never translated: it is sent to the model, and requests are English.
+ */
+export const PICTURE_ONLY_REQUEST = 'Make a shader that looks like this picture.';
 
-/** A stateless repair round: the request, the rejected program and why. */
-export function buildRepairUser(request: string, previousCode: string | null, problems: readonly string[]): string {
+/**
+ * The request line. The text is the user's DATA, quoted verbatim. `picture` is
+ * the app's own measurement of an added picture (imageAnalysis.ts
+ * `pictureLines` — hex colours, counts and fixed words, never text from the
+ * file); with a picture and no words the line is `PICTURE_ONLY_REQUEST`.
+ */
+export const userText = (request: string, picture: readonly string[] = []): string => {
+  const line = `Request: ${request.trim() || (picture.length > 0 ? PICTURE_ONLY_REQUEST : '')}`;
+  return picture.length > 0 ? [line, '', ...picture].join('\n') : line;
+};
+
+/** A stateless repair round: the request (and its picture block), the
+ *  rejected program and why. */
+export function buildRepairUser(
+  request: string,
+  previousCode: string | null,
+  problems: readonly string[],
+  picture: readonly string[] = [],
+): string {
   return [
-    userText(request),
+    userText(request, picture),
     '',
     ...(previousCode ? ['Your previous program:', '```js', previousCode.trim(), '```', ''] : ['Your previous reply had no usable program.', '']),
     'It was rejected for these reasons:',

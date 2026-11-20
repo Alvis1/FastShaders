@@ -14,7 +14,8 @@
  *             through the Rust bridge (src-tauri/src/llm.rs). The dev server
  *             reaches it through its own same-origin proxy (vite.config.ts
  *             `llmDevProxyPlugin`), so the dialog can be exercised in a
- *             browser. No web BUILD offers it — a hosted page cannot reach a
+ *             browser. Both go to the address the dialog's Port field holds.
+ *             No web BUILD offers it — a hosted page cannot reach a
  *             local server reliably (Safari never), and doing so would mean a
  *             CSP and CORS setup per user.
  *  - claude — the user's own API key, wherever `__FS_LLM_CLOUD__` is true:
@@ -48,7 +49,8 @@ export function offeredRoutes(env: BuildEnv, evalMode: boolean): RouteId[] {
 /** The local route's transport for this build, or null where it has none. */
 export async function loadLocalTransport(): Promise<LocalTransport | null> {
   if (__FS_DESKTOP__) return (await import('./transport/tauriTransport')).tauriTransport();
-  if (import.meta.env.DEV) return (await import('./transport/fetchTransport')).fetchTransport();
+  // The dev server: same origin, and its proxy forwards to the server named.
+  if (import.meta.env.DEV) return (await import('./transport/fetchTransport')).devProxyTransport(location.origin);
   return null;
 }
 
@@ -56,16 +58,6 @@ export async function loadLocalTransport(): Promise<LocalTransport | null> {
 export async function loadEngineTransport(): Promise<LocalTransport | null> {
   if (__FS_DESKTOP__) return (await import('./transport/tauriTransport')).engineTransport();
   return null;
-}
-
-/**
- * The address requests actually go to. On the desktop app, the one the user
- * typed; on the dev server, the dev server ITSELF (same origin), whose proxy
- * forwards the model routes to the address set by FS_LLM_DEV_TARGET.
- */
-export function requestBase(env: BuildEnv, typed: string): string {
-  if (env.desktop || typeof location === 'undefined') return typed;
-  return location.origin;
 }
 
 /** The Claude provider's module, or null on a build whose policy cannot reach the API. */

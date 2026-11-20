@@ -32,6 +32,8 @@ interface DialogProps {
   at?: { x: number; y: number };
   /** Start generating as soon as the route is ready (Ctrl/Cmd+Enter). */
   autostart?: boolean;
+  /** A picture pasted or dropped on a search box. */
+  initialPicture?: File;
   onClose: () => void;
 }
 
@@ -73,7 +75,7 @@ export function GeneratorLauncher() {
   if (!request || isEmbedMode() || !generatorOffered(mode, isEvalMode(), generatorBuild(__FS_DESKTOP__, __FS_LLM_CLOUD__))) return null;
   return (
     <Suspense fallback={null}>
-      <GeneratorDialog initialPrompt={request.prompt} at={request.at} autostart={request.autostart} onClose={closeGenerator} />
+      <GeneratorDialog initialPrompt={request.prompt} at={request.at} autostart={request.autostart} initialPicture={request.picture} onClose={closeGenerator} />
     </Suspense>
   );
 }

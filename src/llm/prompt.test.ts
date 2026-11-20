@@ -5,7 +5,7 @@ import { DEFAULT_OPTIONAL_CATEGORIES } from '@/registry/optionalCategories';
 import { buildCatalogue, signatureOf } from './catalogue';
 import { DEFAULT_EXAMPLE_IDS, exampleCorpus, selectExamples } from './examples';
 import { gateText } from './gate';
-import { buildPrompt, buildRepairUser, CONTEXT_BUDGETS, estimateTokens } from './prompt';
+import { buildPrompt, buildRepairUser, CONTEXT_BUDGETS, estimateTokens, PICTURE_ONLY_REQUEST, userText } from './prompt';
 
 const catalogue = buildCatalogue(DEFAULT_OPTIONAL_CATEGORIES);
 const corpus = exampleCorpus([...getBuiltinPresets(), ...getBuiltinTextures()], catalogue);
@@ -67,5 +67,36 @@ describe('the repair round', () => {
 
   it('says so when there was no program at all', () => {
     expect(buildRepairUser('x', null, ['no program found'])).toMatch(/had no usable program/);
+  });
+});
+
+describe('a picture in the request', () => {
+  const picture = ['PICTURE (measured by the app from the picture the user added; you cannot see it)', '- colours, most common first: #1a1a1a 50%, #ff5a00 50%'];
+
+  it('follows the words as the app\'s own block', () => {
+    expect(userText('lava', picture)).toBe(`Request: lava\n\n${picture.join('\n')}`);
+    expect(buildPrompt('lava', catalogue, corpus.slice(0, 1), 'medium', picture).user).toBe(userText('lava', picture));
+  });
+
+  it('alone is a request: the fixed English line, never an empty one', () => {
+    expect(PICTURE_ONLY_REQUEST).toBe('Make a shader that looks like this picture.');
+    expect(userText('  ', picture).split('\n')[0]).toBe(`Request: ${PICTURE_ONLY_REQUEST}`);
+    // Without a picture nothing changes: the line is the words alone.
+    expect(userText('lava')).toBe('Request: lava');
+    expect(userText('lava', [])).toBe('Request: lava');
+  });
+
+  it('stays in every repair round', () => {
+    const repair = buildRepairUser('', 'const a = 1;', ['a problem'], picture);
+    expect(repair.startsWith(userText('', picture))).toBe(true);
+    expect(repair).toContain('#ff5a00 50%');
+    expect(buildRepairUser('lava', null, ['x'])).not.toContain('PICTURE');
+  });
+
+  it('with its block, the worst case still fits the small budget', () => {
+    const block = Array.from({ length: 8 }, (_, i) => `- line ${i}: ${'x'.repeat(70)}`);
+    const longest = [...corpus].sort((a, b) => b.code.length - a.code.length);
+    const built = buildPrompt('x'.repeat(400), catalogue, longest, 'small', block);
+    expect(estimateTokens(built.system) + estimateTokens(built.user)).toBeLessThanOrEqual(CONTEXT_BUDGETS.small.prompt);
   });
 });

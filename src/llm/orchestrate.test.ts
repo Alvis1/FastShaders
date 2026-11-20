@@ -80,3 +80,40 @@ describe('runGeneration', () => {
     expect(seen).toEqual(['1:connecting', '1:checking', '2:connecting', '2:checking']);
   });
 });
+
+describe('a picture in the run', () => {
+  const picture = { lines: ['PICTURE (measured)', '- colours, most common first: #112233 100%'], hintWords: 'stripes bands lines' };
+
+  it('alone is a request, and its block rides every round', async () => {
+    const p = scripted([{ ok: true, text: BAD }, { ok: true, text: GOOD }]);
+    const r = await run(p, { request: '', picture });
+    expect(r).toMatchObject({ ok: true, rounds: 2 });
+    expect(p.calls[0].user).toBe('Request: Make a shader that looks like this picture.\n\nPICTURE (measured)\n- colours, most common first: #112233 100%');
+    expect(p.calls[1].user.startsWith(p.calls[0].user)).toBe(true);
+    expect(p.calls[1].user).toContain('Your previous program:');
+  });
+
+  it('with no words, the picture\'s pattern picks the worked examples', async () => {
+    const withHint = scripted([{ ok: true, text: GOOD }]);
+    await run(withHint, { request: '', picture });
+    const noHint = scripted([{ ok: true, text: GOOD }]);
+    await run(noHint, { request: '', picture: { ...picture, hintWords: '' } });
+    const sameAsWords = scripted([{ ok: true, text: GOOD }]);
+    await run(sameAsWords, { request: 'stripes bands lines' });
+    // The hint chooses exactly what those words typed would choose…
+    expect(withHint.calls[0].system).toBe(sameAsWords.calls[0].system);
+    // …and words, when there are any, choose alone.
+    const words = scripted([{ ok: true, text: GOOD }]);
+    await run(words, { request: 'a gradient', picture });
+    const plain = scripted([{ ok: true, text: GOOD }]);
+    await run(plain, { request: 'a gradient' });
+    expect(words.calls[0].system).toBe(plain.calls[0].system);
+    expect(noHint.calls[0].user).toContain('PICTURE (measured)');
+  });
+
+  it('without one, nothing of the request changes', async () => {
+    const p = scripted([{ ok: true, text: GOOD }]);
+    await run(p);
+    expect(p.calls[0].user).toBe('Request: a gradient');
+  });
+});

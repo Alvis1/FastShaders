@@ -26,6 +26,8 @@ import { resolveDeviceBudget, useAppStore } from '@/store/useAppStore';
 import { isEvalMode } from '@/eval/evalArm';
 import { t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
+import { formatKbMb } from '@/utils/formatSize';
+import { requestPicturePlacement } from '@/utils/picturePlaceRequest';
 import { POINT_BUDGET, toBudgetPoints } from '@/utils/budgetPoints';
 import { useDeviceBudget } from '@/hooks/useDeviceBudget';
 import { Points } from '@/components/Points/Points';
@@ -36,12 +38,14 @@ import { buildCatalogue, type Catalogue } from './catalogue';
 import { exampleCorpus, type Example } from './examples';
 import { liveUniformNames, storedUniformNames } from './names';
 import { MAX_ROUNDS, runGeneration, type GateOk, type RunStatus } from './orchestrate';
-import { addGeneratedGroup } from './place';
+import { addGeneratedGroup, PICTURE_GROUP_LABEL } from './place';
+import { pictureHintWords, pictureLines } from './imageAnalysis';
+import { isDocumentFile, pictureFrom, readPicture, type HeldPicture } from './picture';
 import { loadGeneratorPrefs, saveGeneratorPref, type RouteId } from './prefs';
-import { buildEnv, loadClaude, loadEngineTransport, loadLocalTransport, offeredRoutes, requestBase } from './registry';
+import { buildEnv, loadClaude, loadEngineTransport, loadLocalTransport, offeredRoutes } from './registry';
 import { ENGINE_MODEL_ALIAS } from './engineModel';
 import { checkLocalServer, LOCAL_MIN_CONTEXT, localProvider, type LocalCheck } from './providers/local';
-import { normalizeLocalBase } from './endpoint';
+import { baseFromPortInput, portFieldText } from './endpoint';
 import { CLAUDE_MODELS, CLAUDE_MODEL_LABELS, type ClaudeModel } from './claudeModels';
 import { clearCloudKey, hasCloudKey, setCloudKey, subscribeCloudKey } from './cloudKey';
 import type { GenerateFailure, GeneratorProvider } from './providerTypes';
@@ -60,8 +64,13 @@ export interface GeneratorDialogProps {
   /** Start as soon as the route is ready — Ctrl/Cmd+Enter in a search box
    *  with a route that already worked this session. Never without text. */
   autostart?: boolean;
+  /** A picture to start from: pasted or dropped on a search box. */
+  initialPicture?: File;
   onClose: () => void;
 }
+
+/** The pictures the file picker offers (the reader decides what it takes). */
+const PICTURE_ACCEPT = 'image/png,image/jpeg,image/webp,image/gif,image/avif';
 
 /** Latvian letters in a request: the hint to write in English shows (the
  *  request is still sent as typed). */
@@ -86,15 +95,19 @@ type Phase =
   | { kind: 'failed'; message: string; params?: Record<string, string | number>; detail?: string; problems?: string[]; code?: string | null }
   | { kind: 'adding' };
 
+const PORT_FIELD_ID = 'generator-local-port';
+/** Shown under the Port field while it holds no port, and for a refused address. */
+const BAD_PORT_TEXT = 'Type the port of an AI server on this computer: 1234 for LM Studio, 11434 for Ollama.';
+
 /** What each failure tells the user, per route. English keys through t(). */
 function failureText(f: GenerateFailure, route: RouteId): string {
   switch (f) {
     case 'cancelled': return 'Cancelled.';
     case 'not-running': return route === 'engine'
       ? 'The built-in AI could not start on this computer.'
-      : 'Nothing answers at that address. Start LM Studio’s server (Developer tab, or `lms server start`), then press Check.';
-    case 'wrong-server': return 'No OpenAI-compatible model server answers at that address — check the port (LM Studio uses 1234).';
-    case 'bad-address': return 'Use http://127.0.0.1:<port> or http://localhost:<port> — a server on this computer.';
+      : 'Nothing answers on that port. Start LM Studio’s server (Developer tab, or `lms server start`), then press Check.';
+    case 'wrong-server': return 'No AI server answers on that port. LM Studio uses 1234, Ollama 11434.';
+    case 'bad-address': return BAD_PORT_TEXT;
     case 'busy': return 'Another request to the model is still running. Wait a moment, then try again.';
     case 'no-model': return route === 'local'
       ? 'The server runs, but no model is loaded. Load one in LM Studio, or run `lms load <model> --context-length 16384`.'
@@ -122,7 +135,7 @@ function splitAtCost(template: string): [string, string] {
   return at < 0 ? [template, ''] : [template.slice(0, at), template.slice(at + '{cost}'.length)];
 }
 
-export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: GeneratorDialogProps) {
+export function GeneratorDialog({ initialPrompt, at, autostart, initialPicture, onClose }: GeneratorDialogProps) {
   const language = useAppStore((s) => s.language);
   // 'suggest' until a route has worked once: the first-time line and the
   // "Don't suggest AI" link show only then.
@@ -150,7 +163,8 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
   const downOnBackdrop = useRef(false);
 
   // Local route state.
-  const [baseText, setBaseText] = useState(initial.localBase);
+  // The local server's PORT (a pasted address is taken too — endpoint.ts).
+  const [portText, setPortText] = useState(() => portFieldText(initial.localBase));
   const [check, setCheck] = useState<LocalCheck | 'checking' | null>(null);
   const [localModel, setLocalModel] = useState(initial.localModel);
   // Cloud route state. The key text is cleared the moment it is taken.
@@ -161,6 +175,12 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
   useEffect(() => subscribeCloudKey(setKeyHeld), []);
   // The built-in route: its engine runs here and its model is downloaded and checked.
   const [engineReady, setEngineReady] = useState(false);
+  // The request's picture (picture.ts): one, measured on this computer.
+  const [picture, setPicture] = useState<HeldPicture | null>(null);
+  const [pictureNote, setPictureNote] = useState<{ text: string; warn: boolean } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const pictureSeq = useRef(0);
+  const heldPicture = useRef(false);
 
   const running = phase.kind === 'running';
   const busy = running || phase.kind === 'adding';
@@ -215,7 +235,7 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
 
   useEffect(() => { textRef.current?.focus(); }, [host]);
 
-  const base = normalizeLocalBase(baseText);
+  const base = baseFromPortInput(portText);
 
   // The check in flight. A new check, an address edit and closing the dialog
   // all abort it — which also frees the desktop bridge's ONE request slot —
@@ -227,7 +247,7 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
 
   const runCheck = useCallback(async () => {
     if (route !== 'local') return;
-    const b = normalizeLocalBase(baseText);
+    const b = baseFromPortInput(portText);
     if (!b) return;
     checkRef.current?.abort();
     const ac = new AbortController();
@@ -236,7 +256,7 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
     let r: LocalCheck;
     try {
       const transport = await loadLocalTransport();
-      r = transport ? await checkLocalServer(transport, requestBase(env, b), ac.signal) : { ok: false, failure: 'unavailable' };
+      r = transport ? await checkLocalServer(transport, b, ac.signal) : { ok: false, failure: 'unavailable' };
     } catch {
       r = { ok: false, failure: 'unavailable' };
     }
@@ -245,12 +265,14 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
     setCheck(r);
     if (r.ok) {
       saveGeneratorPref('localBase', b);
+      // A pasted address settles into its port.
+      setPortText(portFieldText(b));
       setLocalModel((m) => {
         if (r.models.some((x) => x.id === m)) return m;
         return (r.models.find((x) => x.loaded) ?? r.models[0]).id;
       });
     }
-  }, [route, baseText, env]);
+  }, [route, portText]);
 
   // Check the local server once when the route is first shown.
   const checkedOnce = useRef(false);
@@ -263,6 +285,56 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
     // Fetch the provider (and the SDK) while the user types, not on Generate.
     if (route === 'claude') void loadClaude().catch(() => null);
   }, [route, runCheck]);
+
+  /** Take a pasted, dropped or picked file as the request's ONE picture. */
+  const takePicture = useCallback(async (file: File) => {
+    // The dialog never opens a document behind itself.
+    if (isDocumentFile(file)) {
+      setPictureNote({ text: 'Close this window to open a shader file.', warn: true });
+      return;
+    }
+    const seq = ++pictureSeq.current;
+    const r = await readPicture(file);
+    // A newer picture, or a removal, came while this one was read.
+    if (seq !== pictureSeq.current) return;
+    if (!r.ok) {
+      setPictureNote({
+        text: r.reason === 'too-big' ? 'Picture too large (over 20 MB).' : 'Not a picture. Use PNG, JPEG, WebP, GIF or AVIF.',
+        warn: true,
+      });
+      return;
+    }
+    setPictureNote(heldPicture.current ? { text: 'One picture only: the new one replaced the old.', warn: false } : null);
+    heldPicture.current = true;
+    setPicture(r.picture);
+  }, []);
+
+  const removePicture = () => {
+    pictureSeq.current++;
+    heldPicture.current = false;
+    setPicture(null);
+    setPictureNote(null);
+  };
+
+  /** "Use the picture itself": an Image node through the canvas's own picture
+   *  drop — the only exact copy. Absent in a study, like the rest. */
+  const placePictureItself = () => {
+    if (!picture || busy || isEvalMode()) return;
+    requestPicturePlacement([picture.file], at);
+    onClose();
+  };
+
+  // A picture pasted or dropped on a search box arrives with the dialog.
+  useEffect(() => {
+    if (initialPicture) void takePicture(initialPicture);
+  }, [initialPicture, takePicture]);
+
+  // "The new one replaced the old" goes after a moment; an error stays.
+  useEffect(() => {
+    if (!pictureNote || pictureNote.warn) return;
+    const id = window.setTimeout(() => setPictureNote(null), 4000);
+    return () => window.clearTimeout(id);
+  }, [pictureNote]);
 
   const chooseRoute = (r: RouteId) => {
     autostartRef.current = false;
@@ -289,7 +361,8 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
   const routeReady = route === 'local'
     ? !!base && typeof check === 'object' && check !== null && check.ok && !!localModel
     : route === 'claude' ? keyHeld : route === 'engine' && engineReady;
-  const canGenerate = !!prepared && !busy && !!prompt.trim() && routeReady;
+  const hasInput = !!prompt.trim() || !!picture;
+  const canGenerate = !!prepared && !busy && hasInput && routeReady;
 
   // What the search boxes read: their button says "Generate with AI" once the
   // chosen route has worked this session, and the first time one does the
@@ -303,7 +376,9 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
   const generate = useCallback(async () => {
     if (!canGenerate || !prepared || !route) return;
     const request = prompt.trim();
-    lastPrompt = request;
+    if (request) lastPrompt = request;
+    // A line about an earlier drop ("Not a picture…") is no part of this run.
+    setPictureNote(null);
     const ac = new AbortController();
     abortRef.current = ac;
     setPhase({ kind: 'running', status: null, startedAt: Date.now() });
@@ -313,7 +388,7 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
         saveGeneratorPref('localModel', localModel);
         const transport = await loadLocalTransport();
         if (!transport) throw new Error('no local transport in this build');
-        provider = localProvider(transport, requestBase(env, base!), localModel);
+        provider = localProvider(transport, base!, localModel);
       } else if (route === 'claude') {
         saveGeneratorPref('cloudModel', cloudModel);
         const claude = await loadClaude();
@@ -340,6 +415,8 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
       r = await runGeneration({
         provider,
         request,
+        // The picture as MEASURED here: a few lines of numbers, never pixels.
+        ...(picture ? { picture: { lines: pictureLines(picture.facts), hintWords: pictureHintWords(picture.facts) } } : {}),
         catalogue: prepared.catalogue,
         corpus: prepared.corpus,
         takenNames,
@@ -355,7 +432,7 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
       if (abortRef.current === ac) abortRef.current = null;
     }
     if (r.ok) {
-      setPhase({ kind: 'result', result: r.result, rounds: r.rounds, request });
+      setPhase({ kind: 'result', result: r.result, rounds: r.rounds, request: request || PICTURE_GROUP_LABEL });
       // The ADD's converter chunk, fetched now, so the Add's awaits are
       // microtasks and nothing can open a gesture bracket before pushHistory.
       void preloadShaderImport();
@@ -372,7 +449,7 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
     } else {
       onClose();
     }
-  }, [canGenerate, prepared, route, prompt, env, base, localModel, cloudModel, onClose]);
+  }, [canGenerate, prepared, route, prompt, picture, base, localModel, cloudModel, onClose]);
 
   // Ctrl/Cmd+Enter from a search box: start once, the first time this dialog
   // can — and never after the user has touched the request.
@@ -421,6 +498,14 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
       if (e.repeat) return;
       if (phase.kind === 'result') void add();
       else void generate();
+      return;
+    }
+    // Enter in the Port field checks that server. It is handled HERE: this
+    // listener stops every key before React's own handlers see it.
+    if (e.key === 'Enter' && !e.isComposing && (e.target as HTMLElement | null)?.id === PORT_FIELD_ID) {
+      e.stopPropagation();
+      e.preventDefault();
+      if (!e.repeat && base && !busy) void runCheck();
       return;
     }
     if (e.key !== 'Tab') e.stopPropagation();
@@ -478,7 +563,16 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
         downOnBackdrop.current = false;
       }}
       onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => { e.preventDefault(); e.stopPropagation(); }}
+      // A file let go anywhere over the dialog is the request's picture — it
+      // never reaches the canvas behind (which would make an Image node, or
+      // open a shader file under an open dialog).
+      onDrop={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (busy) return;
+        const file = pictureFrom(e.dataTransfer) ?? e.dataTransfer?.files?.[0];
+        if (file) void takePicture(file);
+      }}
     >
       <div
         className="csv-import-modal__panel generator-dialog"
@@ -487,6 +581,13 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
         aria-labelledby="generator-dialog-title"
         aria-busy={busy}
         onClick={(e) => e.stopPropagation()}
+        // A pasted picture is taken; pasted TEXT goes to the field as always.
+        onPaste={(e) => {
+          const file = pictureFrom(e.clipboardData);
+          if (!file || busy) return;
+          e.preventDefault();
+          void takePicture(file);
+        }}
       >
         <div className="csv-import-modal__title" id="generator-dialog-title">
           {t('Generate nodes from text', language)} <span className="generator-dialog__tag">{t('experimental', language)}</span>
@@ -494,7 +595,7 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
 
         {firstTime && (
           <div className="generator-dialog__disclosure">
-            {t('The AI sees your words, never your graph. On this computer: free and private. Cloud: you pay.', language)}
+            {t('The AI sees your words or picture, never your graph. On this computer: free and private. Cloud: you pay.', language)}
           </div>
         )}
 
@@ -518,34 +619,30 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
 
         {route === 'local' && (
           <div className="generator-dialog__section">
-            {env.desktop ? (
-              <div className="csv-import-modal__row">
-                <span>{t('Server', language)}</span>
-                <span className="generator-dialog__inline">
-                  <input
-                    className="generator-dialog__field"
-                    type="text"
-                    value={baseText}
-                    spellCheck={false}
-                    autoComplete="off"
-                    disabled={busy}
-                    onChange={(e) => { setBaseText(e.target.value); dropCheck(); setCheck(null); }}
-                    aria-invalid={!base}
-                  />
-                  <button type="button" className="csv-import-modal__button" disabled={busy || !base} onClick={() => void runCheck()}>
-                    {t('Check', language)}
-                  </button>
-                </span>
-              </div>
-            ) : (
-              <div className="generator-dialog__note">
-                {t('Dev server: requests go through its proxy to LM Studio (FS_LLM_DEV_TARGET, 127.0.0.1:1234 by default).', language)}{' '}
-                <button type="button" className="csv-import-modal__button" disabled={busy} onClick={() => void runCheck()}>
+            {/* The same row on the desktop app and the dev server: the port of
+                the user's own server. A whole number, so a plain text field
+                (never type="number"); Enter checks it (the key handler above). */}
+            <div className="csv-import-modal__row">
+              <label htmlFor={PORT_FIELD_ID}>{t('Port', language)}</label>
+              <span className="generator-dialog__inline">
+                <input
+                  id={PORT_FIELD_ID}
+                  className="generator-dialog__field generator-dialog__field--port"
+                  type="text"
+                  inputMode="numeric"
+                  value={portText}
+                  spellCheck={false}
+                  autoComplete="off"
+                  disabled={busy}
+                  onChange={(e) => { setPortText(e.target.value); dropCheck(); setCheck(null); }}
+                  aria-invalid={!base}
+                />
+                <button type="button" className="csv-import-modal__button" disabled={busy || !base} onClick={() => void runCheck()}>
                   {t('Check', language)}
                 </button>
-              </div>
-            )}
-            {!base && <div className="generator-dialog__warn">{t('Use http://127.0.0.1:<port> or http://localhost:<port> — a server on this computer.', language)}</div>}
+              </span>
+            </div>
+            {!base && <div className="generator-dialog__warn">{t(BAD_PORT_TEXT, language)}</div>}
             {typeof check === 'object' && check !== null && check.ok && (
               <div className="csv-import-modal__row">
                 <span>{t('Model', language)}</span>
@@ -630,14 +727,77 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
           maxLength={1000}
           rows={3}
           disabled={busy}
-          // English in both languages: requests are written in English (the
-          // prompt, the rules and the examples are English), so the example
-          // shows the language to write in.
-          placeholder="e.g. glowing lava cracks on dark rock"
+          // Requests are written in English (the prompt, the rules and the
+          // examples are English), and a picture alone is a request too.
+          placeholder={t('Write in English, or just add a picture', language)}
           onChange={(e) => { autostartRef.current = false; setPrompt(e.target.value); }}
         />
         {LATVIAN_LETTERS.test(prompt) && (
           <div className="generator-dialog__note">{t('Write requests in English.', language)}</div>
+        )}
+
+        <div className="generator-dialog__picture">
+          {picture ? (
+            <>
+              {/* The app's own downscaled drawing of the picture, never the file. */}
+              <img className="generator-dialog__thumb" src={picture.thumbUrl} alt="" />
+              <div className="generator-dialog__picture-side">
+                <span className="generator-dialog__inline">
+                  <span className="generator-dialog__picture-size">{picture.width}×{picture.height} · {formatKbMb(picture.bytes)}</span>
+                  <button
+                    type="button"
+                    className="generator-dialog__link"
+                    disabled={busy}
+                    onClick={removePicture}
+                  >
+                    {t('Remove picture', language)}
+                  </button>
+                </span>
+                <span className="generator-dialog__note">
+                  {t('The AI gets only the measured colours, scale and direction. The picture stays on this computer.', language)}
+                </span>
+                <span>
+                  <button
+                    type="button"
+                    className="csv-import-modal__button"
+                    disabled={busy}
+                    title={t('Adds an Image node: the only exact copy.', language)}
+                    onClick={placePictureItself}
+                  >
+                    {t('Use the picture itself', language)}
+                  </button>
+                </span>
+              </div>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="csv-import-modal__button"
+              disabled={busy}
+              title={t('You can also paste or drop a picture.', language)}
+              onClick={() => fileRef.current?.click()}
+            >
+              {t('Add picture…', language)}
+            </button>
+          )}
+          <input
+            ref={fileRef}
+            type="file"
+            accept={PICTURE_ACCEPT}
+            hidden
+            tabIndex={-1}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              // The same file can be picked again after a removal.
+              e.target.value = '';
+              if (file) void takePicture(file);
+            }}
+          />
+        </div>
+        {pictureNote && (
+          <div className={pictureNote.warn ? 'generator-dialog__warn' : 'generator-dialog__note'} role="status">
+            {t(pictureNote.text, language)}
+          </div>
         )}
 
         {!prepared && !prepFailed && <div className="generator-dialog__note">{t('Preparing…', language)}</div>}
@@ -731,7 +891,7 @@ export function GeneratorDialog({ initialPrompt, at, autostart, onClose }: Gener
               className="csv-import-modal__button csv-import-modal__button--primary"
               disabled={!canGenerate}
               onClick={() => void generate()}
-              title={t('Cmd/Ctrl+Enter', language)}
+              title={t(routeReady && !hasInput ? 'Type a request or add a picture.' : 'Cmd/Ctrl+Enter', language)}
             >
               {t('Generate', language)}
             </button>

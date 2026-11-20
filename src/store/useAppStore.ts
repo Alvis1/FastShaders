@@ -3011,6 +3011,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         prompt: typeof request?.prompt === 'string' ? request.prompt : '',
         ...(at && Number.isFinite(at.x) && Number.isFinite(at.y) ? { at: { x: at.x, y: at.y } } : {}),
         ...(request?.autostart === true ? { autostart: true } : {}),
+        ...(typeof File !== 'undefined' && request?.picture instanceof File ? { picture: request.picture } : {}),
       },
     });
   },

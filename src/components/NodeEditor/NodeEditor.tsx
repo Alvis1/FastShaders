@@ -149,6 +149,7 @@ import {
   type ImageDropReport,
 } from '@/utils/imageImportNote';
 import { encodeImageFile, isImageFile, isSvgFile, type ImageConvertMode } from '@/utils/imageImport';
+import { PLACE_PICTURES_EVENT, type PlacePicturesDetail } from '@/utils/picturePlaceRequest';
 import { GRAPH_MERGED_EVENT, isZipFile, openDroppedShader, reportZipImportError } from '@/engine/projectImport';
 import { detectMeshKind } from '@/utils/previewMesh';
 import { requestPreviewModelLoad } from '@/utils/previewModelDrop';
@@ -985,7 +986,7 @@ export function NodeEditor() {
   // Live in-progress stroke path, written imperatively by the draw-capture
   // handler (below) and rendered inside DrawingLayer's live opacity group.
   const livePathRef = useRef<SVGPathElement | null>(null);
-  const { screenToFlowPosition, getViewport, setViewport, getInternalNode, getZoom, zoomTo, fitView } =
+  const { screenToFlowPosition, flowToScreenPosition, getViewport, setViewport, getInternalNode, getZoom, zoomTo, fitView } =
     useReactFlow();
   const flowStore = useStoreApi();
 
@@ -3078,6 +3079,86 @@ export function NodeEditor() {
     [screenToFlowPosition, addNode],
   );
 
+  /**
+   * Place picture files as Image nodes: the ONE queue behind a file drop on
+   * the canvas and a picture handed over from a dialog (`fs:place-pictures`).
+   *
+   * Images are imported ONE AT A TIME. Each import is a decode plus one or
+   * two canvas encodes; firing N concurrently piles N encoders onto the same
+   * main thread, so a five-image drop compounded into one long freeze instead
+   * of a visible cascade.
+   *
+   * The in-flight ghosts go up for ALL of them immediately, before the first
+   * encode blocks — an image import takes a few hundred ms and the node only
+   * appears at the end, so without this the canvas looks like the drop did
+   * nothing. It is the honest indicator, too: the encoders are single opaque
+   * calls with no callback and no cancel, so real progress cannot be computed.
+   */
+  const placePictureFiles = useCallback(
+    (
+      images: File[],
+      clientX: number,
+      clientY: number,
+      droppedModelOrientation: Promise<'gltf' | undefined> | null = null,
+    ) => {
+      const STEP = 34;
+      const queued = images.map((img, i) => ({
+        img,
+        ghostId: generateId(),
+        x: clientX + STEP * i,
+        y: clientY + STEP * i,
+      }));
+      if (queued.length === 0) return;
+      void (async () => {
+        // Ask BEFORE the ghosts go up: the ghosts mean "working on it",
+        // and nothing is being worked on while a dialog waits. Both
+        // answers import the image — only the conversion differs.
+        const choice = await askConvertMode(queued.length, queued[0].img.name);
+        setImportGhosts((g) => [
+          ...g,
+          ...queued.map((q) => ({ id: q.ghostId, x: q.x, y: q.y, name: q.img.name })),
+        ]);
+        // ONE note per drop: each image reports into `reports` and the
+        // lines are composed after the loop, so a batch reports once with
+        // count-neutral lines instead of each image replacing the last.
+        // An image refused by the budget and placed with "Add anyway"
+        // reports under the same `dropId`, merging into this note rather
+        // than replacing it — in either order.
+        const dropId = generateId();
+        const reports: ImageDropReport[] = [];
+        for (const q of queued) {
+          const r = await placeImageFile(q.img, q.x, q.y, q.ghostId, choice, dropId, droppedModelOrientation);
+          if (r) reports.push(r);
+        }
+        useAppStore.getState().showImageDropReports(dropId, reports);
+      })();
+    },
+    [placeImageFile, askConvertMode],
+  );
+
+  // A picture handed over from a dialog ("Use the picture itself" in the
+  // generator): the same queue as a drop, at the spot named or the middle of
+  // the view. Only real picture Files are taken — the event is the app's own,
+  // but nothing here trusts its payload's shape.
+  useEffect(() => {
+    const onPlace = (e: Event) => {
+      const detail = (e as CustomEvent<PlacePicturesDetail | null>).detail;
+      const files = Array.isArray(detail?.files)
+        ? detail.files.filter((f): f is File => f instanceof File && isImageFile(f)).slice(0, 8)
+        : [];
+      if (files.length === 0) return;
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const at = detail?.at;
+      const spot = at && Number.isFinite(at.x) && Number.isFinite(at.y)
+        ? flowToScreenPosition({ x: at.x, y: at.y })
+        : { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      placePictureFiles(files, spot.x, spot.y);
+    };
+    window.addEventListener(PLACE_PICTURES_EVENT, onPlace);
+    return () => window.removeEventListener(PLACE_PICTURES_EVENT, onPlace);
+  }, [placePictureFiles, flowToScreenPosition]);
+
   const onDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault();
@@ -3174,49 +3255,8 @@ export function NodeEditor() {
           const off = STEP * slot++;
           placeCsvFile(csv, event.clientX + off, event.clientY + off);
         }
-        // Images are imported ONE AT A TIME. Each import is a decode plus one
-        // or two canvas encodes; firing N concurrently piles N encoders onto
-        // the same main thread, so a five-image drop compounded into one long
-        // freeze instead of a visible cascade.
-        //
-        // The in-flight ghosts go up for ALL of them immediately, before the
-        // first encode blocks — an image import takes a few hundred ms and
-        // the node only appears at the end, so without this the canvas looks
-        // like the drop did nothing. It is the honest indicator, too: the
-        // encoders are single opaque calls with no callback and no cancel, so
-        // real progress cannot be computed.
-        const queued = images.map((img, i) => ({
-          img,
-          ghostId: generateId(),
-          x: event.clientX + STEP * (slot + i),
-          y: event.clientY + STEP * (slot + i),
-        }));
+        placePictureFiles(images, event.clientX + STEP * slot, event.clientY + STEP * slot, droppedModelOrientation);
         slot += images.length;
-        if (queued.length > 0) {
-          void (async () => {
-            // Ask BEFORE the ghosts go up: the ghosts mean "working on it",
-            // and nothing is being worked on while a dialog waits. Both
-            // answers import the image — only the conversion differs.
-            const choice = await askConvertMode(queued.length, queued[0].img.name);
-            setImportGhosts((g) => [
-              ...g,
-              ...queued.map((q) => ({ id: q.ghostId, x: q.x, y: q.y, name: q.img.name })),
-            ]);
-            // ONE note per drop: each image reports into `reports` and the
-            // lines are composed after the loop, so a batch reports once with
-            // count-neutral lines instead of each image replacing the last.
-            // An image refused by the budget and placed with "Add anyway"
-            // reports under the same `dropId`, merging into this note rather
-            // than replacing it — in either order.
-            const dropId = generateId();
-            const reports: ImageDropReport[] = [];
-            for (const q of queued) {
-              const r = await placeImageFile(q.img, q.x, q.y, q.ghostId, choice, dropId, droppedModelOrientation);
-              if (r) reports.push(r);
-            }
-            useAppStore.getState().showImageDropReports(dropId, reports);
-          })();
-        }
         // A real file drop never doubles as a tile drag — swallow it even when
         // nothing matched instead of falling through to the getData branches.
         return;
@@ -3248,7 +3288,7 @@ export function NodeEditor() {
       }
       placeTilePayload({ kind: 'node', nodeType }, event.clientX, event.clientY);
     },
-    [clearEdgeHighlight, clearConnectPreview, placeTilePayload, placeCsvFile, placeImageFile, askConvertMode],
+    [clearEdgeHighlight, clearConnectPreview, placeTilePayload, placeCsvFile, placePictureFiles],
   );
 
 

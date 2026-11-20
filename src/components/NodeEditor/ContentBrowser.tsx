@@ -35,6 +35,7 @@ import { fillTemplate } from '@/utils/fillTemplate';
 import { foldSearchText } from '@/utils/searchFold';
 import { detectPrompt } from '@/utils/promptDetect';
 import { useGeneratorOffer } from '@/hooks/useGeneratorOffer';
+import { dragMayHoldPicture, pictureFrom } from '@/utils/pictureTransfer';
 import { knownNamesWith } from './promptKnownNames';
 import type { AppNode, NodeCategory, NodeDefinition } from '@/types';
 import { CAT_HEX } from '@/utils/colorUtils';
@@ -921,6 +922,38 @@ export const ContentBrowser = memo(function ContentBrowser() {
     openedGeneratorRef.current = true;
     useAppStore.getState().openGenerator({ prompt: search.trim(), autostart });
   }, [search]);
+  // A picture pasted or dropped on the search box is a request too: it opens
+  // the dialog with that picture, and whatever is typed becomes its words.
+  // Nothing is sent by this. Pasted TEXT and every other drop go on as before.
+  const [pictureDrag, setPictureDrag] = useState(false);
+  const openGeneratorWithPicture = useCallback((file: File) => {
+    openedGeneratorRef.current = true;
+    useAppStore.getState().openGenerator({ prompt: search.trim(), picture: file });
+  }, [search]);
+  const onSearchPaste = useCallback((e: React.ClipboardEvent<HTMLInputElement>) => {
+    if (!aiOffered) return;
+    const file = pictureFrom(e.clipboardData);
+    if (!file) return;
+    e.preventDefault();
+    openGeneratorWithPicture(file);
+  }, [aiOffered, openGeneratorWithPicture]);
+  const onSearchDragOver = useCallback((e: React.DragEvent<HTMLInputElement>) => {
+    if (!aiOffered || !dragMayHoldPicture(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+    setPictureDrag(true);
+  }, [aiOffered]);
+  const onSearchDrop = useCallback((e: React.DragEvent<HTMLInputElement>) => {
+    setPictureDrag(false);
+    if (!aiOffered) return;
+    const file = pictureFrom(e.dataTransfer);
+    if (!file) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openGeneratorWithPicture(file);
+  }, [aiOffered, openGeneratorWithPicture]);
+
   const onSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (!aiOffered || e.key !== 'Enter' || e.nativeEvent.isComposing || e.repeat) return;
     // Ctrl/Cmd+Enter: the explicit door, for any query — an empty box opens
@@ -1079,9 +1112,15 @@ export const ContentBrowser = memo(function ContentBrowser() {
         <div className="content-browser__categories" ref={tabsRef}>
           <input
             ref={searchRef}
-            className="content-browser__search"
+            // Where AI is offered the box says so, and is wide enough to (owner, 2026-11-20).
+            className={`content-browser__search${aiOffered ? ' content-browser__search--ai' : ''}${pictureDrag ? ' content-browser__search--drop' : ''}`}
             type="text"
-            placeholder={t('Search…', language)}
+            placeholder={t(pictureDrag ? 'Drop the picture here' : aiOffered ? 'Find nodes or write a prompt' : 'Search…', language)}
+            title={aiOffered ? t('Search. Paste or drop a picture to use AI.', language) : undefined}
+            onPaste={onSearchPaste}
+            onDragOver={onSearchDragOver}
+            onDragLeave={() => setPictureDrag(false)}
+            onDrop={onSearchDrop}
             aria-label={t('Search nodes and assets', language)}
             value={search}
             onChange={(e) => setSearch(e.target.value)}

@@ -292,3 +292,39 @@
   height: 100%;
   background: var(--text-secondary);
 }
+
+/* The local server's port: five digits, or a pasted address (it scrolls). */
+.generator-dialog__field--port {
+  width: 96px;
+}
+
+/* The request's picture: the app's own small drawing of it, its size, and
+   what happens with it. */
+.generator-dialog__picture {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  margin-top: var(--space-2);
+}
+
+.generator-dialog__thumb {
+  flex-shrink: 0;
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+}
+
+.generator-dialog__picture-side {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.generator-dialog__picture-size {
+  font-size: var(--font-size-sm);
+  font-family: var(--font-mono, monospace);
+  color: var(--text-secondary);
+}

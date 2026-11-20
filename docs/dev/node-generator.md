@@ -20,7 +20,7 @@ The generator was built on v0.3.36 in a worktree and ported to main on 2026-11-1
 | Route | Where | Carried by | What leaves the machine |
 |---|---|---|---|
 | **On this computer · free** (the bundled llama.cpp, P5; being built) | desktop app only | `src-tauri/src/engine.rs` runs llama.cpp's own `llama-server`, shipped in the app | nothing (the model download itself, from Hugging Face, comes next) |
-| **My LM Studio or Ollama** (LM Studio, llama.cpp — the OpenAI-compatible API) | desktop app; dev server | desktop: the Rust bridge `src-tauri/src/llm.rs`, loopback only, through its client `transport/tauriTransport.ts`; dev: `transport/fetchTransport.ts` to the dev server's own same-origin proxy (`llmDevProxyPlugin`) | nothing |
+| **My LM Studio or Ollama** (LM Studio, llama.cpp — the OpenAI-compatible API) | desktop app; dev server | desktop: the Rust bridge `src-tauri/src/llm.rs`, loopback only, through its client `transport/tauriTransport.ts`; dev: `transport/fetchTransport.ts` (`devProxyTransport`) to the dev server's own same-origin proxy (`llmDevProxyPlugin`), which forwards to the server the request names | nothing |
 | **Claude** with the user's own API key | desktop app and dev server; a web build only where its CSP names `https://api.anthropic.com`, which no hosted build does (owner, 2026-11-19) | the official `@anthropic-ai/sdk` (pinned EXACTLY at 0.132.1), straight from the browser (`dangerouslyAllowBrowser`, which sends the direct-browser-access header the API's CORS answer needs) | the request text, the fixed rules, the node list and worked examples. **Nothing from the user's graph or files** |
 
 Deliberately NOT offered:
@@ -210,12 +210,14 @@ The desktop app reaches a model server on THIS computer through Rust, because a 
 ### The dev server's proxy (`llmDevProxyPlugin`, vite.config.ts)
 
 On the dev server the local route goes through a same-origin proxy, so the dialog can be exercised in a browser. No web BUILD has it (`apply: 'serve'`).
-- **What it forwards.** Only `/v1/models`, `/api/v1/models` and `/v1/chat/completions`, to `FS_LLM_DEV_TARGET` (unset or empty: `http://127.0.0.1:1234`, LM Studio). A target that is not a loopback `http` base with no path stops the dev server. Every other path goes on to the rest of the dev server.
+- **What it forwards.** Only `/v1/models`, `/api/v1/models` and `/v1/chat/completions`. Every other path goes on to the rest of the dev server.
+- **Where to: the server the REQUEST names** (owner, 2026-11-20: "allow to change the port"). `devProxyTransport` sends every request to the dev server's own origin with the header `x-fs-llm-target: http://127.0.0.1:<port>` — the address the dialog's Port field holds, the same one the desktop bridge is handed. The proxy takes only what Rust's `parse_base` takes, minus the trailing slash (`LLM_DEV_TARGET_RE`: `http://`, `127.0.0.1` / `localhost` / `[::1]` exactly, a port 1–65535 with no sign or leading zero) and answers 400 to anything else, to a request with no header, and to its OWN port (that request would come back into the proxy). The header never reaches the model server. There is no `FS_LLM_DEV_TARGET` any more: until 2026-11-20 one env variable fixed the target for the whole run of the dev server, so trying Ollama meant restarting it.
+- **What that widens, and what it does not.** A same-origin document can now reach the three routes on ANY loopback port, not one. On the dev server that includes the VR popup: it runs user shader code at the app's real origin, and its own policy (`XR_CSP`) allows `'self'`, which there is this proxy. That code could already reach the ONE configured server through it; now it can ask any loopback port for a model list or a chat. The limit is the three routes, and the sandboxed preview is unaffected (opaque origin: its requests are cross-site, 403). Dev server only (`apply: 'serve'`); no build ships it. The header is also one more thing a cross-site form or no-cors request cannot send.
 - **What it sends.** `Host` set to the target, `Accept` and `Content-Type`; never an `Origin` of its own, like the Rust bridge. A closed page or a Cancel ends the upstream request, so the model stops.
 - **Whom it answers: this dev server's own pages only.** Two attacks reach it from another website open in the same browser:
   - a cross-site request. Even one whose answer the page cannot read can START a generation (a no-cors POST). Refused by its `Sec-Fetch-Site` (anything but `same-origin`) and its `Origin` (anything but `http://<Host>`);
   - DNS REBINDING: the attacker's own name resolves to 127.0.0.1, so the browser counts its requests as same-origin and both checks above pass. Refused by the `Host`, which must be `localhost`, `127.0.0.1` or `[::1]` with an optional port. Vite's own host check does not cover this middleware, because a plugin's middleware runs before Vite's.
-- **Checked** by `llmCspContract.test.ts`, which runs the real middleware against a stand-in model server on loopback, and on 2026-11-19 against a running dev server (port 5194): a rebinding `Host`, a cross-site request and a foreign `Origin` got 403; a request from its own page reached a stand-in server, which saw no `Origin`. It has not yet run against a real LM Studio.
+- **Checked** by `llmCspContract.test.ts`, which runs the real middleware against a stand-in model server on loopback, and on 2026-11-19 against a running dev server (port 5194): a rebinding `Host`, a cross-site request and a foreign `Origin` got 403; a request from its own page reached a stand-in server, which saw no `Origin`. On 2026-11-20 the Port field was driven in real Chrome against the running dev server: 1234 listed a real LM Studio's models, 11434 reached a second server, a port nothing listens on said so, a wrong value showed the hint and disabled Check, and a pasted `http://127.0.0.1:1234/v1` settled into `1234`.
 
 ## The bundled engine (P5, desktop)
 
@@ -336,9 +338,41 @@ The dialog writes them through `saveGeneratorPref`:
 
 Nothing secret is stored: the API key never is.
 
+## A picture in the request
+
+A request can carry ONE picture, and a picture alone is a request (owner, 2026-11-18; built 2026-11-20 as P9 step 1). What reaches a model is the app's own MEASUREMENT of it — never pixels, on any route — so it works with every model, including the small local ones that cannot see.
+
+**The reader (`llm/picture.ts`).** The file is adversarial like every dropped one:
+- SVG is refused outright (markup, not pixels); a file over 20 MB is refused before decoding; a decoded picture over `MAX_SOURCE_PIXELS` (64 MP) after it.
+- It is decoded by the browser's own decoder (`createImageBitmap`, EXIF orientation applied) and by nothing else. The app draws it onto its OWN canvas at ≤ 256 px and measures THAT; the thumbnail is a ≤ 128 px PNG of the same kind of drawing. So no metadata, no markup and no byte of the file reaches the page or a model.
+- The file itself is kept only for "Use the picture itself".
+
+**The measurement (`llm/imageAnalysis.ts`, pure, no model).** On a 96-cell grid averaged in linear light:
+- **colours**: k-means in Oklab from a FIXED start (so the result is deterministic), close centres merged, a rare colour lying between two common ones folded away (it is the blended edge the averaging makes), each colour reported as its cells' MIDDLE value per channel — a flat colour comes back exact (`#ff5a00`, not `#fe5a00`);
+- **brightness and contrast**: mean and spread of the Oklab lightness;
+- **scale**: light-and-dark cycles across and down (sign changes around the mean with a dead band, the median over rows and columns);
+- **direction**: the structure tensor's dominant gradient; features are named by the way they RUN (horizontal, vertical, rising or falling to the right with an angle);
+- **repetition**: the best self-match at a shift near one feature's length;
+- **edges**: hard when nearly every cell sits at the dark or the light end;
+- a **hint** from a fixed set (flat, gradient, stripes, streaks, grid, grain, blotches, clouds).
+
+**What is sent (`pictureLines`).** A fixed frame of about eight lines around hex colours, counts, an angle and words from the module's own tables — about 120 tokens. Nothing in them is text from the file, so a picture cannot carry an instruction into the prompt (`imageAnalysis.test.ts` holds the lines to printable ASCII and a fixed first line). They follow the request line in `userText` and stay in every repair round. With no words the line is `PICTURE_ONLY_REQUEST` ("Make a shader that looks like this picture.", a constant in `prompt.ts`, never shown or translated), and the worked examples are picked by the hint's words (`pictureHintWords`) instead of the request's.
+
+**In the dialog.** "Add picture…", paste (pasted TEXT still goes to the field) and drop anywhere over the dialog. One picture: a new one replaces the old and says so. A shader, project or model file dropped there is refused with "Close this window to open a shader file." — the dialog never opens a document behind itself. Generate needs words OR a picture. The group from a picture alone is labelled `From picture` (English data, like a dropped preset's label).
+
+**"Use the picture itself"** is the only exact copy: it closes the dialog and hands the FILE to the canvas's own picture drop through `utils/picturePlaceRequest.ts` (`fs:place-pictures`). NodeEditor's `placePictureFiles` is the ONE queue behind a dropped file and this — the convert-or-keep question, the ghosts, every cap and budget, one note — so a handed-over picture gets exactly what a dropped one does. The listener takes only real `File`s that pass `isImageFile`.
+
+**From a search box.** A picture pasted or dropped on the palette's search box opens the dialog with it (`utils/pictureTransfer.ts`, a util so the palette never imports `src/llm`); typed text becomes the request's words. It never starts a run. Gated by `useGeneratorOffer` like every entry; the Space menu takes no pictures.
+
+**Not built yet** (P9 step 2 and §11.3): models that SEE the picture (Claude; the built-in model needs a second, pinned vision file), the cloud tick box that goes with sending pixels, and the automatic slider tuning against a hidden render.
+
+**Checked 2026-11-20** in real Chrome against the dev server and a real LM Studio (`google/gemma-4-e2b`): a 480×320 picture of diagonal orange stripes pasted on the search box opened the dialog with its thumbnail; the request sent was the fixed line plus the block (`#ff5a00 52%, #1a1a1a 48%`, 3 features across and down, rising at about 35°, even, hard edges, "even stripes") and no pixels; the model answered a 16-node stripes shader in those two colours, added as "From picture". A second picture replaced the first, a `.js` was refused, and "Use the picture itself" raised the canvas's convert question and added one Image node.
+
 ## The search-box entry
 
 Both search boxes offer the generator when a query reads as a REQUEST (owner, 2026-11-20). It only OFFERS: detection loads nothing and sends nothing, Enter opens the dialog and never starts it, and the request leaves the machine only on the dialog's own Generate.
+
+**Where it is offered the box says so**: its placeholder reads "Find nodes or write a prompt" in both boxes (owner, 2026-11-20; the palette's box widens to 252 px for it, and for the Latvian), and "Search…" / "Search nodes..." everywhere else — a hosted build, a study, the embed, a running lesson, and the Space menu while it wires or splices.
 
 **The switch has three states** under `fs:nodeGenerator` (`utils/generatorFlag.ts`, validated, never coerced):
 - absent = `suggest`, the default: a detected query offers "✦ Set up AI…";

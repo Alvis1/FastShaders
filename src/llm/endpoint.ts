@@ -5,6 +5,8 @@
  * `normalizeLocalBase` is UX only — it forgives what people paste (spaces, an
  * upper-case scheme or host, a trailing `/`, the OpenAI-style `/v1` suffix)
  * and refuses everything that is not a loopback base with an explicit port.
+ * The dialog asks for the PORT alone (`baseFromPortInput`), which is all that
+ * differs between the servers people run (LM Studio 1234, Ollama 11434).
  * The security boundary is Rust's `parse_base` (src-tauri/src/llm.rs), which
  * accepts only the canonical spellings; `isLoopbackBase` is its exact mirror,
  * so the fetch transport (the probe under node, the dev server), where no Rust
@@ -62,6 +64,28 @@ export function normalizeLocalBase(input: string): string | null {
   if (base.endsWith('/')) base = base.slice(0, -1);
   if (base.endsWith('/v1')) base = base.slice(0, -3);
   return !base.endsWith('/') && isLoopbackBase(base) ? base : null;
+}
+
+/** The host a bare port belongs to: `DEFAULT_LOCAL_BASE`'s. */
+const PORT_HOST_PREFIX = 'http://127.0.0.1:';
+
+/**
+ * The dialog's Port field. It takes the PORT of a server on this computer
+ * ("11434"), and forgives a pasted address (`normalizeLocalBase`), so what LM
+ * Studio prints — "http://127.0.0.1:1234" — works too. UX only, like
+ * `normalizeLocalBase`: the result is always a base `isLoopbackBase` accepts,
+ * or null.
+ */
+export function baseFromPortInput(input: string): string | null {
+  const text = input.trim();
+  if (PORT_RE.test(text)) return Number(text) <= 65535 ? PORT_HOST_PREFIX + text : null;
+  return normalizeLocalBase(text);
+}
+
+/** What the Port field shows for a base: its port on 127.0.0.1, else the whole
+ *  base, so a `localhost` or `[::1]` address someone typed is never hidden. */
+export function portFieldText(base: string): string {
+  return base.startsWith(PORT_HOST_PREFIX) ? base.slice(PORT_HOST_PREFIX.length) : base;
 }
 
 /**

@@ -30,6 +30,10 @@ export type PlaceOutcome =
 /** Longest group label taken from a prompt. */
 export const MAX_GENERATED_LABEL = 40;
 
+/** The label of a group made from a picture alone. English DATA, like a
+ *  dropped preset's label — never translated. */
+export const PICTURE_GROUP_LABEL = 'From picture';
+
 /**
  * The group's label: the request's first line, shortened. The ADD names a
  * group after the FILE's stem, which keeps only what follows the last `/` or

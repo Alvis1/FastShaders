@@ -20,6 +20,7 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { loadConfigFromFile, type Plugin, type UserConfig } from 'vite';
 import { SANDBOX_CSP, XR_CSP } from '@/engine/tslToPreviewHTML';
+import { DEV_PROXY_TARGET_HEADER } from './transport/fetchTransport';
 
 const ROOT = path.resolve(__dirname, '../..');
 const read = (p: string) => readFileSync(path.join(ROOT, p), 'utf8');
@@ -188,27 +189,30 @@ describe('shader code never inherits it', () => {
 describe("the dev server's proxy to a model server on this computer", () => {
   interface Seen { path: string; headers: http.IncomingHttpHeaders }
   const seen: Seen[] = [];
+  const seenElsewhere: Seen[] = [];
   let upstream: http.Server;
+  let elsewhere: http.Server;
   let front: http.Server;
   let frontPort = 0;
   let targetHost = '';
+  let elsewhereHost = '';
 
   const listen = (s: http.Server) => new Promise<number>((r) => s.listen(0, '127.0.0.1', () => r((s.address() as AddressInfo).port)));
+  const modelServer = (into: Seen[]) => http.createServer((req, res) => {
+    into.push({ path: req.url ?? '', headers: req.headers });
+    req.resume();
+    req.on('end', () => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"data":[]}'); });
+  });
 
   type Middleware = (req: http.IncomingMessage, res: http.ServerResponse, next: () => void) => void;
-  /** The plugin's middleware, as `configureServer` registers it under FS_LLM_DEV_TARGET=`target`. */
-  async function proxyMiddleware(target: string): Promise<Middleware> {
+  /** The plugin's middleware, as `configureServer` registers it. */
+  async function proxyMiddleware(): Promise<Middleware> {
     const config = await loadConfig({}, 'serve');
     const plugin = pluginNamed(config, 'fs-llm-dev-proxy');
     expect(plugin?.apply, 'dev server only').toBe('serve');
     let mw: Middleware | null = null;
     const server = { middlewares: { use: (fn: Middleware) => { mw = fn; } } };
-    vi.stubEnv('FS_LLM_DEV_TARGET', target);
-    try {
-      (plugin!.configureServer as (s: unknown) => void)(server);
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    (plugin!.configureServer as (s: unknown) => void)(server);
     expect(mw, 'one middleware').not.toBeNull();
     return mw!;
   }
@@ -224,38 +228,96 @@ describe("the dev server's proxy to a model server on this computer", () => {
       req.end(method === 'POST' ? '{"x":1}' : undefined);
     });
   }
+  /** The header a request names its model server in. */
+  const to = (target: string) => ({ [DEV_PROXY_TARGET_HEADER]: target });
 
   beforeAll(async () => {
-    upstream = http.createServer((req, res) => {
-      seen.push({ path: req.url ?? '', headers: req.headers });
-      req.resume();
-      req.on('end', () => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"data":[]}'); });
-    });
+    upstream = modelServer(seen);
+    elsewhere = modelServer(seenElsewhere);
     targetHost = `127.0.0.1:${await listen(upstream)}`;
-    const mw = await proxyMiddleware(`http://${targetHost}`);
+    elsewhereHost = `127.0.0.1:${await listen(elsewhere)}`;
+    const mw = await proxyMiddleware();
     front = http.createServer((req, res) => mw(req, res, () => { res.writeHead(404); res.end('next'); }));
     frontPort = await listen(front);
   });
 
   afterAll(async () => {
-    await Promise.all([front, upstream].map((s) => new Promise((r) => (s ? s.close(r) : r(null)))));
+    await Promise.all([front, upstream, elsewhere].map((s) => new Promise((r) => (s ? s.close(r) : r(null)))));
   });
 
   it("forwards the model routes from the dev server's own pages, with no Origin of its own", async () => {
     const host = `localhost:${frontPort}`;
     for (const [p, method] of [['/v1/models', 'GET'], ['/api/v1/models', 'GET'], ['/v1/chat/completions', 'POST']] as const) {
       seen.length = 0;
-      const r = await ask(p, { host, origin: `http://${host}`, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' }, method);
+      const r = await ask(p, { host, origin: `http://${host}`, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json', ...to(`http://${targetHost}`) }, method);
       expect(r, p).toEqual({ status: 200, body: '{"data":[]}' });
       expect(seen.map((s) => s.path)).toEqual([p]);
       expect(seen[0].headers.host).toBe(targetHost);
       expect(seen[0].headers).not.toHaveProperty('origin');
       expect(seen[0].headers).not.toHaveProperty('sec-fetch-site');
+      // The header is the proxy's own business: the model server never sees it.
+      expect(seen[0].headers).not.toHaveProperty(DEV_PROXY_TARGET_HEADER);
     }
     // A loopback name other than the one the page used, no browser headers (curl).
     for (const h of [`127.0.0.1:${frontPort}`, `[::1]:${frontPort}`, 'localhost']) {
-      expect((await ask('/v1/models', { host: h })).status, h).toBe(200);
+      expect((await ask('/v1/models', { host: h, ...to(`http://${targetHost}`) })).status, h).toBe(200);
     }
+  });
+
+  it('forwards to the server each request names — the port the dialog holds', async () => {
+    seen.length = 0;
+    seenElsewhere.length = 0;
+    const host = `localhost:${frontPort}`;
+    expect((await ask('/v1/models', { host, ...to(`http://${elsewhereHost}`) })).status).toBe(200);
+    expect((await ask('/v1/models', { host, ...to(`http://${targetHost}`) })).status).toBe(200);
+    // `localhost` is a spelling of its own: it reaches a server on 127.0.0.1 too.
+    expect((await ask('/v1/models', { host, ...to(`http://localhost:${elsewhereHost.split(':')[1]}`) })).status).toBe(200);
+    expect(seen.map((s) => s.headers.host)).toEqual([targetHost]);
+    expect(seenElsewhere.map((s) => s.headers.host)).toEqual([elsewhereHost, `localhost:${elsewhereHost.split(':')[1]}`]);
+  });
+
+  it('refuses a request that names no loopback server, and never forwards to itself', async () => {
+    seen.length = 0;
+    seenElsewhere.length = 0;
+    const host = `localhost:${frontPort}`;
+    const port = targetHost.split(':')[1];
+    // Every address the shared cases refuse VERBATIM (Rust's parse_base), bar
+    // the ones a header cannot carry; the one accepted spelling the proxy does
+    // not take is the trailing slash, which the transport never sends.
+    const shared = (JSON.parse(read('src-tauri/tests/llm-urls.json')) as { cases: { input: string; rust: boolean }[] }).cases
+      .filter((c) => !c.rust && /^[\x21-\x7e]+$/.test(c.input))
+      .map((c) => c.input.replace(/:1234\b/, `:${port}`));
+    expect(shared.length).toBeGreaterThan(30);
+    const bad = [
+      ...shared,
+      `http://127.0.0.1:${port}/`,
+      `http://127.0.0.1:${port}/v1`,
+      `HTTP://127.0.0.1:${port}`,
+      `http://LOCALHOST:${port}`,
+      'http://127.0.0.1:65536',
+      'http://127.0.0.1:0',
+      port,
+    ];
+    for (const target of bad) {
+      const r = await ask('/v1/chat/completions', { host, ...to(target) }, 'POST');
+      expect(r.status, target).toBe(400);
+    }
+    // No header at all: what a cross-site form or a no-cors request is left with.
+    expect((await ask('/v1/chat/completions', { host }, 'POST')).status).toBe(400);
+    // Its own port would loop back into this proxy.
+    const own = await ask('/v1/models', { host, ...to(`http://127.0.0.1:${frontPort}`) });
+    expect(own.status).toBe(400);
+    expect(own.body).toContain('this dev server');
+    expect(seen).toEqual([]);
+    expect(seenElsewhere).toEqual([]);
+  });
+
+  it('says so when nothing answers on the named port', async () => {
+    const dead = http.createServer();
+    const port = await listen(dead);
+    await new Promise((r) => dead.close(r));
+    const r = await ask('/v1/models', { host: `localhost:${frontPort}`, ...to(`http://127.0.0.1:${port}`) });
+    expect(r).toEqual({ status: 502, body: JSON.stringify({ error: `Nothing answers at 127.0.0.1:${port}` }) });
   });
 
   it('refuses another site, and DNS rebinding — a same-origin request whose Host is not a loopback name', async () => {
@@ -272,7 +334,8 @@ describe("the dev server's proxy to a model server on this computer", () => {
       { host, origin: 'null' },
     ];
     for (const headers of refused) {
-      const r = await ask('/v1/chat/completions', headers, 'POST');
+      // Naming a real server changes nothing: who asks is checked first.
+      const r = await ask('/v1/chat/completions', { ...headers, ...to(`http://${targetHost}`) }, 'POST');
       expect(r.status, JSON.stringify(headers)).toBe(403);
     }
     expect(seen).toEqual([]);
@@ -281,17 +344,16 @@ describe("the dev server's proxy to a model server on this computer", () => {
   it('leaves every other path to the rest of the dev server', async () => {
     seen.length = 0;
     for (const p of ['/v1/completions', '/api/chat', '/api/tags', '/v1/models/x', '/', '/FastShaders/']) {
-      expect(await ask(p, { host: `localhost:${frontPort}` }), p).toEqual({ status: 404, body: 'next' });
+      expect(await ask(p, { host: `localhost:${frontPort}`, ...to(`http://${targetHost}`) }), p).toEqual({ status: 404, body: 'next' });
     }
     expect(seen).toEqual([]);
   });
 
-  it('forwards only to a loopback http base, LM Studio by default', async () => {
-    for (const bad of ['http://example.com:1234', 'https://127.0.0.1:1234', 'http://127.0.0.1:1234/v1', 'http://192.168.1.2:1234', 'not a url']) {
-      await expect(proxyMiddleware(bad), bad).rejects.toThrow(/FS_LLM_DEV_TARGET/);
-    }
-    // Unset or empty is LM Studio's default address.
-    await expect(proxyMiddleware('')).resolves.toBeTypeOf('function');
-    expect(read('vite.config.ts')).toContain("process.env.FS_LLM_DEV_TARGET || 'http://127.0.0.1:1234'");
+  it('takes its target from the request alone: one header name on both sides, and no env', () => {
+    const config = read('vite.config.ts');
+    expect(config).toContain(`const LLM_DEV_TARGET_HEADER = '${DEV_PROXY_TARGET_HEADER}';`);
+    expect(config).not.toContain('process.env.FS_LLM_DEV_TARGET');
+    // The dev build of the dialog goes through the proxy, to the address its Port field holds.
+    expect(read('src/llm/registry.ts')).toContain('devProxyTransport(location.origin)');
   });
 });

@@ -484,7 +484,9 @@ export function AddNodeMenu() {
     <>
       <input
         className="context-menu__search"
-        placeholder={t('Search nodes...', language)}
+        // The same words as the palette's box where a request can be made here
+        // (never while the menu wires or splices: it adds ONE node then).
+        placeholder={t(aiOffered && !sourceNodeId && !spliceEdgeId ? 'Find nodes or write a prompt' : 'Search nodes...', language)}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={onKeyDown}

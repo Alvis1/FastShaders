@@ -215,10 +215,55 @@ describe('the dialog', () => {
     expect(missing).toEqual([]);
   });
 
-  it('the example request stays English: requests are written in English', () => {
+  it('the prompt box says what it takes: English words, or just a picture', () => {
     const src = read(DIALOG);
-    expect(src).toContain('placeholder="e.g. glowing lava cracks on dark rock"');
-    expect((lv.ui as Record<string, string>)['e.g. glowing lava cracks on dark rock']).toBeUndefined();
+    expect(src).toContain("placeholder={t('Write in English, or just add a picture', language)}");
+    // Generate needs words OR a picture, and says so when it has neither.
+    expect(src).toMatch(/const hasInput = !!prompt\.trim\(\) \|\| !!picture;/);
+    expect(src).toContain("'Type a request or add a picture.'");
+  });
+});
+
+describe('a picture in the request', () => {
+  it('only its measurements reach a model: the file goes to the canvas\'s own picture drop and nowhere else', () => {
+    const src = codeOnly(read(DIALOG));
+    // The one use of the file itself is "Use the picture itself".
+    expect(src.match(/picture\.file/g)).toEqual(['picture.file']);
+    expect(src).toMatch(/requestPicturePlacement\(\[picture\.file\], at\)/);
+    // What a run is handed: the lines and the hint words, built from the facts.
+    expect(src).toMatch(/picture: \{ lines: pictureLines\(picture\.facts\), hintWords: pictureHintWords\(picture\.facts\) \}/);
+    // No provider, transport or prompt builder takes a File, a Blob or a data URL.
+    for (const f of LLM.filter((x) => /providers\/|transport\/|prompt\.ts|orchestrate\.ts/.test(x))) {
+      expect(codeOnly(read(f)), f).not.toMatch(/\bFile\b|\bBlob\b|thumbUrl|toDataURL/);
+    }
+  });
+
+  it('the reader measures the app\'s own drawing and refuses markup and oversize files before decoding', () => {
+    const src = codeOnly(read('src/llm/picture.ts'));
+    expect(src.indexOf('isSvgFile(file)')).toBeGreaterThan(-1);
+    expect(src.indexOf('file.size > MAX_PICTURE_BYTES')).toBeLessThan(src.indexOf('await decode(file)'));
+    expect(src).toMatch(/width \* height > MAX_SOURCE_PIXELS/);
+    expect(src).toMatch(/small\.ctx\.getImageData/);
+    expect(src).toMatch(/thumb\.canvas\.toDataURL\('image\/png'\)/);
+  });
+
+  it('a study never places one, and the search box takes one only where AI is offered', () => {
+    expect(codeOnly(read(DIALOG))).toMatch(/if \(!picture \|\| busy \|\| isEvalMode\(\)\) return;/);
+    const bar = codeOnly(read(ASSET_BAR));
+    for (const handler of ['onSearchPaste', 'onSearchDragOver', 'onSearchDrop']) {
+      const at = bar.indexOf(`const ${handler} = useCallback(`);
+      expect(at, handler).toBeGreaterThan(-1);
+      expect(bar.slice(at, at + 260), handler).toMatch(/if \(!aiOffered/);
+    }
+    // The palette never imports the generator: the transfer helper is a util.
+    expect(bar).toContain("from '@/utils/pictureTransfer'");
+  });
+
+  it('the canvas takes a handed-over picture through its one queue, real picture Files only', () => {
+    const ed = codeOnly(read('src/components/NodeEditor/NodeEditor.tsx'));
+    expect(ed.match(/placePictureFiles\(/g)?.length).toBe(2);
+    expect(ed).toMatch(/f instanceof File && isImageFile\(f\)/);
+    expect(ed).toMatch(/window\.addEventListener\(PLACE_PICTURES_EVENT, onPlace\)/);
   });
 });
 

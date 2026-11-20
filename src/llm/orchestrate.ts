@@ -29,7 +29,11 @@ export type RunResult =
 
 export interface RunOptions {
   provider: GeneratorProvider;
+  /** The typed request; may be empty when `picture` is given. */
   request: string;
+  /** An added picture, as the app measured it (imageAnalysis.ts): the lines
+   *  the request carries, and the words that pick examples when it has none. */
+  picture?: { lines: readonly string[]; hintWords: string };
   catalogue: Catalogue;
   corpus: readonly Example[];
   /** Uniform names already in use (live graph + stored tuned values). */
@@ -69,8 +73,10 @@ function safeGate(text: string, catalogue: Catalogue, takenNames: ReadonlySet<st
 export async function runGeneration(o: RunOptions): Promise<RunResult> {
   if (o.inStudy()) return { ok: false, kind: 'study' };
   const budget = CONTEXT_BUDGETS[o.provider.contextClass];
-  const examples = selectExamples(o.request, o.corpus, budget.examples);
-  const prompt = buildPrompt(o.request, o.catalogue, examples, o.provider.contextClass);
+  const picture = o.picture?.lines ?? [];
+  // With no words, the picture's pattern picks the worked examples.
+  const examples = selectExamples(o.request.trim() ? o.request : o.picture?.hintWords ?? '', o.corpus, budget.examples);
+  const prompt = buildPrompt(o.request, o.catalogue, examples, o.provider.contextClass, picture);
   const usage: GenerateUsage[] = [];
   const rounds = Math.max(1, Math.min(o.maxRounds ?? MAX_ROUNDS, MAX_ROUNDS));
   let user = prompt.user;
@@ -95,7 +101,7 @@ export async function runGeneration(o: RunOptions): Promise<RunResult> {
     const gated = safeGate(reply.text, o.catalogue, o.takenNames);
     if (gated.ok) return { ok: true, result: gated, rounds: round, usage };
     last = gated;
-    user = buildRepairUser(o.request, gated.code, gated.problems);
+    user = buildRepairUser(o.request, gated.code, gated.problems, picture);
   }
   return { ok: false, kind: 'rejected', problems: last?.problems ?? [], lastCode: last?.code ?? null, rounds };
 }

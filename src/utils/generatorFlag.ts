@@ -45,6 +45,9 @@ export interface GeneratorRequest {
   prompt: string;
   at?: { x: number; y: number };
   autostart?: boolean;
+  /** A picture pasted or dropped on a search box: the request's picture.
+   *  Session-only like the rest of the request — never stored. */
+  picture?: File;
 }
 
 /** Can this build reach a model at all? `cloud` is the build's `__FS_LLM_CLOUD__`,
