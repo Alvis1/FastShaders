@@ -463,6 +463,37 @@ const SDF_MASK_LINES = [
   '});',
 ];
 
+/**
+ * Height to Normal — bump mapping: the normal a surface WOULD have if it were
+ * raised by `height`, without moving a vertex (Blender's Bump node). Morten
+ * Mikkelsen's surface-gradient perturbation, as three's own BumpMapNode
+ * (`perturbNormalArb`), with two departures:
+ *  - the height's slope is its own screen derivative, dFdx/dFdy(h), not
+ *    three's re-sampling of a texture at uv + dFdx(uv): that trick needs a
+ *    TEXTURE upstream, and on a procedural height (a noise) all three samples
+ *    are equal and `bumpMap` draws no bump at all;
+ *  - the position derivatives are NOT normalized (Mikkelsen's listing as
+ *    published): |det| and the gradient then carry the pixel's footprint, so
+ *    `height` is in the scene's own units and the bump does not change as the
+ *    camera zooms (three's normalized form is per pixel, so it does).
+ * Returns a VIEW-space unit normal — what the Output's Normal channel takes
+ * (as `normalMap(...)` does). `normalView` here is the geometry's normal,
+ * already turned to the face (three resolves it so inside the NORMAL build).
+ * A constant height has zero derivatives and returns the surface normal.
+ */
+const HEIGHT_TO_NORMAL_LINES = [
+  'const heightToNormal = Fn(([height, strength]) => {',
+  '  const h = mul(float(height), strength);',
+  '  const sx = dFdx(positionView);',
+  '  const sy = dFdy(positionView);',
+  '  const r1 = cross(sy, normalView);',
+  '  const r2 = cross(normalView, sx);',
+  '  const det = mul(dot(sx, r1), faceDirection);',
+  '  const grad = mul(sign(det), add(mul(dFdx(h), r1), mul(dFdy(h), r2)));',
+  '  return normalize(sub(mul(abs(det), normalView), grad));',
+  '});',
+];
+
 /** Keyed by helper NAME; insertion order is emission order. */
 export const MODULE_HELPERS: ReadonlyMap<string, ModuleHelper> = new Map<string, ModuleHelper>([
   ['hsl', { lines: HSL_HELPER_LINES, imports: ['mul', 'add', 'sub', 'abs', 'mod', 'clamp', 'float', 'vec3'] }],
@@ -503,6 +534,7 @@ export const MODULE_HELPERS: ReadonlyMap<string, ModuleHelper> = new Map<string,
   ['fsColorRamp', { lines: [...FS_COLOR_RAMP_LINES], imports: [], kind: 'js', requires: ['fsLut'] }],
   ['fsRgbCurves', { lines: [...FS_RGB_CURVES_LINES], imports: ['vec3', 'float', 'mix'], kind: 'js', requires: ['fsLut'] }],
   [UV_CHANNEL_HELPER, { lines: UV_CHANNEL_LINES, imports: ['round', 'float', 'select', 'equal', 'uv'], alias: { type: 'uv', ports: ['channel'] } }],
+  ['heightToNormal', { lines: HEIGHT_TO_NORMAL_LINES, imports: ['mul', 'float', 'dFdx', 'dFdy', 'positionView', 'normalView', 'cross', 'dot', 'faceDirection', 'sign', 'add', 'normalize', 'sub', 'abs'] }],
 ]);
 
 /** Every emitted helper name — what codeToGraph skips as a declarator. */

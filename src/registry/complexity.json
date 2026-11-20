@@ -64,6 +64,7 @@
     "equal": 1,
 
     "normalize": 7,
+    "heightToNormal": 30,
     "length": 7,
     "distance": 8,
     "dot": 3,

@@ -1830,10 +1830,11 @@ function rangeOfValue(v: number[]): RangeResult {
  *  construction (three's transformDirection ends in normalize()), and so is
  *  `rayDirection` in all three places it is emitted (the flat helper's
  *  normalize(), the splat scope's `.normalize()`, the march Background's
- *  transformDirection). */
+ *  transformDirection). `heightToNormal` ends in normalize() too, and is a
+ *  field whatever feeds it (it reads the surface's own normal). */
 const UNIT_VECTOR_TYPES: ReadonlySet<string> = new Set([
   'normalLocal', 'tangentLocal', 'normalWorld', 'positionWorldDirection', 'positionViewDirection',
-  'rayDirection',
+  'rayDirection', 'heightToNormal',
 ]);
 
 /** Real values the editor cannot bound: world units, the orbit camera, and an

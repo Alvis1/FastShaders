@@ -904,6 +904,27 @@ const definitions: NodeDefinition[] = [
     outputs: [{ id: 'out', label: 'Result', dataType: 'vec3' }],
     description: 'Cross product — a vector perpendicular to both A and B.',
   },
+  // Bump mapping (Blender's Bump node): a module-helper Fn (engine/moduleHelpers.ts,
+  // heightToNormal). The result is a VIEW-space normal for the Output's Normal channel;
+  // it reads screen derivatives, so it means nothing in Displacement (a vertex stage
+  // has none). Height is in the scene's units, so Strength defaults to 0.1 (a ±1 noise
+  // at 1 lays every normal nearly flat); 0 is the surface's own normal.
+  {
+    type: 'heightToNormal',
+    label: 'Height to Normal',
+    category: 'vector',
+    tslFunction: 'heightToNormal',
+    tslImportModule: '',
+    inputs: [
+      { id: 'height', label: 'Height', dataType: 'float' },
+      { id: 'strength', label: 'Strength', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Normal', dataType: 'vec3' }],
+    defaultValues: { height: 0, strength: 0.1 },
+    description:
+      'Make a surface look bumpy without moving it: turns a height (a noise, a texture) into the normal the raised surface would have. Wire it into the Output node’s Normal socket. Strength scales the bumps; 0 leaves the surface smooth. Also: bump, bump map, normal map, normal from height, height map, relief, emboss, blender',
+    construction: 'N′ = normalize(|det|·N − sign(det)·(∂h/∂x·R1 + ∂h/∂y·R2)), h = Height × Strength, with R1 = ∂P/∂y × N, R2 = N × ∂P/∂x, det = ∂P/∂x · R1 (Mikkelsen 2010, in view space)',
+  },
 
   // ===== SPLIT =====
   {

@@ -54,6 +54,11 @@ const DELIBERATELY_GLYPHLESS = new Set([
   // on every surface); with a glyph and two inputs it would also be an operator
   // card, which draws no art (2026-10-09).
   'rgbCurves',
+  // Height to Normal (2026-11-20) has no designed art yet: its Height and
+  // Strength rows show their values, and a glyph with two inputs would turn it
+  // into an operator card. Drops off this list when one is authored in the
+  // Node Designer (the stale-entry test below enforces that).
+  'heightToNormal',
   // The Image node draws its THUMBNAIL — or, with no image, the dashed
   // 'No image' slot every NodeVisual surface draws — which is strictly more
   // informative than an icon. Unlike the colormap ramp it is PAYLOAD, not

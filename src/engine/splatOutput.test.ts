@@ -1095,6 +1095,11 @@ describe('Splat Output — an unwired input never reads the quad (implicit reads
     let swept = 0;
     for (const def of NODE_REGISTRY.values()) {
       if (def.category === 'output' || def.type === 'unknown' || def.type === 'split' || roots.has(def.type)) continue;
+      // Height to Normal is a rasterized-SURFACE node: its helper reads the screen
+      // derivatives of positionView and normalView, which a splat (a camera-facing
+      // quad per point, no Normal socket on the Splat Output) has no meaning for
+      // whatever it were bound to. Not an implicit read the scope could bind.
+      if (def.type === 'heightToNormal') continue;
       if (def.inputs.length === 0 && def.category !== 'noise') continue;
       const n = def.type === 'imageNode' ? image('x') : makeNode('x', def.type);
       const splatCode = code(cut(n));

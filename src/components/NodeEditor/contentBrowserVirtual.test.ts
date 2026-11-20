@@ -98,20 +98,22 @@ describe('content browser — the boot cost, stated', () => {
     // follows the FILE rather than a literal. 77 with the Splat Output
     // (2026-09-25), which is always offered — not a Distance-fields companion;
     // 78 with Brightness/Contrast (2026-10-01); 79 with Fresnel (2026-10-09);
-    // 80 with Color Ramp (2026-10-09); 81 with RGB Curves (2026-10-09).
-    expect(booted.length).toBe(81 + img);
+    // 80 with Color Ramp (2026-10-09); 81 with RGB Curves (2026-10-09);
+    // 82 with Height to Normal (2026-11-20).
+    expect(booted.length).toBe(82 + img);
   });
 
-  it(`observes ${79 + img} elements through ONE shared ResizeObserver`, () => {
+  it(`observes ${80 + img} elements through ONE shared ResizeObserver`, () => {
     // NodePreviewCard wraps every branch except `color` in FitNodeHeading; the
     // colour cards need no heading normalization (they have no header), so they
     // escape it. The count of OBSERVED ELEMENTS is unchanged — what changed
     // (2026-09-09) is that they share a single observer instead of registering
     // one per card in the browser's observation loop for the whole session
     // (76: the boot set minus the two colour cards; 77 with Fresnel, 78 with
-    // Color Ramp, 79 with RGB Curves, 2026-10-09).
+    // Color Ramp, 79 with RGB Curves, 2026-10-09; 80 with Height to Normal,
+    // 2026-11-20).
     const observed = booted.filter((d) => getFlowNodeType(d) !== 'color');
-    expect(observed.length).toBe(79 + img);
+    expect(observed.length).toBe(80 + img);
     const card = readFileSync(join(__dirname, 'NodePreviewCard.tsx'), 'utf8');
     expect((card.match(/new ResizeObserver\(/g) ?? []).length).toBe(1);
     expect(card).toContain('return observeCardSize(el, measure);');
@@ -130,8 +132,9 @@ describe('content browser — the boot cost, stated', () => {
     // fields (its companion, off by default) — 62 before 2026-09-16. The
     // Texture node (`img`) is ShaderNode-rendered too, so it lands here.
     // 62 with Brightness/Contrast (2026-10-01); 63 with Fresnel (2026-10-09);
-    // 64 with Color Ramp (2026-10-09); 65 with RGB Curves (2026-10-09).
-    expect(byFlow('shader')).toBe(65 + img);
+    // 64 with Color Ramp (2026-10-09); 65 with RGB Curves (2026-10-09);
+    // 66 with Height to Normal (2026-11-20).
+    expect(byFlow('shader')).toBe(66 + img);
   });
 });
 

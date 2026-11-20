@@ -44,6 +44,10 @@
       "ref": "Blender Foundation. Blender, Brightness/Contrast shader node — Cycles svm_brightness_contrast (intern/cycles/kernel/svm/color_util.h): a = 1 + contrast, b = brightness − 0.5·contrast, max(a·color + b, 0) per channel. Reproduced exactly, with Blender's defaults.",
       "url": "https://projects.blender.org/blender/blender/src/branch/main/intern/cycles/kernel/svm/color_util.h"
     },
+    "heightToNormal": {
+      "ref": "Mikkelsen, M. S. (2010). Bump Mapping Unparametrized Surfaces on the GPU. Journal of Graphics, GPU, and Game Tools 15(1), 49–61 — listing 2 (surface-gradient perturbation from screen-space derivatives), as in three.js BumpMapNode, with the height's own derivatives and unnormalized position derivatives.",
+      "url": "https://mmikk.github.io/papers3d/mm_sfgrad_bump.pdf"
+    },
     "fresnel": {
       "ref": "Blender Foundation. Blender, Fresnel shader node — Cycles svm_node_fresnel and fresnel_dielectric_cos (intern/cycles/kernel/closure/bsdf_util.h): eta = max(IOR, 1e-5), 1/eta on back faces, dielectric Fresnel of |N·V|; the Facing output is svm_node_layer_weight's Facing at Blend 0.5, 1 − |N·V|. Reproduced exactly with Blender's default IOR 1.5.",
       "url": "https://projects.blender.org/blender/blender/src/branch/main/intern/cycles/kernel/closure/bsdf_util.h"

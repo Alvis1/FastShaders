@@ -19,6 +19,7 @@ exports[`the unwired emission of every node is pinned > matches the recorded per
   "fract": "const fract1 = fract(0);",
   "fresnel": "const fresnel1 = fsFresnel(1.5, normalWorld, positionWorld);",
   "greaterThan": "const greaterThan1 = greaterThan(0, 0);",
+  "heightToNormal": "const heightToNormal1 = heightToNormal(0, 0.1);",
   "hsl": "const hsl1 = hsl(0, 1, 0.5);",
   "length": "const length1 = length(0);",
   "lessThan": "const lessThan1 = lessThan(0, 0);",
