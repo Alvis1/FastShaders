@@ -23,7 +23,7 @@ import { getRecentNodeTypes, noteNodeUsed } from './recentNodes';
 import { hiddenOptionalCategories } from '@/registry/optionalCategories';
 import { freshNodeCost } from '@/utils/nodeCost';
 import { toBudgetPoints } from '@/utils/budgetPoints';
-import { useDeviceBudget } from '@/hooks/useDeviceBudget';
+import { useBudgetUnlimited, useDeviceBudget } from '@/hooks/useDeviceBudget';
 import { Points } from '@/components/Points/Points';
 import { evalTask } from '@/eval/evalTask';
 import { noteMatchesQuery } from '../noteSearch';
@@ -82,6 +82,8 @@ export function AddNodeMenu() {
   // What a row's price is divided by to print (utils/budgetPoints.ts); it
   // re-renders the rows on a device change, which reprices them.
   const deviceBudget = useDeviceBudget();
+  // "Unlimited": the figure stays, in the colourless grey every card uses.
+  const costUnlimited = useBudgetUnlimited();
   const language = useAppStore((s) => s.language);
   const { screenToFlowPosition, fitView } = useReactFlow();
 
@@ -482,7 +484,7 @@ export function AddNodeMenu() {
           {cost > 0 && evalTask().pointsVisible && (
             <span
               className="context-menu__item-cost"
-              style={{ color: getCostTextColor(points, costColorLow, costColorHigh) }}
+              style={{ color: getCostTextColor(costUnlimited ? 0 : points, costColorLow, costColorHigh) }}
             >
               <Points value={points} />
             </span>

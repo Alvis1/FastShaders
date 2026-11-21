@@ -1,6 +1,6 @@
 import type { AppNode } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
-import { useDeviceBudget } from '@/hooks/useDeviceBudget';
+import { useBudgetUnlimited, useDeviceBudget } from '@/hooks/useDeviceBudget';
 import { assetCostPoints } from '@/utils/nodeCost';
 import { toBudgetPoints } from '@/utils/budgetPoints';
 import { getCostTextColor } from '@/utils/colorUtils';
@@ -33,13 +33,16 @@ export function AssetCostBadge({ nodes }: { nodes: readonly AppNode[] }) {
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   const budget = useDeviceBudget();
+  // Hooks before the early return below.
+  const unlimited = useBudgetUnlimited();
   const cost = assetCostPoints(nodes);
   if (cost <= 0) return null;
   const points = toBudgetPoints(cost, budget);
   return (
     <span
       className="node-base__cost-badge"
-      style={{ color: getCostTextColor(points, costColorLow, costColorHigh) }}
+      // Under "Unlimited" the colourless grey, as on every card.
+      style={{ color: getCostTextColor(unlimited ? 0 : points, costColorLow, costColorHigh) }}
     >
       <Points value={points} />
     </span>

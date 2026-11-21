@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useUpdateNodeInternals } from '@xyflow/react';
 import type { AppNode } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
-import { useDeviceBudget } from '@/hooks/useDeviceBudget';
+import { useBudgetUnlimited, useDeviceBudget } from '@/hooks/useDeviceBudget';
 import { nodeCostPoints } from '@/utils/nodeCost';
 import { toBudgetPoints } from '@/utils/budgetPoints';
 import { getCostColor, getCostScale, getCostTextColor, getContrastColor } from '@/utils/colorUtils';
@@ -26,17 +26,21 @@ export function useCostChrome(cost: number) {
   // is the app-wide dark switch; the store field keeps its historical name.
   const dark = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
   const points = toBudgetPoints(cost, useDeviceBudget());
+  const unlimited = useBudgetUnlimited();
   // In the no-points condition (`/evalp`, `pointsVisible === false`), nodes and
   // palette tiles must not leak cost through header colour or card scaling:
   // passing 0 selects `getCostColor`'s built-in neutral header grey and a 1×
   // scale (`getCostScale(0) === 1`), while `points` keeps its value for callers
   // whose `<Points>` component already gates on `pointsVisible`.
   const visiblePoints = evalTask().pointsVisible ? points : 0;
-  const costColor = getCostColor(visiblePoints, low, high, dark);
+  // The "Unlimited" row drops the COLOURS only: the same neutral grey, while
+  // the card keeps its cost scale and its badge its figure (owner, 2026-11-21).
+  const colourPoints = unlimited ? 0 : visiblePoints;
+  const costColor = getCostColor(colourPoints, low, high, dark);
   return {
     costColor,
     headerTextColor: getContrastColor(costColor),
-    costTextColor: getCostTextColor(visiblePoints, low, high),
+    costTextColor: getCostTextColor(colourPoints, low, high),
     costScale: getCostScale(visiblePoints),
     points,
   };
@@ -118,9 +122,11 @@ export function useRemeasureOnScale(id: string, costScale: number): void {
  * printed beside the Output says the same thing as the one in the corner.
  * A per-node badge never does: one node's price is not a total. `cost` is in
  * table points, compared against the device's budget in the same currency —
- * the printed form of that test is "over 100".
+ * the printed form of that test is "over 100". Never under "Unlimited".
  */
 export function useSinkBadgeClass(cost: number): string {
   const max = useDeviceBudget();
-  return `node-base__cost-badge${cost > max ? ' node-base__cost-badge--over' : ''}`;
+  // "Unlimited" has no budget to pass, so nothing is ever over it.
+  const unlimited = useBudgetUnlimited();
+  return `node-base__cost-badge${cost > max && !unlimited ? ' node-base__cost-badge--over' : ''}`;
 }

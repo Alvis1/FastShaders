@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState, type ChangeEvent, type DragEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { useAppStore, VR_HEADSETS, resolveDeviceBudget } from '@/store/useAppStore';
+import { useAppStore, VR_HEADSETS, UNLIMITED_DEVICE_ID, resolveDeviceBudget } from '@/store/useAppStore';
+import { isEvalMode } from '@/eval/evalArm';
 import { t, type Language } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { downloadBlob } from '@/utils/downloadBlob';
@@ -50,6 +51,13 @@ const ACTION_OPTIONS = new Set([IMPORT_OPTION, NEW_OPTION, EDIT_OPTION, EXPORT_O
 const COMPARE_URL = `${import.meta.env.BASE_URL}compare/`;
 const OFFERS_COMPARE = !__FS_DESKTOP__;
 
+/**
+ * The "Unlimited" row (registry/vrHeadsets.ts `UNLIMITED_DEVICE_ID`): no budget,
+ * so no slider and no cost colours. Not offered in a study tab — the arm decides
+ * the cost feedback there, and the store refuses the id anyway.
+ */
+const OFFERS_UNLIMITED = !isEvalMode();
+
 /** How long a one-line notice stays up — the image-convert notice's 12 s. */
 const NOTICE_TIMEOUT_MS = 12000;
 
@@ -81,10 +89,14 @@ export function deviceOptionText(device: { label: string; meta?: CostProfile['me
  * poles (intro/BudgetScene.tsx).
  */
 export function CostMeter({
-  points, language, colorLow, colorHigh, device, value, lowPole, highPole,
+  points, language, colorLow, colorHigh, device, value, lowPole, highPole, unlimited = false,
 }: {
   points: number;
   language: Language;
+  /** The "Unlimited" row: no budget, so the total prints without "/ 100",
+   *  never turns red, and the ramp row — track, marker and both poles — is
+   *  not drawn (owner, 2026-11-21). */
+  unlimited?: boolean;
   /** The device control, sharing the top row with the total — two rows in
    *  all: device + total, then the ramp. The budget is printed once, after
    *  the slash, so the ramp's ends carry no numbers. */
@@ -99,10 +111,10 @@ export function CostMeter({
   highPole: ReactNode;
 }) {
   const percentage = Math.min(points / POINT_BUDGET, 1);
-  const over = points > POINT_BUDGET;
+  const over = !unlimited && points > POINT_BUDGET;
   const label = (
     <>
-      <Points value={points} tip={false} /> / {POINT_BUDGET} {t('pts', language)}
+      <Points value={points} tip={false} />{unlimited ? '' : ` / ${POINT_BUDGET}`} {t('pts', language)}
     </>
   );
   const cls = `cost-bar__value ${over ? 'cost-bar__value--over' : ''}`;
@@ -112,7 +124,7 @@ export function CostMeter({
         {device}
         {value ? value(cls, label) : <span className={cls}>{label}</span>}
       </div>
-      <div className="cost-bar__track-row">
+      {!unlimited && <div className="cost-bar__track-row">
         {lowPole}
         <div
           className="cost-bar__track"
@@ -126,7 +138,7 @@ export function CostMeter({
           />
         </div>
         {highPole}
-      </div>
+      </div>}
     </>
   );
 }
@@ -206,7 +218,9 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
   const { label: deviceLabel } = resolveDeviceBudget(selectedHeadsetId, costProfiles);
   // A dangling id (e.g. a profile id from an imported project the user doesn't
   // have) resolves to the first headset but isn't a real option — show that one.
-  const knownId = activeProfile != null || VR_HEADSETS.some((h) => h.id === selectedHeadsetId);
+  // "Unlimited" is a real option outside a study (the store never holds it in one).
+  const unlimited = selectedHeadsetId === UNLIMITED_DEVICE_ID;
+  const knownId = activeProfile != null || unlimited || VR_HEADSETS.some((h) => h.id === selectedHeadsetId);
   const selectValue = knownId ? selectedHeadsetId : VR_HEADSETS[0].id;
   // The total as printed: its share of the selected device's budget, which is
   // 100 on every device (utils/budgetPoints.ts). The store sums in table
@@ -216,7 +230,7 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
   // editor that layered a user's own cap over a device's measured one went
   // with `fs:costBudgets`.
   const points = useBudgetPoints(totalCost);
-  const over = points > POINT_BUDGET;
+  const over = !unlimited && points > POINT_BUDGET;
   const invalid = activeProfile?.meta.valid === false;
 
   // ONE commit gate for every entrance (drop, picker, same-browser chip):
@@ -522,6 +536,7 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
       <CostMeter
         points={points}
         language={language}
+        unlimited={unlimited}
         colorLow={costColorLow}
         colorHigh={costColorHigh}
         device={
@@ -566,6 +581,13 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
                   ))}
                 </optgroup>
               )}
+              {/* Below every device: it is not one. No budget, so the bar
+                  drops its slider and nothing is coloured by cost. */}
+              {OFFERS_UNLIMITED && (
+                <optgroup label={t('No budget', language)}>
+                  <option value={UNLIMITED_DEVICE_ID}>{t('Unlimited', language)}</option>
+                </optgroup>
+              )}
               <optgroup label={t('Profiles', language)}>
                 <option value={IMPORT_OPTION}>{t('Import result JSON…', language)}</option>
                 <option value={NEW_OPTION}>{t('New profile…', language)}</option>
@@ -606,7 +628,9 @@ export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = fa
           // it goes into is filled in ONE pass (utils/fillTemplate.ts). The
           // total is the EXACT figure (`formatPoints().exact`), so hovering the
           // number shows what its rounded print and dot stand for.
-          const explain = `${fillTemplate(t('Estimated GPU cost: {total} of {max} points for {headset}. Every device’s budget is {max} points — the per-pixel shader work it can do each frame while keeping the frame rate smooth in VR.', language), { total: formatPoints(points).exact, max: POINT_BUDGET, headset: deviceLabel })}${over ? t(' You are over budget.', language) : ''}`;
+          const explain = unlimited
+            ? fillTemplate(t('Estimated GPU cost in points: {total}. “Unlimited” sets no budget, so nodes are not colored by cost and nothing turns red.', language), { total: formatPoints(points).exact })
+            : `${fillTemplate(t('Estimated GPU cost: {total} of {max} points for {headset}. Every device’s budget is {max} points — the per-pixel shader work it can do each frame while keeping the frame rate smooth in VR.', language), { total: formatPoints(points).exact, max: POINT_BUDGET, headset: deviceLabel })}${over ? t(' You are over budget.', language) : ''}`;
           return onFocusOutput ? (
             <button
               type="button"

@@ -26,7 +26,7 @@ import { formatCategoryLabel, type Language } from '@/i18n';
 import { getCostColor, getCostScale, getContrastColor } from '@/utils/colorUtils';
 import { freshNodeCost } from '@/utils/nodeCost';
 import { toBudgetPoints } from '@/utils/budgetPoints';
-import { useDeviceBudget } from '@/hooks/useDeviceBudget';
+import { useBudgetUnlimited, useDeviceBudget } from '@/hooks/useDeviceBudget';
 import { useAppStore } from '@/store/useAppStore';
 import { definitionOf, categoryHex } from './ndData';
 
@@ -85,6 +85,8 @@ function NdPreview(p: NdPreviewInput) {
   // surface (ndData's costColorOf/costScaleOf, which the overlays read, agree).
   // Up here because it is a hook and the render returns early below.
   const deviceBudget = useDeviceBudget();
+  // "Unlimited" draws the canvas's colourless header (useCostChrome).
+  const unlimited = useBudgetUnlimited();
   // Layout effect, not a passive one: the vanilla overlays (corner grip, snap
   // ruler, edge stubs) are positioned from this callback, and a passive effect
   // runs AFTER paint — during a corner-resize drag the grip would visibly
@@ -96,7 +98,7 @@ function NdPreview(p: NdPreviewInput) {
   if (!def) return null;
   const cost = freshNodeCost(def.type) ?? 0;
   const points = toBudgetPoints(cost, deviceBudget);
-  const costColor = getCostColor(points, costColorLow, costColorHigh);
+  const costColor = getCostColor(unlimited ? 0 : points, costColorLow, costColorHigh);
   return (
     <NodeVisual
       def={def}

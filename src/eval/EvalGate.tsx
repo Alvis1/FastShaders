@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { clearImageOrigins } from '@/utils/imageOriginCache';
-import { useAppStore, resolveDeviceBudget, TUTORIALS_DONE_KEY } from '@/store/useAppStore';
+import { useAppStore, resolveDeviceBudget, TUTORIALS_DONE_KEY, UNLIMITED_DEVICE_ID, VR_HEADSETS } from '@/store/useAppStore';
 import { countProject } from '@/utils/feedbackReport';
 import { computeGraphCost } from '@/utils/nodeCost';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
@@ -96,6 +96,11 @@ function cleanSlateForStudy(): void {
   const store = useAppStore.getState();
   store.newGraph();
   store.setPreviewMesh(null);
+  // The cost bar's "Unlimited" row turns the cost colours and the slider off —
+  // the feedback the arm decides. A study tab never offers it and the store
+  // refuses it while the session records, but this browser may have it stored
+  // from ordinary use: the participant starts on the default device instead.
+  if (store.selectedHeadsetId === UNLIMITED_DEVICE_ID) store.setSelectedHeadsetId(VR_HEADSETS[0].id);
   // Every device-local store a drop can WRITE is dropped: the preview mesh
   // above (store + its IndexedDB mirror) and the image-origin cache — a
   // participant's dropped source images would otherwise stay recoverable from

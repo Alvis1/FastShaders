@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useAppStore, resolveDeviceBudget } from '@/store/useAppStore';
+import { useAppStore, UNLIMITED_DEVICE_ID, resolveDeviceBudget } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { countMeshVertices } from '@/utils/previewMesh';
 import {
@@ -89,7 +89,9 @@ export function collectProject(): FeedbackProject {
   return {
     ...countProject(s.nodes, s.edges),
     totalCost: s.totalCost,
-    headset: headset.label,
+    // "Unlimited" resolves to the default device's prices and divisor; the
+    // report says which row was picked, as the bar does.
+    headset: s.selectedHeadsetId === UNLIMITED_DEVICE_ID ? 'Unlimited' : headset.label,
     budget: headset.maxPoints,
     geometry,
     mesh: mesh

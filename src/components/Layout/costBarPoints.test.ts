@@ -36,17 +36,19 @@ const meter = BAR.slice(BAR.indexOf('export function CostMeter('), BAR.indexOf('
 describe('the readout prints budget points against 100', () => {
   it('divides the summed total once, with the hook every point surface shares', () => {
     expect(BAR).toContain('const points = useBudgetPoints(totalCost);');
-    expect(BAR).toContain('const over = points > POINT_BUDGET;');
+    // "Unlimited" (no budget) is never over it; every device row is past 100.
+    expect(BAR).toContain('const over = !unlimited && points > POINT_BUDGET;');
     // The raw total is never printed or compared against a budget by itself.
     expect(BAR).not.toMatch(/totalCost\s*>/);
     expect(BAR).not.toMatch(/total=\{totalCost\}/);
   });
 
   it('prints the figure through <Points>, then the fixed budget, beside the device on one row', () => {
-    expect(meter).toContain('<Points value={points} tip={false} /> / {POINT_BUDGET} {t(\'pts\', language)}');
+    // "Unlimited" drops the "/ 100": it has no budget to print.
+    expect(meter).toContain("<Points value={points} tip={false} />{unlimited ? '' : ` / ${POINT_BUDGET}`} {t('pts', language)}");
     expect(meter).toMatch(/<div className="cost-bar__head">\s*\{device\}/);
     expect(meter).toContain('const percentage = Math.min(points / POINT_BUDGET, 1);');
-    expect(meter).toContain('const over = points > POINT_BUDGET;');
+    expect(meter).toContain('const over = !unlimited && points > POINT_BUDGET;');
     expect(meter).not.toMatch(/\bmax\b|maxPoints/);
   });
 

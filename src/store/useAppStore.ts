@@ -67,7 +67,7 @@ import { nodeCostPoints, computeReachableCost, imageNodeCost, getCost, sinkCosts
 // costTable.ts imports nothing and therefore can never be caught mid-init.
 import { setCostOverrides } from '@/utils/costTable';
 import { setDeviceBudget } from '@/utils/budgetPoints';
-import { VR_HEADSETS, deviceCostOverrides, type VRHeadset } from '@/registry/vrHeadsets';
+import { VR_HEADSETS, UNLIMITED_DEVICE_ID, deviceCostOverrides, type VRHeadset } from '@/registry/vrHeadsets';
 import {
   type ParsedCostFile, type CostProfile, profileFromParsed, createManualProfile, parseStoredCostProfiles,
 } from '@/utils/costOverride';
@@ -1446,7 +1446,7 @@ export function reportOutputSectionsTrimmed(slot: StorageSlot | undefined, count
 
 // The device rows live in registry/vrHeadsets.ts (a leaf the compare page
 // reads too); re-exported so every existing importer keeps one import site.
-export { VR_HEADSETS, deviceCostOverrides };
+export { VR_HEADSETS, UNLIMITED_DEVICE_ID, deviceCostOverrides };
 export type { VRHeadset };
 
 // Apply the active device's measured costs to the nodeCost module, and its
@@ -1467,7 +1467,9 @@ export function deviceMaxTextureDim(headsetId: string): number {
  * the device's measured budget in TABLE points — what every surface prints as
  * 100 (utils/budgetPoints.ts) — so the store hands it to `setDeviceBudget`
  * and the study package records it. Unknown ids fall back to the first
- * headset. (A user-typed cap layered over it went 2026-10-23 with the fixed
+ * headset, and so does "Unlimited" (UNLIMITED_DEVICE_ID), on purpose: its
+ * prices, divisor and image cap ARE that device's — only the budget display
+ * goes. (A user-typed cap layered over it went 2026-10-23 with the fixed
  * 100: `fs:costBudgets` is retired.)
  */
 export function resolveDeviceBudget(
@@ -1481,6 +1483,20 @@ export function resolveDeviceBudget(
     maxPoints: p ? p.maxPoints : h.maxPoints,
     isProfile: p != null,
   };
+}
+
+/**
+ * Can `id` be the device selection? A built-in headset, a cost profile in
+ * `profiles`, or the "Unlimited" row — except while a study session records,
+ * which never selects that one (UNLIMITED_DEVICE_ID; a project file naming it
+ * changes nothing there). The ONE test `setSelectedHeadsetId` and the bundle
+ * import's keep-current check share. The session flag comes from telemetry,
+ * the store's one eval import; the cost bar's offer and the clean slate's
+ * reset (EvalGate) close the rest of the study tab.
+ */
+export function isSelectableDeviceId(id: string, profiles: { id: string }[]): boolean {
+  if (id === UNLIMITED_DEVICE_ID) return !isEvalSessionActive();
+  return VR_HEADSETS.some((h) => h.id === id) || profiles.some((p) => p.id === id);
 }
 
 /**
@@ -2649,9 +2665,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // entry the file happened to end with, so a bundle keeps the active
     // device — but still re-selects it, since one of the entries may BE that
     // device with new numbers and the applied table has to catch up.
-    const keepCurrent = opts?.select === 'current'
-      && (VR_HEADSETS.some((h) => h.id === selectedHeadsetId)
-        || nextProfiles.some((p) => p.id === selectedHeadsetId));
+    const keepCurrent = opts?.select === 'current' && isSelectableDeviceId(selectedHeadsetId, nextProfiles);
     get().setSelectedHeadsetId(keepCurrent ? selectedHeadsetId : last.id);
     return landed.size;
   },
@@ -3146,16 +3160,16 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   setSelectedHeadsetId: (id) => {
-    // Selecting a device may be a measured cost profile (its id) or a built-in
-    // headset — apply the matching cost table (profile costs, else base) and
+    // Selecting a device may be a measured cost profile (its id), a built-in
+    // headset or "Unlimited" (base prices, no budget display; refused while a
+    // study session records) — apply the matching cost table (profile costs, else base) and
     // recompute the total + Output-node cost, bumping costVersion so badges
     // repaint. Ignore an id that resolves to NEITHER (e.g. a foreign `cp:` id
     // embedded in an imported project the user doesn't have) — persisting and
     // applying it would silently clobber the user's real device selection with a
     // dangling phantom. Keeping the current selection is the correct fallback.
     const { costProfiles, nodes, edges } = get();
-    const isKnown = VR_HEADSETS.some((h) => h.id === id) || costProfiles.some((p) => p.id === id);
-    if (!isKnown) return;
+    if (!isSelectableDeviceId(id, costProfiles)) return;
     saveString('fs:headsetId', id);
     setCostOverrides(deviceCostOverrides(id, costProfiles));
     // The budget the points are printed against moves with the device; the

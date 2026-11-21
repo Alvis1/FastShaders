@@ -27,7 +27,10 @@ describe('/evalp: no point figure in a menu row', () => {
   it('neutralizes node header cost colour and card cost scaling when pointsVisible is false', () => {
     const chrome = read('../components/NodeEditor/nodes/useCostChrome.ts');
     expect(chrome).toContain('const visiblePoints = evalTask().pointsVisible ? points : 0;');
-    expect(chrome).toContain('getCostColor(visiblePoints, low, high, dark)');
+    // Colours go through "Unlimited"'s gate too (registry/vrHeadsets.ts), which
+    // can only take MORE colour away: 0 stays 0.
+    expect(chrome).toContain('const colourPoints = unlimited ? 0 : visiblePoints;');
+    expect(chrome).toContain('getCostColor(colourPoints, low, high, dark)');
     expect(chrome).toContain('getCostScale(visiblePoints)');
     const layout = read('../engine/layoutEngine.ts');
     expect(layout).toContain('if (!evalTask().pointsVisible) return 1;');

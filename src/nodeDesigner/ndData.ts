@@ -15,7 +15,7 @@ import { getAllDefinitions, getFlowNodeType, growsOperands, NODE_REGISTRY } from
 import { budgetPointsOf, freshNodeCost, getBaseCosts } from '@/utils/nodeCost';
 import { formatPoints, type PointsLabel } from '@/utils/budgetPoints';
 import { CAT_HEX, getTypeColor, getCostColor, getCostScale, getContrastColor, COUNT_EDGE_COLORS } from '@/utils/colorUtils';
-import { useAppStore } from '@/store/useAppStore';
+import { useAppStore, UNLIMITED_DEVICE_ID } from '@/store/useAppStore';
 import type { NodeCategory, NodeDefinition, TSLDataType } from '@/types';
 
 /** The designer app's node model — port tuples, like the old snapshot, so the
@@ -88,7 +88,9 @@ export function typeColor(dataType: string): string {
  *  points like every card's (utils/budgetPoints.ts). */
 export function costColorOf(cost: number): string {
   const s = useAppStore.getState();
-  return getCostColor(budgetPointsOf(cost), s.costColorLow, s.costColorHigh);
+  // The canvas's colourless header under "Unlimited" (useCostChrome).
+  const points = s.selectedHeadsetId === UNLIMITED_DEVICE_ID ? 0 : budgetPointsOf(cost);
+  return getCostColor(points, s.costColorLow, s.costColorHigh);
 }
 
 /** The cost scale the stage card is drawn at (bridge.tsx), from a price in

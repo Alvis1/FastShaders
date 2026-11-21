@@ -13,7 +13,9 @@ describe('the over-budget sink badge', () => {
     const hook = read('./useCostChrome.ts');
     // The device budget in table points, i.e. the printed 100 (utils/budgetPoints.ts).
     expect(hook).toContain('const max = useDeviceBudget();');
-    expect(hook).toContain("return `node-base__cost-badge${cost > max ? ' node-base__cost-badge--over' : ''}`;");
+    // "Unlimited" has no budget, so no sink is ever over it.
+    expect(hook).toContain('const unlimited = useBudgetUnlimited();');
+    expect(hook).toContain("return `node-base__cost-badge${cost > max && !unlimited ? ' node-base__cost-badge--over' : ''}`;");
   });
 
   it('every sink badge, and the Output card, takes the class', () => {

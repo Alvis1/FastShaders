@@ -19,7 +19,7 @@ import { hiddenOptionalCategories } from '@/registry/optionalCategories';
 import { formatCategoryLabel, formatNodeLabel, t, type Language } from '@/i18n';
 import { freshNodeCost } from '@/utils/nodeCost';
 import { getCostTextColor } from '@/utils/colorUtils';
-import { useBudgetPoints } from '@/hooks/useDeviceBudget';
+import { useBudgetPoints, useBudgetUnlimited } from '@/hooks/useDeviceBudget';
 import { evalTask } from '@/eval/evalTask';
 import { Points } from '@/components/Points/Points';
 import {
@@ -95,6 +95,8 @@ export function MenuRow({ def, focused, language, costLow, costHigh, probe }: {
   // As the Add-node menu prints it: the selected device's budget points, which
   // also re-renders the row when a device change reprices it.
   const points = useBudgetPoints(cost);
+  // Coloured as the menu's row is: grey under "Unlimited".
+  const unlimited = useBudgetUnlimited();
   return (
     <button
       tabIndex={-1}
@@ -107,7 +109,7 @@ export function MenuRow({ def, focused, language, costLow, costHigh, probe }: {
             study arm, and /evalp (points off) must see no point figure —
             eval.css's points-off sweep does not reach a menu row. */}
         {cost > 0 && evalTask().pointsVisible && (
-          <span className="context-menu__item-cost" style={{ color: getCostTextColor(points, costLow, costHigh) }}>
+          <span className="context-menu__item-cost" style={{ color: getCostTextColor(unlimited ? 0 : points, costLow, costHigh) }}>
             <Points value={points} />
           </span>
         )}

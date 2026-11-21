@@ -1,4 +1,4 @@
-import { useAppStore } from '@/store/useAppStore';
+import { useAppStore, UNLIMITED_DEVICE_ID } from '@/store/useAppStore';
 import { getDeviceBudget, toBudgetPoints } from '@/utils/budgetPoints';
 
 /**
@@ -18,4 +18,13 @@ export function useDeviceBudget(): number {
 /** `raw` table points as the budget points a surface prints, under the selected device. */
 export function useBudgetPoints(raw: number): number {
   return toBudgetPoints(raw, useDeviceBudget());
+}
+
+/**
+ * Is the "Unlimited" row selected (registry/vrHeadsets.ts `UNLIMITED_DEVICE_ID`)?
+ * Then no surface colours a price or marks a total over budget, and the cost
+ * bar draws no slider. The store never holds it in a study tab.
+ */
+export function useBudgetUnlimited(): boolean {
+  return useAppStore((s) => s.selectedHeadsetId === UNLIMITED_DEVICE_ID);
 }

@@ -60,6 +60,25 @@ export const VR_HEADSETS: VRHeadset[] = [
   },
 ];
 
+/**
+ * The device dropdown's "Unlimited" row (owner, 2026-11-21): a selection with
+ * NO budget. The cost bar drops its slider (the gradient track, its marker and
+ * the two impact-colour pickers) and prints the total without "/ 100"; every
+ * card, badge and menu row draws the colourless look `/evalp` uses, and
+ * nothing turns red past 100. Everything else is the DEFAULT device's
+ * (VR_HEADSETS[0]): the shipped price table, the divisor the point figures are
+ * printed with, the image size cap — so `resolveDeviceBudget` and
+ * `deviceCostOverrides` fall back for it exactly as for an unknown id, and an
+ * image notice still names the device whose cap it applied. Card SIZE still
+ * follows the price.
+ *
+ * Not a `VRHeadset` row: it is no device, and the compare page and every
+ * `VR_HEADSETS` reader list devices only. Never offered or applied in a study
+ * session, where the cost feedback is the arm's condition (the store refuses
+ * it there). A cost-profile id always starts `cp:`, so none can collide.
+ */
+export const UNLIMITED_DEVICE_ID = 'unlimited';
+
 /** The per-node prices a device selection lays over complexity.json: a cost
  *  profile's, else a built-in headset's own measured ones, else none. The ONE
  *  lookup the boot and `setSelectedHeadsetId` both apply. */

@@ -29,7 +29,7 @@ import { fillTemplate } from '@/utils/fillTemplate';
 import { formatKbMb } from '@/utils/formatSize';
 import { requestPicturePlacement } from '@/utils/picturePlaceRequest';
 import { POINT_BUDGET, toBudgetPoints } from '@/utils/budgetPoints';
-import { useDeviceBudget } from '@/hooks/useDeviceBudget';
+import { useBudgetUnlimited, useDeviceBudget } from '@/hooks/useDeviceBudget';
 import { Points } from '@/components/Points/Points';
 import { preloadShaderImport } from '@/engine/projectImport';
 import { fullscreenElement } from '@/components/inputs/colorPickerModel';
@@ -149,6 +149,8 @@ export function GeneratorDialog({ initialPrompt, at, autostart, initialPicture, 
   // selected device's budget onto the fixed 100 (utils/budgetPoints.ts).
   const deviceBudget = useDeviceBudget();
   const deviceLabel = useAppStore((s) => resolveDeviceBudget(s.selectedHeadsetId, s.costProfiles).label);
+  // "Unlimited" sets no budget: the line names none and never turns red.
+  const costUnlimited = useBudgetUnlimited();
 
   const env = useMemo(buildEnv, []);
   const routes = useMemo(() => offeredRoutes(env, isEvalMode()), [env]);
@@ -862,11 +864,13 @@ export function GeneratorDialog({ initialPrompt, at, autostart, initialPicture, 
         {phase.kind === 'result' && (() => {
           const points = toBudgetPoints(phase.result.cost, deviceBudget);
           const facts = { n: phase.result.nodeCount, max: POINT_BUDGET, device: deviceLabel };
-          const [beforeCost, afterCost] = splitAtCost(t('{n} nodes · {cost} of {max} points on {device}', language));
+          const [beforeCost, afterCost] = splitAtCost(costUnlimited
+            ? t('{n} nodes · {cost} points', language)
+            : t('{n} nodes · {cost} of {max} points on {device}', language));
           return (
           <div className="generator-dialog__result">
             {phase.result.plan && <div className="generator-dialog__plan">{phase.result.plan}</div>}
-            <div className={`generator-dialog__facts${points > POINT_BUDGET ? ' generator-dialog__facts--over' : ''}`}>
+            <div className={`generator-dialog__facts${!costUnlimited && points > POINT_BUDGET ? ' generator-dialog__facts--over' : ''}`}>
               {fillTemplate(beforeCost, facts)}
               <Points value={points} />
               {fillTemplate(afterCost, facts)}
