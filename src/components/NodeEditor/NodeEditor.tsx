@@ -2150,7 +2150,6 @@ export function NodeEditor() {
       let allNodes = useAppStore.getState().nodes;
       let freshDragged = allNodes.find((n) => n.id === draggedNode.id) ?? draggedNode;
 
-      const { w: nw, h: nh } = getNodeSize(freshDragged);
       // Use absolute position for edge-proximity so grouped nodes compare correctly,
       // and the VISIBLE center (cost-scaled cards render bigger than their
       // measured box) so the drop tests the same point the drag preview did.
@@ -2218,38 +2217,19 @@ export function NodeEditor() {
           GAP,
         );
       } else if (!isNote) {
-        // --- Anti-overlap: nudge the dropped node itself off whatever it
-        // landed on (plain moves and drop-on-edge splices; single pass) ---
-        for (const other of allNodes) {
-          if (other.id === freshDragged.id) continue;
-          // Group containers + background notes must not push other nodes aside.
-          if (other.type === 'group' || other.type === 'note') continue;
-          // Only compare nodes in the same coordinate space (same parent).
-          if (other.parentId !== freshDragged.parentId) continue;
-          const { w: ow, h: oh } = getNodeSize(other);
-
-          // Check AABB overlap
-          const overlapX = Math.min(posX + nw, other.position.x + ow) - Math.max(posX, other.position.x);
-          const overlapY = Math.min(posY + nh, other.position.y + oh) - Math.max(posY, other.position.y);
-
-          if (overlapX > 0 && overlapY > 0) {
-            // Compute push-out distance for each direction
-            const pushRight = (other.position.x + ow + GAP) - posX;
-            const pushLeft = posX + nw - (other.position.x - GAP);
-            const pushDown = (other.position.y + oh + GAP) - posY;
-            const pushUp = posY + nh - (other.position.y - GAP);
-
-            // Pick smallest push-out
-            const minPush = Math.min(pushRight, pushLeft, pushDown, pushUp);
-
-            if (minPush === pushRight) posX += pushRight;
-            else if (minPush === pushLeft) posX -= pushLeft;
-            else if (minPush === pushDown) posY += pushDown;
-            else posY -= pushUp;
-
-            nudged = true;
-          }
-        }
+        // --- Make room: the dropped node stays EXACTLY where it was released,
+        // and whatever it landed on moves out from under it (plain moves and
+        // drop-on-edge splices) — the drag-connect drop's own rule above,
+        // knock-ons included (overlapCascade.ts). The drop used to nudge the
+        // DROPPED node off what it covered instead, and that read as a jump
+        // with no cause: a large opaque card (an Image) hides the small node
+        // under it, so nothing visible was in the way (owner report,
+        // 2026-11-21). Visible boxes, any parent: what is pushed is what is
+        // seen, and every shift is reparented like a drag below.
+        cascadeShifts = resolveOverlapCascade(
+          makeRoomBoxes(allNodes, freshDragged.id, absPos, freshDragged.id, useAppStore.getState().edges),
+          GAP,
+        );
       }
 
       // --- Group attachment: if the dragged node lands inside a group's
