@@ -32,6 +32,8 @@ import { fillTemplate } from '@/utils/fillTemplate';
 import { useGeneratorOffer } from '@/hooks/useGeneratorOffer';
 import { knownNodeNames } from '../promptKnownNames';
 import { pictureFrom } from '@/utils/pictureTransfer';
+import { bakeQueryMatches, bakeSelectionCount, bakeSelectionIds } from '@/utils/bakeQuery';
+import { isEmbedMode } from '@/embed/embedMode';
 
 /** Selected nodes eligible for grouping: not groups, not notes (annotations). */
 const isGroupable = (n: AppNode) => !!n.selected && n.type !== 'group' && n.type !== 'note';
@@ -52,6 +54,7 @@ function countNodes(nodes: AppNode[], pred: (n: AppNode) => boolean): number {
 type ActionItem =
   | { kind: 'organize'; key: string; run: () => void }
   | { kind: 'group'; key: string; run: () => void }
+  | { kind: 'bake'; key: string; run: () => void }
   | { kind: 'output'; key: string; run: () => void }
   | { kind: 'note'; key: string; run: () => void }
   | { kind: 'ai'; key: string; run: () => void }
@@ -75,6 +78,9 @@ export function AddNodeMenu() {
   // live graph from getState().
   const groupableCount = useAppStore((s) => countNodes(s.nodes, isGroupable));
   const organizableCount = useAppStore((s) => countNodes(s.nodes, isOrganizable));
+  // Bake to texture (docs/dev/baking.md) works on ANY selection, one node or
+  // many, grouped or not; never in the embed, where no preview renders it.
+  const bakeableCount = useAppStore((s) => (isEmbedMode() ? 0 : bakeSelectionCount(s.nodes)));
   const groupSelection = useAppStore((s) => s.groupSelection);
   const organizeSelection = useAppStore((s) => s.organizeSelection);
   const costColorLow = useAppStore((s) => s.costColorLow);
@@ -89,6 +95,7 @@ export function AddNodeMenu() {
 
   const canGroup = groupableCount >= 2;
   const canOrganize = organizableCount >= 2;
+  const canBake = bakeableCount >= 1;
 
   // Source pin info for auto-connect when dragged from an output handle
   const sourceNodeId = contextMenu.sourceNodeId;
@@ -286,6 +293,18 @@ export function AddNodeMenu() {
     closeContextMenu();
   }, [groupSelection, closeContextMenu]);
 
+  const handleBakeSelection = useCallback(() => {
+    const ids = bakeSelectionIds(useAppStore.getState().nodes);
+    if (ids.length === 0) return;
+    closeContextMenu();
+    useAppStore.getState().openBake(ids);
+  }, [closeContextMenu]);
+
+  // A search for "bake" ("iecept") offers the same row — never while this
+  // menu wires or splices, which adds ONE node. With nothing selected the row
+  // stays, inert, and says what to do first.
+  const bakeQueried = !isEmbedMode() && !sourceNodeId && !spliceEdgeId && bakeQueryMatches(query);
+
   const handleOrganizeSelection = useCallback(() => {
     organizeSelection();
     closeContextMenu();
@@ -305,6 +324,13 @@ export function AddNodeMenu() {
     }
     if (!query.trim() && canGroup) {
       items.push({ kind: 'group', key: '__group__', run: handleGroupSelection });
+    }
+    if (!query.trim() && canBake) {
+      items.push({ kind: 'bake', key: '__bake__', run: handleBakeSelection });
+    }
+    // A bake search: the row FIRST, as the one thing the query names.
+    if (bakeQueried) {
+      items.push({ kind: 'bake', key: '__bake__', run: handleBakeSelection });
     }
     if (!query.trim()) {
       items.push({
@@ -356,7 +382,7 @@ export function AddNodeMenu() {
     // row and Enter opens the generator (it never sends).
     if (aiDetected) items.push({ kind: 'ai', key: '__ai__', run: () => handleGenerate() });
     return items;
-  }, [query, noteMatches, canGroup, canOrganize, grouped, results, recentDefs, handleGroupSelection, handleOrganizeSelection, handleAddNode, handleAddNote, aiDetected, handleGenerate]);
+  }, [query, noteMatches, canGroup, canOrganize, canBake, bakeQueried, grouped, results, recentDefs, handleGroupSelection, handleOrganizeSelection, handleBakeSelection, handleAddNode, handleAddNote, aiDetected, handleGenerate]);
 
   // Reset focus to the first item whenever the visible list changes (typing in
   // the search box, selection toggling, output-node presence flipping, etc.).
@@ -497,6 +523,30 @@ export function AddNodeMenu() {
     );
   };
 
+  /** The bake row — the Selection section's, or a "bake" search's. Inert
+   *  (aria-disabled, never `disabled`, so its title still explains) while
+   *  nothing is selected. */
+  const renderBakeRow = () => (
+    <button
+      className={itemClass('__bake__')}
+      data-add-node-focused={focusedAttr('__bake__')}
+      aria-haspopup="dialog"
+      aria-disabled={!canBake}
+      title={canBake
+        ? t('Render what leaves the selection into a picture on an Image node, and park the originals unwired', language)
+        : t('Select the nodes to bake first', language)}
+      onClick={handleBakeSelection}
+      onMouseEnter={() => hoverFocus('__bake__')}
+    >
+      <span>{t('Bake Selection to Texture…', language)}</span>
+      {canBake && (
+        <span className="context-menu__item-category">
+          {bakeableCount} {t('nodes', language)}
+        </span>
+      )}
+    </button>
+  );
+
   return (
     <>
       <input
@@ -512,7 +562,7 @@ export function AddNodeMenu() {
       />
       <div className="context-menu__list" ref={listRef}>
         {/* Selection actions — only when 2+ eligible nodes are selected */}
-        {!query.trim() && (canOrganize || canGroup) && (
+        {!query.trim() && (canOrganize || canGroup || canBake) && (
           <>
             <div className="context-menu__category">{t('Selection', language)}</div>
             {canOrganize && (
@@ -541,6 +591,15 @@ export function AddNodeMenu() {
                 </span>
               </button>
             )}
+            {canBake && renderBakeRow()}
+            <div className="context-menu__divider" />
+          </>
+        )}
+
+        {/* "bake" typed: the same row, above the node results. */}
+        {bakeQueried && (
+          <>
+            {renderBakeRow()}
             <div className="context-menu__divider" />
           </>
         )}

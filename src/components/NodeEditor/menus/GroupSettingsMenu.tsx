@@ -4,6 +4,7 @@ import type { GroupFlowNode } from '@/types';
 import { rowStyle, labelStyle, colorFieldStyle, wideFieldStyle } from './menuShared';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
+import { isEmbedMode } from '@/embed/embedMode';
 
 interface GroupSettingsMenuProps {
   nodeId: string;
@@ -80,6 +81,18 @@ export function GroupSettingsMenu({ nodeId }: GroupSettingsMenuProps) {
       >
         {t('Save to Library', language)}
       </button>
+      {!isEmbedMode() && (
+        <button
+          className="context-menu__item"
+          title={t('Render what leaves this group into a picture on an Image node, and park the group unwired', language)}
+          onClick={() => {
+            useAppStore.getState().openBake([nodeId]);
+            closeContextMenu();
+          }}
+        >
+          {t('Bake to Texture…', language)}
+        </button>
+      )}
       <button
         className="context-menu__item"
         onClick={() => {

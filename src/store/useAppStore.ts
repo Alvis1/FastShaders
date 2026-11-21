@@ -48,7 +48,9 @@ import {
   hiddenByInnerCollapse,
   groupFrameSize,
   measuredNodeSize,
+  absoluteNodePosition,
 } from '@/utils/groupFrame';
+import { planBakeCommit, bakeObstacles, BAKED_IMAGE_BOX, BAKED_PILL_GAP, type BakeCommitInput, type BakeCommitPlan } from '@/utils/bakeCommit';
 import { safeJsonReviver } from '@/utils/safeJson';
 // colorUtils' only import is type-only, so it is a runtime LEAF and its
 // exports are guaranteed initialised by the time anything can reach them —
@@ -58,7 +60,7 @@ import { safeJsonReviver } from '@/utils/safeJson';
 import { HEX6 } from '@/utils/colorUtils';
 import { authoredUniformChange } from '@/utils/uniformOverride';
 import { normalizeChainOperands } from '@/utils/chainOperands';
-import { nodeCostPoints, computeReachableCost, imageNodeCost, getCost, sinkCosts, sinkBadgesStale, stampSinkCosts } from '@/utils/nodeCost';
+import { nodeCostPoints, computeReachableCost, imageNodeCost, getCost, sinkCosts, sinkBadgesStale, stampSinkCosts, freshNodeCost } from '@/utils/nodeCost';
 // From the LEAF cost table, not from nodeCost: both of these are called at
 // MODULE SCOPE below (loadCostProfiles + the boot setCostOverrides), and
 // nodeCost sits in an import cycle that runs back through this file — so
@@ -1662,6 +1664,9 @@ interface AppState {
    *  Session-only; `openGenerator` is the ONE way in for every entry (both
    *  search boxes and the Settings row). */
   generatorRequest: GeneratorRequest | null;
+  /** The open "Bake to texture" dialog's selection (node and group ids), or
+   *  null while it is closed. Session-only (docs/dev/baking.md). */
+  bakeRequest: { selectedIds: string[] } | null;
   /** Did the dialog's chosen route work this session (a local server answered
    *  with a model, or a key is held)? Session-only: it only words the search
    *  button — "Generate with AI" or "Set up AI…". */
@@ -1967,6 +1972,16 @@ interface AppState {
    *  embed and on a build with no route). */
   openGenerator: (request?: Partial<GeneratorRequest>) => void;
   closeGenerator: () => void;
+  /** Open / close the "Bake to texture" dialog for these node and group ids. */
+  openBake: (selectedIds: string[]) => void;
+  closeBake: () => void;
+  /**
+   * BAKE TO TEXTURE's ONE commit (utils/bakeCommit.ts): the Images take over
+   * the baked sockets' wires and the originals are parked in a collapsed
+   * group, in ONE undo entry. Null (and nothing written) when a socket's node
+   * is gone.
+   */
+  commitBake: (input: BakeCommitInput) => BakeCommitPlan | null;
   setGeneratorRouteReady: (v: boolean) => void;
   setImageConvertMode: (v: 'ask' | 'always' | 'never') => void;
   setHideImageConvertNotice: (v: boolean) => void;
@@ -2111,6 +2126,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   allowManyMaterials: allowManyMaterialsFrom(loadString(ALLOW_MANY_MATERIALS_KEY, '0')),
   nodeGenerator: generatorModeFrom(loadString(GENERATOR_FLAG_KEY, '')),
   generatorRequest: null,
+  bakeRequest: null,
   generatorRouteReady: false,
   // Only the exact string '0' turns it off, so a junk value fails SAFE (on) —
   // the same validate-never-coerce rule the optional categories follow.
@@ -3031,6 +3047,79 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   closeGenerator: () => set({ generatorRequest: null }),
+
+  openBake: (selectedIds) => {
+    const ids = selectedIds.filter((id) => typeof id === 'string');
+    if (ids.length > 0) set({ bakeRequest: { selectedIds: ids } });
+  },
+
+  closeBake: () => set({ bakeRequest: null }),
+
+  commitBake: (input) => {
+    const s0 = get();
+    const byId0 = new Map(s0.nodes.map((n) => [n.id, n]));
+    if (input.sockets.length === 0 || input.sockets.some((s) => !byId0.has(s.socket.nodeId))) return null;
+
+    /** The collapsed park pill beside the (first) Image, on the nearest free spot. */
+    const movePillBeside = (groupId: string, imageId: string | undefined) => {
+      const nodes = get().nodes;
+      const byId = new Map(nodes.map((n) => [n.id, n]));
+      const pill = byId.get(groupId);
+      const img = imageId ? byId.get(imageId) : undefined;
+      if (!pill || !img) return;
+      const { w, h } = groupFrameSize(pill);
+      const imgAbs = absoluteNodePosition(img, byId);
+      const parent = pill.parentId ? byId.get(pill.parentId) : undefined;
+      const parentAbs = parent ? absoluteNodePosition(parent, byId) : { x: 0, y: 0 };
+      // Never the frames holding the pill: it would be pushed out of its own parent.
+      const obstacles = bakeObstacles(nodes, new Set([groupId]), pill.parentId);
+      // The Image has not been measured yet: its card, not the fallback box.
+      obstacles.push({ x: imgAbs.x, y: imgAbs.y, w: BAKED_IMAGE_BOX.w, h: BAKED_IMAGE_BOX.h });
+      const spot = freeFrameSpot({ x: imgAbs.x - w - BAKED_PILL_GAP, y: imgAbs.y, w, h }, obstacles);
+      set({
+        nodes: nodes.map((n) =>
+          n.id === groupId ? ({ ...n, position: { x: spot.x - parentAbs.x, y: spot.y - parentAbs.y } } as AppNode) : n,
+        ),
+      });
+    };
+
+    const first = byId0.get(input.sockets[0].socket.nodeId);
+    const label = typeof first?.data.label === 'string' && first.data.label ? first.data.label : 'nodes';
+    const plan = planBakeCommit(
+      s0.nodes,
+      s0.edges,
+      input.selectedIds,
+      input.sockets,
+      generateId,
+      (t) => freshNodeCost(t) ?? 0,
+      { label: `Baked ${label}`, color: randomGroupColor(s0.nodes) },
+    );
+    if (!plan) return null;
+
+    get().pushHistory();
+    set({ nodes: plan.nodes, edges: plan.edges, syncSource: 'graph', isUndoRedo: false });
+    // The park frame is the ONE group this collapses (bakeCommit.ts says why).
+    // Its own pushHistory is swallowed — this is one act, logged as `bake` —
+    // without beginInteraction, which would also log a `gesture`.
+    const park = plan.parkGroupId ? get().nodes.find((n) => n.id === plan.parkGroupId) : undefined;
+    if (park && park.type === 'group' && !(park.data as GroupNodeData).collapsed) {
+      const prevBracket = { coalescingHistory: get().coalescingHistory, interactionDepth: get().interactionDepth };
+      set({ coalescingHistory: true, interactionDepth: Math.max(1, prevBracket.interactionDepth) });
+      try {
+        get().toggleGroupCollapsed(park.id);
+        movePillBeside(park.id, plan.imageIds[0]);
+      } finally {
+        set(prevBracket);
+      }
+    }
+    evalLog('bake', {
+      layout: input.layout,
+      size: input.size,
+      sockets: input.sockets.length,
+      parked: plan.parked,
+    });
+    return plan;
+  },
 
   setGeneratorRouteReady: (v) => {
     if (get().generatorRouteReady !== v) set({ generatorRouteReady: v });

@@ -34,6 +34,7 @@ import { assetText, formatCategoryLabel, t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { foldSearchText } from '@/utils/searchFold';
 import { detectPrompt } from '@/utils/promptDetect';
+import { bakeQueryMatches, bakeSelectionCount, bakeSelectionIds } from '@/utils/bakeQuery';
 import { useGeneratorOffer } from '@/hooks/useGeneratorOffer';
 import { dragMayHoldPicture, pictureFrom } from '@/utils/pictureTransfer';
 import { knownNamesWith } from './promptKnownNames';
@@ -954,7 +955,23 @@ export const ContentBrowser = memo(function ContentBrowser() {
     openGeneratorWithPicture(file);
   }, [aiOffered, openGeneratorWithPicture]);
 
+  // ── "Bake Selection to Texture…" (docs/dev/baking.md): a settled "bake"
+  // ("iecept") query offers the bake of the canvas selection, a button after
+  // the box, and Enter. Inert, with its title saying why, while nothing is
+  // selected; never in the embed, where no preview renders a bake.
+  const bakeQueried = !isEmbedMode() && bakeQueryMatches(settledSearch);
+  const bakeCount = useAppStore((s) => (bakeQueried ? bakeSelectionCount(s.nodes) : 0));
+  const openBakeFromSearch = useCallback(() => {
+    const ids = bakeSelectionIds(useAppStore.getState().nodes);
+    if (ids.length > 0) useAppStore.getState().openBake(ids);
+  }, []);
+
   const onSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (bakeQueried && e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.nativeEvent.isComposing && !e.repeat) {
+      e.preventDefault();
+      openBakeFromSearch();
+      return;
+    }
     if (!aiOffered || e.key !== 'Enter' || e.nativeEvent.isComposing || e.repeat) return;
     // Ctrl/Cmd+Enter: the explicit door, for any query — an empty box opens
     // the dialog with no text. It starts at once only with a route that
@@ -969,7 +986,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
       e.preventDefault();
       openGeneratorFromSearch(false);
     }
-  }, [aiOffered, aiReady, promptDetected, search, settledSearch, openGeneratorFromSearch]);
+  }, [aiOffered, aiReady, promptDetected, search, settledSearch, openGeneratorFromSearch, bakeQueried, openBakeFromSearch]);
 
   const onDragStart = useCallback((event: React.DragEvent, def: NodeDefinition) => {
     event.dataTransfer.setData('application/reactflow-type', def.type);
@@ -1126,6 +1143,20 @@ export const ContentBrowser = memo(function ContentBrowser() {
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={onSearchKeyDown}
           />
+          {bakeQueried && (
+            <button
+              type="button"
+              className="content-browser__ai-btn"
+              aria-haspopup="dialog"
+              aria-disabled={bakeCount === 0}
+              title={bakeCount > 0
+                ? t('Render what leaves the selection into a picture on an Image node, and park the originals unwired', language)
+                : t('Select the nodes to bake first', language)}
+              onClick={openBakeFromSearch}
+            >
+              {t('Bake Selection to Texture…', language)}
+            </button>
+          )}
           {/* Shown only while the query reads as a request. "Set up AI…" until
               a route has worked this session. */}
           {promptDetected && (

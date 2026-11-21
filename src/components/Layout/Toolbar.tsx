@@ -22,6 +22,7 @@ import { GLB_IMPORT_MATERIAL_LIMIT } from '@/utils/glbImportLimits';
 import { generatorBuild } from '@/utils/generatorFlag';
 import { isEmbedMode } from '@/embed/embedMode';
 import { GeneratorLauncher } from './GeneratorLauncher';
+import { BakeLauncher } from './BakeLauncher';
 import { WorkFolder } from './WorkFolder';
 import { formatCategoryLabel, t } from '@/i18n';
 import { CATEGORIES } from '@/registry/nodeCategories';
@@ -1361,6 +1362,7 @@ export function Toolbar() {
         </div>
       )}
       <GeneratorLauncher />
+      <BakeLauncher />
     </div>
   );
 }

@@ -98,6 +98,8 @@ import { safeJsonReviver } from '@/utils/safeJson';
 import { graphToCode } from '@/engine/graphToCode';
 import { collectImageAssets, inlineImageAssetsFromNodes } from '@/engine/imageAssets';
 import { PREVIEW_ASSETS_MESSAGE, planPreviewAssetFeed } from '@/engine/previewAssetFeed';
+import { postBakeAndWait, registerPreviewBaker } from './previewBake';
+import type { BakeContext } from '@/utils/bakePlan';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { isZipFile } from '@/engine/projectImport';
 import { requestShaderImport } from '@/utils/shaderDropRequest';
@@ -2709,6 +2711,35 @@ export function ShaderPreview() {
     renderContinuousRef.current = renderContinuous;
     iframeRef.current?.contentWindow?.postMessage({ type: RENDER_MODE_MESSAGE, continuous: renderContinuous }, '*');
   }, [renderContinuous]);
+
+  // BAKE TO TEXTURE (previewBake.ts): this pane is the one baker. The context
+  // is read through a ref, so registering once is enough; the image payloads
+  // a bake module names are posted first, through the same feed a swap uses
+  // and charged to the same budget, since they stay in the document.
+  const bakeContextRef = useRef<BakeContext>({ geometry: previewGeometry, splatShown: false });
+  bakeContextRef.current = { geometry: previewGeometry, splatShown: previewGeometry === 'custom' && splatLoaded };
+  const bakeIdRef = useRef(0);
+  useEffect(() => registerPreviewBaker({
+    context: () => bakeContextRef.current,
+    bake: (req) => {
+      const win = iframeRef.current?.contentWindow;
+      if (!win) return Promise.resolve({ ok: false, error: 'no-preview' });
+      // The nodes the bake module was generated from — never the live store.
+      const codeNodes = req.nodes;
+      const feed = planPreviewAssetFeed(sentAssetKeysRef.current, collectImageAssets(codeNodes), req.code);
+      if (feed.entries.length > 0) {
+        win.postMessage({ type: PREVIEW_ASSETS_MESSAGE, entries: feed.entries }, '*');
+        chargeRetained(assetFeedBytes(feed.entries));
+      }
+      sentAssetKeysRef.current = feed.sent;
+      return postBakeAndWait(win, ++bakeIdRef.current, {
+        code: req.code,
+        size: req.size,
+        layout: req.layout,
+        filter: req.filter,
+      });
+    },
+  }), [chargeRetained]);
 
   // A rebuild throws the old document away, and what describes it goes too:
   // the animation controls (the new document re-announces via fs:anim, or has

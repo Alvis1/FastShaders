@@ -308,10 +308,13 @@ describe('ShaderPreview', () => {
     // The settled pair's nodes, under their two names: `moduleNodes` in the three
     // closures that plan a feed (each reads it from `settledRef` when it runs, so
     // no closure keeps an old graph alive), `codeNodes` inside postShaderSwap —
-    // whose every caller hands it `moduleNodes`, the nodes of exactly the module it posts.
+    // whose every caller hands it `moduleNodes`, the nodes of exactly the module it
+    // posts — and inside the BAKER, where it is the request's own nodes: those the
+    // bake module was generated from (docs/dev/baking.md).
     for (const arg of calls) expect(['moduleNodes', 'codeNodes']).toContain(arg);
     const plans = [...SRC.matchAll(/planPreviewAssetFeed\(([^;]*)\);/g)].map((m) => m[1]);
-    expect(plans).toHaveLength(2);
+    expect(plans).toHaveLength(3);
+    expect(SRC).toContain('const codeNodes = req.nodes;');
     for (const plan of plans) expect(plan).not.toContain('getState()');
     const posts = [...SRC.matchAll(/postShaderSwap\(([^)]*)\)/g)].map((m) => m[1]);
     expect(posts).toEqual(['previewModule, moduleNodes', 'previewModule, moduleNodes']);

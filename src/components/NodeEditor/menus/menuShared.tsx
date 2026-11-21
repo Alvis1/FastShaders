@@ -10,6 +10,8 @@ import { generateId } from '@/utils/idGenerator';
 import { exceedsImageBudget, imageNodesForNotice } from '@/utils/imageNode';
 import { resetNodeValues, isAtDefaultValues, hasResettableValues } from '@/utils/resetNodeValues';
 import { previewableOutputs } from '@/utils/nodePreview';
+import { isEmbedMode } from '@/embed/embedMode';
+import { bakeSelectionCount, bakeSelectionIds } from '@/utils/bakeQuery';
 import { clampFieldNumber, formatFieldNumber, parseFieldNumber } from '@/utils/numberField';
 import { NumberField } from '@/components/inputs/NumberField';
 
@@ -316,6 +318,9 @@ export function NodeActions({ nodeId, preview = true }: { nodeId: string; previe
   const nodePreview = useAppStore((s) => s.nodePreview);
   const setNodePreview = useAppStore((s) => s.setNodePreview);
   const previewPorts = node ? previewableOutputs(node) : [];
+  // Bake to texture: this node alone, or the whole selection when the node is
+  // part of one (a COUNT selector, so a drag frame re-renders nothing).
+  const bakesSelection = useAppStore((s) => !!node?.selected && bakeSelectionCount(s.nodes) > 1);
 
   const handleDuplicate = () => {
     if (!node) return;
@@ -393,6 +398,24 @@ export function NodeActions({ nodeId, preview = true }: { nodeId: string; previe
             </svg>
           </button>
         </>
+      )}
+      {/* BAKE TO TEXTURE (docs/dev/baking.md): this node, or the whole
+          selection when the node is part of one. Never in the embed, where no
+          preview runs to render it. */}
+      {previewPorts.length > 0 && !isEmbedMode() && (
+        <button
+          className="context-menu__item"
+          title={bakesSelection
+            ? t('Render what leaves the selection into a picture on an Image node, and park the originals unwired', language)
+            : t('Render what leaves this node — or the selection it is part of — into a picture on an Image node, and park the originals unwired', language)}
+          onClick={() => {
+            const selected = bakeSelectionIds(useAppStore.getState().nodes);
+            useAppStore.getState().openBake(selected.length > 1 && selected.includes(nodeId) ? selected : [nodeId]);
+            closeContextMenu();
+          }}
+        >
+          {t(bakesSelection ? 'Bake Selection to Texture…' : 'Bake to Texture…', language)}
+        </button>
       )}
       <div className="context-menu__divider" />
       {showReset && (

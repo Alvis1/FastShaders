@@ -724,6 +724,255 @@ const EVAL_BRIDGE_SCRIPT = `<script>
 <\/script>`;
 
 /**
+ * BAKE TO TEXTURE — the stage's half (docs/dev/baking.md; the parent's is
+ * components/Preview/previewBake.ts). The parent asks with
+ * `fs:bake { id, code, size, layout, filter }` and the reply is
+ * `fs:bake-result { id, ok, width, height, data }` — NUMBERS only: an RGBA
+ * Float32Array (or a Uint8Array where float targets do not render), rows top
+ * first with row 0 at v ≈ 1, alpha = coverage. Failure is ANSWERED with
+ * `{ ok: false, error }`, never dropped.
+ *
+ * The module is loaded and applied through the loader core
+ * (`FastShaders.load` → `FastShaders.apply`), so the bake runs exactly the TSL
+ * the 3D view runs, onto TEMPORARY meshes in a scene of its own: a 2×2 plane for
+ * the UV square, or, for the mesh layout, a plain Mesh per shown mesh sharing
+ * its geometry and its world matrix (so world-space reads match the view). It
+ * never adds anything to `preview-entity` — the loader walks that subtree.
+ * Every material gets `vertexNode = vec4(uv·2 − 1, 0, 1)`, so each triangle
+ * lands where its texture coordinates are, double-sided, no depth test, no
+ * blending — and `fragmentNode = vec4(colour, 1)`: three's own colour path
+ * clamps a negative to 0, which would cut a signed field in half. The tuned
+ * uniform values are copied by NAME from the shader the view is running, so a
+ * bake shows what is on screen.
+ *
+ * Which way up a backend reads a render target back is MEASURED, once per
+ * pixel type, by a 64 px probe drawing its own uv — never assumed per backend.
+ * A float target that does not render (the probe reads nonsense) falls back to
+ * 8 bits.
+ */
+const BAKE_SCRIPT = `<script>
+  (function () {
+    var probes = {};
+    var busy = false;
+
+    function reply(m, transfer) {
+      try { window.parent.postMessage(m, "*", transfer || []); } catch (e) {}
+    }
+    function fail(id, err) {
+      reply({
+        type: "fs:bake-result", id: id, ok: false,
+        error: String(err && err.message ? err.message : err).slice(0, 200)
+      });
+    }
+    function sizeOk(n) {
+      return typeof n === "number" && n >= 64 && n <= 4096 && (n & (n - 1)) === 0;
+    }
+    function strings(v) {
+      return Array.isArray(v) ? v.filter(function (x) { return typeof x === "string"; }) : [];
+    }
+    function ints(v) {
+      return Array.isArray(v) ? v.filter(function (x) { return typeof x === "number" && x >= 0 && x % 1 === 0; }) : [];
+    }
+    // The colour IS the fragment: three's colour path clamps a negative to 0
+    // (measured on r184, both target types), and a signed field must arrive
+    // whole, so the bake writes the value itself, alpha 1 where drawn.
+    function prep(mat, THREE, TSL) {
+      mat.fragmentNode = TSL.vec4(TSL.vec3(mat.colorNode || TSL.vec3(0)), 1);
+      mat.vertexNode = TSL.vec4(TSL.uv().mul(2).sub(1), 0, 1);
+      mat.side = THREE.DoubleSide;
+      mat.depthTest = false;
+      mat.depthWrite = false;
+      mat.transparent = false;
+      mat.blending = THREE.NoBlending;
+      mat.fog = false;
+      mat.needsUpdate = true;
+    }
+    // Rows padded to the backend's alignment are packed back to size x 4.
+    function unpad(px, size) {
+      var want = size * size * 4;
+      if (px.length === want) return px;
+      var stride = px.length / size;
+      if (stride % 1 !== 0 || stride < size * 4) throw new Error("readback-size");
+      var out = new px.constructor(want);
+      for (var y = 0; y < size; y++) out.set(px.subarray(y * stride, y * stride + size * 4), y * size * 4);
+      return out;
+    }
+    function flipRows(px, size) {
+      var out = new px.constructor(px.length);
+      var row = size * 4;
+      for (var y = 0; y < size; y++) out.set(px.subarray(y * row, (y + 1) * row), (size - 1 - y) * row);
+      return out;
+    }
+    async function draw(renderer, THREE, scene, size, type) {
+      var rt = new THREE.RenderTarget(size, size, { type: type, depthBuffer: false });
+      rt.texture.minFilter = THREE.NearestFilter;
+      rt.texture.magFilter = THREE.NearestFilter;
+      rt.texture.generateMipmaps = false;
+      var cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+      var prevTarget = renderer.getRenderTarget();
+      var prevColor = new THREE.Color();
+      renderer.getClearColor(prevColor);
+      var prevAlpha = renderer.getClearAlpha();
+      try {
+        renderer.setRenderTarget(rt);
+        renderer.setClearColor(0x000000, 0);
+        renderer.clear();
+        renderer.render(scene, cam);
+      } finally {
+        renderer.setRenderTarget(prevTarget);
+        renderer.setClearColor(prevColor, prevAlpha);
+      }
+      try {
+        return unpad(await renderer.readRenderTargetPixelsAsync(rt, 0, 0, size, size), size);
+      } finally {
+        rt.dispose();
+      }
+    }
+    // Draw uv itself: which row holds v near 0, and does a float target render?
+    async function probe(renderer, THREE, TSL, type) {
+      var scene = new THREE.Scene();
+      var geo = new THREE.PlaneGeometry(2, 2);
+      var mat = new THREE.MeshBasicNodeMaterial();
+      mat.colorNode = TSL.vec3(TSL.uv().x, TSL.uv().y, 0);
+      prep(mat, THREE, TSL);
+      var mesh = new THREE.Mesh(geo, mat);
+      mesh.frustumCulled = false;
+      scene.add(mesh);
+      try {
+        var px = await draw(renderer, THREE, scene, 64, type);
+        var s = px instanceof Uint8Array ? 1 / 255 : 1;
+        var last = 63 * 64 * 4;
+        var lo = 0.5 / 64, hi = 63.5 / 64, tol = 0.02;
+        if (!(px[3] * s > 0.5) || !(Math.abs(px[0] * s - lo) < tol)) return null;
+        var v0 = px[1] * s, vL = px[last + 1] * s;
+        if (Math.abs(v0 - lo) < tol && Math.abs(vL - hi) < tol) return { type: type, flip: true };
+        if (Math.abs(v0 - hi) < tol && Math.abs(vL - lo) < tol) return { type: type, flip: false };
+        return null;
+      } catch (e) {
+        return null;
+      } finally {
+        geo.dispose();
+        mat.dispose();
+      }
+    }
+    async function orientation(renderer, THREE, TSL) {
+      var types = [THREE.FloatType, THREE.UnsignedByteType];
+      for (var i = 0; i < types.length; i++) {
+        var t = types[i];
+        if (!(t in probes)) probes[t] = await probe(renderer, THREE, TSL, t);
+        if (probes[t]) return probes[t];
+      }
+      throw new Error("readback");
+    }
+
+    async function bake(m) {
+      var THREE = window.THREE;
+      var TSL = THREE && THREE.TSL;
+      var FS = window.FastShaders;
+      var sceneEl = document.querySelector("a-scene");
+      var renderer = sceneEl && sceneEl.renderer;
+      if (!THREE || !TSL || !FS || !renderer || typeof renderer.readRenderTargetPixelsAsync !== "function") {
+        throw new Error("no-renderer");
+      }
+      if (!sizeOk(m.size)) throw new Error("bad-size");
+      if (typeof m.code !== "string") throw new Error("bad-code");
+      var orient = await orientation(renderer, THREE, TSL);
+
+      var url = URL.createObjectURL(new Blob(
+        [window.__fsResolveAssets ? window.__fsResolveAssets(m.code) : m.code],
+        { type: "text/javascript" }
+      ));
+      var loaded;
+      try { loaded = await FS.load(url); } finally { try { URL.revokeObjectURL(url); } catch (e) {} }
+
+      var root = new THREE.Scene();
+      var ownGeo = [];
+      var entity = document.getElementById("preview-entity");
+      if (m.layout === "uv") {
+        var g = new THREE.PlaneGeometry(2, 2);
+        var uvA = g.getAttribute("uv");
+        g.setAttribute("uv1", uvA.clone());
+        g.setAttribute("uv2", uvA.clone());
+        g.setAttribute("uv3", uvA.clone());
+        ownGeo.push(g);
+        var pm = new THREE.Mesh(g, new THREE.MeshBasicMaterial());
+        pm.frustumCulled = false;
+        root.add(pm);
+      } else {
+        if (!entity || !entity.object3D) throw new Error("no-mesh");
+        entity.object3D.updateMatrixWorld(true);
+        var f = m.filter && typeof m.filter === "object" ? m.filter : { all: true };
+        var names = strings(f.names), idx = ints(f.indices);
+        var exN = strings(f.exceptNames), exI = ints(f.exceptIndices);
+        entity.object3D.traverse(function (o) {
+          // An instanced draw (and so a point-cloud scene's quad) is no surface.
+          if (!o.isMesh || o.isInstancedMesh || !o.geometry || o.geometry.isInstancedBufferGeometry) return;
+          if (!o.geometry.getAttribute || !o.geometry.getAttribute("uv")) return;
+          var mi = typeof FS.materialIndexOf === "function" ? FS.materialIndexOf(o) : null;
+          if (exN.indexOf(o.name) >= 0 || (mi != null && exI.indexOf(mi) >= 0)) return;
+          if (f.all !== true && names.indexOf(o.name) < 0 && !(mi != null && idx.indexOf(mi) >= 0)) return;
+          var c = new THREE.Mesh(o.geometry, new THREE.MeshBasicMaterial());
+          c.matrixAutoUpdate = false;
+          c.matrix.copy(o.matrixWorld);
+          c.name = o.name;
+          c.frustumCulled = false;
+          root.add(c);
+        });
+        if (root.children.length === 0) throw new Error("no-mesh");
+      }
+      var placeholders = root.children.map(function (c) { return c.material; });
+
+      var binding = FS.apply(root, loaded, { weld: false });
+      try {
+        var comp = entity && entity.components && entity.components.shader;
+        var live = comp && comp._propertyUniforms;
+        var u = binding.uniforms;
+        if (u && live) {
+          for (var k in u) {
+            var a = u[k], b = live[k];
+            if (!a || !b || !("value" in a) || !("value" in b)) continue;
+            if (typeof b.value === "number") a.value = b.value;
+            else if (a.value && typeof a.value.copy === "function" && b.value && typeof b.value === "object") a.value.copy(b.value);
+          }
+        }
+        var mats = [];
+        root.traverse(function (o) {
+          if (!o.isMesh) return;
+          var list = Array.isArray(o.material) ? o.material : [o.material];
+          for (var i = 0; i < list.length; i++) if (mats.indexOf(list[i]) < 0) mats.push(list[i]);
+        });
+        for (var i = 0; i < mats.length; i++) {
+          if (!mats[i] || !mats[i].isNodeMaterial) throw new Error("no-material");
+          prep(mats[i], THREE, TSL);
+        }
+        var px = await draw(renderer, THREE, root, m.size, orient.type);
+        if (orient.flip) px = flipRows(px, m.size);
+        return { type: "fs:bake-result", id: m.id, ok: true, width: m.size, height: m.size, data: px };
+      } finally {
+        try { binding.dispose(); } catch (e) {}
+        for (var j = 0; j < ownGeo.length; j++) ownGeo[j].dispose();
+        for (var p = 0; p < placeholders.length; p++) placeholders[p].dispose();
+      }
+    }
+
+    window.addEventListener("message", function (e) {
+      if (e.source !== window.parent) return;
+      var m = e.data;
+      if (!m || m.type !== "fs:bake") return;
+      var id = typeof m.id === "number" ? m.id : 0;
+      if (busy) { fail(id, "busy"); return; }
+      busy = true;
+      window.__fsWhenSceneBooted(function () {
+        bake(m).then(
+          function (r) { busy = false; reply(r, [r.data.buffer]); },
+          function (err) { busy = false; fail(id, err); }
+        );
+      });
+    });
+  })();
+<\/script>`;
+
+/**
  * Frame-time / FPS reporter for the EDITOR's preview pane (non-xr).
  *
  * The XR twin above draws its own head-locked panel because a popup has no
@@ -2915,9 +3164,10 @@ export function nextPreviewStage(s: PreviewStage): PreviewStage {
  *    centre lines, the unit printed on the first one each way (owner,
  *    2026-11-17: no readout over the view — a top-centre line printing the
  *    square's and the object's size was removed);
- *  - in both, a GIZMO at the top left: the object's OWN X / Y / Z axes as the
- *    camera sees them, so it turns with the turntable — exactly the axes the
- *    shader's Position reads;
+ *  - in both, a GIZMO at the top left: the WORLD's X / Y / Z axes as the
+ *    camera sees them (owner, 2026-11-21: "show world rotation, not object"),
+ *    so it turns as the camera orbits and stays still while the turntable
+ *    spins the object — the axes the grid and the room are drawn on;
  *  - and in both, the object stands UPRIGHT (owner, 2026-11-17): its resting
  *    tilt (GEOMETRY_ROTATIONS, kept as `data-fs-tilt`) is set aside, so its
  *    axes are the grid's and the room's, and `none` puts the tilt back.
@@ -2932,8 +3182,8 @@ export function nextPreviewStage(s: PreviewStage): PreviewStage {
  * measured. A level camera sees the grid edge-on, as a line through the
  * object; orbit to read it.
  *
- * The gizmo is SVG over the canvas, redrawn only on a frame the camera or the
- * object turned. Nothing here posts anything, reads anything from the parent
+ * The gizmo is SVG over the canvas, redrawn only on a frame the camera
+ * turned. Nothing here posts anything, reads anything from the parent
  * but the mode, or touches the object's own entity — whose subtree the shader loader walks — beyond its
  * `rotation`.
  */
@@ -3177,10 +3427,10 @@ export const STAGE_SCRIPT = `<script>
       return { root: root, parts: parts };
     }
 
-    var gq = new T.Quaternion(), cq = new T.Quaternion(), gv = new T.Vector3();
-    function drawGizmo(gz, objQ, camQInv) {
+    var cq = new T.Quaternion(), gv = new T.Vector3();
+    function drawGizmo(gz, camQInv) {
       for (var i = 0; i < 3; i++) {
-        gv.set(i === 0 ? 1 : 0, i === 1 ? 1 : 0, i === 2 ? 1 : 0).applyQuaternion(objQ).applyQuaternion(camQInv);
+        gv.set(i === 0 ? 1 : 0, i === 1 ? 1 : 0, i === 2 ? 1 : 0).applyQuaternion(camQInv);
         for (var sgn = 0; sgn < 2; sgn++) {
           var p = gz.parts[2 * i + sgn];
           var f = sgn === 0 ? 1 : -1;
@@ -3212,7 +3462,7 @@ export const STAGE_SCRIPT = `<script>
         this.m = null;
         this.version = 0;
         this.drawn = -1;
-        this.viewKey = new Float64Array(32);
+        this.viewKey = new Float64Array(16);
         this.overlay = document.createElement("div");
         this.overlay.setAttribute("aria-hidden", "true");
         this.overlay.style.cssText = "position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;overflow:hidden;z-index:5;display:none;";
@@ -3275,22 +3525,19 @@ export const STAGE_SCRIPT = `<script>
       tock: function () {
         if (!this.m || !this.world.visible) return;
         var cam = this.el.camera;
-        var ent = this.entity();
-        if (!cam || !ent) return;
-        // Redrawn only when the view or the object turned: a time-driven
-        // shader renders every frame with both still.
-        ent.object3D.updateWorldMatrix(true, false);
+        if (!cam) return;
+        // The WORLD's axes, so only the view turns them: redrawn only when
+        // the camera moved (a time-driven shader renders every frame with it
+        // still, and the turntable's spin changes nothing here).
         var key = this.viewKey, same = this.drawn === this.version;
-        var ce = cam.matrixWorld.elements, oe = ent.object3D.matrixWorld.elements;
+        var ce = cam.matrixWorld.elements;
         for (var i = 0; i < 16; i++) {
           if (key[i] !== ce[i]) { same = false; key[i] = ce[i]; }
-          if (key[16 + i] !== oe[i]) { same = false; key[16 + i] = oe[i]; }
         }
         if (same) return;
         this.drawn = this.version;
-        ent.object3D.getWorldQuaternion(gq);
         cam.getWorldQuaternion(cq);
-        drawGizmo(this.gizmo, gq, cq.invert());
+        drawGizmo(this.gizmo, cq.invert());
       },
     });
 
@@ -4004,6 +4251,7 @@ export function tslToPreviewHTML(
   } else {
     lines.push(STATS_REPORT_SCRIPT);
     lines.push(EVAL_BRIDGE_SCRIPT);
+    lines.push(BAKE_SCRIPT);
     lines.push('');
   }
 

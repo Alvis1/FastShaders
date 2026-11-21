@@ -38,7 +38,7 @@ export const EVAL_SCHEMA = 'fs-eval-1';
  * package says which wording its participant agreed to. BUMP IT whenever the
  * text changes materially; the per-version history is in docs/dev/eval-mode.md.
  */
-export const CONSENT_TEXT_VERSION = 'consent-16';
+export const CONSENT_TEXT_VERSION = 'consent-17';
 
 /**
  * The host the consent names as holding the study package: imgame.va.lv, the

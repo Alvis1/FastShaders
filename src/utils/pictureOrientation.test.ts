@@ -548,6 +548,7 @@ describe('every path that brings a FILE’s picture into an Image node asks the 
     // the same predicate, though its node is only ever DRAWN (it never
     // reaches the graph — introGate.test.ts pins that the intro writes nothing).
     expect(callers(/(?<!function )\bencodeImageFile\(/).filter((f) => f !== 'utils/imageImport.ts')).toEqual([
+      'components/Modals/bakeRun.ts',
       'components/NodeEditor/NodeEditor.tsx',
       'components/NodeEditor/menus/ImageNodeSettings.tsx',
       'intro/ImageScene.tsx',
@@ -557,6 +558,7 @@ describe('every path that brings a FILE’s picture into an Image node asks the 
     // import — a model's own texture, which writes 'gltf' itself — and a
     // lesson's "Do it for me", which places a painted picture as a drop would.
     expect(callers(/(?<!function )\bmakeImageNodeFromEncode\(/).filter((f) => f !== 'utils/imageNode.ts')).toEqual([
+      'components/Modals/bakeRun.ts',
       'components/NodeEditor/NodeEditor.tsx',
       'engine/gltfSectionBuilder.ts',
       'intro/ImageScene.tsx',
@@ -566,6 +568,13 @@ describe('every path that brings a FILE’s picture into an Image node asks the 
     for (const f of ['components/NodeEditor/NodeEditor.tsx', 'components/NodeEditor/menus/ImageNodeSettings.tsx', 'intro/ImageScene.tsx', 'store/useAppStore.ts', 'tutorials/tutorialAutoStep.ts']) {
       expect(code(read(f)), f).toMatch(/\b(?:file|replacement)PictureOrientation\(/);
     }
+    // A BAKE is the one encode that is not a file's picture: the stage writes
+    // its rows in the APP orientation (row 0 at v ≈ 1), which is right on any
+    // mesh, so it never asks the file predicate — asking it would store a bake
+    // over a glTF model's UVs glTF-oriented, i.e. upside down (docs/dev/baking.md).
+    const bake = code(read('components/Modals/bakeRun.ts'));
+    expect(bake).not.toMatch(/PictureOrientation\(/);
+    expect(bake).toContain('makeImageNodeFromEncode(payload, cost, fileName, origin);');
     const builder = code(read('engine/gltfSectionBuilder.ts'));
     expect(builder).toContain('const mv = gltfTextureValues(ref.textureInfo, { normalGreenFlip });');
     expect(builder).toContain('data.values = { ...data.values, ...sv.values, ...mv.values, colorSpace };');

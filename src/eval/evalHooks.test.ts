@@ -31,6 +31,9 @@ const HOOKS: { file: string; events: string[] }[] = [
       "evalLog('edge-disconnect'",
       "evalLog('new-graph')",
       "evalLog('output-activate'",
+      // Bake to texture's ONE commit (docs/dev/baking.md): its expand/collapse
+      // and park steps log nothing of their own.
+      "evalLog('bake'",
       "evalLog('undo')",
       "evalLog('redo')",
       "evalLog('gesture'",

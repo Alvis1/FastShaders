@@ -27,6 +27,10 @@ const EVAL_EVENT_TYPES = [
   'node-edit',
   // the participant chose which output node drives (several may coexist)
   'output-activate',
+  // nodes baked into textures (docs/dev/baking.md): `layout` uv|mesh, `size`
+  // in texels, `sockets` baked, `parked` nodes moved into the frame — counts
+  // and enums only, one per committed bake
+  'bake',
   // code / preview / assets
   'code-apply', 'preview-rebuild', 'asset-drop', 'import', 'export',
   // periodic totals
@@ -79,6 +83,7 @@ export const ACTIVITY_EVENT_TYPES: ReadonlySet<EvalEventType> = new Set([
   'node-edit',
   'new-graph',
   'output-activate',
+  'bake',
   'code-apply',
   'asset-drop',
   'import',
@@ -105,6 +110,7 @@ export const STRUCTURAL_EVENT_TYPES: ReadonlySet<EvalEventType> = new Set([
   'redo',
   'new-graph',
   'output-activate',
+  'bake',
   'code-apply',
   'import',
   // a lesson's takeover replaces the graph; its auto step adds and wires

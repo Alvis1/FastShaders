@@ -115,7 +115,7 @@ export function DataDisclosureModal({ onClose }: Props) {
             {item(
               'Editor actions log',
               'telemetry-events.json',
-              'Timestamped editor events: nodes added/removed (by type), setting names changed (never values), connections, undo/redo, code applies, dropped assets, intro slides and tutorial steps used, language switches, tab visibility, and periodic graph-size counts. No keystrokes, typed text, clipboard, or addresses.',
+              'Timestamped editor events: nodes added/removed (by type), setting names changed (never values), connections, undo/redo, code applies, dropped assets, nodes baked into textures, intro slides and tutorial steps used, language switches, tab visibility, and periodic graph-size counts. No keystrokes, typed text, clipboard, or addresses.',
             )}
             {item(
               'Session totals',

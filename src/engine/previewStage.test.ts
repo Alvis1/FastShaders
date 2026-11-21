@@ -239,7 +239,7 @@ describe('what it draws', () => {
     expect(comp.overlay.children).toEqual([comp.gizmo.root]);
   });
 
-  it('the gizmo shows the object’s own axes as the camera sees them, nearest on top', () => {
+  it('the gizmo shows the WORLD’s axes as the camera sees them, nearest on top', () => {
     const dot = (c: StageComponent, i: number) => {
       const a = c.gizmo.parts[2 * i].dot.attrs;
       return [Number(a.cx), Number(a.cy)];
@@ -251,10 +251,22 @@ describe('what it draws', () => {
     // Drawn last: the +Z dot points straight at the camera.
     const order = flat.gizmo.root.children;
     expect(order[order.length - 1]).toBe(flat.gizmo.parts[4].g);
-    // Turned 90° about Y, as the turntable turns it: X now points away, Z right.
-    const turned = stage(new THREE.Mesh(new THREE.SphereGeometry(0.8)), 'grid', { spinDeg: [0, 90, 0] }).comp;
-    expect(dot(turned, 0)[0]).toBeCloseTo(38);
-    expect(dot(turned, 2)).toEqual([64, 38]);
+    // The turntable turns the OBJECT, never the world (owner, 2026-11-21:
+    // "show world rotation, not object"): the gizmo stays as it was.
+    const spun = stage(new THREE.Mesh(new THREE.SphereGeometry(0.8)), 'grid', { spinDeg: [30, 90, 0] }).comp;
+    expect(dot(spun, 0)).toEqual([64, 38]);
+    expect(dot(spun, 1)).toEqual([38, 12]);
+    expect(dot(spun, 2)).toEqual([38, 38]);
+    // The camera orbiting 90° about Y to look from +X: X now points at the
+    // camera, Z left — redrawn on the next frame, with nothing else moved.
+    const camera = (spun.el as { camera: THREE.PerspectiveCamera }).camera;
+    camera.position.set(8, 0, 0);
+    camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld();
+    spun.tock();
+    expect(dot(spun, 0)).toEqual([38, 38]);
+    expect(dot(spun, 2)).toEqual([12, 38]);
+    expect(dot(spun, 1)).toEqual([38, 12]);
   });
 
   it('stands the object upright while drawn and gives its tilt back with none — the gizmo’s Y is the grid’s', () => {

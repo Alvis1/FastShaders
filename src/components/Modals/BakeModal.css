@@ -1,0 +1,19 @@
+/* "Bake to texture": one row per socket leaving the selection — its name, then
+   either the layout and the warnings or the one sentence saying why it cannot
+   be baked. The shared dialog chrome is CsvImportModal.css. */
+.bake-modal__label {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* The refusal: the context menu's danger red, brightened on the dark theme. */
+.bake-modal__refusal {
+  color: #c0392b;
+}
+:root[data-theme="dark"] .bake-modal__refusal {
+  color: #ff6b5e;
+}
+
+.bake-modal__stop {
+  color: var(--text-primary);
+}
