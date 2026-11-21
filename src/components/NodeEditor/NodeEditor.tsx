@@ -1332,8 +1332,8 @@ export function NodeEditor() {
   // navigates instead of corrupting the ink. Only ever set on coarse pointers.
   const twoFingerNavRef = useRef(false);
   // Coarse pointer = touch/pen (e.g. iPad). Drives the touch interaction model:
-  // ONE finger manipulates (drag nodes/edges; tap selects — marquee stays a
-  // mouse-only affordance, see selectionOnDrag), TWO fingers navigate
+  // ONE finger manipulates (drag nodes/edges, drag empty canvas = selection
+  // box, tap selects), TWO fingers navigate
   // (pan + pinch-zoom), long-press opens the menu. A mouse keeps the desktop
   // model (panOnDrag={[1,2]}, double-tap-drag pan) completely intact.
   //
@@ -3752,6 +3752,12 @@ export function NodeEditor() {
       e.stopImmediatePropagation();
       active = true;
       twoFingerNavRef.current = true;
+      // The first finger of this gesture may already have opened React Flow's
+      // rubber band (selectionOnDrag stays ON for touch, so ONE finger on the
+      // empty canvas draws a selection box). A second finger means navigation:
+      // drop the band, or it keeps tracking the first finger while the view
+      // pans. Its pointermove/pointerup handlers bail on a null rect.
+      flowStore.setState({ userSelectionRect: null, userSelectionActive: false });
       // The first pinch finger may have landed on a socket (its pointerdown
       // fired before this touchstart could be intercepted) — dismiss the
       // tooltip it popped now that the gesture is known to be navigation.
@@ -3800,7 +3806,7 @@ export function NodeEditor() {
       el.removeEventListener('touchend', onEnd, { capture: true } as EventListenerOptions);
       el.removeEventListener('touchcancel', onEnd, { capture: true } as EventListenerOptions);
     };
-  }, [isCoarsePointer, getViewport, setViewport, screenToFlowPosition]);
+  }, [isCoarsePointer, getViewport, setViewport, screenToFlowPosition, flowStore]);
 
   // The import one-liner clears itself. Keyed on the note's id so a second
   // drop restarts the clock instead of inheriting the first one's timer, and
@@ -4026,16 +4032,12 @@ export function NodeEditor() {
           // so a stroke never also starts (and strands) a selection box. The
           // draw-capture handler still swallows the pointerdown; these props are
           // the declarative belt-and-suspenders that actually keep RF idle.
-          // Also OFF on coarse pointers. With panOnDrag={false} on touch, the
-          // FIRST finger of a two-finger pan lands on the pane; React Flow then
-          // starts a marquee (pointer-driven) before the second finger arrives,
-          // and a touchstart can't retroactively cancel that pointer selection —
-          // so an empty-canvas two-finger pan came out as a selection box. (Over
-          // a node the first finger starts a node-drag instead, which is why the
-          // two-finger nav only worked over nodes.) Dropping selectionOnDrag on
-          // touch leaves the two-finger nav effect unopposed. Rubber-band
-          // marquee-select stays a mouse-only affordance; tap still selects.
-          selectionOnDrag={!drawToolActive && !isCoarsePointer}
+          // ON for touch too: ONE finger dragging the empty canvas draws the
+          // selection box (panOnDrag is off there, so nothing else claims that
+          // gesture). The old trap — the first finger of a two-finger pan
+          // opening a band before the second landed — is closed by the touch-nav
+          // effect, which cancels the band on the second touchstart.
+          selectionOnDrag={!drawToolActive}
           nodesDraggable={!drawToolActive}
           elementsSelectable={!drawToolActive}
           selectionMode={SelectionMode.Partial}
