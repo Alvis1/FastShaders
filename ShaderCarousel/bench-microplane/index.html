@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MicroPlane — per-node microbench (WebGPU)</title>
+  <link rel="stylesheet" href="../lib/bench-style.css">
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <div id="progress-bar"></div>
+  <div id="error-overlay"></div>
+
+  <div id="hud">
+    <span class="badge badge-micro">μPlane</span>
+    <span><span class="label">Shader: </span><span class="value" id="hud-shader">—</span></span>
+    <span><span class="label">Pts: </span><span class="value" id="hud-pts">—</span></span>
+    <span><span class="label">FT: </span><span class="value" id="hud-ft">—</span></span>
+    <span><span class="label">Marginal: </span><span class="value" id="hud-marginal">—</span></span>
+    <span><span class="label">Progress: </span><span class="value" id="hud-progress">—</span></span>
+    <span><span class="label">Phase: </span><span class="value" id="hud-phase">idle</span></span>
+  </div>
+
+  <div id="controls">
+    <button id="btn-start" class="primary">▶ Start</button>
+    <button id="btn-stop" class="danger" disabled>Stop</button>
+    <button id="btn-shaders" type="button">Shaders</button>
+    <button id="btn-log" type="button">Log</button>
+    <div class="sep"></div>
+    <label class="field">Plane px
+      <input id="input-size" type="number" min="128" max="2048" step="64">
+    </label>
+    <label class="field">Frames
+      <input id="input-frames" type="number" min="10" max="500">
+    </label>
+    <label class="field" title="Minimum passes per measurement. The bench calibrates upward per-shader so each measurement spans ~20 ms — cheap atomics will run with more passes than this.">Passes (min)
+      <input id="input-passes" type="number" min="1" max="5000">
+    </label>
+    <label class="field">Warmup
+      <input id="input-warmup" type="number" min="1" max="60">
+    </label>
+    <label class="field">Log every Nth
+      <input id="input-stride" type="number" min="1" max="50">
+    </label>
+    <div class="sep"></div>
+    <button id="btn-reset" type="button">Reset defaults</button>
+  </div>
+
+  <div id="shader-picker"><div id="pick-list"></div></div>
+  <div id="log"></div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "../lib/three/three.webgpu.min.js",
+      "three/webgpu": "../lib/three/three.webgpu.min.js",
+      "three/tsl": "../lib/three/three.tsl.min.js"
+    }
+  }
+  </script>
+  <script type="module" src="./bench.js"></script>
+</body>
+</html>
