@@ -8,7 +8,6 @@ import {
   useStore,
   useStoreApi,
   type ReactFlowState,
-  Position,
   type OnConnect,
   type Connection,
   type Edge,
@@ -40,7 +39,10 @@ import { previewableOutputs, PREVIEW_KEEP_SELECTOR } from '@/utils/nodePreview';
 import { nodeTypes, edgeTypes } from './flowTypes';
 import { CONNECTION_RADIUS } from './nodes/connectionReveal';
 import { clearSocketTapTooltip } from './handles/TypedHandle';
-import { edgeBezier, distancePointToCubicBezier, distancePointToSpline, splinePath } from './edges/bezierGeometry';
+import { distancePointToSpline, splinePath } from './edges/bezierGeometry';
+import { findNearestEdge, handleAnchor, type GetInternalNode } from './edgeHit';
+import { finishReconnect, removeBranch, startReconnect, type ReconnectMark } from './branchActions';
+import { feedsFedKnot } from './branchWire';
 import { addEdgeWaypoint } from './edges/edgeWaypoints';
 import { DrawingLayer } from './DrawingLayer';
 import { DrawToolbar } from './DrawToolbar';
@@ -128,7 +130,7 @@ import { canMuteNode, detachEdges, isMutedNode } from '@/utils/nodeMute';
 import { isTypingTarget } from '@/utils/isTypingTarget';
 import { beginDragChrome } from '@/utils/dragChrome';
 import { bridgeEdgesAcrossDeletedNodes, unwrapCollapsedGroupEdges, unwrapGroupsOnly } from '@/utils/edgeUtils';
-import { remapTunnelLinks, resolvePassThroughEndpoint, topologyEdges } from '@/utils/passThrough';
+import { isKnot, remapTunnelLinks, resolvePassThroughEndpoint, topologyEdges } from '@/utils/passThrough';
 import { parseCsv, COLUMN_WARN_THRESHOLD } from '@/utils/csvParser';
 import { makeDataNodeData } from '@/utils/dataNode';
 import {
@@ -313,7 +315,6 @@ function nodeAbsolutePos(node: AppNode, allNodes: AppNode[]): { x: number; y: nu
   return { x, y };
 }
 
-type GetInternalNode = (id: string) => InternalNode | undefined;
 
 /** NodeEditor's ONE placement path (`placeTilePayload`), as a ref can hold it:
  *  `fromKey` marks a 1/2/3+click add, which logs no palette drop. */
@@ -324,45 +325,6 @@ type PlaceTilePayload = (
   activate?: boolean,
   fromKey?: boolean,
 ) => void;
-
-/**
- * The edge anchor React Flow actually draws from/to for one handle, in
- * flow-space: the handle box's CARDINAL-side midpoint (Right → right edge, Left
- * → left edge, …), exactly what @xyflow/system's getHandlePosition(center=false)
- * returns. Also reports the handle's node-local CENTER (`localCx/localCy`) so a
- * color-circle source can reconstruct its radial exit vector. Falls back to the
- * node's mid-left/mid-right edge when handle bounds haven't been measured yet.
- * Reading the ACTUAL handle (not the node's vertical center) is what lets a drop
- * land on an edge feeding a non-centered socket — e.g. the Output node's
- * displacement/normal rows, or the `b` input of an arithmetic node.
- */
-function handleAnchor(
-  node: InternalNode,
-  handleId: string | null | undefined,
-  kind: 'source' | 'target',
-): { x: number; y: number; position: Position; localCx: number; localCy: number } {
-  const pos = node.internals.positionAbsolute;
-  const bounds = node.internals.handleBounds?.[kind];
-  const h = (handleId ? bounds?.find((b) => b.id === handleId) : undefined) ?? bounds?.[0];
-  if (h) {
-    const localCx = h.x + h.width / 2;
-    const localCy = h.y + h.height / 2;
-    let x = pos.x + localCx;
-    let y = pos.y + localCy;
-    switch (h.position) {
-      case Position.Left:   x = pos.x + h.x; break;
-      case Position.Right:  x = pos.x + h.x + h.width; break;
-      case Position.Top:    y = pos.y + h.y; break;
-      case Position.Bottom: y = pos.y + h.y + h.height; break;
-    }
-    return { x, y, position: h.position, localCx, localCy };
-  }
-  const w = node.measured?.width ?? 120;
-  const ht = node.measured?.height ?? 40;
-  return kind === 'source'
-    ? { x: pos.x + w, y: pos.y + ht / 2, position: Position.Right, localCx: w, localCy: ht / 2 }
-    : { x: pos.x, y: pos.y + ht / 2, position: Position.Left, localCx: 0, localCy: ht / 2 };
-}
 
 /**
  * Drag-connect adapter: a node's MOUNTED handles of one kind as plain
@@ -481,7 +443,9 @@ function connectTargetBoxes(draggedId: string, allNodes: AppNode[], edges: AppEd
   const boxes: NodeBox[] = [];
   for (const other of allNodes) {
     if (other.id === draggedId) continue;
-    if (other.type === 'group' || other.type === 'note') continue;
+    // A Branch is no drag-connect target: wires out of it are made only by
+    // connecting TO it from an input (docs/dev/canvas-interaction.md, Branch).
+    if (other.type === 'group' || other.type === 'note' || isKnot(other)) continue;
     if (isCollapsedMember(other)) continue;
     boxes.push(nodeVisualBox(other, allNodes, edges));
   }
@@ -503,7 +467,8 @@ function makeRoomBoxes(
 ): CascadeBox[] {
   const out: CascadeBox[] = [];
   for (const n of allNodes) {
-    if (n.type === 'group' || n.type === 'note') continue;
+    // A Branch is a dot on the wires, like a routing point: never pushed.
+    if (n.type === 'group' || n.type === 'note' || isKnot(n)) continue;
     if (isCollapsedMember(n)) continue;
     const box = nodeVisualBox(n, allNodes, edges);
     if (n.id === placedId) {
@@ -513,107 +478,6 @@ function makeRoomBoxes(
     out.push({ ...box, fixed: n.id === placedId || n.id === peerId });
   }
   return out;
-}
-
-/**
- * Find the closest edge to (cx, cy) in flow-space within `radius` (flow px).
- * `excludeNodeId` skips edges connected to the node being dragged. Distance is
- * measured against the SAME cubic bezier TypedEdge renders — exact handle
- * anchors, React Flow's control-point math, and the color-circle radial exit —
- * so what highlights is exactly what snaps. Invisible edges (collapsed-group
- * internals / hidden boundary edges) are skipped so a node can't splice onto an
- * edge the user can't see.
- */
-/**
- * What is not DRAWN must not be hit-testable. React Flow renders an edge only
- * when its NAMED handle resolves in the node's measured bounds — an edge into
- * a DORMANT Output section's unmounted `m<n>:<channel>` handle renders as
- * NOTHING — but `handleAnchor`'s first-handle fallback would still anchor it
- * at the node's first mounted handle, so `findNearestEdge` measured a phantom
- * curve across empty-looking canvas that a drop could then SPLICE with no
- * highlight ever painted ("what wasn't previewed is never committed"). A null
- * handle id keeps the first-handle fallback (React Flow's own rule), and
- * unmeasured bounds stay permissive (a one-frame mid-mount state).
- */
-function edgeEndpointDrawable(
-  node: InternalNode,
-  handleId: string | null | undefined,
-  kind: 'source' | 'target',
-): boolean {
-  if (!handleId) return true;
-  const bounds = node.internals.handleBounds?.[kind];
-  if (!bounds) return true;
-  return bounds.some((b) => b.id === handleId);
-}
-
-function findNearestEdge(
-  cx: number, cy: number,
-  allEdges: AppEdge[],
-  getInternalNode: GetInternalNode,
-  radius: number,
-  excludeNodeId?: string,
-): string | null {
-  let bestId: string | null = null;
-  let bestDist = radius;
-
-  for (const edge of allEdges) {
-    if (edge.hidden) continue;
-    if ((edge as { className?: string }).className?.includes('fs-collapsed-edge')) continue;
-    if (excludeNodeId && (edge.source === excludeNodeId || edge.target === excludeNodeId)) continue;
-    const srcNode = getInternalNode(edge.source);
-    const tgtNode = getInternalNode(edge.target);
-    if (!srcNode || !tgtNode) continue;
-    if (!edgeEndpointDrawable(srcNode, edge.sourceHandle, 'source')) continue;
-    if (!edgeEndpointDrawable(tgtNode, edge.targetHandle, 'target')) continue;
-
-    const s = handleAnchor(srcNode, edge.sourceHandle, 'source');
-    const t = handleAnchor(tgtNode, edge.targetHandle, 'target');
-
-    // Routed edges (user waypoints) draw a spline, not a single bezier — measure
-    // against the SAME spline so what highlights is exactly what snaps.
-    const wps = (edge.data?.waypoints ?? []) as { x: number; y: number }[];
-    let d: number;
-    if (wps.length) {
-      d = distancePointToSpline(
-        [[s.x, s.y], ...wps.map((w) => [w.x, w.y] as [number, number]), [t.x, t.y]],
-        cx, cy,
-      );
-    } else {
-      // Color nodes are circles whose output rides the perimeter and exits along
-      // the radial (TypedEdge's getRadialBezierPath) — everything else uses the
-      // cardinal exit. Match whichever this edge is actually drawn with, through
-      // `edgeBezier`, the ONE curve the renderer and the chevrons also call, so
-      // the "never fork the curve" rule holds by construction.
-      const rdx = s.localCx - (srcNode.measured?.width ?? 28) / 2;
-      const rdy = s.localCy - (srcNode.measured?.height ?? 28) / 2;
-      const rlen = Math.hypot(rdx, rdy);
-      const exit = srcNode.type === 'color' && rlen > 1e-3 ? ([rdx / rlen, rdy / rlen] as const) : s.position;
-      const [, , c1x, c1y, c2x, c2y] = edgeBezier(s.x, s.y, exit, t.x, t.y, t.position);
-      // Reject on the control hull before paying for the solve. A cubic bezier
-      // lies inside the convex hull of its four control points, so a curve
-      // whose control AABB is further than `bestDist` from the probe cannot
-      // contain a closer point — an EXACT test, so it can never change which
-      // edge is picked (the "what highlights is exactly what snaps" contract
-      // holds). Worth it because this runs per edge per drag FRAME and
-      // `distancePointToCubicBezier` is 31 coarse samples plus 3 refine passes
-      // of 13 — 70 curve evaluations, measured at ~50 µs for 294 edges against
-      // ~2 µs with the reject. The waypoint branch above is deliberately NOT
-      // guarded this way: a Catmull-Rom spline can overshoot its own control
-      // polygon, so the same bounds would not be conservative there.
-      const loX = Math.min(s.x, c1x, c2x, t.x);
-      const hiX = Math.max(s.x, c1x, c2x, t.x);
-      const loY = Math.min(s.y, c1y, c2y, t.y);
-      const hiY = Math.max(s.y, c1y, c2y, t.y);
-      if (cx < loX - bestDist || cx > hiX + bestDist
-        || cy < loY - bestDist || cy > hiY + bestDist) continue;
-      d = distancePointToCubicBezier(s.x, s.y, c1x, c1y, c2x, c2y, t.x, t.y, cx, cy);
-    }
-    if (d < bestDist) {
-      bestDist = d;
-      bestId = edge.id;
-    }
-  }
-  return bestId;
 }
 
 /**
@@ -918,6 +782,13 @@ export function NodeEditor() {
     if (!isDoubleActivation(prev, node.id, t)) return;
     // Consumed: a third click starts a fresh pair rather than toggling again.
     lastActivationRef.current = null;
+    // A Branch is removed, as a double-click removes a routing point: its
+    // wires out are fed from the trunk's source again (branchActions.ts,
+    // through removeNode's splice — one undo entry). No label peek.
+    if (isKnot(node)) {
+      removeBranch(node.id);
+      return;
+    }
     if (PEEK_EXEMPT_NODE_TYPES.has(node.type ?? '')) return;
     const el = e.target as Element | null;
     if (el?.closest?.(PEEK_EXEMPT_SELECTOR)) return;
@@ -1600,9 +1471,13 @@ export function NodeEditor() {
           // first connected input's upstream, then drop the user's explicitly
           // selected edges. Chain deletes (X→A→B→C with A and B selected)
           // resolve across the whole deleted run to produce X→C.
+          // With the nodes, a deleted Branch keeps its drawing: each bridged
+          // wire runs through the trunk's routing points, then its own — no
+          // point where the Branch was (edgeUtils.ts `joinWaypoints`).
           const afterBridge = bridgeEdgesAcrossDeletedNodes(
             currentEdges as AppEdge[],
             selectedNodeIds,
+            currentNodes,
           );
           store.setEdges(afterBridge.filter((e) => !selectedEdgeIds.has(e.id)));
         });
@@ -1982,7 +1857,10 @@ export function NodeEditor() {
           }
         }
       }
-      if (rfDragged.type === 'group' || rfDragged.type === 'note') return;
+      // A Branch only MOVES, like a routing point: no drag-connect (wires out
+      // of it are made by connecting TO it) and never a splice into the wire
+      // it is dropped on (it would replace its own trunk) — so no preview.
+      if (rfDragged.type === 'group' || rfDragged.type === 'note' || isKnot(rfDragged)) return;
 
       const store = useAppStore.getState();
       const draggedNode = withStorePosition(rfDragged, store.nodes);
@@ -2187,6 +2065,8 @@ export function NodeEditor() {
         pickDropTargetNode(cx, cy, connectTargetBoxes(freshDragged.id, allNodes, useAppStore.getState().edges)) != null;
       // (`isNote` is redundant with `def` — a note has no registry entry — but
       // stated explicitly so the rule survives one ever gaining one.)
+      // A Branch has no registry def, so it never splices here: a moved
+      // Branch dropped on a wire would replace its own trunk.
       if (!isNote && !overNodeBody && def && def.inputs.length > 0 && def.outputs.length > 0) {
         const radius = DROP_ON_EDGE_RADIUS / getViewport().zoom;
         if (tryInsertOnEdge(freshDragged.id, def, cx, cy, getInternalNode, radius)) {
@@ -2235,7 +2115,9 @@ export function NodeEditor() {
           makeRoomBoxes(allNodes, freshDragged.id, placedAbs, hoverId, useAppStore.getState().edges),
           GAP,
         );
-      } else if (!isNote) {
+      } else if (!isNote && !isKnot(freshDragged)) {
+        // (A Branch is a dot on the wires, like a routing point: it never makes
+        // room, and makeRoomBoxes never moves one either.)
         // --- Make room: the dropped node stays EXACTLY where it was released,
         // and whatever it landed on moves out from under it (plain moves and
         // drop-on-edge splices) — the drag-connect drop's own rule above,
@@ -2342,6 +2224,25 @@ export function NodeEditor() {
   // Track whether a connection attempt succeeded; if not, open add-node menu
   const connectSucceeded = useRef(false);
   const pendingSourceRef = useRef<DroppedPin | null>(null);
+
+  // The wire a reconnect is moving (onReconnectStart), so a Branch's own
+  // feed may be dropped back on it (isValidConnection).
+  const reconnectingEdgeRef = useRef<string | null>(null);
+  // …and its undo entry (`startReconnect`), for `finishReconnect`.
+  const reconnectMarkRef = useRef<ReconnectMark | null>(null);
+
+  /**
+   * React Flow asks this for every socket a dragged wire snaps to, and refuses
+   * the snap (the socket reads invalid, the release makes nothing) when it
+   * answers false. The one refusal: a wire into a Branch that something
+   * ALREADY feeds (branchWire.ts `feedsFedKnot`) — a Branch's one input is
+   * never replaced, since every wire it fans out to would silently change
+   * source (owner, 2026-11-23). Every other connection keeps today's rules.
+   */
+  const isValidConnection = useCallback((connection: Connection | Edge) => {
+    const { nodes, edges } = useAppStore.getState();
+    return !feedsFedKnot(nodes, edges, connection.target, reconnectingEdgeRef.current, connection.targetHandle);
+  }, []);
 
   const onConnectStart = useCallback(
     (_event: MouseEvent | TouchEvent, params: { nodeId: string | null; handleId: string | null; handleType: string | null }) => {
@@ -2537,14 +2438,17 @@ export function NodeEditor() {
   );
 
   // Drag-to-delete: track reconnect start + save history
-  const onReconnectStart = useCallback(() => {
+  const onReconnectStart = useCallback((_event: React.MouseEvent, edge: Edge) => {
     reconnectSuccessful.current = false;
+    reconnectingEdgeRef.current = edge.id;
     // Dragging an edge END off its socket is a disconnect gesture, but React
     // Flow still runs the connection lifecycle for it (onConnectStart/End) — so
     // flag it exactly like the edge-body drag-to-disconnect does. Otherwise
     // releasing on empty canvas pops the AddNodeMenu on top of the disconnect.
     setEdgeDisconnecting(true);
-    useAppStore.getState().pushHistory();
+    // The undo entry, remembered so a release a fed Branch refuses can take
+    // it back (branchActions.ts `finishReconnect`).
+    reconnectMarkRef.current = startReconnect(edge.id);
   }, []);
 
   // Drag-to-delete: handle successful reconnect
@@ -2561,10 +2465,17 @@ export function NodeEditor() {
     [setEdges]
   );
 
-  // Drag-to-delete: if reconnect failed (dropped on empty space), delete the edge
+  // Drag-to-delete: if reconnect failed (dropped on empty space), delete the
+  // edge — but a release ON a fed Branch, which refused it, keeps the wire and
+  // spends no undo entry (a refusal changes nothing; branchActions.ts).
   const onReconnectEnd = useCallback(
-    (_event: MouseEvent | TouchEvent, edge: Edge) => {
-      if (!reconnectSuccessful.current) {
+    (_event: MouseEvent | TouchEvent, edge: Edge, _handleType: unknown, connectionState: FinalConnectionState) => {
+      reconnectingEdgeRef.current = null;
+      const mark = reconnectMarkRef.current;
+      reconnectMarkRef.current = null;
+      if (mark && mark.edgeId === edge.id) {
+        finishReconnect(mark, reconnectSuccessful.current, connectionState);
+      } else if (!reconnectSuccessful.current) {
         removeEdge(edge.id);
       }
       reconnectSuccessful.current = true;
@@ -4046,6 +3957,7 @@ export function NodeEditor() {
           panActivationKeyCode={null}
           edgesReconnectable
           connectionRadius={CONNECTION_RADIUS}
+          isValidConnection={isValidConnection}
           // Draw mode owns the left-drag gesture: turn React Flow's rubber-band
           // selection, node dragging, and element selection OFF while drawing,
           // so a stroke never also starts (and strands) a selection box. The

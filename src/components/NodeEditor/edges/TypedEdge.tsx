@@ -29,6 +29,7 @@ import {
 import { handleEl, nodeEl } from '../nodeElement';
 import { removeEdgeWaypoint } from './edgeWaypoints';
 import { EdgeInfoCard } from './EdgeInfoCard';
+import { WAYPOINT_DOT_R, WAYPOINT_DOT_STROKE } from '../nodes/passThroughGeometry';
 
 type Waypoint = { x: number; y: number };
 
@@ -53,7 +54,9 @@ function EdgeWaypointHandles({
   const dragRef = useRef<{ index: number; startX: number; startY: number; moved: boolean } | null>(null);
   const fill = getContrastColor(bgColor);
   const stroke = fill === '#ffffff' ? '#000000' : '#ffffff';
-  const r = 5 / zoom;
+  // The Branch (nodes/KnotNode.tsx) is this dot at twice the size: one pair
+  // of numbers for both (passThroughGeometry.ts).
+  const r = WAYPOINT_DOT_R / zoom;
 
   const onPointerDown = (e: React.PointerEvent, index: number) => {
     if (e.button !== 0) return;
@@ -104,7 +107,7 @@ function EdgeWaypointHandles({
           r={r}
           fill={fill}
           stroke={stroke}
-          strokeWidth={1.5 / zoom}
+          strokeWidth={WAYPOINT_DOT_STROKE / zoom}
           style={{ cursor: 'grab', pointerEvents: 'all' }}
           onPointerDown={(e) => onPointerDown(e, i)}
           onPointerMove={onPointerMove}

@@ -63,10 +63,11 @@
      chrome; this tracks --node-bg instead. */
   --node-plate: #ffffff;
   /* The inside of a PORTAL hole (nodes/TunnelNode.tsx): a TINT laid over the
-     canvas colour, so the interior is one step darker than whatever canvas the
-     user picked. Redefined in the dark block below (deeper there), or the hole
-     would read as a bump on a dark canvas. */
-  --tunnel-well: rgba(0, 0, 0, 0.18);
+     canvas colour, so the interior is darker than whatever canvas the user
+     picked. Half black on a light canvas (owner, 2026-11-23: at 0.18 the hole
+     read as a flat grey disc, not a hole). Redefined in the dark block below,
+     or the hole would read as a bump on a dark canvas. */
+  --tunnel-well: rgba(0, 0, 0, 0.5);
 
   /* ===== BORDERS ===== */
   --border-subtle: #E0E0E0;

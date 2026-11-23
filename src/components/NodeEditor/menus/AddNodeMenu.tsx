@@ -3,7 +3,10 @@ import { useReactFlow } from '@xyflow/react';
 import { findSingletonNode } from '../singletonNodes';
 import { focusNode } from '../outputFocus';
 import { useAppStore } from '@/store/useAppStore';
-import { connectDroppedWire, spliceNodeIntoEdge } from '../edgeInsert';
+import { connectDroppedWire, connectNodes, spliceNodeIntoEdge } from '../edgeInsert';
+import { branchRefusal, makeKnotNode } from '../branchWire';
+import { branchIntoWireAt } from '../branchActions';
+import { BRANCH_TOOLTIP, branchMatchesQuery, branchNameMatchesQuery } from '../branchSearch';
 import {
   searchNodes,
   getEditorDefinitions,
@@ -57,6 +60,7 @@ type ActionItem =
   | { kind: 'bake'; key: string; run: () => void }
   | { kind: 'output'; key: string; run: () => void }
   | { kind: 'note'; key: string; run: () => void }
+  | { kind: 'branch'; key: string; run: () => void }
   | { kind: 'ai'; key: string; run: () => void }
   | { kind: 'def'; key: string; def: NodeDefinition; run: () => void };
 
@@ -91,7 +95,7 @@ export function AddNodeMenu() {
   // "Unlimited": the figure stays, in the colourless grey every card uses.
   const costUnlimited = useBudgetUnlimited();
   const language = useAppStore((s) => s.language);
-  const { screenToFlowPosition, fitView } = useReactFlow();
+  const { screenToFlowPosition, fitView, getInternalNode, getViewport } = useReactFlow();
 
   const canGroup = groupableCount >= 2;
   const canOrganize = organizableCount >= 2;
@@ -128,6 +132,12 @@ export function AddNodeMenu() {
   }, [query, hidden]);
 
   const noteMatches = useMemo(() => noteMatchesQuery(query), [query]);
+  // Insert node on a wire a Branch may not go into (branchWire.ts
+  // `branchRefusal`: a collapsed pill's wire) offers no Branch row, which
+  // would close the menu and do nothing. A boolean, so no re-render per notify.
+  const branchOffered = useAppStore((s) => !spliceEdgeId || branchRefusal(s.nodes, s.edges, spliceEdgeId) === null);
+  const branchMatches = useMemo(() => branchOffered && branchMatchesQuery(query), [branchOffered, query]);
+  const branchFirst = useMemo(() => branchOffered && branchNameMatchesQuery(query), [branchOffered, query]);
 
   // "Generate “…” with AI": the LAST row, when the query reads as a request
   // (utils/promptDetect.ts; docs/dev/node-generator.md § The search-box
@@ -136,8 +146,8 @@ export function AddNodeMenu() {
   const aiOffered = useGeneratorOffer();
   const aiDetected = useMemo(() => {
     if (!aiOffered || sourceNodeId || spliceEdgeId) return false;
-    return detectPrompt(query, { hasResults: results.length > 0 || noteMatches, known: knownNodeNames() });
-  }, [aiOffered, sourceNodeId, spliceEdgeId, query, results, noteMatches]);
+    return detectPrompt(query, { hasResults: results.length > 0 || noteMatches || branchMatches, known: knownNodeNames() });
+  }, [aiOffered, sourceNodeId, spliceEdgeId, query, results, noteMatches, branchMatches]);
   /** Open the generator on this query; an unwired result lands where the menu
    *  was opened. `autostart` is Ctrl/Cmd+Enter with a route that already works. */
   const handleGenerate = useCallback((autostart = false) => {
@@ -315,6 +325,48 @@ export function AddNodeMenu() {
     closeContextMenu();
   }, [addNote, screenToFlowPosition, contextMenu.x, contextMenu.y, closeContextMenu]);
 
+  // A BRANCH (flow type `knot`, utils/passThrough.ts), centred where the menu
+  // was opened — one of the two ways a Branch is made, both right-click menus
+  // (owner, 2026-11-23). From a dropped wire it is wired to the pulled socket
+  // — an output feeds its input, an input is fed from its output — and from
+  // an edge's Insert node it goes into that wire where the menu was opened:
+  // on a routing point that point becomes it, else the nearest point of the
+  // drawn curve, with no routing point dissolved (branchActions.ts
+  // `branchIntoWireAt`; a wire it may not take changes nothing). One undo
+  // entry, as for every row here; `addNode` logs the add.
+  const handleAddBranch = useCallback(() => {
+    const at = screenToFlowPosition({ x: contextMenu.x, y: contextMenu.y });
+    if (spliceEdgeId) {
+      branchIntoWireAt(spliceEdgeId, at, getInternalNode, getViewport().zoom);
+      closeContextMenu();
+      return;
+    }
+    asOneHistoryEntry(() => {
+      const id = generateId();
+      addNode(makeKnotNode(id, at));
+      if (sourceNodeId && sourceHandleId && sourceHandleType === 'source') {
+        connectNodes(sourceNodeId, sourceHandleId, id, 'in');
+      } else if (sourceNodeId && sourceHandleId && sourceHandleType === 'target') {
+        connectNodes(id, 'out', sourceNodeId, sourceHandleId);
+      }
+      closeContextMenu();
+    });
+  }, [addNode, screenToFlowPosition, getInternalNode, getViewport, contextMenu.x, contextMenu.y, sourceNodeId, sourceHandleId, sourceHandleType, spliceEdgeId, closeContextMenu]);
+
+  /** The Branch row, in the browse list and when a search names it. */
+  const renderBranchRow = () => (
+    <button
+      className={itemClass('__branch__')}
+      title={t(BRANCH_TOOLTIP, language)}
+      data-add-node-focused={focusedAttr('__branch__')}
+      onClick={handleAddBranch}
+      onMouseEnter={() => hoverFocus('__branch__')}
+    >
+      <span>{t('Branch', language)}</span>
+      <span className="context-menu__item-category">{t('wire', language)}</span>
+    </button>
+  );
+
   // Build the flat keyboard-traversable list in the same order things render.
   // ArrowUp/Down step through this list; Enter runs the focused item's action.
   const actionItems: ActionItem[] = useMemo(() => {
@@ -350,16 +402,22 @@ export function AddNodeMenu() {
     }
     if (!query.trim()) {
       items.push({ kind: 'note', key: '__note__', run: handleAddNote });
+      if (branchOffered) items.push({ kind: 'branch', key: '__branch__', run: handleAddBranch });
     }
     // Recent nodes render above the category list (distinct `recent:` keys so a
     // def appearing here AND in its category stays two independent focus stops).
-    // A search naming the note offers it AFTER the node results, so a node
-    // match keeps the Enter key ("tex" is Texture before it is text).
-    if (query.trim() && noteMatches) {
+    // A search naming the note or the Branch offers it AFTER the node results,
+    // so a node match keeps the Enter key ("tex" is Texture before it is text,
+    // "split" the Split node before the Branch).
+    if (query.trim() && (noteMatches || branchMatches)) {
+      // …except a query naming the Branch itself ("bra", "sazar"), which puts
+      // it FIRST (branchSearch.ts `branchNameMatchesQuery`).
+      if (branchFirst) items.push({ kind: 'branch', key: '__branch__', run: handleAddBranch });
       for (const def of results) {
         items.push({ kind: 'def', key: def.type, def, run: () => handleAddNode(def) });
       }
-      items.push({ kind: 'note', key: '__note__', run: handleAddNote });
+      if (noteMatches) items.push({ kind: 'note', key: '__note__', run: handleAddNote });
+      if (branchMatches && !branchFirst) items.push({ kind: 'branch', key: '__branch__', run: handleAddBranch });
       if (aiDetected) items.push({ kind: 'ai', key: '__ai__', run: () => handleGenerate() });
       return items;
     }
@@ -382,7 +440,7 @@ export function AddNodeMenu() {
     // row and Enter opens the generator (it never sends).
     if (aiDetected) items.push({ kind: 'ai', key: '__ai__', run: () => handleGenerate() });
     return items;
-  }, [query, noteMatches, canGroup, canOrganize, canBake, bakeQueried, grouped, results, recentDefs, handleGroupSelection, handleOrganizeSelection, handleBakeSelection, handleAddNode, handleAddNote, aiDetected, handleGenerate]);
+  }, [query, noteMatches, branchOffered, branchMatches, branchFirst, canGroup, canOrganize, canBake, bakeQueried, grouped, results, recentDefs, handleGroupSelection, handleOrganizeSelection, handleBakeSelection, handleAddNode, handleAddNote, handleAddBranch, aiDetected, handleGenerate]);
 
   // Reset focus to the first item whenever the visible list changes (typing in
   // the search box, selection toggling, output-node presence flipping, etc.).
@@ -646,6 +704,15 @@ export function AddNodeMenu() {
           </>
         )}
 
+        {/* A Branch: one wire in, many out (branchActions.ts) */}
+        {!query.trim() && branchOffered && (
+          <>
+            <div className="context-menu__category">{t('Wires', language)}</div>
+            {renderBranchRow()}
+            <div className="context-menu__divider" />
+          </>
+        )}
+
         {/* Recently-used nodes, newest first — floated above the category list */}
         {!query.trim() && recentDefs.length > 0 && (
           <>
@@ -654,6 +721,9 @@ export function AddNodeMenu() {
             <div className="context-menu__divider" />
           </>
         )}
+
+        {/* A search naming the Branch itself: its row FIRST (branchSearch.ts). */}
+        {query.trim() && branchFirst && renderBranchRow()}
 
         {grouped
           ? // Grouped by category
@@ -680,6 +750,9 @@ export function AddNodeMenu() {
             <span className="context-menu__item-category">{t('note', language)}</span>
           </button>
         )}
+
+        {/* …and the Branch, when the search names it by an alias (branchSearch.ts). */}
+        {query.trim() && branchMatches && !branchFirst && renderBranchRow()}
 
         {aiDetected && (
           <>

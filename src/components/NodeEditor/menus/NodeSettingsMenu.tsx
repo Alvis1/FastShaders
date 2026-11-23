@@ -18,6 +18,7 @@ import { RgbCurvesSettings } from './RgbCurvesSettings';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
 import { hasUnitRangeFlag } from '@/utils/unitRange';
 import { modeOf } from '@/engine/moduleHelpers';
+import { isKnot } from '@/utils/passThrough';
 
 
 interface NodeSettingsMenuProps {
@@ -37,6 +38,29 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
   // `onPaneClick` closes it, so that is an ordinary state to be in.
   const node = useAppStore((s) => s.nodes.find((n) => n.id === nodeId));
   if (!node) return null;
+
+  // A BRANCH has nothing to set: its menu is its name and the delete row
+  // (owner, 2026-11-23: "keep it minimal"). Delete is `removeNode`, the same
+  // splice as X / Delete and its double-click — the trunk's routing points
+  // are joined onto every wire it fed.
+  if (isKnot(node)) {
+    return (
+      <div className="context-menu__list">
+        <div className="context-menu__category">{t('Branch', language)}</div>
+        <div className="context-menu__divider" />
+        <button
+          className="context-menu__item context-menu__item--danger"
+          onClick={() => {
+            const store = useAppStore.getState();
+            store.removeNode(nodeId);
+            store.closeContextMenu();
+          }}
+        >
+          {t('Delete Node', language)}
+        </button>
+      </div>
+    );
+  }
 
   const def = NODE_REGISTRY.get(node.data.registryType);
   /** The Image (Texture) node — this menu's one shape-changing special case:

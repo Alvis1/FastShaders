@@ -445,6 +445,26 @@ export function distancePointToCubicBezier(
   tx: number, ty: number,
   px: number, py: number,
 ): number {
+  return nearestOnCubicBezier(sx, sy, c1x, c1y, c2x, c2y, tx, ty, px, py).d;
+}
+
+/** The nearest point of a cubic bezier to a probe: its parameter `t`, the
+ *  point itself and the distance `d`. */
+export interface CurvePoint { t: number; x: number; y: number; d: number }
+
+/**
+ * `distancePointToCubicBezier`'s search, reporting WHERE on the curve the
+ * nearest point is as well as how far: the one solve, so Insert node > Branch
+ * (edgeHit.ts `branchSpotOnWire`) lands on exactly the point of the drawn
+ * curve the drop-on-edge hit test would measure.
+ */
+export function nearestOnCubicBezier(
+  sx: number, sy: number,
+  c1x: number, c1y: number,
+  c2x: number, c2y: number,
+  tx: number, ty: number,
+  px: number, py: number,
+): CurvePoint {
   const dist2 = (t: number): number => {
     const bx = cubicAt(sx, c1x, c2x, tx, t);
     const by = cubicAt(sy, c1y, c2y, ty, t);
@@ -478,5 +498,31 @@ export function distancePointToCubicBezier(
     step = (hi - lo) / FINE;
   }
 
-  return Math.sqrt(bestD2);
+  return {
+    t: bestT,
+    x: cubicAt(sx, c1x, c2x, tx, bestT),
+    y: cubicAt(sy, c1y, c2y, ty, bestT),
+    d: Math.sqrt(bestD2),
+  };
+}
+
+/**
+ * The nearest point of a chain of segments (a routed wire's spline, or a plain
+ * wire's one cubic) to a probe, with the INDEX of the segment it lies on:
+ * segment `i` runs from the wire's point `i` to point `i + 1` (point 0 the
+ * source, the last the target), so the routing points before it are
+ * `waypoints.slice(0, i)`. Null for an empty chain.
+ */
+export function nearestOnSegments(
+  segs: readonly BezierSegment[],
+  px: number,
+  py: number,
+): (CurvePoint & { seg: number }) | null {
+  let best: (CurvePoint & { seg: number }) | null = null;
+  for (let seg = 0; seg < segs.length; seg++) {
+    const [p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y] = segs[seg];
+    const hit = nearestOnCubicBezier(p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, px, py);
+    if (!best || hit.d < best.d) best = { ...hit, seg };
+  }
+  return best;
 }

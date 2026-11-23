@@ -90,8 +90,21 @@ describe('a lifted node', () => {
       ['./nodes/ColorNode.css', '.color-node'],
       ['./nodes/NoteNode.css', '.note-node'],
       ['./nodes/GroupNode.css', '.group-node--collapsed'],
-      ['./nodes/PassThroughNode.css', '.knot-node'],         // knot (Branch)
     ];
+    // knot (Branch): drawn as a routing point's dot, counter-scaled by the
+    // zoom on its OWN box that never eases (an eased 1/zoom pulsed the dot on
+    // every wheel step), and like a Portal hole it casts no shadow until
+    // SELECTED, when it takes the wrapper's lift (`--fs-knot-lift`).
+    {
+      const css = read('./nodes/PassThroughNode.css');
+      const at = (sel: string) => css.slice(css.indexOf(`${sel} {`), css.indexOf('}', css.indexOf(`${sel} {`)));
+      expect(at('.knot-node__dot')).toContain('scale: var(--fs-node-scale, 1);');
+      expect(at('.knot-node__dot')).not.toContain('--fs-knot-unzoom');
+      expect(at('.knot-node__unzoom')).toContain('scale: var(--fs-knot-unzoom, 1);');
+      expect(at('.knot-node__unzoom')).not.toContain('transition');
+      expect(at('.knot-node__dot')).toContain('box-shadow: var(--fs-knot-lift, 0 0 0 transparent);');
+      expect(at('.knot-node--selected')).toContain('--fs-knot-lift: var(--fs-node-lift');
+    }
     for (const [file, sel] of shells) {
       const css = read(file);
       const block = css.slice(css.indexOf(`${sel} {`), css.indexOf('}', css.indexOf(`${sel} {`)));

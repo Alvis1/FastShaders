@@ -209,14 +209,17 @@ describe('edgeBezier — the one curve the renderer, the hit test and the chevro
   });
 
   it('the drop-on-edge hit test and the chevrons CALL it rather than re-deriving the controls (source pins)', () => {
-    // The env is node and both callers are .tsx, so the guard reads source:
+    // The env is node and the renderer is .tsx, so the guard reads source:
     // a hit test that picks its own control points can drift from what draws,
-    // and then what highlights is no longer what snaps.
+    // and then what highlights is no longer what snaps. The hit test lives in
+    // edgeHit.ts (moved out of NodeEditor.tsx so Insert node > Branch shares it);
+    // both its curves — the search's and the Branch split's — call edgeBezier.
     const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8');
-    const editor = read('../NodeEditor.tsx');
-    const hit = editor.slice(editor.indexOf('function findNearestEdge('), editor.indexOf('function findContainingGroup('));
+    const hit = read('../edgeHit.ts');
     expect(hit).toContain('edgeBezier(s.x, s.y, exit, t.x, t.y, t.position)');
+    expect(hit).toContain('edgeBezier(s.x, s.y, radialExit(srcNode, s) ?? s.position, t.x, t.y, t.position)');
     expect(hit).not.toMatch(/\b(?:cardinal|radial)ControlPoint\(/);
+    expect(read('../NodeEditor.tsx')).not.toMatch(/function findNearestEdge\(|edgeBezier\(/);
     expect(read('./TypedEdge.tsx')).toContain('edgeBezier(sourceX, sourceY, radial ?? sourcePosition, targetX, targetY, targetPosition)');
   });
 });

@@ -9,7 +9,16 @@ import {
   passThroughTypes,
   tunnelExitCount,
 } from './passThroughLook';
-import { KNOT_SIZE, TUNNEL_LAYOUT_H, TUNNEL_LAYOUT_W, TUNNEL_SIZE } from './passThroughGeometry';
+import {
+  KNOT_DOT_R,
+  KNOT_DOT_STROKE,
+  KNOT_SIZE,
+  TUNNEL_LAYOUT_H,
+  TUNNEL_LAYOUT_W,
+  TUNNEL_SIZE,
+  WAYPOINT_DOT_R,
+  WAYPOINT_DOT_STROKE,
+} from './passThroughGeometry';
 import { rawNodeTypes } from '../flowTypes';
 import { COST_SCALED_TYPES, estimateNodeSize } from '@/engine/layoutEngine';
 
@@ -180,10 +189,54 @@ describe('the look', () => {
     expect(css).toContain('var(--tunnel-well)');
   });
 
-  it('draws the Portal hole ROUND (the owner\'s exception) and the Branch SQUARE', () => {
+  it('draws the Portal hole ROUND (the owner\'s exception) and the Branch as a routing point\'s dot', () => {
     const block = (sel: string) => css.slice(css.indexOf(`${sel} {`), css.indexOf('}', css.indexOf(`${sel} {`)));
     expect(block('.tunnel-node__hole')).toContain('border-radius: 50%');
-    expect(block('.knot-node')).toContain('border-radius: 0');
+    expect(block('.knot-node__dot')).toContain('border-radius: 50%');
+  });
+
+  it('draws the Branch at TWICE a routing point, at every zoom (owner, 2026-11-23)', () => {
+    // One pair of numbers for both: TypedEdge's waypoint circle reads them.
+    expect(KNOT_DOT_R).toBe(2 * WAYPOINT_DOT_R);
+    expect(KNOT_DOT_STROKE).toBe(2 * WAYPOINT_DOT_STROKE);
+    const edge = read('../edges/TypedEdge.tsx');
+    expect(edge).toContain('const r = WAYPOINT_DOT_R / zoom;');
+    expect(edge).toContain('strokeWidth={WAYPOINT_DOT_STROKE / zoom}');
+    // The box is the dot at zoom 1; the dot inside it is counter-scaled.
+    expect(KNOT_SIZE).toBe(2 * KNOT_DOT_R + KNOT_DOT_STROKE);
+    const knot = decomment(read('./KnotNode.tsx'));
+    expect(knot).toMatch(/'--fs-knot-unzoom': unzoom/);
+    expect(knot).toMatch(/s\.transform\[2\]/);
+    // Its fill and stroke are the waypoint's own pair.
+    expect(knot).toContain('getContrastColor(canvas)');
+    expect(edge).toContain("const stroke = fill === '#ffffff' ? '#000000' : '#ffffff';");
+    expect(knot).toContain("const stroke = fill === '#ffffff' ? '#000000' : '#ffffff';");
+  });
+
+  it('makes only the Branch DOT a target, never the rest of its flow-px box', () => {
+    // At zoom 3 the box is 69 screen px around a 23 px dot: a press beside the
+    // dot grabbed the Branch. React Flow writes `pointer-events: all` inline
+    // on the wrapper, so the rule needs !important.
+    const rule = (sel: string) => {
+      const at = css.indexOf(sel);
+      expect(at, sel).toBeGreaterThanOrEqual(0);
+      return css.slice(at, css.indexOf('}', at));
+    };
+    const box = rule('.react-flow__node.react-flow__node-knot,');
+    expect(box).toContain('.react-flow__node-knot .knot-node');
+    expect(box).toContain('pointer-events: none !important');
+    expect(rule('.knot-node__dot {')).toContain('pointer-events: auto !important');
+  });
+
+  it('puts both Branch sockets at the CENTRE, drawing nothing, never starting a wire', () => {
+    const knot = decomment(read('./KnotNode.tsx'));
+    expect(knot.match(/isConnectableStart=\{false\}/g)).toHaveLength(2);
+    expect(knot).not.toMatch(/TypedHandle/);
+    const block = css.slice(css.indexOf('.knot-node > .react-flow__handle.knot-node__handle {'));
+    const rule = block.slice(0, block.indexOf('}'));
+    for (const decl of ['top: 50%', 'left: 50%', 'width: 0', 'height: 0', 'transform: none', 'pointer-events: none']) {
+      expect(rule, decl).toContain(decl);
+    }
   });
 
   it('casts only HARD shadows: zero blur everywhere, the inset included', () => {

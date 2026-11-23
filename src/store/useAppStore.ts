@@ -34,7 +34,7 @@ import { organizeLayout } from '@/engine/layoutEngine';
 // instantiateBuiltinTexture, which loads them on demand so that the Babel
 // front end behind `buildCodeGroup` stays out of every page's boot chunk.
 import complexityData from '@/registry/complexity.json';
-import { bridgeEdgesAcrossDeletedNodes, restoreCollapsedEdges, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { bridgeEdgesAcrossDeletedNodes, restoreCollapsedEdges, unwrapCollapsedGroupEdges, unwrapGroupsOnly } from '@/utils/edgeUtils';
 import {
   MIN_GROUP_W,
   MIN_GROUP_H,
@@ -132,7 +132,7 @@ import {
 } from '@/utils/palettes';
 import { sanitizeEdgeExtras } from '@/utils/edgeExtras';
 import { sanitizeGraphShape } from '@/utils/graphShape';
-import { remapTunnelLinks } from '@/utils/passThrough';
+import { isKnot, passThroughSource, remapTunnelLinks } from '@/utils/passThrough';
 import { toAsciiStorageJson } from '@/utils/asciiStorage';
 import type { DesktopAutosaveRuntime } from '@/utils/desktopAutosave';
 // Eval-mode telemetry: `evalLog` is a no-op outside a study session, so these
@@ -2274,8 +2274,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set((state) => {
       const nodes = state.nodes.filter((n) => n.id !== nodeId);
       // Splice-delete: outgoing edges of the removed node re-parent to its
-      // first connected input's upstream so the signal stays wired up.
-      const bridged = bridgeEdgesAcrossDeletedNodes(state.edges, new Set([nodeId]));
+      // first connected input's upstream so the signal stays wired up (a
+      // Branch's drawing is joined back onto each bridged wire).
+      const bridged = bridgeEdgesAcrossDeletedNodes(state.edges, new Set([nodeId]), state.nodes);
       const norm = normalizeChainOperands(nodes, bridged);
       return { nodes: norm.nodes, edges: norm.edges, syncSource: 'graph', isUndoRedo: false };
     });
@@ -3611,7 +3612,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     get().pushHistory();
     // Splice-delete edges across the removed run so signal stays wired when
     // the group sat mid-graph; then drop any edge still touching the removal set.
-    const bridged = bridgeEdgesAcrossDeletedNodes(state.edges, toRemove);
+    const bridged = bridgeEdgesAcrossDeletedNodes(state.edges, toRemove, state.nodes);
     const edges = bridged.filter((e) => !toRemove.has(e.source) && !toRemove.has(e.target));
     const norm = normalizeChainOperands(
       state.nodes.filter((n) => !toRemove.has(n.id)),
@@ -3728,6 +3729,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
       return data.label || undefined;
     };
 
+    /** An exit socket's name: its source's label — and for a BRANCH, which
+     *  has none (`data` is `{}`), the label of what it carries, through the
+     *  resolver (utils/passThrough.ts), else "Branch" while it is unfed. */
+    const exitLabel = (nodeId: string): string | undefined => {
+      if (!isKnot(nodeById.get(nodeId))) return nodeLabel(nodeId);
+      const fed = passThroughSource(state.nodes, unwrapGroupsOnly(state.nodes, state.edges), nodeId);
+      return (fed && nodeLabel(fed.source)) || 'Branch';
+    };
+
     /** Sum of GPU costs of every member node, snapshotted onto the collapsed
      *  group as `data.cost` at every collapse. Nothing DRAWS it any more: the
      *  pill's badge re-sums the same members LIVE (GroupNode.tsx
@@ -3787,7 +3797,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
               originalNodeId: e.source,
               originalHandleId: e.sourceHandle ?? 'out',
               dataType: portDef(e.source, e.sourceHandle, 'output')?.dataType ?? 'any',
-              name: nodeLabel(e.source),
+              name: exitLabel(e.source),
             };
             outputSocketByPin.set(pinKey, socket);
             collapsedOutputs.push(socket);

@@ -1,11 +1,9 @@
 import { useReactFlow } from '@xyflow/react';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
-import { addEdgeWaypoint, removeEdgeWaypoint, waypointIndexAt } from '../edges/edgeWaypoints';
-
-/** How close (screen px) to a point's centre a right-click counts as ON it —
- *  the dot is 5 px in radius, so this adds a little slack for a trackpad. */
-const POINT_HIT_PX = 9;
+import { addEdgeWaypoint, removeEdgeWaypoint, waypointIndexAt, WAYPOINT_HIT_PX } from '../edges/edgeWaypoints';
+import { promoteWaypoint } from '../branchActions';
+import { branchRefusal } from '../branchWire';
 
 interface EdgeContextMenuProps {
   edgeId: string;
@@ -35,11 +33,25 @@ export function EdgeContextMenu({ edgeId }: EdgeContextMenuProps) {
   // its routing dots, so "on a dot" is decided from where the menu opened.
   const pointIndex = useAppStore((s) => {
     const wps = (s.edges.find((e) => e.id === edgeId)?.data?.waypoints ?? []) as { x: number; y: number }[];
-    return wps.length === 0 ? -1 : waypointIndexAt(wps.map((w) => flowToScreenPosition(w)), s.contextMenu, POINT_HIT_PX);
+    return wps.length === 0 ? -1 : waypointIndexAt(wps.map((w) => flowToScreenPosition(w)), s.contextMenu, WAYPOINT_HIT_PX);
   });
+
+  // A wire a Branch may not go into (branchWire.ts `branchRefusal`: a
+  // collapsed pill's wire) is offered no "Branch from here" — the row would
+  // close the menu and do nothing. A boolean, so no re-render per notify.
+  const branchOffered = useAppStore((s) => branchRefusal(s.nodes, s.edges, edgeId) === null);
 
   const handleRemovePoint = () => {
     removeEdgeWaypoint(edgeId, pointIndex);
+    closeContextMenu();
+  };
+
+  // The point becomes a BRANCH (branchActions.ts): a node one wire comes into
+  // and any number of wires leave. One of the two ways a Branch is made, both
+  // right-click menus (a long-press opens this one on touch);
+  // docs/dev/canvas-interaction.md, "Branch".
+  const handleBranchPoint = () => {
+    promoteWaypoint(edgeId, pointIndex);
     closeContextMenu();
   };
 
@@ -60,9 +72,20 @@ export function EdgeContextMenu({ edgeId }: EdgeContextMenuProps) {
         {t('Insert node', language)}
       </button>
       {pointIndex >= 0 ? (
-        <button className="context-menu__item" onClick={handleRemovePoint}>
-          {t('Remove routing point', language)}
-        </button>
+        <>
+          {branchOffered && (
+            <button
+              className="context-menu__item"
+              onClick={handleBranchPoint}
+              title={t('Turn this routing point into a Branch. Then drag a wire from any input onto it to use the same value there', language)}
+            >
+              {t('Branch from here', language)}
+            </button>
+          )}
+          <button className="context-menu__item" onClick={handleRemovePoint}>
+            {t('Remove routing point', language)}
+          </button>
+        </>
       ) : (
         <button className="context-menu__item" onClick={handleAddPoint}>
           {t('Add routing point', language)}

@@ -2,6 +2,12 @@ import type { InternalNode } from '@xyflow/react';
 import { useAppStore } from '@/store/useAppStore';
 import { insertWaypointOrdered } from './bezierGeometry';
 
+/** How close (SCREEN px) to a routing point's centre a press or a drop counts
+ *  as ON it — the dot is 5 px in radius, so this adds a little slack for a
+ *  trackpad. The edge menu's "on a point?" test and Insert node > Branch's
+ *  (branchActions.ts `branchIntoWireAt`) share it. */
+export const WAYPOINT_HIT_PX = 9;
+
 const center = (n: InternalNode) => ({
   x: n.internals.positionAbsolute.x + (n.measured?.width ?? 120) / 2,
   y: n.internals.positionAbsolute.y + (n.measured?.height ?? 40) / 2,

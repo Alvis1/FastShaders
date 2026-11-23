@@ -1,0 +1,242 @@
+/**
+ * Hit-testing WIRES on the canvas against the curve each one is DRAWN as —
+ * the drop-on-edge splice, the tile drag's highlight and Insert node > Branch
+ * (branchActions.ts) all ask here, so what lights is exactly what is hit.
+ * Moved out of NodeEditor.tsx (2026-11-23) so the Branch could reuse the
+ * curve rather than restate it.
+ *
+ * Reads React Flow's internal nodes (measured handle bounds), never the DOM.
+ */
+import { Position, type InternalNode } from '@xyflow/react';
+import type { AppEdge } from '@/types';
+import {
+  catmullRomToBeziers,
+  distancePointToCubicBezier,
+  distancePointToSpline,
+  edgeBezier,
+  nearestOnSegments,
+  type BezierSegment,
+} from './edges/bezierGeometry';
+import { waypointIndexAt } from './edges/edgeWaypoints';
+import { splitWaypointsAtSegment, wirePoints, type Pt } from './branchWire';
+
+export type GetInternalNode = (id: string) => InternalNode | undefined;
+
+/**
+ * The edge anchor React Flow actually draws from/to for one handle, in
+ * flow-space: the handle box's CARDINAL-side midpoint (Right → right edge, Left
+ * → left edge, …), exactly what @xyflow/system's getHandlePosition(center=false)
+ * returns. Also reports the handle's node-local CENTER (`localCx/localCy`) so a
+ * color-circle source can reconstruct its radial exit vector. Falls back to the
+ * node's mid-left/mid-right edge when handle bounds haven't been measured yet.
+ * Reading the ACTUAL handle (not the node's vertical center) is what lets a drop
+ * land on an edge feeding a non-centered socket — e.g. the Output node's
+ * displacement/normal rows, or the `b` input of an arithmetic node.
+ */
+export function handleAnchor(
+  node: InternalNode,
+  handleId: string | null | undefined,
+  kind: 'source' | 'target',
+): { x: number; y: number; position: Position; localCx: number; localCy: number } {
+  const pos = node.internals.positionAbsolute;
+  const bounds = node.internals.handleBounds?.[kind];
+  const h = (handleId ? bounds?.find((b) => b.id === handleId) : undefined) ?? bounds?.[0];
+  if (h) {
+    const localCx = h.x + h.width / 2;
+    const localCy = h.y + h.height / 2;
+    let x = pos.x + localCx;
+    let y = pos.y + localCy;
+    switch (h.position) {
+      case Position.Left:   x = pos.x + h.x; break;
+      case Position.Right:  x = pos.x + h.x + h.width; break;
+      case Position.Top:    y = pos.y + h.y; break;
+      case Position.Bottom: y = pos.y + h.y + h.height; break;
+    }
+    return { x, y, position: h.position, localCx, localCy };
+  }
+  const w = node.measured?.width ?? 120;
+  const ht = node.measured?.height ?? 40;
+  return kind === 'source'
+    ? { x: pos.x + w, y: pos.y + ht / 2, position: Position.Right, localCx: w, localCy: ht / 2 }
+    : { x: pos.x, y: pos.y + ht / 2, position: Position.Left, localCx: 0, localCy: ht / 2 };
+}
+
+/**
+ * What is not DRAWN must not be hit-testable. React Flow renders an edge only
+ * when its NAMED handle resolves in the node's measured bounds — an edge into
+ * a DORMANT Output section's unmounted `m<n>:<channel>` handle renders as
+ * NOTHING — but `handleAnchor`'s first-handle fallback would still anchor it
+ * at the node's first mounted handle, so `findNearestEdge` measured a phantom
+ * curve across empty-looking canvas that a drop could then SPLICE with no
+ * highlight ever painted ("what wasn't previewed is never committed"). A null
+ * handle id keeps the first-handle fallback (React Flow's own rule), and
+ * unmeasured bounds stay permissive (a one-frame mid-mount state).
+ */
+function edgeEndpointDrawable(
+  node: InternalNode,
+  handleId: string | null | undefined,
+  kind: 'source' | 'target',
+): boolean {
+  if (!handleId) return true;
+  const bounds = node.internals.handleBounds?.[kind];
+  if (!bounds) return true;
+  return bounds.some((b) => b.id === handleId);
+}
+
+/** Is this wire hit-testable at all: drawn, not a collapsed group's inside. */
+function edgeHittable(edge: AppEdge): boolean {
+  if (edge.hidden) return false;
+  return !(edge as { className?: string }).className?.includes('fs-collapsed-edge');
+}
+
+/** Does React Flow DRAW this wire — both ends' nodes known and both NAMED
+ *  handles mounted (`edgeEndpointDrawable`)? A routing point of a wire it does
+ *  not draw is not drawn either, so it can never be hit. */
+function edgeDrawn(edge: AppEdge, getInternalNode: GetInternalNode): boolean {
+  const srcNode = getInternalNode(edge.source);
+  const tgtNode = getInternalNode(edge.target);
+  return !!srcNode && !!tgtNode
+    && edgeEndpointDrawable(srcNode, edge.sourceHandle, 'source')
+    && edgeEndpointDrawable(tgtNode, edge.targetHandle, 'target');
+}
+
+/**
+ * The centreline an edge is DRAWN as, in flow space: the Catmull-Rom spline
+ * through its routing points, else the one cubic React Flow draws (with the
+ * Color node's radial exit) — TypedEdge's own curve, through the shared
+ * `edgeBezier`/`catmullRomToBeziers`. Segment `i` runs from the wire's point
+ * `i` to `i + 1` (0 = the source anchor). Null when an end is not drawn.
+ */
+export function edgeDrawnSegments(edge: AppEdge, getInternalNode: GetInternalNode): BezierSegment[] | null {
+  if (!edgeDrawn(edge, getInternalNode)) return null;
+  const srcNode = getInternalNode(edge.source)!;
+  const tgtNode = getInternalNode(edge.target)!;
+  const s = handleAnchor(srcNode, edge.sourceHandle, 'source');
+  const t = handleAnchor(tgtNode, edge.targetHandle, 'target');
+  const wps = (edge.data?.waypoints ?? []) as { x: number; y: number }[];
+  if (wps.length) {
+    return catmullRomToBeziers([[s.x, s.y], ...wps.map((w) => [w.x, w.y] as [number, number]), [t.x, t.y]]);
+  }
+  return [edgeBezier(s.x, s.y, radialExit(srcNode, s) ?? s.position, t.x, t.y, t.position)];
+}
+
+/** A Color node's radial exit (its output rides the circle), else null. */
+function radialExit(
+  srcNode: InternalNode,
+  s: { localCx: number; localCy: number },
+): readonly [number, number] | null {
+  if (srcNode.type !== 'color') return null;
+  const rdx = s.localCx - (srcNode.measured?.width ?? 28) / 2;
+  const rdy = s.localCy - (srcNode.measured?.height ?? 28) / 2;
+  const rlen = Math.hypot(rdx, rdy);
+  return rlen > 1e-3 ? [rdx / rlen, rdy / rlen] : null;
+}
+
+/**
+ * Find the closest edge to (cx, cy) in flow-space within `radius` (flow px).
+ * `excludeNodeId` skips edges connected to the node being dragged. Distance is
+ * measured against the SAME cubic bezier TypedEdge renders — exact handle
+ * anchors, React Flow's control-point math, and the color-circle radial exit —
+ * so what highlights is exactly what snaps. Invisible edges (collapsed-group
+ * internals / hidden boundary edges) are skipped so a node can't splice onto an
+ * edge the user can't see.
+ */
+export function findNearestEdge(
+  cx: number, cy: number,
+  allEdges: AppEdge[],
+  getInternalNode: GetInternalNode,
+  radius: number,
+  excludeNodeId?: string,
+): string | null {
+  let bestId: string | null = null;
+  let bestDist = radius;
+
+  for (const edge of allEdges) {
+    if (!edgeHittable(edge)) continue;
+    if (excludeNodeId && (edge.source === excludeNodeId || edge.target === excludeNodeId)) continue;
+    const srcNode = getInternalNode(edge.source);
+    const tgtNode = getInternalNode(edge.target);
+    if (!srcNode || !tgtNode) continue;
+    if (!edgeEndpointDrawable(srcNode, edge.sourceHandle, 'source')) continue;
+    if (!edgeEndpointDrawable(tgtNode, edge.targetHandle, 'target')) continue;
+
+    const s = handleAnchor(srcNode, edge.sourceHandle, 'source');
+    const t = handleAnchor(tgtNode, edge.targetHandle, 'target');
+
+    // Routed edges (user waypoints) draw a spline, not a single bezier — measure
+    // against the SAME spline so what highlights is exactly what snaps.
+    const wps = (edge.data?.waypoints ?? []) as { x: number; y: number }[];
+    let d: number;
+    if (wps.length) {
+      d = distancePointToSpline(
+        [[s.x, s.y], ...wps.map((w) => [w.x, w.y] as [number, number]), [t.x, t.y]],
+        cx, cy,
+      );
+    } else {
+      // Color nodes are circles whose output rides the perimeter and exits along
+      // the radial (TypedEdge's getRadialBezierPath) — everything else uses the
+      // cardinal exit. Match whichever this edge is actually drawn with, through
+      // `edgeBezier`, the ONE curve the renderer and the chevrons also call, so
+      // the "never fork the curve" rule holds by construction.
+      const exit = radialExit(srcNode, s) ?? s.position;
+      const [, , c1x, c1y, c2x, c2y] = edgeBezier(s.x, s.y, exit, t.x, t.y, t.position);
+      // Reject on the control hull before paying for the solve. A cubic bezier
+      // lies inside the convex hull of its four control points, so a curve
+      // whose control AABB is further than `bestDist` from the probe cannot
+      // contain a closer point — an EXACT test, so it can never change which
+      // edge is picked (the "what highlights is exactly what snaps" contract
+      // holds). Worth it because this runs per edge per drag FRAME and
+      // `distancePointToCubicBezier` is 31 coarse samples plus 3 refine passes
+      // of 13 — 70 curve evaluations, measured at ~50 µs for 294 edges against
+      // ~2 µs with the reject. The waypoint branch above is deliberately NOT
+      // guarded this way: a Catmull-Rom spline can overshoot its own control
+      // polygon, so the same bounds would not be conservative there.
+      const loX = Math.min(s.x, c1x, c2x, t.x);
+      const hiX = Math.max(s.x, c1x, c2x, t.x);
+      const loY = Math.min(s.y, c1y, c2y, t.y);
+      const hiY = Math.max(s.y, c1y, c2y, t.y);
+      if (cx < loX - bestDist || cx > hiX + bestDist
+        || cy < loY - bestDist || cy > hiY + bestDist) continue;
+      d = distancePointToCubicBezier(s.x, s.y, c1x, c1y, c2x, c2y, t.x, t.y, cx, cy);
+    }
+    if (d < bestDist) {
+      bestDist = d;
+      bestId = edge.id;
+    }
+  }
+  return bestId;
+}
+
+/** Where on ONE wire a Branch would go: one of its routing points (by index),
+ *  or a point on its drawn curve with the wire's routing points shared out. */
+export type BranchSpot =
+  | { kind: 'point'; index: number }
+  | { kind: 'body'; at: Pt; before: Pt[]; after: Pt[] };
+
+/**
+ * Insert node > Branch on the wire `edge`, from where its menu opened (flow
+ * point `p`): ON one of its routing points (within `pointRadius`, the edge
+ * menu's own on-point test) that point becomes the Branch, as "Branch from
+ * here" makes it; else the Branch goes on the NEAREST point of the curve the
+ * wire is DRAWN as, and the segment that point lies on shares the routing
+ * points out — nothing is dissolved. Null when the wire is not drawn (hidden,
+ * a collapsed pill's inside, an unmounted socket): what is not drawn cannot
+ * be pointed at.
+ */
+export function branchSpotOnWire(
+  edge: AppEdge,
+  p: Pt,
+  getInternalNode: GetInternalNode,
+  pointRadius: number,
+): BranchSpot | null {
+  if (!edgeHittable(edge)) return null;
+  const segs = edgeDrawnSegments(edge, getInternalNode);
+  if (!segs) return null;
+  const wps = wirePoints(edge);
+  const index = wps.length ? waypointIndexAt(wps, p, pointRadius) : -1;
+  if (index >= 0) return { kind: 'point', index };
+  const hit = nearestOnSegments(segs, p.x, p.y);
+  if (!hit) return null;
+  const { before, after } = splitWaypointsAtSegment(wps, hit.seg);
+  return { kind: 'body', at: { x: hit.x, y: hit.y }, before, after };
+}

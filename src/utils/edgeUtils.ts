@@ -2,7 +2,44 @@ import { useAppStore } from '@/store/useAppStore';
 import type { AppEdge, AppNode, BoundarySocket, GroupNodeData, TSLDataType } from '@/types';
 import { generateEdgeId } from '@/utils/idGenerator';
 import { groupDescendantIds, hiddenByInnerCollapse } from '@/utils/groupFrame';
-import { foldPassThroughEdges } from '@/utils/passThrough';
+import { foldPassThroughEdges, isKnot } from '@/utils/passThrough';
+import { MAX_WAYPOINTS_PER_EDGE } from '@/utils/edgeExtras';
+
+type Pt = { x: number; y: number };
+
+/** An edge's routing points, read defensively (restore sanitizes them, but a
+ *  reader that builds new points must never copy a malformed one). */
+export function edgeWaypointsOf(edge: AppEdge): Pt[] {
+  const raw = (edge.data as { waypoints?: unknown } | undefined)?.waypoints;
+  if (!Array.isArray(raw)) return [];
+  const out: Pt[] = [];
+  for (const w of raw) {
+    if (typeof w !== 'object' || w === null) continue;
+    const { x, y } = w as { x?: unknown; y?: unknown };
+    if (typeof x === 'number' && typeof y === 'number' && Number.isFinite(x) && Number.isFinite(y)) out.push({ x, y });
+  }
+  return out;
+}
+
+/**
+ * The routing points of ONE wire joined back from two halves around a removed
+ * Branch (Delete, X and its double-click): the trunk's points followed by the
+ * branch wire's own — WITHOUT a point where the Branch was, as double-clicking
+ * a routing point removes that point (owner, 2026-11-23) — capped at
+ * `MAX_WAYPOINTS_PER_EDGE` (the restore cap; the points nearest the SOURCE are
+ * kept, as the sanitizer keeps them). Fresh objects, never the inputs'.
+ */
+export function joinWaypoints(trunk: readonly Pt[], own: readonly Pt[]): Pt[] {
+  return [...trunk, ...own].slice(0, MAX_WAYPOINTS_PER_EDGE).map((w) => ({ x: w.x, y: w.y }));
+}
+
+/** `edge.data` with its routing points replaced — the key left out when there
+ *  are none, as a wire that never had any carries none. */
+function withWaypoints(edge: AppEdge, points: Pt[]): NonNullable<AppEdge['data']> {
+  const { waypoints: _old, ...rest } = (edge.data ?? { dataType: 'any' }) as NonNullable<AppEdge['data']> & { waypoints?: unknown };
+  void _old;
+  return (points.length ? { ...rest, waypoints: points } : rest) as NonNullable<AppEdge['data']>;
+}
 
 /**
  * The one canonical edge factory: every edge in the app is a typed animated
@@ -45,10 +82,17 @@ export function makeTypedEdge(
  *
  * Used by both the keyboard Delete handler and `store.removeNode` so every
  * user-facing node deletion behaves the same way.
+ *
+ * With `nodes`, a deleted BRANCH (`knot`) is spliced out with its drawing
+ * kept: each bridged wire's routing points become the trunk's followed by its
+ * own (`joinWaypoints`, no point where the Branch was), through a chain of
+ * Branches too. A chain through any other deleted node keeps the bridged
+ * wire's own points only, as before.
  */
 export function bridgeEdgesAcrossDeletedNodes(
   edges: AppEdge[],
   deletedIds: Set<string>,
+  nodes?: readonly AppNode[],
 ): AppEdge[] {
   if (deletedIds.size === 0) return edges;
 
@@ -59,21 +103,31 @@ export function bridgeEdgesAcrossDeletedNodes(
     else incomingByTarget.set(e.target, [e]);
   }
 
+  // Every deleted Branch, when the caller handed in the nodes.
+  let knots: Set<string> | null = null;
+  if (nodes) {
+    for (const n of nodes) if (deletedIds.has(n.id) && isKnot(n)) (knots ??= new Set()).add(n.id);
+  }
+
   // Walk upstream from a deleted source through chains of deleted nodes until
   // we hit a live source, or give up. Returns null when the chain dead-ends.
+  // `points` is the joined drawing while every deleted node walked is a
+  // Branch, else null (keep the wire's own).
   const resolveLiveSource = (
     edge: AppEdge,
-  ): { source: string; sourceHandle: string | null | undefined } | null => {
+  ): { source: string; sourceHandle: string | null | undefined; points: Pt[] | null } | null => {
     let cur = edge;
     const visited = new Set<string>([cur.id]);
+    let points: Pt[] | null = knots ? edgeWaypointsOf(edge) : null;
     while (deletedIds.has(cur.source)) {
       const upstream = incomingByTarget.get(cur.source);
       const next = upstream?.find((u) => !visited.has(u.id));
       if (!next) return null;
       visited.add(next.id);
+      points = points && knots?.has(cur.source) ? joinWaypoints(edgeWaypointsOf(next), points) : null;
       cur = next;
     }
-    return { source: cur.source, sourceHandle: cur.sourceHandle };
+    return { source: cur.source, sourceHandle: cur.sourceHandle, points };
   };
 
   const out: AppEdge[] = [];
@@ -95,6 +149,7 @@ export function bridgeEdgesAcrossDeletedNodes(
       source: live.source,
       sourceHandle: live.sourceHandle,
       id: generateEdgeId(live.source, live.sourceHandle ?? 'out', e.target, e.targetHandle ?? 'in'),
+      ...(live.points ? { data: withWaypoints(e, live.points) } : {}),
     });
   }
   return out;

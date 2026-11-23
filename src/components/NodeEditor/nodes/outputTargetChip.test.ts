@@ -327,9 +327,11 @@ describe('the Output node\'s preview socket', () => {
     // handleAnchor's first-handle fallback anchored the invisible edge on the
     // Output's first mounted handle and drop-on-edge could SPLICE a phantom
     // curve with no highlight ever painted — committing what was never
-    // previewed, into a sleeping material's wiring.
-    expect(nodeEditor).toContain('edgeEndpointDrawable(srcNode, edge.sourceHandle');
-    expect(nodeEditor).toContain('edgeEndpointDrawable(tgtNode, edge.targetHandle');
+    // previewed, into a sleeping material's wiring. (The hit test is
+    // edgeHit.ts, shared with Insert node > Branch.)
+    const edgeHit = readFileSync(path.resolve(__dirname, '../edgeHit.ts'), 'utf8');
+    expect(edgeHit).toContain('edgeEndpointDrawable(srcNode, edge.sourceHandle');
+    expect(edgeHit).toContain('edgeEndpointDrawable(tgtNode, edge.targetHandle');
     // And React Flow's 008 stays "always a bug" for everything EXCEPT an edge
     // landing on a currently-dormant material: unscoped, a sleeping section
     // warns at frame rate on every pan; blanket suppression would hide the

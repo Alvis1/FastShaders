@@ -6,53 +6,108 @@
    the thicker frame from `--fs-node-border-scale` — all published on React
    Flow's node wrapper (NodeBase.css), never a translate. */
 
-/* --- The Branch: a small SQUARE in the carried type's colour --------------
-   Square corners and a hard contact shadow, so it never reads as a ROUND
-   routing point on a wire (TypedEdge). The background (type colour) is inline. */
+/* --- The Branch: a ROUTING POINT's dot at twice the size ------------------
+   (owner, 2026-11-23: "Branch = routing point, visually like the dot but 2x
+   bigger"). The node box is fixed in FLOW px (KNOT_SIZE, the dot at zoom 1);
+   the dot inside it is counter-scaled by `--fs-knot-unzoom` (inline, 1/zoom),
+   so like TypedEdge's waypoint circle it keeps one size ON SCREEN at every
+   zoom. Its fill and stroke colours are inline: the waypoint's own pair. */
 .knot-node {
   position: relative;
+}
+
+/* Only the DOT is a target, never the rest of the node box: the box is fixed
+   in flow px and the dot in screen px, so at zoom 3 the box is 69 screen px
+   around a 23 px dot, and a press on the blank-looking canvas beside the dot
+   grabbed, moved or double-click-removed the Branch (and hid routing points
+   and wire ends under it, and stopped a marquee). A press on the dot still
+   reaches React Flow's handlers on the wrapper: pointer-events only decides
+   the TARGET, and the event bubbles. `!important` because React Flow writes
+   `pointer-events: all` INLINE on the wrapper (GroupNode.css does the same). */
+.react-flow__node.react-flow__node-knot,
+.react-flow__node-knot .knot-node {
+  pointer-events: none !important;
+}
+
+/* The zoom compensation, on its OWN element with NO transition: React Flow
+   applies a new zoom at once, so an eased 1/zoom drew the dot at the old
+   size times the new zoom and let it pulse back over ~100 ms on every wheel
+   step (measured: 23 → 34.9 → … → 23 px). The scale is about this box's
+   centre, which is the node's. */
+.knot-node__unzoom {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  scale: var(--fs-knot-unzoom, 1);
+}
+
+.knot-node__dot {
+  position: absolute;
+  inset: 0;
   box-sizing: border-box;
-  /* The canvas ink (black on a light canvas, an eased white on a dark one):
-     the square sits ON the canvas, so it is framed against that, not a card. */
-  border: calc(1.5px * var(--fs-node-border-scale, 1)) solid var(--node-cost-text, rgb(var(--node-ink-rgb)));
-  border-radius: 0;
-  box-shadow: var(--fs-node-lift, var(--shadow-node));
+  border-radius: 50%;
+  /* Twice the waypoint's 1.5px stroke; a border SCALE when selected, as every
+     shell's frame thickens. A border-box disc keeps its outer size. */
+  border: calc(3px * var(--fs-node-border-scale, 1)) solid;
+  /* A routing point casts no shadow, and neither does the Branch at rest:
+     only SELECTION lifts it, through the wrapper's `--fs-node-lift` like
+     every node (`--fs-knot-lift`, below). Hard, zero blur. Inside the
+     counter-scaled box, so its offset is a constant screen size too. */
+  box-shadow: var(--fs-knot-lift, 0 0 0 transparent);
+  /* The lift's growth alone — the one scale that eases. */
   scale: var(--fs-node-scale, 1);
   transition: box-shadow var(--transition-fast), scale var(--transition-fast);
+  pointer-events: auto !important;
   cursor: grab;
 }
 
 .knot-node--selected {
-  --fs-node-lift: var(--shadow-node-selected);
+  --fs-knot-lift: var(--fs-node-lift, var(--shadow-node-selected));
 }
 
-.knot-node:active {
+.knot-node__dot:active {
   cursor: grabbing;
 }
 
-/* The two sockets sit just OUTSIDE the square, touching its left and right
-   edges, rather than centred on them as on a card: on a 12px square two 10px
-   discs centred on the edges cover it, and the Branch read as two round dots
-   — the very look of a routing point it must never have (measured on the
-   canvas). React Flow keeps its own translate; only the inset moves. */
-.knot-node > .react-flow__handle-left {
-  left: calc(var(--handle-size) / -2);
+/* Both sockets: ZERO-size boxes at the dot's CENTRE, drawing nothing and
+   never pressed (the press belongs to the dot, which moves the node). React
+   Flow anchors a left target's wire at the handle's left edge and a right
+   source's at its right edge — the same point here, so every wire meets the
+   centre. Not counter-scaled, so the centres never move with the zoom, and
+   the two boxes are IDENTICAL, so React Flow's tie-break between handles at
+   one distance picks the type opposite to the dragged wire's. Every inset is
+   stated because the side classes position a handle with a transform this
+   rule replaces; the specificity beats `.react-flow__handle.connectionindicator`,
+   which would hand the socket the pointer during a drag. */
+.knot-node > .react-flow__handle.knot-node__handle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  width: 0;
+  height: 0;
+  min-width: 0;
+  min-height: 0;
+  transform: none;
+  border: none;
+  background: transparent;
+  pointer-events: none;
 }
 
-.knot-node > .react-flow__handle-right {
-  right: calc(var(--handle-size) / -2);
-}
-
-/* On a coarse pointer a 12px square is no target: an invisible hit area around
-   it takes the press (and drags the node). Painted at z-index -1 inside the
-   square's own stacking context (the `scale` property makes one), so the two
-   sockets, positioned children painted after it, still win their presses. */
+/* On a coarse pointer the dot is too small a target: an invisible hit area
+   around it takes the press (and drags the node). Inside the counter-scaled
+   box, so it is a constant screen size too, and a target like the dot itself
+   (it inherits the dot's pointer-events). z-index -1 inside the dot's own
+   stacking context (the `scale` property makes one). */
 @media (pointer: coarse) {
-  .knot-node::before {
+  .knot-node__dot::before {
     content: '';
     position: absolute;
-    inset: -10px;
+    inset: -12px;
     z-index: -1;
+    border-radius: 50%;
   }
 }
 
