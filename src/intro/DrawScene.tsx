@@ -224,6 +224,7 @@ export function DrawScene() {
             inert
             active={state.draw}
             eraser={false}
+            cut={false}
             opacity={drawOpacity}
             width={PEN_WIDTH}
             hasInk={state.stroke >= 0 || state.draw}
@@ -231,6 +232,7 @@ export function DrawScene() {
             swatch={<span className="palette-swatch fs-draw-swatch" style={{ background: drawColor }} />}
             onActive={noop}
             onEraser={noop}
+            onCut={noop}
             onOpacity={noop}
             onWidth={noop}
             onClear={noop}

@@ -308,6 +308,51 @@
   cursor: cell;
 }
 
+/* ── Cut stroke (useCutStroke.ts) ──────────────────────────────────────────
+   A scissors cursor (black on a white outline, so it reads on either canvas
+   ground; hotspot where the blades cross) while Alt is held over EMPTY canvas,
+   for the whole stroke, and in draw mode with the scissors on. A data: image
+   (the CSP's img-src allows data:), crosshair where a browser refuses it.
+   The ready/cutting marks are ATTRIBUTES: React owns the className. */
+.node-editor__canvas[data-fs-cut-ready] .react-flow__pane,
+.node-editor__canvas[data-fs-cutting],
+.node-editor__canvas[data-fs-cutting] *,
+.node-editor__canvas.fs-scissors-active,
+.node-editor__canvas.fs-scissors-active .react-flow__pane {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke-linecap='round'%3E%3Cg stroke='white' stroke-width='4'%3E%3Ccircle cx='6.5' cy='18' r='3'/%3E%3Ccircle cx='17.5' cy='18' r='3'/%3E%3Cpath d='M8.5 15.5L18 3M15.5 15.5L6 3'/%3E%3C/g%3E%3Cg stroke='black' stroke-width='1.6'%3E%3Ccircle cx='6.5' cy='18' r='3'/%3E%3Ccircle cx='17.5' cy='18' r='3'/%3E%3Cpath d='M8.5 15.5L18 3M15.5 15.5L6 3'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E") 12 11, crosshair;
+}
+
+/* With the scissors on, the canvas owns every touch: under `auto` Chrome takes
+   a one-finger drag as a pan after a few moves and sends pointercancel, which
+   drops the stroke, so the scissors cut nothing. Two-finger navigation is the
+   app's own (touch events), so it keeps working. */
+.node-editor__canvas.fs-scissors-active {
+  touch-action: none;
+}
+
+/* The stroke itself: screen space over the whole canvas, never hit-tested.
+   A thin dashed line in the app's one danger red (--cost-high, unchanged in
+   dark mode), with the app's hard zero-blur offset shadow so it reads over
+   wires of any colour. */
+.fs-cut-stroke {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 6;
+}
+.fs-cut-stroke polyline {
+  fill: none;
+  stroke: var(--cost-high);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  stroke-linecap: butt;
+  stroke-linejoin: bevel;
+  filter: drop-shadow(1px 1px 0 var(--bg-app));
+}
+
 /* Bottom-center canvas bar: one pill holding undo/redo, the draw tools, and
    the view controls (zoom/fit/canvas-bg). Replaces the old top-center draw
    toolbar and the React Flow Controls stack.

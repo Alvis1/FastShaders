@@ -1808,6 +1808,10 @@ interface AppState {
   drawWidth: number;
   drawToolActive: boolean;
   drawEraser: boolean;
+  /** The draw mode's SCISSORS (session-only): a drag cuts the wires it
+   *  crosses — the cut stroke for touch and the laser, where there is no Alt.
+   *  Exclusive with the eraser; both are cleared on leaving draw mode. */
+  drawCut: boolean;
 
   /** The shader's own colour palettes — SHADER-SCOPED like `drawings` (autosave,
    *  history, project block) and invisible to codegen. `BUILTIN_PALETTES` are
@@ -1822,6 +1826,13 @@ interface AppState {
   addNode: (node: AppNode) => void;
   removeNode: (nodeId: string) => void;
   removeEdge: (edgeId: string) => void;
+  /**
+   * Remove wires by id in ONE undo entry, one filter and one operand
+   * compaction, logging one `edge-disconnect {how:'remove-edge'}` per wire
+   * actually removed. `removeEdge(id)` is `removeEdges([id])`. Absent ids are
+   * ignored; none present → nothing changes and no history is pushed.
+   */
+  removeEdges: (edgeIds: readonly string[]) => void;
   /**
    * Replace an edge's routing waypoints (visual-only). `history` pushes an undo
    * entry (once per gesture: at drag-start / on add / on remove — NOT on every
@@ -1856,6 +1867,7 @@ interface AppState {
   /** Enter/leave draw mode. Leaving also clears the eraser sub-mode. */
   setDrawToolActive: (active: boolean) => void;
   setDrawEraser: (eraser: boolean) => void;
+  setDrawCut: (cut: boolean) => void;
 
   // Palette actions. The four CRUD actions record their own history, never
   // through `pushHistory` — the reason sits on their implementations.
@@ -2217,6 +2229,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   drawWidth: loadNumber('fs:drawWidth', 3, 0.5, 200),
   drawToolActive: false,
   drawEraser: false,
+  drawCut: false,
 
   // Palettes are hydrated from fs:graph by App.tsx (loadGraph) alongside the
   // graph and the ink, and replaced wholesale by a project import.
@@ -2284,15 +2297,26 @@ export const useAppStore = create<AppState>()((set, get) => ({
     });
   },
 
-  removeEdge: (edgeId) => {
-    // Both the drag-to-disconnect gesture (onReconnectEnd) and the edge menu's
-    // delete land here — the keyboard-delete path logs its own (NodeEditor).
-    evalLog('edge-disconnect', { how: 'remove-edge' });
+  removeEdge: (edgeId) => get().removeEdges([edgeId]),
+
+  removeEdges: (edgeIds) => {
+    // The ONE wire-removal path: Alt+click, the wire's ✕, the edge menu's
+    // delete, an end dragged off its socket (onReconnectEnd) and the cut
+    // stroke all land here — the keyboard-delete path logs its own
+    // (NodeEditor). PLURAL because removing wires one at a time is wrong:
+    // the operand compaction below re-mints the ids of the wires it shifts,
+    // so cutting operands a and c of a grown Add one by one would miss c.
+    // Ids that are not present change nothing and push no undo entry.
+    const gone = new Set<string>();
+    const want = new Set(edgeIds);
+    for (const e of get().edges) if (want.has(e.id)) gone.add(e.id);
+    if (gone.size === 0) return;
+    for (let i = 0; i < gone.size; i++) evalLog('edge-disconnect', { how: 'remove-edge' });
     get().pushHistory();
     set((state) => {
       const norm = normalizeChainOperands(
         state.nodes,
-        state.edges.filter((e) => e.id !== edgeId),
+        state.edges.filter((e) => !gone.has(e.id)),
       );
       return {
         edges: norm.edges,
@@ -2498,8 +2522,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
     saveString('fs:drawWidth', String(w));
     set({ drawWidth: w });
   },
-  setDrawToolActive: (active) => set(active ? { drawToolActive: true } : { drawToolActive: false, drawEraser: false }),
-  setDrawEraser: (eraser) => set({ drawEraser: eraser }),
+  setDrawToolActive: (active) => set(active ? { drawToolActive: true } : { drawToolActive: false, drawEraser: false, drawCut: false }),
+  // Pen, eraser and scissors are ONE choice: picking a tool drops the other.
+  setDrawEraser: (eraser) => set(eraser ? { drawEraser: true, drawCut: false } : { drawEraser: false }),
+  setDrawCut: (cut) => set(cut ? { drawCut: true, drawEraser: false } : { drawCut: false }),
 
   // ── Palette actions ──────────────────────────────────────────────────────
   // Visual-only, like drawings: these NEVER touch syncSource, so the graph→code

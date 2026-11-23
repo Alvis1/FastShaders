@@ -19,6 +19,7 @@ import {
 } from './edges/bezierGeometry';
 import { waypointIndexAt } from './edges/edgeWaypoints';
 import { splitWaypointsAtSegment, wirePoints, type Pt } from './branchWire';
+import { prepareStroke, strokeCrossesSegments } from './cutStroke';
 
 export type GetInternalNode = (id: string) => InternalNode | undefined;
 
@@ -205,6 +206,33 @@ export function findNearestEdge(
     }
   }
   return bestId;
+}
+
+/**
+ * The wires a CUT STROKE crosses (cutStroke.ts): every hittable wire whose
+ * DRAWN centreline — `edgeDrawnSegments`, the curve `findNearestEdge` measures
+ * and TypedEdge draws — the polyline `stroke` (flow space) meets, in `edges`
+ * order. `tol` is the flattening tolerance in flow units (half a screen pixel
+ * at the current zoom is plenty). Hidden wires, a collapsed group's insides
+ * and wires into an unmounted socket are never cut: what is not drawn cannot
+ * be crossed. A wire into or out of a Branch or a Portal end is a wire like
+ * any other.
+ */
+export function edgesCrossedByStroke(
+  stroke: readonly Pt[],
+  edges: readonly AppEdge[],
+  getInternalNode: GetInternalNode,
+  tol: number,
+): string[] {
+  const prepared = prepareStroke(stroke);
+  if (!prepared) return [];
+  const out: string[] = [];
+  for (const edge of edges) {
+    if (!edge || !edgeHittable(edge)) continue;
+    const segs = edgeDrawnSegments(edge, getInternalNode);
+    if (segs && strokeCrossesSegments(prepared, segs, tol)) out.push(edge.id);
+  }
+  return out;
 }
 
 /** Where on ONE wire a Branch would go: one of its routing points (by index),

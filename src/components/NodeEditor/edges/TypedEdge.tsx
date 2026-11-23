@@ -102,6 +102,8 @@ function EdgeWaypointHandles({
       {waypoints.map((w, i) => (
         <circle
           key={i}
+          // Named so the cut stroke never starts on a point (useCutStroke).
+          className="fs-edge-waypoint"
           cx={w.x}
           cy={w.y}
           r={r}

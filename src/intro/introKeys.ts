@@ -65,6 +65,7 @@ export const KEY_ROWS: readonly KeyRow[] = [
   { combos: [['Esc']], does: 'Leave Draw, hide socket names, stop a preview' },
   { combos: [['Delete'], ['backspace'], ['X']], does: 'Delete the selection; the wire joins up again' },
   { combos: [['alt', 'Click']], does: 'On a wire: delete it' },
+  { combos: [['alt', 'Drag']], does: 'From an empty spot or a wire: cut every wire the line crosses' },
   { combos: [['mod', 'C'], ['mod', 'V']], does: 'Copy, paste' },
   { combos: [['mod', 'D']], does: 'Duplicate' },
   { combos: [['mod', 'G'], ['mod', 'shift', 'G']], does: 'Group, ungroup' },

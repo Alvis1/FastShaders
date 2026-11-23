@@ -114,4 +114,17 @@ describe('store drawings slice', () => {
     expect(useAppStore.getState().drawEraser).toBe(false);
     expect(useAppStore.getState().drawToolActive).toBe(false);
   });
+
+  it('pen, eraser and scissors are one choice, and leaving draw mode clears the scissors', () => {
+    const s = useAppStore.getState();
+    s.setDrawToolActive(true);
+    s.setDrawEraser(true);
+    s.setDrawCut(true);
+    expect([useAppStore.getState().drawCut, useAppStore.getState().drawEraser]).toEqual([true, false]);
+    s.setDrawEraser(true);
+    expect([useAppStore.getState().drawCut, useAppStore.getState().drawEraser]).toEqual([false, true]);
+    s.setDrawCut(true);
+    s.setDrawToolActive(false);
+    expect(useAppStore.getState().drawCut).toBe(false);
+  });
 });

@@ -9,7 +9,7 @@ import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
  * canvas bar (the bar's Panel carries `nodrag nowheel`; the button/input
  * targets keep NodeEditor's draw-capture handler off the controls
  * themselves). A pencil toggle enters/leaves draw mode; while active, the
- * color / opacity / width / eraser / clear controls appear in their OWN
+ * color / opacity / width / eraser / scissors / clear controls appear in their OWN
  * floating box stacked above the bar (see .fs-draw-controls) rather than
  * widening the bar and shifting every other button.
  *
@@ -22,12 +22,14 @@ import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 export const DrawToolbar = memo(function DrawToolbar() {
   const active = useAppStore((s) => s.drawToolActive);
   const eraser = useAppStore((s) => s.drawEraser);
+  const cut = useAppStore((s) => s.drawCut);
   const color = useAppStore((s) => s.drawColor);
   const opacity = useAppStore((s) => s.drawOpacity);
   const width = useAppStore((s) => s.drawWidth);
   const hasInk = useAppStore((s) => s.drawings.length > 0);
   const setActive = useAppStore((s) => s.setDrawToolActive);
   const setEraser = useAppStore((s) => s.setDrawEraser);
+  const setCut = useAppStore((s) => s.setDrawCut);
   const setColor = useAppStore((s) => s.setDrawColor);
   const setOpacity = useAppStore((s) => s.setDrawOpacity);
   const setWidth = useAppStore((s) => s.setDrawWidth);
@@ -38,12 +40,14 @@ export const DrawToolbar = memo(function DrawToolbar() {
     <DrawToolbarView
       active={active}
       eraser={eraser}
+      cut={cut}
       opacity={opacity}
       width={width}
       hasInk={hasInk}
       language={language}
       onActive={setActive}
       onEraser={setEraser}
+      onCut={setCut}
       onOpacity={setOpacity}
       onWidth={setWidth}
       onClear={clear}
@@ -73,11 +77,13 @@ export const DrawToolbar = memo(function DrawToolbar() {
  * app has its colour picker.
  */
 export function DrawToolbarView({
-  active, eraser, opacity, width, hasInk, language, swatch,
-  onActive, onEraser, onOpacity, onWidth, onClear, inert = false,
+  active, eraser, cut, opacity, width, hasInk, language, swatch,
+  onActive, onEraser, onCut, onOpacity, onWidth, onClear, inert = false,
 }: {
   active: boolean;
   eraser: boolean;
+  /** The scissors: a drag cuts the wires it crosses (NodeEditor's cut stroke). */
+  cut: boolean;
   opacity: number;
   width: number;
   hasInk: boolean;
@@ -85,6 +91,7 @@ export function DrawToolbarView({
   swatch: ReactNode;
   onActive: (on: boolean) => void;
   onEraser: (on: boolean) => void;
+  onCut: (on: boolean) => void;
   onOpacity: (v: number) => void;
   onWidth: (v: number) => void;
   onClear: () => void;
@@ -147,6 +154,19 @@ export function DrawToolbarView({
             onClick={() => onEraser(!eraser)}
           >
             <span aria-hidden="true">🩹</span> {t('Erase', language)}
+          </button>
+
+          {/* The cut stroke for touch and the laser, which have no Alt key:
+              a drag cuts every wire it crosses (NodeEditor, useCutStroke). */}
+          <button
+            type="button"
+            tabIndex={tab}
+            className={`fs-draw-btn fs-draw-btn--sm${cut ? ' is-active' : ''}`}
+            aria-pressed={cut}
+            title={t('Scissors — drag across wires to cut them. With a mouse: Alt/⌥ + drag on the canvas', language)}
+            onClick={() => onCut(!cut)}
+          >
+            <span aria-hidden="true">✂️</span> {t('Scissors', language)}
           </button>
 
           <button

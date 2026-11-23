@@ -167,6 +167,7 @@ import { getNodeValues } from '@/types';
 import { t } from '@/i18n';
 import { initialNodeValues } from '@/utils/newNodeValues';
 import { TOUCH_UNDETECTED, installTouchAsMouse } from './touchAsMouse';
+import { useCutStroke } from './useCutStroke';
 import './NodeEditor.css';
 
 // Constant ReactFlow prop objects, hoisted so their identities are stable —
@@ -824,6 +825,7 @@ export function NodeEditor() {
   const closeBgPicker = useCallback(() => setBgPickerOpen(false), []);
   const drawToolActive = useAppStore((s) => s.drawToolActive);
   const drawEraser = useAppStore((s) => s.drawEraser);
+  const drawCut = useAppStore((s) => s.drawCut);
   const canUndo = useAppStore((s) => s.past.length > 0);
   const canRedo = useAppStore((s) => s.future.length > 0);
   const language = useAppStore((s) => s.language);
@@ -875,6 +877,8 @@ export function NodeEditor() {
   // Live in-progress stroke path, written imperatively by the draw-capture
   // handler (below) and rendered inside DrawingLayer's live opacity group.
   const livePathRef = useRef<SVGPathElement | null>(null);
+  // The cut stroke's dashed line (useCutStroke), written per pointermove.
+  const cutLineRef = useRef<SVGPolylineElement | null>(null);
   const { screenToFlowPosition, flowToScreenPosition, getViewport, setViewport, getInternalNode, getZoom, zoomTo, fitView } =
     useReactFlow();
   const flowStore = useStoreApi();
@@ -3521,6 +3525,8 @@ export function NodeEditor() {
       // instead (it stopImmediatePropagation's, but bail here too in case order
       // ever changes).
       if (useAppStore.getState().drawToolActive) { lastDownAt = 0; return; }
+      // An Alt press is the cut stroke's (useCutStroke), never a pan.
+      if (e.altKey) { lastDownAt = 0; return; }
       // Primary button only (e.button === 0 for left-click / first-touch / pen-tip).
       if (e.button !== 0 || isInteractive(e.target)) {
         lastDownAt = 0;
@@ -3613,6 +3619,8 @@ export function NodeEditor() {
       // Only the primary finger/pen draws — a second finger is a two-finger
       // navigation gesture (handled by the touch-nav effect), never more ink.
       if (!store.drawToolActive || e.button !== 0 || !e.isPrimary || isChrome(e.target)) return;
+      // The scissors' drag is a cut stroke (useCutStroke), never ink.
+      if (store.drawCut) return;
       e.preventDefault();
       e.stopImmediatePropagation();
       drawing = true;
@@ -3694,6 +3702,13 @@ export function NodeEditor() {
       window.removeEventListener('pointercancel', onUp);
     };
   }, [screenToFlowPosition, getViewport]);
+
+  // The cut stroke: Alt/⌥ + drag from empty canvas or a wire, or a drag with
+  // the draw toolbar's scissors, removes every wire it crosses (one undo).
+  useCutStroke({
+    canvasRef, lineRef: cutLineRef, screenToFlowPosition, flowToScreenPosition, getViewport, getInternalNode,
+    twoFingerNavRef, setCanvasBusy, flowStore,
+  });
 
   // Two-finger touch navigation: pan (centroid drag) + pinch-zoom, anchored to
   // the pinch centre. On coarse pointers React Flow's own drag-to-pan is OFF
@@ -3889,7 +3904,7 @@ export function NodeEditor() {
   return (
     <div className="node-editor" style={canvasCssVars}>
       <div
-        className={`node-editor__canvas${TOUCH_UNDETECTED ? ' fs-touch-as-mouse' : ''}${drawToolActive ? ' fs-draw-active' : ''}${drawToolActive && drawEraser ? ' fs-erase-active' : ''}${connecting ? ' fs-connecting' : ''}${previewSrcId ? ' fs-previewing' : ''}`}
+        className={`node-editor__canvas${TOUCH_UNDETECTED ? ' fs-touch-as-mouse' : ''}${drawToolActive ? ' fs-draw-active' : ''}${drawToolActive && drawEraser ? ' fs-erase-active' : ''}${drawToolActive && drawCut ? ' fs-scissors-active' : ''}${connecting ? ' fs-connecting' : ''}${previewSrcId ? ' fs-previewing' : ''}`}
         ref={canvasRef}
         // HTML5 drag wandering off the canvas (into the code editor / assets
         // bar) must tear down the live previews — dragover stops firing here,
@@ -4191,6 +4206,12 @@ export function NodeEditor() {
             </div>
           </Panel>
         </ReactFlow>
+
+        {/* The cut stroke's dashed line (useCutStroke): screen space over the
+            whole canvas, inert to the pointer, empty while idle. */}
+        <svg className="fs-cut-stroke" aria-hidden="true">
+          <polyline ref={cutLineRef} points="" />
+        </svg>
 
         {/* In-flight image imports. Fixed-positioned at the drop point and
             pointer-events:none, so they never intercept a drag; the pulse is
