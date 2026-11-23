@@ -18,6 +18,7 @@ import { isNodeHiddenFromEditor, isTextureHiddenFromEditor } from '@/registry/ed
 import { CATEGORIES } from '@/registry/nodeCategories';
 import { CAT_HEX, getContrastColor } from '@/utils/colorUtils';
 import { foldSearchText } from '@/utils/searchFold';
+import { isPassThroughNode } from '@/utils/passThrough';
 import { splitAliases, joinAliases } from '@/registry/descriptionSplice';
 import { getCitation, CITATIONS, type Citation } from '@/registry/citations';
 import { freshNodeCost } from '@/utils/nodeCost';
@@ -318,7 +319,7 @@ const RegistryRow = memo(function RegistryRow({
   const id = rowId(r);
   // Shader nodes only, like the tile drawn in this same row: a texture may pin
   // an explainer note, and a note is not a node of the graph.
-  const childCount = r.nodes.filter((n) => n.type !== 'group' && n.type !== 'note').length;
+  const childCount = r.nodes.filter((n) => n.type !== 'group' && n.type !== 'note' && !isPassThroughNode(n)).length;
   // Output has no tile and no menu row of its own to remove — the
   // palette already excludes it and the Add-node menu reaches it
   // through a hardcoded row — so a checkbox here would look like a

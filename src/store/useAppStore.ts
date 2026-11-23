@@ -132,6 +132,7 @@ import {
 } from '@/utils/palettes';
 import { sanitizeEdgeExtras } from '@/utils/edgeExtras';
 import { sanitizeGraphShape } from '@/utils/graphShape';
+import { remapTunnelLinks } from '@/utils/passThrough';
 import { toAsciiStorageJson } from '@/utils/asciiStorage';
 import type { DesktopAutosaveRuntime } from '@/utils/desktopAutosave';
 // Eval-mode telemetry: `evalLog` is a no-op outside a study session, so these
@@ -376,6 +377,7 @@ function cloneGroupSnapshot(
   snapshot: { nodes: AppNode[]; edges: AppEdge[] },
   position: { x: number; y: number },
   anchor: GroupDropAnchor = 'top-left',
+  live: readonly AppNode[] = [],
 ): { group: AppNode; members: AppNode[]; edges: AppEdge[]; idMap: ReadonlyMap<string, string> } {
   const idMap = new Map<string, string>();
   for (const n of snapshot.nodes) idMap.set(n.id, generateId());
@@ -394,7 +396,10 @@ function cloneGroupSnapshot(
     selected: false,
   } as AppNode;
 
-  const members: AppNode[] = originalMembers.map((m) => {
+  // A Portal Out's `link` (utils/passThrough.ts) follows a copied entrance, and
+  // otherwise survives only while it names a Portal In of the graph the group
+  // lands in (`live`); anything else arrives as a broken exit.
+  const members: AppNode[] = remapTunnelLinks(originalMembers.map((m) => {
     const out = {
       ...cloneNodeSharingPayloads(m),
       id: idMap.get(m.id)!,
@@ -402,8 +407,8 @@ function cloneGroupSnapshot(
       selected: false,
     } as AppNode & { extent?: unknown };
     delete out.extent;
-    return out;
-  });
+    return out as AppNode;
+  }), idMap, 'keep-if-live', live);
 
   const edges: AppEdge[] = snapshot.edges.map((e) => {
     const src = idMap.get(e.source) ?? e.source;
@@ -471,7 +476,7 @@ function placeLibraryGroup(
       ? { x: wire.beside.x - w, y: wire.beside.y }
       : { x: anchor === 'top-right' ? position.x - w : position.x, y: position.y };
   const at = freeFrameSpot({ ...ideal, w, h }, placementObstacles(state.nodes));
-  const { group, members, edges, idMap } = cloneGroupSnapshot(snapshot, at, 'top-left');
+  const { group, members, edges, idMap } = cloneGroupSnapshot(snapshot, at, 'top-left', state.nodes);
   const wires = target && free.length > 0 ? libraryWireEdges(free, idMap, target.id, taken) : [];
   const handles = wires.map((e) => e.targetHandle).filter((h): h is string => !!h);
   state.pushHistory();
@@ -4196,7 +4201,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       });
       return;
     }
-    const { group, members, edges } = cloneGroupSnapshot(saved, position, opts?.anchor);
+    const { group, members, edges } = cloneGroupSnapshot(saved, position, opts?.anchor, state.nodes);
     get().pushHistory();
     // Re-run the target repairs against the COMBINED list, not just the
     // group's own nodes: a group may contain an Output (groupSelection filters

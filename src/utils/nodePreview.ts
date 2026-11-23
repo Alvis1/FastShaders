@@ -3,8 +3,12 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { findDefaultOutput, isOutputNode } from '@/utils/outputMaterials';
 import { isSinkNode, isSplatOutput, hasActiveFlag, activeSink, ACTIVE_OUTPUT_KEY, SPLAT_OUTPUT_TYPE } from '@/utils/sdfPartition';
 import { isSplatLit } from '@/utils/splatLight';
-import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { unwrapCollapsedGroupEdges, unwrapGroupsOnly } from '@/utils/edgeUtils';
 import { generateEdgeId } from '@/utils/idGenerator';
+import { isPassThroughNode, isTunnelIn, resolvePassThroughEndpoint } from '@/utils/passThrough';
+
+/** The one output socket a Branch / Portal Out shows (its handle is `out`). */
+const PASS_THROUGH_OUTPUTS: PortDefinition[] = [{ id: 'out', label: 'Value', dataType: 'any' }];
 
 /**
  * PREVIEW MODE — look at ONE node's output on the 3D view.
@@ -92,6 +96,9 @@ export const PREVIEW_KEEP_SELECTOR = '.context-menu, .palette-pop, .mesh-picker_
  */
 export function previewableOutputs(node: AppNode): PortDefinition[] {
   if (node.type === 'group' || node.type === 'note') return [];
+  // A Branch or Portal Out offers the value it PASSES (previewGraph resolves
+  // it); a Portal In has no output socket, so Alt+click on it selects.
+  if (isPassThroughNode(node)) return isTunnelIn(node) ? [] : PASS_THROUGH_OUTPUTS;
   const data = node.data as Partial<ShaderNodeData>;
   const dynamic = data.dynamicOutputs;
   if (Array.isArray(dynamic) && dynamic.length > 0) return dynamic;
@@ -242,10 +249,18 @@ export function previewGraph(
   const kept = unwrapped().filter(
     (e) => !sinkIds.has(e.target) && !dropped.has(e.source),
   );
+  // A Branch or Portal Out is RESOLVED first: the fold in the next codegen
+  // pass would drop a wire into it — the route — and the preview go blank. An
+  // unfed one routes nothing: the Output shows what an unwired Color shows.
+  const from = isPassThroughNode(src)
+    ? resolvePassThroughEndpoint(nodes, unwrapGroupsOnly(nodes, edges), src.id, preview.handleId)
+    : { source: src.id, sourceHandle: preview.handleId };
+  if (!from || !nodes.some((n) => n.id === from.source)) return { nodes: previewNodes, edges: kept };
+  const fromHandle = from.sourceHandle ?? 'out';
   const route: AppEdge = {
-    id: generateEdgeId(src.id, preview.handleId, outId, PREVIEW_CHANNEL),
-    source: src.id,
-    sourceHandle: preview.handleId,
+    id: generateEdgeId(from.source, fromHandle, outId, PREVIEW_CHANNEL),
+    source: from.source,
+    sourceHandle: fromHandle,
     target: outId,
     targetHandle: PREVIEW_CHANNEL,
     type: 'typed',

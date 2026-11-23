@@ -24,7 +24,7 @@
 
 import type { AppEdge, AppNode, MaterialSettings } from '@/types';
 import { activeSink } from '@/utils/sdfPartition';
-import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { unwrapCollapsedGroupEdges, unwrapGroupsOnly } from '@/utils/edgeUtils';
 import { absoluteNodePosition, groupFrameSize, isCollapsedMember, measuredNodeSize } from '@/utils/groupFrame';
 import { effectiveExposedPorts } from '@/utils/exposedPorts';
 import { generateEdgeId } from '@/utils/idGenerator';
@@ -180,15 +180,19 @@ export function libraryWireOutput(
   return sink;
 }
 
-/** The Output sockets that already have a wire, read on the UNWRAPPED graph so
- *  a wire arriving from a collapsed group's pill counts as the socket's own. */
+/** The Output sockets that already have a wire, read on the GROUP-ONLY view
+ *  (`unwrapGroupsOnly`) so a wire arriving from a collapsed group's pill counts
+ *  as the socket's own — and a wire from an unfed Branch or a broken Portal Out
+ *  does too: the Branch/Portal fold drops such a wire (the shader reads the
+ *  socket unwired), yet the socket HOLDS it, and a press must never put a
+ *  second wire beside it (utils/passThrough.ts). */
 export function takenOutputChannels(
   nodes: readonly AppNode[],
   edges: readonly AppEdge[],
   outputId: string,
 ): Set<string> {
   const taken = new Set<string>();
-  for (const e of unwrapCollapsedGroupEdges(nodes as AppNode[], edges as AppEdge[])) {
+  for (const e of unwrapGroupsOnly(nodes as AppNode[], edges as AppEdge[])) {
     if (e.target === outputId && e.targetHandle) taken.add(e.targetHandle);
   }
   return taken;

@@ -90,6 +90,7 @@ describe('a lifted node', () => {
       ['./nodes/ColorNode.css', '.color-node'],
       ['./nodes/NoteNode.css', '.note-node'],
       ['./nodes/GroupNode.css', '.group-node--collapsed'],
+      ['./nodes/PassThroughNode.css', '.knot-node'],         // knot (Branch)
     ];
     for (const [file, sel] of shells) {
       const css = read(file);
@@ -97,6 +98,18 @@ describe('a lifted node', () => {
       expect(block, `${sel} takes the shadow but not the scale`).toContain('scale: var(--fs-node-scale, 1);');
       expect(block, `${sel} lost the lift shadow`).toContain('box-shadow: var(--fs-node-lift');
     }
+  });
+
+  it('lifts a Portal hole only when SELECTED: a hole casts no shadow at rest (owner, 2026-11-23)', () => {
+    // tunnelIn / tunnelOut: the plate's outer shadow is empty until selection
+    // hands it the wrapper's lift; hover deepens the INSET instead.
+    const css = read('./nodes/PassThroughNode.css');
+    const block = (sel: string) => css.slice(css.indexOf(`${sel} {`), css.indexOf('}', css.indexOf(`${sel} {`)));
+    const hole = block('.tunnel-node__hole');
+    expect(hole).toContain('scale: var(--fs-node-scale, 1);');
+    expect(hole).toContain('box-shadow: var(--fs-tunnel-plate, 0 0 0 transparent), inset 3px 3px 0');
+    expect(block('.tunnel-node--selected')).toContain('--fs-tunnel-plate: var(--fs-node-lift');
+    expect(block('.react-flow__node:hover .tunnel-node__hole')).toContain('inset 4px 4px 0');
   });
 
   it('exempts an expanded group frame, which must not move OR grow', () => {

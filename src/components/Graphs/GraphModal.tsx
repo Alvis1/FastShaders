@@ -18,6 +18,7 @@ import { useAppStore } from '@/store/useAppStore';
 // texture/preset (none contain a Sound node), so the light renders disabled.
 import { nodeTypes, edgeTypes } from '@/components/NodeEditor/flowTypes';
 import { useModalKeys } from '@/components/Modals/useModalKeys';
+import { isPassThroughNode } from '@/utils/passThrough';
 import type { AppNode, AppEdge } from '@/types';
 import './GraphModal.css';
 
@@ -50,7 +51,7 @@ export function GraphModal({ title, subtitle, nodes, edges, code, onClose }: Gra
     if (e.key === 'Escape') onClose();
   });
 
-  const nodeCount = useMemo(() => nodes.filter((n) => n.type !== 'group').length, [nodes]);
+  const nodeCount = useMemo(() => nodes.filter((n) => n.type !== 'group' && !isPassThroughNode(n)).length, [nodes]);
   const groupCount = useMemo(() => nodes.filter((n) => n.type === 'group').length, [nodes]);
 
   return (

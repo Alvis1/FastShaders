@@ -8,6 +8,7 @@
 import type { AppNode, AppEdge, MaterialSettings, NodeDefinition } from '@/types';
 import { getNodeValues, outputNodeValues } from '@/types';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { isPassThroughNode } from '@/utils/passThrough';
 import { effectiveExposedPorts } from '@/utils/exposedPorts';
 import { valueNum, valueStr } from '@/utils/valueCoerce';
 import { validImageDataUrl } from '@/utils/imageNode';
@@ -117,10 +118,13 @@ export function evaluateStep(
       // Newest first: the node the user just added is the one they mean.
       for (let i = nodes.length - 1; i >= 0; i--) {
         const n = nodes[i];
-        if (taken.has(n.id) || n.type === 'group' || n.type === 'note') continue;
+        // A Branch or Portal end is never the lesson's node.
+        if (taken.has(n.id) || n.type === 'group' || n.type === 'note' || isPassThroughNode(n)) continue;
         if (meetsAdd(step, n)) return { status: 'satisfied', bind: [step.role, n.id] };
       }
-      const newest = [...nodes].reverse().find((n) => !taken.has(n.id) && n.type !== 'group' && n.type !== 'note');
+      const newest = [...nodes]
+        .reverse()
+        .find((n) => !taken.has(n.id) && n.type !== 'group' && n.type !== 'note' && !isPassThroughNode(n));
       if (!newest) return { status: 'pending' };
       // The right type without its picture is not a wrong node, it is an unfinished one.
       if (registryTypeOf(newest) === step.type) return { status: 'pending', needsPicture: true };

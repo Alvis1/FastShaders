@@ -33,8 +33,9 @@
 import type { AppEdge, AppNode } from '@/types';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { unwrapCollapsedGroupEdges, unwrapGroupsOnly } from '@/utils/edgeUtils';
 import { bypassMutedEdges } from '@/utils/nodeMute';
+import { isPassThroughNode } from '@/utils/passThrough';
 import { implicitRootOf, isSinkNode, drivingMarchOutput, drivingSplatOutput } from '@/utils/sdfPartition';
 import { groupDescendantIds } from '@/utils/groupFrame';
 import { readImageUvMapping } from '@/utils/imageUvMapping';
@@ -220,7 +221,8 @@ export function expandBakeSelection(nodes: readonly AppNode[], selectedIds: read
   }
   for (const id of [...out]) {
     const n = byId.get(id);
-    if (!n || n.type === 'group' || n.type === 'note' || isSinkNode(n)) out.delete(id);
+    // A Branch or Portal end carries no value of its own: it is never baked.
+    if (!n || n.type === 'group' || n.type === 'note' || isPassThroughNode(n) || isSinkNode(n)) out.delete(id);
   }
   return out;
 }
@@ -230,7 +232,10 @@ export function expandBakeSelection(nodes: readonly AppNode[], selectedIds: read
  * the WIRES that carry it out. Read on the unwrapped graph but NOT through the
  * mute bypass: these are the wires the commit moves onto the Image, and a muted
  * node outside the selection must keep its place in the chain (it is fed by the
- * Image afterwards and still passes it through).
+ * Image afterwards and still passes it through). Nor through the Branch/Portal
+ * FOLD (`unwrapGroupsOnly`): folded, a wire out of a Portal Out would read as
+ * leaving the selection itself, and the commit would move it onto the Image
+ * and strand the Portal — the wire that leaves is the one INTO the Portal In.
  */
 export function bakeSockets(
   nodes: AppNode[],
@@ -238,7 +243,7 @@ export function bakeSockets(
   selected: ReadonlySet<string>,
 ): { socket: BakeSocket; consumers: AppEdge[] }[] {
   const out = new Map<string, { socket: BakeSocket; consumers: AppEdge[] }>();
-  for (const e of unwrapCollapsedGroupEdges(nodes, edges)) {
+  for (const e of unwrapGroupsOnly(nodes, edges)) {
     if (!selected.has(e.source) || selected.has(e.target)) continue;
     const handleId = typeof e.sourceHandle === 'string' && e.sourceHandle ? e.sourceHandle : 'out';
     const key = `${e.source}\0${handleId}`;

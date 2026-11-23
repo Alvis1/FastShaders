@@ -33,6 +33,8 @@ import { RaymarchOutputNode } from '@/components/NodeEditor/nodes/RaymarchOutput
 import { SplatOutputNode } from '@/components/NodeEditor/nodes/SplatOutputNode';
 import { GroupNode } from '@/components/NodeEditor/nodes/GroupNode';
 import { NoteNode } from '@/components/NodeEditor/nodes/NoteNode';
+import { KnotNode } from '@/components/NodeEditor/nodes/KnotNode';
+import { TunnelInNode, TunnelOutNode } from '@/components/NodeEditor/nodes/TunnelNode';
 import { TypedEdge } from '@/components/NodeEditor/edges/TypedEdge';
 
 /** Every flow type's component, as written. React Flow is handed `nodeTypes`. */
@@ -48,6 +50,11 @@ export const rawNodeTypes = {
   splatOutput: SplatOutputNode,
   group: GroupNode,
   note: NoteNode,
+  // The pass-through nodes (utils/passThrough.ts): Branch and the two Portal
+  // ends. Keys are the PERMANENT flow types stored in every `.fastshader`.
+  knot: KnotNode,
+  tunnelIn: TunnelInNode,
+  tunnelOut: TunnelOutNode,
 };
 
 /** The two props React Flow's NodeWrapper passes that change on every MOVE. */

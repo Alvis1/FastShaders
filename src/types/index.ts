@@ -17,6 +17,12 @@ export type {
   OutputFlowNode,
   GroupFlowNode,
   NoteFlowNode,
+  KnotNodeData,
+  TunnelInNodeData,
+  TunnelOutNodeData,
+  KnotFlowNode,
+  TunnelInFlowNode,
+  TunnelOutFlowNode,
   AppNode,
   AppEdge,
 } from './node.types';

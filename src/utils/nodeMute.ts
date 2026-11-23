@@ -36,13 +36,16 @@ import type { AppEdge, AppNode } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { isSinkNode } from '@/utils/sdfPartition';
 import { generateEdgeId } from '@/utils/idGenerator';
+import { isPassThroughNode } from '@/utils/passThrough';
 
 /** The node data key. */
 export const MUTED_KEY = 'muted';
 
-/** A node type that may never be muted: it passes nothing, or is no node. */
+/** A node type that may never be muted: it passes nothing, or is no node — or,
+ *  a Branch or Portal end (utils/passThrough.ts), it computes nothing to skip:
+ *  muted, `passSources` would find no input in the folded view and cut the chain. */
 function unmutable(node: AppNode): boolean {
-  return node.type === 'group' || node.type === 'note' || isSinkNode(node);
+  return node.type === 'group' || node.type === 'note' || isSinkNode(node) || isPassThroughNode(node);
 }
 
 /** Can M mute this node? Everything that computes a value can. */

@@ -200,6 +200,42 @@ export function isUsableEdge(e: unknown): boolean {
   );
 }
 
+/**
+ * A Portal Out's `data.link` (utils/passThrough.ts) is the first data-borne
+ * NODE ID: a selector or a lookup may be built from it. The resolver already
+ * reads anything that names no live entrance as DANGLING, so the restore
+ * paths only strip what can never be an id — a non-string, or a string
+ * holding a SELECTOR_UNSAFE character. The node stays (a broken exit, its
+ * consumers unwired); nothing else about it changes on load.
+ */
+function hasBadTunnelLink(n: unknown): boolean {
+  if (!isRecord(n) || n.type !== 'tunnelOut' || !isRecord(n.data) || !('link' in n.data)) return false;
+  const link = n.data.link;
+  return !(typeof link === 'string' && isSelectorSafeId(link));
+}
+
+function withoutTunnelLink(n: Record<string, unknown>): Record<string, unknown> {
+  const { link: _l, ...data } = n.data as Record<string, unknown>;
+  void _l;
+  return { ...n, data };
+}
+
+/**
+ * `nodes` with every malformed Portal Out `link` stripped (hasBadTunnelLink),
+ * BY IDENTITY when there is none — every graph without Portals. For the
+ * restore paths that do not run `sanitizeGraphShape` (a project block, which
+ * is gated by `isRenderableNode` and then applied).
+ */
+export function sanitizeTunnelLinks<N>(nodes: N[]): N[] {
+  let out: N[] | null = null;
+  nodes.forEach((n, i) => {
+    if (!hasBadTunnelLink(n)) return;
+    out ??= [...nodes];
+    out[i] = withoutTunnelLink(n as Record<string, unknown>) as N;
+  });
+  return out ?? nodes;
+}
+
 export interface GraphShapeResult<N, E> {
   nodes: N[];
   edges: E[];
@@ -273,7 +309,8 @@ export function sanitizeGraphShape<N, E>(
   }
 
   return {
-    nodes: (droppedNodes === 0 && repairedPositions === 0 ? rawNodes : nodes) as N[],
+    // A malformed Portal link is stripped, the node kept (by identity when none is).
+    nodes: sanitizeTunnelLinks(droppedNodes === 0 && repairedPositions === 0 ? rawNodes : nodes) as N[],
     edges: (droppedEdges === 0 ? rawEdges : edges) as E[],
     droppedNodes,
     repairedPositions,

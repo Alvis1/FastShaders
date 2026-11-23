@@ -10,6 +10,7 @@ import { NODE_REGISTRY, growsOperands, getFlowNodeType } from '@/registry/nodeRe
 import { nodeBox, hasNodeGlyph, usesOperatorLayout, nodeScale } from '@/components/NodeEditor/nodes/glyphs/NodeGlyph';
 import { COLOR_NODE_SIZE } from '@/components/NodeEditor/nodes/ColorNode';
 import { SOUND_W, SOUND_HEADER_H, SOUND_BODY_H } from '@/components/NodeEditor/nodes/soundGeometry';
+import { KNOT_SIZE, TUNNEL_LAYOUT_H, TUNNEL_LAYOUT_W } from '@/components/NodeEditor/nodes/passThroughGeometry';
 import { edgePortRailHeight } from '@/components/NodeEditor/nodes/edgePorts';
 import { unknownRefSlots } from './unknownExpression';
 
@@ -126,6 +127,13 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
       return { width: SOUND_W * scale, height: (SOUND_HEADER_H + SOUND_BODY_H) * scale };
     case 'color': // borderless square swatch, no header, never cost-scaled
       return { width: COLOR_NODE_SIZE, height: COLOR_NODE_SIZE };
+    // The pass-through nodes (KnotNode, TunnelNode): fixed, never cost-scaled.
+    // A Portal end reserves its name label above the hole too.
+    case 'knot':
+      return { width: KNOT_SIZE, height: KNOT_SIZE };
+    case 'tunnelIn':
+    case 'tunnelOut':
+      return { width: TUNNEL_LAYOUT_W, height: TUNNEL_LAYOUT_H };
     case 'output': {
       // One node = one material: rows = exposed channels (floored by inDegree,
       // one wire one row) + the UNCONDITIONAL mesh-picker row. An estimate

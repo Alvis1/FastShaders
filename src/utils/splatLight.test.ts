@@ -146,8 +146,9 @@ describe('carryDormantLightEdges — the WIRES an Apply cannot see', () => {
     expect(at).toBeGreaterThan(src.indexOf('const inactiveSinks = carryInactiveSinks('));
     expect(at).toBeLessThan(src.indexOf('const oldGroups ='));
     expect(at).toBeLessThan(src.indexOf('autoExposeConnectedParamPorts(finalNodes, remappedEdges);'));
-    // The UNWRAPPED old edges the gate already built.
-    expect(src.slice(at, at + 300)).toContain('realOldEdges,');
+    // The old edges the gate already built, collapsed groups unwrapped but the
+    // Branch/Portal wires AS DRAWN (utils/passThrough.ts).
+    expect(src.slice(at, at + 300)).toContain('groupOldEdges,');
     expect(src).toContain('if (dormantLight.length > 0) remappedEdges.push(...dormantLight);');
   });
 });

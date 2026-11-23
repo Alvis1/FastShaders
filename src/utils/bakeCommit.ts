@@ -31,6 +31,7 @@
 import type { AppEdge, AppNode, ShaderNodeData } from '@/types';
 import { makeTypedEdge } from '@/utils/edgeUtils';
 import { isSinkNode } from '@/utils/sdfPartition';
+import { isPassThroughNode } from '@/utils/passThrough';
 import {
   GROUP_BADGE_CLEARANCE,
   GROUP_HEADER_H,
@@ -275,7 +276,7 @@ export function planBakeCommit(
     for (const e of edgesOut) {
       if (!cand.has(e.target) || cand.has(e.source)) continue;
       const u = byId.get(e.source);
-      if (!u || u.type === 'group' || u.type === 'note' || isSinkNode(u)) continue;
+      if (!u || u.type === 'group' || u.type === 'note' || isPassThroughNode(u) || isSinkNode(u)) continue;
       if (edgesOut.every((f) => f.source !== u.id || cand.has(f.target))) {
         cand.add(u.id);
         changed = true;

@@ -20,6 +20,7 @@ import type { AppEdge, AppNode, GeneratedCode } from '@/types';
 import { isSinkNode } from '@/utils/sdfPartition';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { bypassMutedEdges, mutedNodeIds } from '@/utils/nodeMute';
+import { isPassThroughNode } from '@/utils/passThrough';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { graphToCode } from './graphToCode';
 
@@ -87,12 +88,19 @@ export function panelCodegen(
   // the whole graph (no sink, or `whole`), that set is every node but the
   // muted — and only while one is muted, so every other graph keeps
   // `emitted: null` and today's Apply exactly.
+  // A Branch or Portal end (utils/passThrough.ts) is the same: it emits nothing,
+  // so the set must leave it out for an Apply to carry it — with no sink too,
+  // or every Apply of a sink-less graph deleted them. `feedsAnOutputIds` never
+  // reaches one (the fold reads through it), so only this branch needs it.
   if (!ids) {
     const muted = mutedNodeIds(nodes);
-    if (!muted) return { result: graphToCode(nodes, edges, NODE_REGISTRY), emitted: null };
+    const anyPass = nodes.some(isPassThroughNode);
+    if (!muted && !anyPass) return { result: graphToCode(nodes, edges, NODE_REGISTRY), emitted: null };
     // Frames and notes stay out, as in `feedsAnOutputIds` (they emit nothing).
     ids = new Set(
-      nodes.filter((n) => n.type !== 'group' && n.type !== 'note' && !muted.has(n.id)).map((n) => n.id),
+      nodes
+        .filter((n) => n.type !== 'group' && n.type !== 'note' && !isPassThroughNode(n) && !muted?.has(n.id))
+        .map((n) => n.id),
     );
   }
   return { result: graphToCode(nodes, edges, NODE_REGISTRY, { emitOnly: ids }), emitted: ids };

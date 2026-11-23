@@ -209,8 +209,10 @@ describe('gates — only the Color socket is an image to Normal and Environment'
     const at = s.indexOf("if (connection.targetHandle === 'normal') {");
     expect(at).toBeGreaterThan(0);
     const block = s.slice(at, s.indexOf("colorSpace: 'data'", at));
+    // The socket the wire RESOLVES to through a Branch or Portal Out
+    // (utils/passThrough.ts) — the wire's own socket when there is none.
     expect(block).toContain(
-      "src?.data.registryType === 'imageNode' && !isImageChannelHandle(connection.sourceHandle)",
+      "src?.data.registryType === 'imageNode' && !isImageChannelHandle(from?.sourceHandle)",
     );
   });
 

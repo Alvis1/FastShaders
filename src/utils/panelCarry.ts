@@ -23,7 +23,8 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { isSinkNode } from '@/utils/sdfPartition';
 import { COLLAPSED_MEMBER_CLASS } from '@/utils/groupFrame';
 import { generateEdgeId } from '@/utils/idGenerator';
-import { mutedNodeIds, passSources } from '@/utils/nodeMute';
+import { mutedNodeIds, passSources, type PassSource } from '@/utils/nodeMute';
+import { isPassThroughNode, passThroughSource } from '@/utils/passThrough';
 
 /**
  * The old nodes an Apply carries: everything the panel's text did not emit,
@@ -150,9 +151,20 @@ export function carryPanelHidden(
  * The consumer must be the same TYPE it was (a retyped line is a different
  * node). `parsed` holds the parse's nodes under their FINAL ids. Returns
  * `edges` itself when there is nothing to restore.
+ *
+ * Two views of the old wires, as `restorePassThroughOutWires` takes them:
+ * the muted node's own pass-through is read on the FOLDED view
+ * (`realOldEdges`, `unwrapCollapsedGroupEdges` — as the text read it, so a
+ * Branch or Portal feeding a muted node resolves through), but the wires that
+ * LEAVE it are the wires as DRAWN (`groupOldEdges`, `unwrapGroupsOnly`).
+ * Folded, a Branch's or Portal Out's wire out names the muted node feeding
+ * it; walking that view put back a DIRECT wire from the muted node in place of
+ * the parsed one, and the pass-through lost its wire on an unchanged Apply.
+ * Those wires are the pass-through twin's.
  */
 export function restoreMutedOutWires(
   oldNodes: readonly AppNode[],
+  groupOldEdges: readonly AppEdge[],
   realOldEdges: readonly AppEdge[],
   carriedIds: ReadonlySet<string>,
   feederOf: (oldId: string, handle: string | null | undefined) => string | null,
@@ -173,13 +185,97 @@ export function restoreMutedOutWires(
   });
   let out: AppEdge[] | null = null;
   const done = new Set<string>();
-  for (const e of realOldEdges) {
+  for (const e of groupOldEdges) {
     if (!muted.has(e.source) || carriedIds.has(e.target)) continue;
     const target = feederOf(e.target, null);
     if (target === null || newType.get(target) !== oldType.get(e.target)) continue;
     const k = socketOf(target, e.targetHandle);
     if (done.has(k)) continue;
     const via = pass.get(e.source) ?? null;
+    const i = at.get(k);
+    const cur = i === undefined ? null : (out ?? edges)[i];
+    if (via) {
+      const from = carriedIds.has(via.source) ? via.source : feederOf(via.source, via.sourceHandle);
+      if (!cur || from === null || cur.source !== from || (cur.sourceHandle ?? 'out') !== (via.sourceHandle ?? 'out')) continue;
+    } else if (cur) {
+      continue;
+    }
+    done.add(k);
+    const id = generateEdgeId(e.source, e.sourceHandle ?? 'out', target, e.targetHandle ?? 'in');
+    let wire: AppEdge = { ...e, target, id };
+    if (relayout && wire.className !== undefined) {
+      const { className: _c, ...rest } = wire;
+      void _c;
+      wire = rest as AppEdge;
+    }
+    out ??= [...edges];
+    if (i === undefined) out.push(wire);
+    else out[i] = wire;
+  }
+  return out ?? edges;
+}
+
+/**
+ * The twin of `restoreMutedOutWires` for the Branch and Portal nodes
+ * (utils/passThrough.ts). A pass-through is never in the text, so the panel
+ * carries it back with the wires INTO it (`carryPanelHidden`, on the GROUP-ONLY
+ * view so those wires exist at all) — but its wires OUT, into nodes the text
+ * holds, are the folded wires the parse rebuilt as direct ones: the text read
+ * the RESOLVED source. Each is put back as the wire from the pass-through,
+ * IN PLACE of the parsed wire it stands for (so an unchanged Apply changes
+ * nothing, and the edge order — the namer's — does not move), only where the
+ * text still says what the fold said: the socket is wired from the resolved
+ * source (re-found by NAME, as a carried wire's is) with the same handle, or —
+ * when the pass-through resolved to nothing (unfed, a broken exit) — left
+ * unwired. A socket the user rewired in the text keeps the text's wire and the
+ * pass-through's is dropped, so an Apply never puts two wires into one input.
+ * The consumer must be the same TYPE it was.
+ *
+ * `groupOldEdges` is the old graph's group-only view (`unwrapGroupsOnly`),
+ * `foldedOldEdges` the same folded (`unwrapCollapsedGroupEdges`): a MUTED node
+ * feeding an entrance is resolved on through its own pass-through, as the
+ * text read it. Returns `edges` itself when there is nothing to restore.
+ */
+export function restorePassThroughOutWires(
+  oldNodes: readonly AppNode[],
+  groupOldEdges: readonly AppEdge[],
+  foldedOldEdges: readonly AppEdge[],
+  carriedIds: ReadonlySet<string>,
+  feederOf: (oldId: string, handle: string | null | undefined) => string | null,
+  parsed: readonly AppNode[],
+  edges: AppEdge[],
+  relayout: boolean,
+): AppEdge[] {
+  const carriedPass = oldNodes.filter((n) => carriedIds.has(n.id) && isPassThroughNode(n));
+  if (carriedPass.length === 0) return edges;
+  const passIds = new Set(carriedPass.map((n) => n.id));
+  const muted = mutedNodeIds(oldNodes);
+  const mutedPass = muted ? passSources(oldNodes, foldedOldEdges, muted) : null;
+  const resolved = new Map<string, PassSource | null>();
+  const resolveOf = (id: string): PassSource | null => {
+    if (resolved.has(id)) return resolved.get(id)!;
+    let via: PassSource | null = passThroughSource(oldNodes, groupOldEdges, id);
+    if (via && muted?.has(via.source)) via = mutedPass?.get(via.source) ?? null;
+    resolved.set(id, via);
+    return via;
+  };
+  const oldType = new Map(oldNodes.map((n) => [n.id, n.data.registryType] as const));
+  const newType = new Map(parsed.map((n) => [n.id, n.data.registryType] as const));
+  const socketOf = (target: string, handle: string | null | undefined) => `${target}\0${handle ?? ''}`;
+  const at = new Map<string, number>();
+  edges.forEach((e, i) => {
+    const k = socketOf(e.target, e.targetHandle);
+    if (!at.has(k)) at.set(k, i);
+  });
+  let out: AppEdge[] | null = null;
+  const done = new Set<string>();
+  for (const e of groupOldEdges) {
+    if (!passIds.has(e.source) || carriedIds.has(e.target)) continue;
+    const target = feederOf(e.target, null);
+    if (target === null || newType.get(target) !== oldType.get(e.target)) continue;
+    const k = socketOf(target, e.targetHandle);
+    if (done.has(k)) continue;
+    const via = resolveOf(e.source);
     const i = at.get(k);
     const cur = i === undefined ? null : (out ?? edges)[i];
     if (via) {

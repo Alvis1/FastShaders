@@ -1,4 +1,5 @@
 import type { Node, Edge } from '@xyflow/react';
+import { isPassThroughNode } from '@/utils/passThrough';
 
 export type TSLDataType = 'float' | 'int' | 'vec2' | 'vec3' | 'vec4' | 'color' | 'any';
 
@@ -379,6 +380,39 @@ export interface NoteNodeData {
   [key: string]: unknown;
 }
 
+/**
+ * The PASS-THROUGH nodes (utils/passThrough.ts): they compute nothing, emit no
+ * code and take no variable name — the engines read straight through them
+ * (`unwrapCollapsedGroupEdges`' fold). No registry entry, like note and group;
+ * `registryType` mirrors the flow type for the readers that ask every node for
+ * one. Every field is adversarial (a file or a tampered `fs:graph`): read
+ * `link`/`label` only through passThrough.ts' readers.
+ */
+/** The Branch: one wire in (`in`), any number out (`out`). */
+export interface KnotNodeData {
+  registryType: 'knot';
+  [key: string]: unknown;
+}
+
+/** A Portal In: one wire in (`in`), no output socket. `label` is the portal's NAME. */
+export interface TunnelInNodeData {
+  registryType: 'tunnelIn';
+  label: string;
+  [key: string]: unknown;
+}
+
+/**
+ * A Portal Out: no input socket, any number of wires out (`out`). `link` is
+ * its Portal In's NODE ID (identity is the id, never the name); `label` is the
+ * last-known name, a display cache used only when the entrance is gone.
+ */
+export interface TunnelOutNodeData {
+  registryType: 'tunnelOut';
+  link: string;
+  label?: string;
+  [key: string]: unknown;
+}
+
 export type ShaderFlowNode = Node<ShaderNodeData, 'shader'>;
 export type ColorFlowNode = Node<ShaderNodeData, 'color'>;
 export type PreviewFlowNode = Node<ShaderNodeData, 'preview'>;
@@ -387,6 +421,9 @@ export type ClockFlowNode = Node<ShaderNodeData, 'clock'>;
 export type OutputFlowNode = Node<OutputNodeData, 'output'>;
 export type GroupFlowNode = Node<GroupNodeData, 'group'>;
 export type NoteFlowNode = Node<NoteNodeData, 'note'>;
+export type KnotFlowNode = Node<KnotNodeData, 'knot'>;
+export type TunnelInFlowNode = Node<TunnelInNodeData, 'tunnelIn'>;
+export type TunnelOutFlowNode = Node<TunnelOutNodeData, 'tunnelOut'>;
 /** The Sound node (registry type `soundNode`) — its own component, not a row layout. */
 export type SoundFlowNode = Node<ShaderNodeData, 'sound'>;
 /** The Raymarch Output — the Output node's chrome, its own component. */
@@ -417,7 +454,10 @@ export type AppNode =
   | RaymarchOutputFlowNode
   | SplatOutputFlowNode
   | GroupFlowNode
-  | NoteFlowNode;
+  | NoteFlowNode
+  | KnotFlowNode
+  | TunnelInFlowNode
+  | TunnelOutFlowNode;
 
 export interface TypedEdgeData {
   dataType: TSLDataType;
@@ -492,7 +532,7 @@ function rawNodeValues(node: AppNode): Record<string, string | number> {
 
 /** Safely extract values from any AppNode's data. */
 export function getNodeValues(node: AppNode): Record<string, string | number> {
-  if (node.type === 'output' || node.type === 'group' || node.type === 'note') return {};
+  if (node.type === 'output' || node.type === 'group' || node.type === 'note' || isPassThroughNode(node)) return {};
   return rawNodeValues(node);
 }
 

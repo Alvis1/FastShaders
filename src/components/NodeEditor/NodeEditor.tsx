@@ -127,7 +127,8 @@ import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { canMuteNode, detachEdges, isMutedNode } from '@/utils/nodeMute';
 import { isTypingTarget } from '@/utils/isTypingTarget';
 import { beginDragChrome } from '@/utils/dragChrome';
-import { bridgeEdgesAcrossDeletedNodes, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { bridgeEdgesAcrossDeletedNodes, unwrapCollapsedGroupEdges, unwrapGroupsOnly } from '@/utils/edgeUtils';
+import { remapTunnelLinks, resolvePassThroughEndpoint, topologyEdges } from '@/utils/passThrough';
 import { parseCsv, COLUMN_WARN_THRESHOLD } from '@/utils/csvParser';
 import { makeDataNodeData } from '@/utils/dataNode';
 import {
@@ -1405,7 +1406,9 @@ export function NodeEditor() {
       const spots = pastedSpots(sourceNodes, store.nodes, target);
 
       for (const node of sourceNodes) idMap.set(node.id, generateId());
-      const clones = sourceNodes.map((node) => {
+      // A Portal Out's `link` is a node id too: pasted WITH its entrance it
+      // follows the copy, pasted alone it stays an exit of the live portal.
+      const clones = remapTunnelLinks(sourceNodes.map((node) => {
         const cloned = cloneNodeSharingPayloads(node);
         // A pasted output node arrives INACTIVE: the clone must not carry the
         // active flag off the original (several outputs may coexist, exactly
@@ -1421,7 +1424,7 @@ export function NodeEditor() {
         else cloned.parentId = parentId;
         cloned.selected = true;
         return cloned;
-      });
+      }), idMap, 'keep');
 
       const sourceIds = new Set(sourceNodes.map((n) => n.id));
       const edgeClones: AppEdge[] = store.edges
@@ -1763,7 +1766,9 @@ export function NodeEditor() {
         clearConnectPreview();
         return true;
       }
-      const logicalEdges = unwrapCollapsedGroupEdges(store.nodes, store.edges);
+      // The wires AS DRAWN plus each Portal's hidden link (utils/passThrough.ts):
+      // folded, a Branch's input reads free and a loop through a Portal hides.
+      const logicalEdges = topologyEdges(store.nodes, unwrapGroupsOnly(store.nodes, store.edges));
       const phantomMain = primaryInputId(def);
       const phantomOperands = growsOperands(def);
       const phantomPorts = (ports: { id: string }[]): ConnectHandle[] =>
@@ -1900,21 +1905,33 @@ export function NodeEditor() {
       // scan stays handle-blind — any edge from the image into color/emissive
       // is the conservative answer.
       if (connection.targetHandle === 'normal') {
-        const nodes = useAppStore.getState().nodes;
-        const src = nodes.find((n) => n.id === connection.source);
-        if (src?.data.registryType === 'imageNode' && !isImageChannelHandle(connection.sourceHandle)) {
+        const { nodes, edges: liveEdges } = useAppStore.getState();
+        // Through a Branch or Portal Out the image is what the wire RESOLVES
+        // to (utils/passThrough.ts), and its other consumers are read on the
+        // folded view for the same reason.
+        const from = resolvePassThroughEndpoint(
+          nodes,
+          unwrapGroupsOnly(nodes, liveEdges),
+          connection.source,
+          connection.sourceHandle,
+        );
+        const srcId = from?.source;
+        const src = srcId === undefined ? undefined : nodes.find((n) => n.id === srcId);
+        if (src?.data.registryType === 'imageNode' && !isImageChannelHandle(from?.sourceHandle)) {
           // The live list: the edge just made targets `normal`, so it can never
           // match the two handles below and reading before or after is the same
-          // answer — but reading fresh cannot go stale.
-          const feedsSrgb = useAppStore.getState().edges.some(
+          // answer — but reading fresh cannot go stale. Folded only when a
+          // pass-through is involved, so every other graph reads the raw list.
+          const readEdges = src.id === connection.source ? liveEdges : unwrapCollapsedGroupEdges(nodes, liveEdges);
+          const feedsSrgb = readEdges.some(
             (e) =>
-              e.source === connection.source &&
+              e.source === src.id &&
               (e.targetHandle === 'color' || e.targetHandle === 'emissive'),
           );
           if (!feedsSrgb && getNodeValues(src).colorSpace !== 'data') {
             useAppStore.getState().setNodes(
               nodes.map((n) =>
-                n.id === connection.source
+                n.id === src.id
                   ? { ...n, data: { ...n.data, values: { ...getNodeValues(n), colorSpace: 'data' } } }
                   : n,
               ) as AppNode[],
@@ -1991,8 +2008,10 @@ export function NodeEditor() {
           const hoverNode = store.nodes.find((n) => n.id === hoverId);
           // Plan against the LOGICAL graph: while a group is collapsed its
           // boundary edges are rewritten onto the group node, which would
-          // contract all members into one vertex and fabricate cycles.
-          const logicalEdges = unwrapCollapsedGroupEdges(store.nodes, store.edges);
+          // contract all members into one vertex and fabricate cycles. Not
+          // folded through Branches/Portals (topologyEdges): a Branch's input
+          // must read as taken, and a loop through a Portal as a loop.
+          const logicalEdges = topologyEdges(store.nodes, unwrapGroupsOnly(store.nodes, store.edges));
           const endpoints =
             di && hi && hoverNode
               ? {
@@ -2086,7 +2105,7 @@ export function NodeEditor() {
           connectPlan = null;
         } else if (
           wouldCreateCycle(
-            unwrapCollapsedGroupEdges(store.nodes, store.edges),
+            topologyEdges(store.nodes, unwrapGroupsOnly(store.nodes, store.edges)),
             connectPlan.source,
             connectPlan.target,
           )

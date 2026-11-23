@@ -78,7 +78,7 @@ describe('saved groups', () => {
   it('the over-budget retry keeps the anchor (it re-spreads the options)', () => {
     const store = readFileSync(resolve(__dirname, 'useAppStore.ts'), 'utf8');
     expect(store).toContain("proceed: () => get().instantiateSavedGroup(savedId, position, { ...opts, overBudgetOk: true })");
-    expect(store).toContain('cloneGroupSnapshot(saved, position, opts?.anchor)');
+    expect(store).toContain('cloneGroupSnapshot(saved, position, opts?.anchor, state.nodes)');
   });
 });
 

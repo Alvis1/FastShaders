@@ -21,7 +21,7 @@ import { useHeaderTip } from './headerTip';
 // written under `.shader-node__left` so it does not depend on that ordering.)
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { NodeGlyph, hasNodeGlyph, usesOperatorLayout, nodeJustify, nodeScale, nodeBox, nodeSockets, outputSocketKey, nodeTextScale, nodeArtStyle } from './glyphs/NodeGlyph';
-import { evaluateNodeOutput, evaluateEdgeSource, evaluateEdgeRange, getEdgeOutputShape, getTargetEdges, getTimeUpstreamSet, getFieldUpstreamSet } from '@/engine/cpuEvaluator';
+import { evaluateNodeOutput, evaluateEdgeSource, evaluateEdgeRange, getDrawnTargetEdges, getEdgeOutputShape, getTargetEdges, getTimeUpstreamSet, getFieldUpstreamSet } from '@/engine/cpuEvaluator';
 import { intLiteral } from '@/engine/intPromotion';
 import { edgeRangeText, rangeSpan } from '@/utils/edgeValueText';
 import { LiveEdgeValue } from './LiveEdgeValue';
@@ -853,6 +853,15 @@ export const ShaderNode = memo(function ShaderNode({
       // Object.is bails and the card keeps showing the old channel forever.
       key += `${e.source}\u0000${sh}\u0000${th}\u0000${label ? label.text : ''}\u0000${label ? edgeLabelFlags(label) : ''}\u0000${ch}\u0001`;
     }
+    // The sockets wires are DRAWN into, when that differs from the folded
+    // list above (a wire from an unfed Branch or a broken Portal Out): they
+    // decide which operand sockets mount (`mountedHandleList` below).
+    const folded = getTargetEdges(s.nodes, s.edges, id);
+    const drawn = getDrawnTargetEdges(s.nodes, s.edges, id);
+    if (drawn !== folded) {
+      key += '\u0002';
+      for (const e of drawn) key += `${typeof e.targetHandle === 'string' ? e.targetHandle : ''}\u0001`;
+    }
     return key;
   });
   const graphInfo = useMemo(() => {
@@ -888,9 +897,19 @@ export const ShaderNode = memo(function ShaderNode({
       }
       widest = Math.max(widest, c);
     }
+    // Every socket a wire is DRAWN into, for MOUNTING operand sockets: the
+    // folded list above drops a wire from an unfed Branch or a broken Portal
+    // Out (the shader reads that socket unwired, and so do the labels), but an
+    // unmounted socket leaves that wire in the store drawing nothing.
+    const drawnEdges = getDrawnTargetEdges(allNodes, allEdges, id);
+    const mountedHandleList =
+      drawnEdges === targetEdges
+        ? connectedHandleList
+        : drawnEdges.flatMap((e) => (typeof e.targetHandle === 'string' ? [e.targetHandle] : []));
     return {
       connectedInputs,
       connectedHandleList,
+      mountedHandleList,
       labelByHandle,
       inputChannels,
       inChannels: Math.min(widest, 4),
@@ -949,6 +968,7 @@ export const ShaderNode = memo(function ShaderNode({
   // edgeKey change (see graphInfo above).
   const connectedInputs = graphInfo.connectedInputs;
   const connectedHandleList = graphInfo.connectedHandleList;
+  const mountedHandleList = graphInfo.mountedHandleList;
 
   // A socket-growing node (variadic arithmetic, append) grows/shrinks its input
   // sockets as operands are wired. Whenever that count changes, React Flow must
@@ -974,7 +994,7 @@ export const ShaderNode = memo(function ShaderNode({
   // very drift effectiveRampDef exists to prevent. Measured 2026-09-03 before
   // the fix: a dropped Data Stripes carried signal + lowColor + highColor.
   const opSocketCount = growsOperands(effDef)
-    ? effectiveInputs(effDef, connectedHandleList, growSockets, valuedHandleList).length
+    ? effectiveInputs(effDef, mountedHandleList, growSockets, valuedHandleList).length
     : effDef.inputs.length;
   // The Image node's opt-in sockets re-measure on any exposed-set change (the
   // count alone can stay equal while the handle ids differ) — same idiom as
@@ -1148,7 +1168,7 @@ export const ShaderNode = memo(function ShaderNode({
     // channel; see utils/appendCapacity). At rest it returns just the wired operands, so a fully
     // wired a+b stays the compact 2-op look instead of sprouting a dangling
     // socket. Non-chainable 2-input glyph nodes get their static [a, b] back.
-    const ins = effectiveInputs(effDef, connectedHandleList, growSockets, valuedHandleList);
+    const ins = effectiveInputs(effDef, mountedHandleList, growSockets, valuedHandleList);
     const N = ins.length;
     const identity = def.chainIdentity ?? 0;
     const scale = nodeScale(data.registryType);

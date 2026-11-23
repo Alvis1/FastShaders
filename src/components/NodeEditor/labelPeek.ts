@@ -22,6 +22,7 @@
  * (double-click opens the picker), so a peek there would fight a control the
  * user is aiming at.
  */
+import { KNOT_TYPE, TUNNEL_IN_TYPE, TUNNEL_OUT_TYPE } from '@/utils/passThrough';
 
 /**
  * How long after a click a second one still counts as a pair. 400 ms is the
@@ -71,5 +72,16 @@ export const PEEK_EXEMPT_SELECTOR =
  * Flow node types whose whole body owns the gesture. The Color node IS the
  * swatch — its double-click opens the picker — and it has exactly one socket,
  * so a peek there would trade a real control for almost nothing.
+ *
+ * The Branch and the two Portal ends (utils/passThrough.ts) are exempt too:
+ * their sockets carry no names worth pinning (a Portal hole draws no socket
+ * at all), and their double-click belongs to their own interactions — the
+ * Branch turning back into a routing point, a Portal end gliding to its
+ * partner (later steps of the same feature).
  */
-export const PEEK_EXEMPT_NODE_TYPES: ReadonlySet<string> = new Set(['color']);
+export const PEEK_EXEMPT_NODE_TYPES: ReadonlySet<string> = new Set([
+  'color',
+  KNOT_TYPE,
+  TUNNEL_IN_TYPE,
+  TUNNEL_OUT_TYPE,
+]);

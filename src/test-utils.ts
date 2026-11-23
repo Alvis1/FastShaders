@@ -51,6 +51,26 @@ export function makeNode(
  */
 export const HISTORY_IDLE = { isUndoRedo: false, coalescingHistory: false, interactionDepth: 0 } as const;
 
+/** A Branch (utils/passThrough.ts): flow type `knot`, no registry entry. */
+export function makeKnot(id: string): AppNode {
+  return { id, type: 'knot', position: { x: 0, y: 0 }, data: { registryType: 'knot' } } as unknown as AppNode;
+}
+
+/** A Portal In named `label`. */
+export function makeTunnelIn(id: string, label = 'portal 1'): AppNode {
+  return { id, type: 'tunnelIn', position: { x: 0, y: 0 }, data: { registryType: 'tunnelIn', label } } as unknown as AppNode;
+}
+
+/** A Portal Out linked to the entrance `link` (any value: the field is adversarial). */
+export function makeTunnelOut(id: string, link: unknown, label?: string): AppNode {
+  return {
+    id,
+    type: 'tunnelOut',
+    position: { x: 0, y: 0 },
+    data: { registryType: 'tunnelOut', link, ...(label === undefined ? {} : { label }) },
+  } as unknown as AppNode;
+}
+
 /**
  * Build a minimal AppEdge for tests. Matches the shape `TypedEdge` expects:
  * deterministic id, typed edge, `dataType: 'any'` payload.

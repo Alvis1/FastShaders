@@ -23,7 +23,7 @@ import { hasCustomFormula } from '@/utils/dataRangeFormula';
 import { intLiteral, isIntSource, type IntGraph } from './intPromotion';
 import { SOUND_CHANNELS, soundChannelForHandle } from '@/utils/soundAnalysis';
 import { readSoundSettings } from '@/utils/soundSettings';
-import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { unwrapCollapsedGroupEdges, unwrapGroupsOnly } from '@/utils/edgeUtils';
 import { bypassMutedEdges, mutedNodeIds, passSources, type PassSource } from '@/utils/nodeMute';
 import { hasNoiseRangeFlag, isUnsignedNoise } from '@/utils/noiseRange';
 import { isUnitRange, unitWave } from '@/utils/unitRange';
@@ -172,6 +172,9 @@ interface EvalCtx {
   fieldUpstream: Set<string> | null;
   /** Lazy "does this node vary over the SURFACE" set (getSurfaceFieldUpstreamSet). */
   surfaceFieldUpstream: Set<string> | null;
+  /** Lazy index of the wires AS DRAWN (getDrawnTargetEdges): `edgeIndex` itself
+   *  when no wire touches a Branch or Portal. */
+  drawnIndex: Map<string, AppEdge[]> | null;
 }
 
 /**
@@ -264,6 +267,7 @@ function getCtx(nodes: AppNode[], edges: AppEdge[]): EvalCtx {
       timeUpstream: null,
       fieldUpstream: null,
       surfaceFieldUpstream: null,
+      drawnIndex: null,
     };
     byEdges.set(edges, ctx);
     // Internal recursion (e.g. computeRange → evaluateNodeOutput) re-enters
@@ -312,6 +316,26 @@ export function getUnwrappedEdge(nodes: AppNode[], edges: AppEdge[], edgeId: str
  */
 export function getTargetEdges(nodes: AppNode[], edges: AppEdge[], nodeId: string): AppEdge[] {
   return getCtx(nodes, edges).edgeIndex.get(nodeId) ?? [];
+}
+
+/**
+ * Edges arriving at `nodeId` AS DRAWN: the group-only view (`unwrapGroupsOnly`
+ * — collapsed-group boundaries resolved like `getTargetEdges`, but no
+ * Branch/Portal fold, utils/passThrough.ts). The fold DROPS a wire from an
+ * unfed Branch or a broken Portal Out (the shader reads that socket unwired,
+ * and so do the card's labels), yet the socket still HOLDS it — so a card
+ * deciding which sockets to MOUNT must count it, or the wire stays in the
+ * store and never draws (the React Flow failure mode `useUpdateNodeInternals`
+ * guards). Returns `getTargetEdges`' own array (the same identity) whenever no
+ * wire touches a pass-through; lazy, once per graph version.
+ */
+export function getDrawnTargetEdges(nodes: AppNode[], edges: AppEdge[], nodeId: string): AppEdge[] {
+  const ctx = getCtx(nodes, edges);
+  if (!ctx.drawnIndex) {
+    const drawn = unwrapGroupsOnly(nodes, edges);
+    ctx.drawnIndex = drawn === ctx.edges ? ctx.edgeIndex : buildEdgeIndex(drawn);
+  }
+  return ctx.drawnIndex.get(nodeId) ?? [];
 }
 
 /**

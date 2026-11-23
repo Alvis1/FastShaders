@@ -11,7 +11,14 @@ import { activeSink, isSinkNode, hasActiveFlag, normalizeActiveOutput } from '@/
 import { carryModelMeshes, isOutputNode, moduleSettingsOutput } from '@/utils/outputMaterials';
 import { carryMaterialSettings, pairResyncNodes, placeParsedOutputs } from '@/utils/resyncPairing';
 import { carryInactiveSinks } from '@/utils/sinkCarry';
-import { carryPanelHidden, inOldOrder, panelCarryIds, panelFeederResolver, restoreMutedOutWires } from '@/utils/panelCarry';
+import {
+  carryPanelHidden,
+  inOldOrder,
+  panelCarryIds,
+  panelFeederResolver,
+  restoreMutedOutWires,
+  restorePassThroughOutWires,
+} from '@/utils/panelCarry';
 import { carryDormantLightEdges, carrySplatLightValues } from '@/utils/splatLight';
 import { carrySplatReplaceColor, splatStoredColor } from '@/utils/splatColor';
 import { isDirectAssignmentCode } from '@/engine/evaluateTSLScript';
@@ -19,7 +26,7 @@ import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import { sameGraphSemantics } from '@/utils/graphSemantics';
 import type { AppNode } from '@/types';
 import { generateEdgeId } from '@/utils/idGenerator';
-import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { unwrapCollapsedGroupEdges, unwrapGroupsOnly } from '@/utils/edgeUtils';
 import { previewGraph, resolveNodePreview } from '@/utils/nodePreview';
 import { keepsNativeUndo } from '@/utils/isTypingTarget';
 
@@ -454,6 +461,11 @@ export function useSyncEngine() {
           // Unwrapped, so every carry below matches graphToCode's own reading
           // of the old graph (see the orphan carry for why a raw read is wrong).
           const realOldEdges = unwrapCollapsedGroupEdges(oldNodes, oldEdges);
+          // The same WITHOUT the Branch/Portal fold (utils/passThrough.ts): the
+          // wires as drawn, for every carry that brings a stored wire back —
+          // folded, a wire into a pass-through does not exist and a wire out of
+          // one names its upstream. `realOldEdges` itself when there is none.
+          const groupOldEdges = unwrapGroupsOnly(oldNodes, oldEdges);
           // What the parse produced, under the ids it now carries — what a
           // carried node may still be wired from, and the next Apply's scope.
           const parseIds = new Set([...positioned, ...unpositioned].map((n) => n.id));
@@ -464,16 +476,24 @@ export function useSyncEngine() {
           // if their lines were still in the text; only an import, which nulls
           // `codeEmitted`, carries nothing.
           const feederOf = panelFeederResolver(oldNodes, [...positioned, ...unpositioned], textNames);
-          const hidden = carryPanelHidden(oldNodes, realOldEdges, carriedIds, feederOf, unpositioned.length > 0);
+          const hidden = carryPanelHidden(oldNodes, groupOldEdges, carriedIds, feederOf, unpositioned.length > 0);
           remappedEdges.push(...hidden.edges);
           // A carried MUTED node's wires OUT: its consumers' lines read its
           // pass-through, so the parse wired them from there; each goes back
           // to the muted node where the text still says so (panelCarry.ts).
           const unmuted = restoreMutedOutWires(
-            oldNodes, realOldEdges, carriedIds, feederOf,
+            oldNodes, groupOldEdges, realOldEdges, carriedIds, feederOf,
             [...positioned, ...unpositioned], remappedEdges, unpositioned.length > 0,
           );
           if (unmuted !== remappedEdges) remappedEdges.splice(0, remappedEdges.length, ...unmuted);
+          // A carried Branch's or Portal Out's wires OUT: the parse wired each
+          // consumer from the resolved source; each goes back to the
+          // pass-through, in place, where the text still says so.
+          const unfolded = restorePassThroughOutWires(
+            oldNodes, groupOldEdges, realOldEdges, carriedIds, feederOf,
+            [...positioned, ...unpositioned], remappedEdges, unpositioned.length > 0,
+          );
+          if (unfolded !== remappedEdges) remappedEdges.splice(0, remappedEdges.length, ...unfolded);
 
           let finalNodes: AppNode[];
           if (unpositioned.length > 0) {
@@ -538,7 +558,9 @@ export function useSyncEngine() {
             // while "did a march drive" would also resurrect a material the
             // user had just deleted from the code panel by hand.
             const parseHasPlainOutput = result.nodes.some(isOutputNode);
-            const inactiveSinks = carryInactiveSinks(oldNodes, realOldEdges, oldActive?.id ?? null, survivingIds, parseHasPlainOutput);
+            // The group-only view: a parked sink fed through a Branch or Portal
+            // (carried above) gets that wire back, not a direct one.
+            const inactiveSinks = carryInactiveSinks(oldNodes, groupOldEdges, oldActive?.id ?? null, survivingIds, parseHasPlainOutput);
             if (inactiveSinks.nodes.length > 0) {
               finalNodes = [...finalNodes, ...inactiveSinks.nodes];
               remappedEdges.push(...inactiveSinks.edges);
@@ -556,7 +578,9 @@ export function useSyncEngine() {
             const dormantLight = carryDormantLightEdges(
               oldNodes,
               finalNodes,
-              realOldEdges,
+              // As drawn, like the parked sinks: a Light wire out of a Branch or
+              // Portal comes back from it.
+              groupOldEdges,
               remappedEdges,
               new Set(finalNodes.map((n) => n.id)),
             );

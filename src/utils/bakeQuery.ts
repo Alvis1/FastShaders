@@ -5,6 +5,7 @@
  */
 import type { AppNode } from '@/types';
 import { foldSearchText } from './searchFold';
+import { isPassThroughNode } from './passThrough';
 
 /**
  * Does a search ask for "Bake to texture"? A SHORT query (at most four words)
@@ -26,7 +27,7 @@ const NOT_BAKEABLE = new Set(['output', 'raymarchOutput', 'splatOutput']);
 /** Can this SELECTED node take part in a bake? A group can: it stands for
  *  the nodes inside it. */
 function bakeableSelected(n: AppNode): boolean {
-  if (!n.selected || n.type === 'note') return false;
+  if (!n.selected || n.type === 'note' || isPassThroughNode(n)) return false;
   const type = (n.data as { registryType?: unknown } | undefined)?.registryType;
   return !(typeof type === 'string' && NOT_BAKEABLE.has(type));
 }

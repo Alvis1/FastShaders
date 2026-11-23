@@ -26,6 +26,7 @@
  */
 import type { AppNode, AppEdge } from '@/types';
 import { getEdgeOutputShape, getSurfaceFieldUpstreamSet } from '@/engine/cpuEvaluator';
+import { foldPassThroughEdges } from '@/utils/passThrough';
 import { wouldCreateCycle } from './dragConnect';
 
 /** The sockets a sampler reads its coordinate from. */
@@ -51,18 +52,24 @@ export function inheritedImageUv(
   const byId = new Map(nodes.map((n) => [n.id, n]));
   if (byId.get(source)?.data.registryType !== 'imageNode') return null;
   if (edges.some((e) => e.target === source && e.targetHandle === 'uv')) return null;
-  const displaced = edges.find((e) => e.target === target && e.targetHandle === targetHandle);
-  if (!displaced || displaced.source === source) return null;
 
   const nodeList = nodes as AppNode[];
   const edgeList = edges as AppEdge[];
+  // Read THROUGH Branches and Portals (utils/passThrough.ts): a displaced wire
+  // out of one stands for the source it resolves to — the same id, re-sourced
+  // — and one that resolves to nothing displaces nothing. `edges` itself when
+  // there is no pass-through, so every other graph reads exactly as before.
+  const read = foldPassThroughEdges(nodeList, edgeList);
+  const displaced = read.find((e) => e.target === target && e.targetHandle === targetHandle);
+  if (!displaced || displaced.source === source) return null;
+
   // Varies over the SURFACE — never a uniform-built vec2 (Sound, the camera).
   const field = getSurfaceFieldUpstreamSet(nodeList, edgeList);
   const isCoordinate = (e: AppEdge) =>
     field.has(e.source) && getEdgeOutputShape(e, nodeList, edgeList) === 2;
   const coord = isCoordinate(displaced)
     ? displaced
-    : edges.find(
+    : read.find(
         (e) =>
           e.target === displaced.source &&
           COORDINATE_HANDLES.has(e.targetHandle ?? '') &&
@@ -74,7 +81,7 @@ export function inheritedImageUv(
   // The coordinate must not depend on the picture it would steer — counted on
   // the graph as it will be, with the Image already wired into the target.
   const after = [
-    ...edges.filter((e) => !(e.target === target && e.targetHandle === targetHandle)),
+    ...read.filter((e) => !(e.target === target && e.targetHandle === targetHandle)),
     { source, target },
   ];
   if (wouldCreateCycle(after, coord.source, source)) return null;

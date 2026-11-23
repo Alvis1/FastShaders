@@ -61,8 +61,12 @@ describe('what keeps its own double-click', () => {
 
   it('exempts the Color node, whose body IS its swatch', () => {
     expect(PEEK_EXEMPT_NODE_TYPES.has('color')).toBe(true);
+  });
+
+  it('exempts the Branch and both Portal ends, whose double-click is their own', () => {
+    for (const type of ['knot', 'tunnelIn', 'tunnelOut']) expect(PEEK_EXEMPT_NODE_TYPES.has(type), type).toBe(true);
     // …and nothing else: every other node type has ports worth naming.
-    expect(PEEK_EXEMPT_NODE_TYPES.size).toBe(1);
+    expect(PEEK_EXEMPT_NODE_TYPES.size).toBe(4);
   });
 });
 

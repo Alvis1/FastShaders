@@ -41,6 +41,7 @@ import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
+import { isPassThroughNode } from '@/utils/passThrough';
 import { fullscreenElement } from '@/components/inputs/colorPickerModel';
 import {
   addDroppedShader,
@@ -70,7 +71,7 @@ export function ShaderImportModal() {
   const liveNodes = useAppStore((s) => {
     if (s.pendingShaderImports.length === 0) return 0;
     let count = 0;
-    for (const n of s.nodes) if (n.type !== 'group' && n.type !== 'note') count++;
+    for (const n of s.nodes) if (n.type !== 'group' && n.type !== 'note' && !isPassThroughNode(n)) count++;
     return count;
   });
   const [busy, setBusy] = useState(false);

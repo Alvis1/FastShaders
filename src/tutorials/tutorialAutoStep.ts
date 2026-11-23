@@ -16,6 +16,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { connectNodes } from '@/components/NodeEditor/edgeInsert';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import { generateId } from '@/utils/idGenerator';
+import { isPassThroughNode } from '@/utils/passThrough';
 import { freshNodeCost, imageNodeCost } from '@/utils/nodeCost';
 import { initialNodeValues } from '@/utils/newNodeValues';
 import { effectiveExposedPorts } from '@/utils/exposedPorts';
@@ -159,7 +160,7 @@ function addPicture(run: TutorialRun, step: AddStep, nodeDef: NodeDefinition): A
   const store = useAppStore.getState();
   const taken = new Set(Object.values(run.bindings));
   const empty = [...store.nodes].reverse().find(
-    (n) => !taken.has(n.id) && n.type !== 'group' && n.type !== 'note' &&
+    (n) => !taken.has(n.id) && n.type !== 'group' && n.type !== 'note' && !isPassThroughNode(n) &&
       (n.data as { registryType?: unknown }).registryType === PICTURE_TYPE && !holdsPicture(n),
   );
   const cost = imageNodeCost(freshNodeCost(PICTURE_TYPE) ?? 0, picture.width, picture.height);

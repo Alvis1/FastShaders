@@ -18,6 +18,8 @@ import type { AppEdge, AppNode, GroupNodeData } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { graphToCode } from './graphToCode';
 import { feedsAnOutputIds, panelCodegen } from './panelCode';
+import { unwrapGroupsOnly } from '@/utils/edgeUtils';
+import { isPassThroughNode, isTunnelOut, tunnelEntrance } from '@/utils/passThrough';
 
 export type ExportScope = 'connected' | 'whole';
 
@@ -49,6 +51,35 @@ export interface ExportGraph {
 const isFrame = (n: AppNode): boolean => n.type === 'group';
 const isNote = (n: AppNode): boolean => n.type === 'note';
 
+/** Grows `keep` with the pass-throughs its nodes read through (connectedExportIds). */
+function addPassThroughPaths(nodes: readonly AppNode[], edges: readonly AppEdge[], keep: Set<string>): void {
+  if (!nodes.some(isPassThroughNode)) return;
+  const pass = new Map<string, AppNode>();
+  for (const n of nodes) if (isPassThroughNode(n) && !pass.has(n.id)) pass.set(n.id, n);
+  const into = new Map<string, string[]>();
+  for (const e of unwrapGroupsOnly(nodes as AppNode[], edges as AppEdge[])) {
+    if (!pass.has(e.source)) continue;
+    const list = into.get(e.target);
+    if (list) list.push(e.source);
+    else into.set(e.target, [e.source]);
+  }
+  const stack = [...keep];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    const reach = [...(into.get(id) ?? [])];
+    const node = pass.get(id);
+    if (node && isTunnelOut(node)) {
+      const entrance = tunnelEntrance(nodes as AppNode[], node);
+      if (entrance) reach.push(entrance.id);
+    }
+    for (const s of reach) {
+      if (keep.has(s)) continue;
+      keep.add(s);
+      stack.push(s);
+    }
+  }
+}
+
 /**
  * The ids a `'connected'` export keeps, or null when there is nothing to anchor
  * a prune to (no Output of any kind — keep everything rather than export an
@@ -74,6 +105,14 @@ export function connectedExportIds(nodes: readonly AppNode[], edges: readonly Ap
   if (!keep) return null;
   const byId = new Map<string, AppNode>();
   for (const n of nodes) byId.set(n.id, n);
+
+  // The Branch and Portal nodes the kept ones read THROUGH. `feedsAnOutputIds`
+  // walks the folded wires, which never reach a pass-through, so without this
+  // the file drops them and `pruneToConnected` cuts the wires on BOTH sides —
+  // the exported consumer reads its socket unwired. Kept: every pass-through
+  // on a DRAWN path (the group-only view) into a kept node, every kept Portal
+  // Out's entrance, and that entrance's own feeder path.
+  addPassThroughPaths(nodes, edges, keep);
 
   const parentOf = (n: AppNode): AppNode | undefined =>
     typeof n.parentId === 'string' ? byId.get(n.parentId) : undefined;

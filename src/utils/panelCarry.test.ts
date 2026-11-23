@@ -7,7 +7,7 @@ import { makeEdge, makeNode } from '@/test-utils';
 import { codeToGraph } from '@/engine/codeToGraph';
 import { panelCodegen } from '@/engine/panelCode';
 import { activeSink } from './sdfPartition';
-import { unwrapCollapsedGroupEdges } from './edgeUtils';
+import { unwrapCollapsedGroupEdges, unwrapGroupsOnly } from './edgeUtils';
 import { pairResyncNodes } from './resyncPairing';
 import { COLLAPSED_MEMBER_CLASS } from './groupFrame';
 import { carryPanelHidden, inOldOrder, panelCarryIds, panelFeederResolver, restoreMutedOutWires } from './panelCarry';
@@ -78,6 +78,7 @@ function apply(old: { nodes: AppNode[]; edges: AppEdge[] }, code: string, scope:
   const parsed = codeToGraph(code);
   expect(parsed.errors.filter((e) => e.severity !== 'warning')).toEqual([]);
   const realOldEdges = unwrapCollapsedGroupEdges(old.nodes, old.edges);
+  const groupOldEdges = unwrapGroupsOnly(old.nodes, old.edges);
   const carriedIds = panelCarryIds(old.nodes, scope.emitted);
   const names = scope.emitted !== null ? scope.names : null;
   const pairing = pairResyncNodes(old.nodes, parsed.nodes, activeSink(old.nodes, realOldEdges)?.id ?? null, carriedIds, names);
@@ -91,9 +92,9 @@ function apply(old: { nodes: AppNode[]; edges: AppEdge[] }, code: string, scope:
   const edges = parsed.edges.map((e) => ({ ...e, source: idMap.get(e.source) ?? e.source, target: idMap.get(e.target) ?? e.target }));
   const parseIds = new Set([...positioned, ...unpositioned].map((n) => n.id));
   const feederOf = panelFeederResolver(old.nodes, [...positioned, ...unpositioned], names);
-  const hidden = carryPanelHidden(old.nodes, realOldEdges, carriedIds, feederOf, unpositioned.length > 0);
+  const hidden = carryPanelHidden(old.nodes, groupOldEdges, carriedIds, feederOf, unpositioned.length > 0);
   const restored = restoreMutedOutWires(
-    old.nodes, realOldEdges, carriedIds, feederOf,
+    old.nodes, groupOldEdges, realOldEdges, carriedIds, feederOf,
     [...positioned, ...unpositioned], [...edges, ...hidden.edges], unpositioned.length > 0,
   );
   let nodes = [...positioned, ...unpositioned, ...hidden.nodes];
@@ -323,7 +324,7 @@ describe('useSyncEngine wiring (source pins)', () => {
     const sync = src.slice(src.indexOf('const doCodeSync'));
     const scope = sync.indexOf('const scope = useAppStore.getState().codeEmitted;');
     const pair = sync.indexOf('pairResyncNodes(oldNodes, result.nodes, oldActive?.id ?? null, carriedIds, textNames)');
-    const carry = sync.indexOf('carryPanelHidden(oldNodes, realOldEdges, carriedIds, feederOf, unpositioned.length > 0)');
+    const carry = sync.indexOf('carryPanelHidden(oldNodes, groupOldEdges, carriedIds, feederOf, unpositioned.length > 0)');
     const layout = sync.indexOf('autoLayout([...positioned, ...unpositioned, ...hidden.nodes], remappedEdges)');
     expect(scope).toBeGreaterThan(-1);
     expect(pair).toBeGreaterThan(scope);

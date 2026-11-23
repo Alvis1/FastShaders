@@ -606,7 +606,9 @@ describe('carryInactiveSinks — an Apply keeps the inactive outputs and their w
     // …and the panel's carried ids (utils/panelCarry.ts), which may never pair.
     expect(src).toContain('pairResyncNodes(oldNodes, result.nodes, oldActive?.id ?? null, carriedIds, textNames)');
     expect(src).toContain('if (isSinkNode(match) && hasActiveFlag(match)) {');
-    expect(src).toContain("carryInactiveSinks(oldNodes, realOldEdges, oldActive?.id ?? null, survivingIds, parseHasPlainOutput)");
+    // On the wires AS DRAWN (`groupOldEdges`): a parked sink fed through a
+    // Branch or Portal gets that wire back (utils/passThrough.ts).
+    expect(src).toContain("carryInactiveSinks(oldNodes, groupOldEdges, oldActive?.id ?? null, survivingIds, parseHasPlainOutput)");
     // …and the 5th argument is read off the PARSE. Only a source pin can cover
     // this: derived from the OLD graph instead (“did a march drive”) the carry
     // would resurrect a material deleted from the code panel by hand, and the

@@ -17,7 +17,7 @@ import {
 } from '@/utils/libraryAutoWire';
 import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import { COLLAPSED_MEMBER_CLASS } from '@/utils/groupFrame';
-import { makeEdge, makeNode } from '@/test-utils';
+import { makeEdge, makeKnot, makeNode, makeTunnelOut } from '@/test-utils';
 import type { AppNode } from '@/types';
 
 const output = (id = 'out', extra: Record<string, unknown> = {}): AppNode =>
@@ -84,6 +84,18 @@ describe('takenOutputChannels', () => {
     const member = { ...makeNode('m', 'float'), parentId: 'g', className: COLLAPSED_MEMBER_CLASS } as AppNode;
     const nodes = [group, member, output()];
     expect([...takenOutputChannels(nodes, [makeEdge('g', 's0', 'out', 'color')], 'out')]).toEqual(['color']);
+  });
+
+  // The shader reads an unfed Branch or a broken Portal Out as no wire, but
+  // the socket still HOLDS one: a press must not add a second wire beside it.
+  it('a wire from an unfed Branch or a broken Portal Out still takes its socket', () => {
+    const nodes = [output(), makeKnot('k'), makeTunnelOut('x', 'gone'), makeNode('f', 'float')];
+    const edges = [
+      makeEdge('k', 'out', 'out', 'color'),
+      makeEdge('x', 'out', 'out', 'roughness'),
+      makeEdge('f', 'out', 'out', 'metalness'),
+    ];
+    expect([...takenOutputChannels(nodes, edges, 'out')].sort()).toEqual(['color', 'metalness', 'roughness']);
   });
 });
 

@@ -2,6 +2,7 @@ import { useAppStore } from '@/store/useAppStore';
 import type { AppEdge, AppNode, BoundarySocket, GroupNodeData, TSLDataType } from '@/types';
 import { generateEdgeId } from '@/utils/idGenerator';
 import { groupDescendantIds, hiddenByInnerCollapse } from '@/utils/groupFrame';
+import { foldPassThroughEdges } from '@/utils/passThrough';
 
 /**
  * The one canonical edge factory: every edge in the app is a typed animated
@@ -136,8 +137,27 @@ function collapsedCount(nodes: AppNode[]): number {
  *
  * Returns a new edge array with rewritten endpoints; non-boundary edges are
  * passed through unchanged.
+ *
+ * Then the Branch/Portal FOLD (utils/passThrough.ts `foldPassThroughEdges`):
+ * wires into a pass-through dropped, wires out of one re-sourced onto what it
+ * passes, every edge id KEPT. Both halves return their input BY IDENTITY when
+ * they change nothing, so this does too.
  */
 export function unwrapCollapsedGroupEdges(nodes: AppNode[], edges: AppEdge[]): AppEdge[] {
+  return foldPassThroughEdges(nodes, unwrapGroupsOnly(nodes, edges));
+}
+
+/**
+ * The collapsed-group half of `unwrapCollapsedGroupEdges` alone: boundary
+ * wires back on their member endpoints, but the Branch and Portal wires AS
+ * DRAWN (utils/passThrough.ts). For the few sites that must see those wires
+ * rather than read through them — the Apply carry, the export prune, the
+ * drag-connect occupancy and cycle checks (via `topologyEdges`) and the
+ * wires a bake moves. Everything that reads the graph as the SHADER does
+ * takes `unwrapCollapsedGroupEdges`. Same identity contract: `edges` itself
+ * when nothing is collapsed.
+ */
+export function unwrapGroupsOnly(nodes: AppNode[], edges: AppEdge[]): AppEdge[] {
   // Build socketId → original endpoint maps, keyed per group so two collapsed
   // groups can't accidentally collide on the same synthetic socket id.
   const outMap = new Map<string, { nodeId: string; handleId: string }>();

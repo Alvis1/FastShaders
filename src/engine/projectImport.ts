@@ -22,6 +22,7 @@ import { sanitizeDataRangeNodes } from '@/utils/dataRangeFormula';
 import { sanitizeDrawings } from '@/utils/drawings';
 import { sanitizePalettes } from '@/utils/palettes';
 import { sanitizeEdgeExtras } from '@/utils/edgeExtras';
+import { sanitizeTunnelLinks } from '@/utils/graphShape';
 import {
   sanitizeOutputMaterialsReport,
   unfoldOutputMaterials,
@@ -169,7 +170,9 @@ function applyProjectToStore(
 
   // Folded node types first (registry/legacyNodeTypes.ts), before anything
   // reads a def; then param ports that arrive with edges are exposed.
-  project.graph.nodes = migrateLegacyNodeTypes(project.graph.nodes);
+  // A malformed Portal Out `link` is stripped (the exit stays, dangling) —
+  // the other two restore paths do it inside sanitizeGraphShape.
+  project.graph.nodes = sanitizeTunnelLinks(migrateLegacyNodeTypes(project.graph.nodes));
   autoExposeConnectedParamPorts(project.graph.nodes, project.graph.edges);
 
   // Imported files are adversarial input: image payloads are bounded before
