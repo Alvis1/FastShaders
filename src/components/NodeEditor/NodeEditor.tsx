@@ -81,6 +81,7 @@ import {
 } from './tileDrag';
 import {
   CONNECT_SNAP_GAP,
+  connectableInputs,
   pickDropTargetNode,
   planDragConnect,
   wouldCreateCycle,
@@ -130,7 +131,11 @@ import { canMuteNode, detachEdges, isMutedNode } from '@/utils/nodeMute';
 import { isTypingTarget } from '@/utils/isTypingTarget';
 import { beginDragChrome } from '@/utils/dragChrome';
 import { bridgeEdgesAcrossDeletedNodes, unwrapCollapsedGroupEdges, unwrapGroupsOnly } from '@/utils/edgeUtils';
-import { isKnot, remapTunnelLinks, resolvePassThroughEndpoint, topologyEdges } from '@/utils/passThrough';
+import { isKnot, isTunnelIn, isTunnelOut, remapTunnelLinks, resolvePassThroughEndpoint, topologyEdges } from '@/utils/passThrough';
+import { renameCopiedEntrances } from '@/utils/portalNames';
+import { connectionRefused, spliceClosesHiddenLoop } from './portalWire';
+import { glideToPortalPartner } from './portalActions';
+import { PortalTrace } from './PortalTrace';
 import { parseCsv, COLUMN_WARN_THRESHOLD } from '@/utils/csvParser';
 import { makeDataNodeData } from '@/utils/dataNode';
 import {
@@ -370,7 +375,9 @@ function mountedHandles(
         : {}),
     });
   }
-  return handles;
+  // A fed Portal In's one input is never replaced (dragConnect.ts
+  // `connectableInputs`): every exit would silently change source.
+  return kind === 'target' ? connectableInputs(handles, isTunnelIn(node)) : handles;
 }
 
 /**
@@ -782,6 +789,11 @@ export function NodeEditor() {
     if (!isDoubleActivation(prev, node.id, t)) return;
     // Consumed: a third click starts a fresh pair rather than toggling again.
     lastActivationRef.current = null;
+    // Two clicks inside a control on the card (the entrance's in-place name
+    // field, a value box) are that control's own — never a node gesture: a
+    // double-click selecting a word in the name field glided the view away.
+    const el = e.target as Element | null;
+    if (el?.closest?.(PEEK_EXEMPT_SELECTOR)) return;
     // A Branch is removed, as a double-click removes a routing point: its
     // wires out are fed from the trunk's source again (branchActions.ts,
     // through removeNode's splice — one undo entry). No label peek.
@@ -789,9 +801,14 @@ export function NodeEditor() {
       removeBranch(node.id);
       return;
     }
+    // A Portal end glides to its partner on F's glide: an exit to its
+    // entrance (selected), an entrance to frame all its exits
+    // (portalActions.ts). No label peek.
+    if (isTunnelIn(node) || isTunnelOut(node)) {
+      glideToPortalPartner(node.id, fitView);
+      return;
+    }
     if (PEEK_EXEMPT_NODE_TYPES.has(node.type ?? '')) return;
-    const el = e.target as Element | null;
-    if (el?.closest?.(PEEK_EXEMPT_SELECTOR)) return;
     setPeekNodeId((cur) => togglePeek(cur, node.id));
   }, []);
 
@@ -1279,7 +1296,9 @@ export function NodeEditor() {
       for (const node of sourceNodes) idMap.set(node.id, generateId());
       // A Portal Out's `link` is a node id too: pasted WITH its entrance it
       // follows the copy, pasted alone it stays an exit of the live portal.
-      const clones = remapTunnelLinks(sourceNodes.map((node) => {
+      // A copied entrance is a NEW portal, so it takes a free name ("name 2")
+      // and the exits copied with it cache that (utils/portalNames.ts).
+      const clones = renameCopiedEntrances(remapTunnelLinks(sourceNodes.map((node) => {
         const cloned = cloneNodeSharingPayloads(node);
         // A pasted output node arrives INACTIVE: the clone must not carry the
         // active flag off the original (several outputs may coexist, exactly
@@ -1295,7 +1314,7 @@ export function NodeEditor() {
         else cloned.parentId = parentId;
         cloned.selected = true;
         return cloned;
-      }), idMap, 'keep');
+      }), idMap, 'keep'), store.nodes);
 
       const sourceIds = new Set(sourceNodes.map((n) => n.id));
       const edgeClones: AppEdge[] = store.edges
@@ -1540,8 +1559,12 @@ export function NodeEditor() {
     setCanvasBusy(true);
     dragStartPosRef.current = { x: node.position.x, y: node.position.y };
     dragStartsRef.current.clear();
+    // A Portal end only MOVES under Alt: pulled out, `detachEdges` would close
+    // its chain up THROUGH the hidden link and draw the long wire back.
     const pulled = event.altKey
-      ? (dragged.length > 0 ? dragged : [node]).filter((n) => n.type !== 'group' && n.type !== 'note')
+      ? (dragged.length > 0 ? dragged : [node]).filter(
+        (n) => n.type !== 'group' && n.type !== 'note' && !isTunnelIn(n) && !isTunnelOut(n),
+      )
       : [];
     altDetachRef.current = pulled.length > 0
       ? { ids: new Set(pulled.map((n) => n.id)), done: false, pushed: false }
@@ -1937,7 +1960,12 @@ export function NodeEditor() {
       }
       const radius = DROP_ON_EDGE_RADIUS / getViewport().zoom;
 
-      updateEdgeHighlight(findNearestEdge(cx, cy, store.edges, getInternalNode, radius, draggedNode.id));
+      // A splice that would close a loop only a Portal's hidden link makes is
+      // refused at the drop (edgeInsert.ts), so it is never previewed either.
+      const near = findNearestEdge(cx, cy, store.edges, getInternalNode, radius, draggedNode.id);
+      updateEdgeHighlight(
+        near && !spliceClosesHiddenLoop(store.nodes, store.edges, draggedNode.id, near) ? near : null,
+      );
     },
     [
       clearConnectPreview,
@@ -1987,6 +2015,14 @@ export function NodeEditor() {
             connectPlan.source,
             connectPlan.target,
           )
+        ) {
+          connectPlan = null;
+        } else if (
+          // …and an undo that RE-FED a Portal In the plan targets: its one
+          // input is never replaced (`connectableInputs`), unless the plan's
+          // source is what already feeds it.
+          feedsFedKnot(store.nodes, store.edges, connectPlan.target, null, connectPlan.targetHandle)
+          && !store.edges.some((e) => e.source === connectPlan!.source && e.target === connectPlan!.target)
         ) {
           connectPlan = null;
         }
@@ -2234,14 +2270,20 @@ export function NodeEditor() {
   /**
    * React Flow asks this for every socket a dragged wire snaps to, and refuses
    * the snap (the socket reads invalid, the release makes nothing) when it
-   * answers false. The one refusal: a wire into a Branch that something
+   * answers false. The refusals: a wire into a Branch or a Portal In that something
    * ALREADY feeds (branchWire.ts `feedsFedKnot`) — a Branch's one input is
    * never replaced, since every wire it fans out to would silently change
    * source (owner, 2026-11-23). Every other connection keeps today's rules.
    */
   const isValidConnection = useCallback((connection: Connection | Edge) => {
     const { nodes, edges } = useAppStore.getState();
-    return !feedsFedKnot(nodes, edges, connection.target, reconnectingEdgeRef.current, connection.targetHandle);
+    // …and a wire that would close a loop only a Portal's HIDDEN link makes
+    // (an exit feeding something upstream of its own entrance) — read on the
+    // drawn wires plus every live link, a pill socket as its member. ONE
+    // function (portalWire.ts `connectionRefused`), so a refused RECONNECT's
+    // release (`finishReconnect` → `reconnectRefused`) keeps its wire for
+    // exactly the sockets refused here.
+    return !connectionRefused(nodes, edges, connection, reconnectingEdgeRef.current);
   }, []);
 
   const onConnectStart = useCallback(
@@ -4033,6 +4075,8 @@ export function NodeEditor() {
           <PreviewRoute />
           {/* Muted nodes' wrapper attribute (NodeBase.css dims them). */}
           <MutedMarks />
+          {/* A selected or hovered Portal's marks and ghost lines. */}
+          <PortalTrace />
           <DrawingLayer livePathRef={livePathRef} />
           {/* Bottom-LEFT canvas bar: undo/redo + draw tools + view controls
               in one pill (replaces the old toolbar history group, the RF

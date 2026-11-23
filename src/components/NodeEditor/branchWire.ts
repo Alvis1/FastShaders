@@ -27,7 +27,7 @@
 import type { AppEdge, AppNode, GroupNodeData } from '@/types';
 import { generateEdgeId } from '@/utils/idGenerator';
 import { edgeWaypointsOf, unwrapGroupsOnly } from '@/utils/edgeUtils';
-import { KNOT_TYPE, isKnot } from '@/utils/passThrough';
+import { KNOT_TYPE, isKnot, isTunnelIn } from '@/utils/passThrough';
 import { KNOT_SIZE } from './nodes/passThroughGeometry';
 import { absoluteNodePosition } from '@/utils/groupFrame';
 
@@ -105,8 +105,9 @@ export function knotParentFor(
   return { id: group.id, origin: absoluteNodePosition(group, byId) };
 }
 
-/** One half of a split wire: the old wire's data type, its share of points. */
-function half(
+/** One half of a split wire: the old wire's data type, its share of points.
+ *  Shared with the Portal's split (portalWire.ts `splitEdgeWithPortal`). */
+export function half(
   old: AppEdge,
   source: string,
   sourceHandle: string | null | undefined,
@@ -176,11 +177,12 @@ export function branchRefusal(
 }
 
 /**
- * Would this connection feed a Branch that is ALREADY fed? A Branch has one
- * input, and a wire released on a fed one is REFUSED, never a replacement
- * (owner, 2026-11-23): replacing it would silently re-source every wire it
- * fans out to. `ignoreEdgeId` is the wire a reconnect is moving, which may go
- * back where it was.
+ * Would this connection feed a Branch — or a Portal In (docs/dev/canvas-interaction.md,
+ * "Portal") — that is ALREADY fed? Each has one input, and a wire released on
+ * a fed one is REFUSED, never a replacement (owner, 2026-11-23): replacing it
+ * would silently re-source every wire it fans out to (through every Portal
+ * Out, for an entrance). `ignoreEdgeId` is the wire a reconnect is moving,
+ * which may go back where it was.
  *
  * A Branch inside a COLLAPSED group is still fed from outside it through the
  * pill's input socket (`__in_<knot>_in`, which the store's collapse writes
@@ -203,7 +205,7 @@ export function feedsFedKnot(
   let handle = targetHandle ?? null;
   let node = byId(id);
   // Bounded by the node count: a forged loop of pill sockets ends.
-  for (let hop = 0; node && !isKnot(node); hop++) {
+  for (let hop = 0; node && !isKnot(node) && !isTunnelIn(node); hop++) {
     if (hop > nodes.length || node.type !== 'group') return false;
     const data = node.data as GroupNodeData;
     if (!data.collapsed || !Array.isArray(data.collapsedInputs)) return false;
@@ -216,23 +218,6 @@ export function feedsFedKnot(
   if (!node) return false;
   const view = id === target ? edges : unwrapGroupsOnly(nodes as AppNode[], edges as AppEdge[]);
   return view.some((e) => e.target === id && e.id !== ignoreEdgeId);
-}
-
-/**
- * A RECONNECT (one end of a wire dragged off its socket) that was released on
- * a fed Branch: React Flow found that socket and `feedsFedKnot` refused it.
- * The refusal changes nothing, so the wire stays where it was — never the
- * empty-canvas release's disconnect (branchActions.ts `finishReconnect`).
- * `end` is React Flow's final connection state.
- */
-export function reconnectRefusedOnFedKnot(
-  nodes: readonly AppNode[],
-  edges: readonly AppEdge[],
-  edgeId: string,
-  end: { isValid: boolean | null; toHandle: { nodeId: string; id?: string | null; type: string } | null },
-): boolean {
-  if (end.isValid !== false || !end.toHandle || end.toHandle.type !== 'target') return false;
-  return feedsFedKnot(nodes, edges, end.toHandle.nodeId, edgeId, end.toHandle.id ?? null);
 }
 
 /** The routing points a wire carries, as `splitWaypointsAt*` reads them. */

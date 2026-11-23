@@ -18,7 +18,8 @@ import { RgbCurvesSettings } from './RgbCurvesSettings';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
 import { hasUnitRangeFlag } from '@/utils/unitRange';
 import { modeOf } from '@/engine/moduleHelpers';
-import { isKnot } from '@/utils/passThrough';
+import { isKnot, isTunnelIn, isTunnelOut } from '@/utils/passThrough';
+import { PortalMenu } from './PortalMenu';
 
 
 interface NodeSettingsMenuProps {
@@ -61,6 +62,9 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
       </div>
     );
   }
+
+  // A PORTAL end's menu is its own short list (PortalMenu.tsx).
+  if (isTunnelIn(node) || isTunnelOut(node)) return <PortalMenu nodeId={nodeId} />;
 
   const def = NODE_REGISTRY.get(node.data.registryType);
   /** The Image (Texture) node — this menu's one shape-changing special case:

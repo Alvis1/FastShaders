@@ -8,6 +8,17 @@ import { branchRefusal, makeKnotNode } from '../branchWire';
 import { branchIntoWireAt } from '../branchActions';
 import { BRANCH_TOOLTIP, branchMatchesQuery, branchNameMatchesQuery } from '../branchSearch';
 import {
+  PORTAL_IN_TOOLTIP,
+  PORTAL_OUT_TOOLTIP,
+  filterPortalsByName,
+  parsePortalList,
+  portalListKey,
+  portalMatchesQuery,
+  portalNameMatchesQuery,
+} from '../portalSearch';
+import { addPortalIn, addPortalOut, portalOutRefusal } from '../portalActions';
+import { isTunnelOut } from '@/utils/passThrough';
+import {
   searchNodes,
   getEditorDefinitions,
   NODE_REGISTRY,
@@ -61,6 +72,7 @@ type ActionItem =
   | { kind: 'output'; key: string; run: () => void }
   | { kind: 'note'; key: string; run: () => void }
   | { kind: 'branch'; key: string; run: () => void }
+  | { kind: 'portal'; key: string; run: () => void }
   | { kind: 'ai'; key: string; run: () => void }
   | { kind: 'def'; key: string; def: NodeDefinition; run: () => void };
 
@@ -138,6 +150,43 @@ export function AddNodeMenu() {
   const branchOffered = useAppStore((s) => !spliceEdgeId || branchRefusal(s.nodes, s.edges, spliceEdgeId) === null);
   const branchMatches = useMemo(() => branchOffered && branchMatchesQuery(query), [branchOffered, query]);
   const branchFirst = useMemo(() => branchOffered && branchNameMatchesQuery(query), [branchOffered, query]);
+
+  // PORTALS (docs/dev/canvas-interaction.md, "Portal"). Never on an edge's
+  // Insert node (the edge menu's "Make portal" is that act). The live
+  // portals ride ONE string (a primitive per notify), parsed once per change.
+  const portalKey = useAppStore((s) => (spliceEdgeId ? '' : portalListKey(s.nodes)));
+  const portals = useMemo(() => parsePortalList(portalKey), [portalKey]);
+  const pinOut = useMemo(
+    () => (!spliceEdgeId && sourceNodeId && sourceHandleId && sourceHandleType === 'source'
+      ? { nodeId: sourceNodeId, handleId: sourceHandleId } : null),
+    [spliceEdgeId, sourceNodeId, sourceHandleId, sourceHandleType],
+  );
+  const pinIn = useMemo(
+    () => (!spliceEdgeId && sourceNodeId && sourceHandleId && sourceHandleType === 'target'
+      ? { nodeId: sourceNodeId, handleId: sourceHandleId } : null),
+    [spliceEdgeId, sourceNodeId, sourceHandleId, sourceHandleType],
+  );
+  // A wire pulled from an OUTPUT: "New portal…" leads, while nothing else is
+  // typed (or the query names the Portal). Never from a Portal Out's own
+  // socket — a portal fed by a portal is one hidden hop on another.
+  const newPortalOffered = useMemo(() => {
+    if (!pinOut) return false;
+    const pinNode = useAppStore.getState().nodes.find((n) => n.id === pinOut.nodeId);
+    return !isTunnelOut(pinNode) && (!query.trim() || portalMatchesQuery(query));
+  }, [pinOut, query]);
+  // A wire pulled from an INPUT: the existing portals by name LEAD, filtered
+  // by the query (`foldSearchText`); one whose exit would close a loop
+  // through its hidden link, or feed a fed Branch / Portal In, stays inert
+  // and says so (`portalOutRefusal`). Read when the list changes — the menu
+  // is short-lived. Without a pin (Space / right-click), every portal is
+  // offered as "Portal Out: <name>" beside the Portal In row.
+  const portalOutRows = useMemo(() => {
+    if (spliceEdgeId || pinOut || portals.length === 0) return [];
+    const shown = portalMatchesQuery(query) ? portals : filterPortalsByName(portals, query);
+    return shown.map((p) => ({ ...p, refusal: portalOutRefusal(p.id, pinIn ?? undefined) }));
+  }, [spliceEdgeId, pinOut, pinIn, portals, query]);
+  const portalInOffered = !spliceEdgeId && !sourceNodeId && (!query.trim() || portalMatchesQuery(query));
+  const portalFirst = !!query.trim() && portalNameMatchesQuery(query);
 
   // "Generate “…” with AI": the LAST row, when the query reads as a request
   // (utils/promptDetect.ts; docs/dev/node-generator.md § The search-box
@@ -367,10 +416,79 @@ export function AddNodeMenu() {
     </button>
   );
 
+  // A PORTAL IN at the menu point (portalActions.ts): fed by a wire pulled
+  // from an output ("New portal…", named after what it carries), or unfed and
+  // named "portal N" (Space / right-click). One undo entry.
+  const handleAddPortalIn = useCallback(() => {
+    addPortalIn(screenToFlowPosition({ x: contextMenu.x, y: contextMenu.y }), pinOut ?? undefined);
+    closeContextMenu();
+  }, [screenToFlowPosition, contextMenu.x, contextMenu.y, pinOut, closeContextMenu]);
+
+  // A PORTAL OUT of the portal `id` at the menu point, wired into the input a
+  // wire was pulled from when there is one. An inert row does nothing.
+  const handleAddPortalOut = useCallback((id: string, inert: boolean) => {
+    if (inert) return;
+    addPortalOut(id, screenToFlowPosition({ x: contextMenu.x, y: contextMenu.y }), pinIn ?? undefined);
+    closeContextMenu();
+  }, [screenToFlowPosition, contextMenu.x, contextMenu.y, pinIn, closeContextMenu]);
+
+  /** The Portal In row ("New portal…" on a wire pulled from an output). */
+  const renderPortalInRow = () => (
+    <button
+      className={itemClass('__portal_in__')}
+      title={t(PORTAL_IN_TOOLTIP, language)}
+      data-add-node-focused={focusedAttr('__portal_in__')}
+      onClick={handleAddPortalIn}
+      onMouseEnter={() => hoverFocus('__portal_in__')}
+    >
+      <span>{t(pinOut ? 'New portal…' : 'Portal In', language)}</span>
+      <span className="context-menu__item-category">{t('wire', language)}</span>
+    </button>
+  );
+
+  /** One "Portal Out: <name>" row per portal (the name is user data: text). */
+  const renderPortalOutRows = () => portalOutRows.map((p) => {
+    const key = `__portal_out__:${p.id}`;
+    const inert = p.refusal !== null;
+    return (
+      <button
+        key={key}
+        className={`${itemClass(key)} context-menu__item--inert`}
+        aria-disabled={inert || undefined}
+        title={p.refusal === 'loop'
+          ? t('This would make a loop', language)
+          : p.refusal ? t('This input already has a wire', language)
+          : t(PORTAL_OUT_TOOLTIP, language)}
+        data-add-node-focused={focusedAttr(key)}
+        onClick={() => handleAddPortalOut(p.id, inert)}
+        onMouseEnter={() => hoverFocus(key)}
+      >
+        <span>{fillTemplate(t('Portal Out: {name}', language), { name: p.name || '…' })}</span>
+        <span className="context-menu__item-category">{t('wire', language)}</span>
+      </button>
+    );
+  });
+
+  /** The Portal In row is shown: "New portal…" on a wire pulled from an
+   *  output, the plain row on Space / right-click (or a query naming it). */
+  const portalInRowShown = pinOut ? newPortalOffered : portalInOffered;
+  /** A dropped wire's portal rows go FIRST. */
+  const portalsLead = (!!pinOut && newPortalOffered) || (!!pinIn && portalOutRows.length > 0);
+  /** A search shows portal rows (first when it names the Portal). */
+  const portalsInQuery = !portalsLead && !!query.trim() && (portalInRowShown || portalOutRows.length > 0);
+
   // Build the flat keyboard-traversable list in the same order things render.
   // ArrowUp/Down step through this list; Enter runs the focused item's action.
   const actionItems: ActionItem[] = useMemo(() => {
     const items: ActionItem[] = [];
+    const pushPortalRows = () => {
+      if (portalInRowShown) items.push({ kind: 'portal', key: '__portal_in__', run: handleAddPortalIn });
+      for (const p of portalOutRows) {
+        items.push({ kind: 'portal', key: `__portal_out__:${p.id}`, run: () => handleAddPortalOut(p.id, p.refusal !== null) });
+      }
+    };
+    // A dropped wire's portal rows LEAD the list (owner, 2026-11-23).
+    if (portalsLead) pushPortalRows();
     if (!query.trim() && canOrganize) {
       items.push({ kind: 'organize', key: '__organize__', run: handleOrganizeSelection });
     }
@@ -403,21 +521,25 @@ export function AddNodeMenu() {
     if (!query.trim()) {
       items.push({ kind: 'note', key: '__note__', run: handleAddNote });
       if (branchOffered) items.push({ kind: 'branch', key: '__branch__', run: handleAddBranch });
+      if (!portalsLead) pushPortalRows();
     }
     // Recent nodes render above the category list (distinct `recent:` keys so a
     // def appearing here AND in its category stays two independent focus stops).
     // A search naming the note or the Branch offers it AFTER the node results,
     // so a node match keeps the Enter key ("tex" is Texture before it is text,
     // "split" the Split node before the Branch).
-    if (query.trim() && (noteMatches || branchMatches)) {
+    if (query.trim() && (noteMatches || branchMatches || portalsInQuery)) {
       // …except a query naming the Branch itself ("bra", "sazar"), which puts
-      // it FIRST (branchSearch.ts `branchNameMatchesQuery`).
+      // it FIRST (branchSearch.ts `branchNameMatchesQuery`) — and the same for
+      // the Portal (portalSearch.ts `portalNameMatchesQuery`).
       if (branchFirst) items.push({ kind: 'branch', key: '__branch__', run: handleAddBranch });
+      if (portalsInQuery && portalFirst) pushPortalRows();
       for (const def of results) {
         items.push({ kind: 'def', key: def.type, def, run: () => handleAddNode(def) });
       }
       if (noteMatches) items.push({ kind: 'note', key: '__note__', run: handleAddNote });
       if (branchMatches && !branchFirst) items.push({ kind: 'branch', key: '__branch__', run: handleAddBranch });
+      if (portalsInQuery && !portalFirst) pushPortalRows();
       if (aiDetected) items.push({ kind: 'ai', key: '__ai__', run: () => handleGenerate() });
       return items;
     }
@@ -440,7 +562,7 @@ export function AddNodeMenu() {
     // row and Enter opens the generator (it never sends).
     if (aiDetected) items.push({ kind: 'ai', key: '__ai__', run: () => handleGenerate() });
     return items;
-  }, [query, noteMatches, branchOffered, branchMatches, branchFirst, canGroup, canOrganize, canBake, bakeQueried, grouped, results, recentDefs, handleGroupSelection, handleOrganizeSelection, handleBakeSelection, handleAddNode, handleAddNote, handleAddBranch, aiDetected, handleGenerate]);
+  }, [query, noteMatches, branchOffered, branchMatches, branchFirst, canGroup, canOrganize, canBake, bakeQueried, grouped, results, recentDefs, handleGroupSelection, handleOrganizeSelection, handleBakeSelection, handleAddNode, handleAddNote, handleAddBranch, aiDetected, handleGenerate, portalsLead, portalsInQuery, portalFirst, portalInRowShown, portalOutRows, handleAddPortalIn, handleAddPortalOut]);
 
   // Reset focus to the first item whenever the visible list changes (typing in
   // the search box, selection toggling, output-node presence flipping, etc.).
@@ -619,6 +741,16 @@ export function AddNodeMenu() {
         autoFocus
       />
       <div className="context-menu__list" ref={listRef}>
+        {/* A dropped wire's portal rows lead (portalActions.ts). */}
+        {portalsLead && (
+          <>
+            <div className="context-menu__category">{t('Portal', language)}</div>
+            {portalInRowShown && renderPortalInRow()}
+            {renderPortalOutRows()}
+            <div className="context-menu__divider" />
+          </>
+        )}
+
         {/* Selection actions — only when 2+ eligible nodes are selected */}
         {!query.trim() && (canOrganize || canGroup || canBake) && (
           <>
@@ -705,10 +837,12 @@ export function AddNodeMenu() {
         )}
 
         {/* A Branch: one wire in, many out (branchActions.ts) */}
-        {!query.trim() && branchOffered && (
+        {!query.trim() && (branchOffered || (!portalsLead && (portalInRowShown || portalOutRows.length > 0))) && (
           <>
             <div className="context-menu__category">{t('Wires', language)}</div>
-            {renderBranchRow()}
+            {branchOffered && renderBranchRow()}
+            {!portalsLead && portalInRowShown && renderPortalInRow()}
+            {!portalsLead && renderPortalOutRows()}
             <div className="context-menu__divider" />
           </>
         )}
@@ -724,6 +858,14 @@ export function AddNodeMenu() {
 
         {/* A search naming the Branch itself: its row FIRST (branchSearch.ts). */}
         {query.trim() && branchFirst && renderBranchRow()}
+
+        {/* …and the Portal rows, when the search names the Portal. */}
+        {portalsInQuery && portalFirst && (
+          <>
+            {portalInRowShown && renderPortalInRow()}
+            {renderPortalOutRows()}
+          </>
+        )}
 
         {grouped
           ? // Grouped by category
@@ -753,6 +895,14 @@ export function AddNodeMenu() {
 
         {/* …and the Branch, when the search names it by an alias (branchSearch.ts). */}
         {query.trim() && branchMatches && !branchFirst && renderBranchRow()}
+
+        {/* …and the Portal rows a search finds by an alias or a portal's name. */}
+        {portalsInQuery && !portalFirst && (
+          <>
+            {portalInRowShown && renderPortalInRow()}
+            {renderPortalOutRows()}
+          </>
+        )}
 
         {aiDetected && (
           <>

@@ -41,6 +41,7 @@
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { isSinkNode } from '@/utils/sdfPartition';
 import { remapTunnelLinks } from '@/utils/passThrough';
+import { renameCopiedEntrances } from '@/utils/portalNames';
 import { isSingletonNodeType } from '@/components/NodeEditor/singletonNodes';
 import { randomGroupColor } from '@/utils/newNodeValues';
 import {
@@ -213,7 +214,10 @@ export function planShaderGroup(
   // A Portal Out's `link` names a node id (utils/passThrough.ts): it follows
   // an entrance that arrives with it and is CLEARED otherwise — a file usually
   // carries the live graph's own ids, so a kept link could bind to a live node.
-  const members = remapTunnelLinks(parentsFirst(
+  // An arriving entrance is a NEW portal and takes a free name ("name 2"),
+  // its arriving exits caching it — the paste's rule (utils/portalNames.ts):
+  // the same file added twice must not list "Portal Out: sin1" twice.
+  const members = renameCopiedEntrances(remapTunnelLinks(parentsFirst(
     kept.map((n) => {
       // Nested only under a parent that SURVIVED: a child of a dropped sink —
       // or of a singleton folded onto the live node — becomes a root of the
@@ -232,7 +236,7 @@ export function planShaderGroup(
       delete out.extent;
       return out as AppNode;
     }),
-  ), idMap, 'clear');
+  ), idMap, 'clear'), live);
 
   const plainSinks = new Set(
     incoming.nodes.filter((n) => sinks.has(n.id) && n.data?.registryType === 'output').map((n) => n.id),

@@ -12,6 +12,7 @@ import {
 } from './keyboardNav';
 import { isTypingTarget } from '@/utils/isTypingTarget';
 import { nodeEl } from './nodeElement';
+import { topologyEdges } from '@/utils/passThrough';
 
 /**
  * App-wide keyboard navigation.
@@ -215,7 +216,9 @@ export function useKeyboardNav({ drawToolActive }: Options): void {
       // ── Cmd/Ctrl + Arrow: move the SELECTION along the graph ────────────
       if ((e.metaKey || e.ctrlKey) && !e.altKey && nodeId) {
         const { nodes, edges } = useAppStore.getState();
-        const next = traverseGraph(nodes, edges, nodeId, dir);
+        // Plus each Portal's hidden link (utils/passThrough.ts `topologyEdges`):
+        // left from an exit reaches its entrance, right from an entrance its exits.
+        const next = traverseGraph(nodes, topologyEdges(nodes, edges), nodeId, dir);
         if (!next) return;
         e.preventDefault();
         e.stopPropagation();

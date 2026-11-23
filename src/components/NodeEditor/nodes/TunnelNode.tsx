@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import type { TSLDataType, TunnelInFlowNode, TunnelOutFlowNode } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
@@ -7,6 +7,9 @@ import { t, type Language } from '@/i18n';
 import { TUNNEL_OUT_TYPE, tunnelLabelOf, tunnelLinkOf } from '@/utils/passThrough';
 import { exitCountText, liveEntranceLabel, passThroughTypeOf, tunnelExitCount } from './passThroughLook';
 import { TUNNEL_SIZE } from './passThroughGeometry';
+import { PORTAL_NAME_MAX } from '@/utils/portalNames';
+import { endPortalRename, usePortalRenaming } from '../portalRename';
+import { renamePortal } from '../portalActions';
 import './PassThroughNode.css';
 
 /**
@@ -51,7 +54,44 @@ function holeTitle(kind: 'in' | 'out', type: TSLDataType | null, dangling: boole
   return name;
 }
 
-function TunnelHole({ kind, selected, type, dangling, name, exits, language }: HoleProps) {
+/**
+ * The entrance's IN-PLACE name field (the menus' Rename, portalRename.ts):
+ * where the label was, the current name selected. Enter or a click away
+ * commits ONE undo entry (`renamePortal`: cleaned, unique, every exit's cache
+ * in the same write — nothing when unchanged); Escape cancels. `nodrag` /
+ * `nopan` / `nowheel` keep typing and pointing inside it from moving the
+ * canvas, and every canvas key stands down on a typing target.
+ */
+function RenameField({ id, name, language }: { id: string; name: string; language: Language }) {
+  const done = useRef(false);
+  const finish = (commit: boolean, value: string) => {
+    if (done.current) return;
+    done.current = true;
+    if (commit) renamePortal(id, value);
+    endPortalRename(id);
+  };
+  return (
+    <input
+      className="tunnel-node__rename nodrag nopan nowheel"
+      defaultValue={name}
+      maxLength={PORTAL_NAME_MAX}
+      autoFocus
+      spellCheck={false}
+      aria-label={t('Portal name', language)}
+      title={t('Portal name: Enter saves, Escape cancels', language)}
+      onFocus={(e) => e.currentTarget.select()}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') finish(true, e.currentTarget.value);
+        else if (e.key === 'Escape') finish(false, '');
+      }}
+      onBlur={(e) => finish(true, e.currentTarget.value)}
+    />
+  );
+}
+
+function TunnelHole({ id, kind, selected, type, dangling, name, exits, language }: HoleProps & { id: string }) {
+  const renaming = usePortalRenaming(id);
   const canvas = useAppStore((s) => s.nodeEditorBgColor);
   const rim = dangling ? 'var(--cat-unknown)' : getTypeColor(type ?? 'any');
   const count = exits === null ? '' : exitCountText(exits);
@@ -75,12 +115,16 @@ function TunnelHole({ kind, selected, type, dangling, name, exits, language }: H
           isConnectableStart
         />
       </div>
-      <span
-        className="tunnel-node__label"
-        {...(name ? { title: name } : {})}
-      >
-        {name || t(kind === 'in' ? 'Portal In' : 'Portal Out', language)}
-      </span>
+      {renaming && kind === 'in' ? (
+        <RenameField id={id} name={name} language={language} />
+      ) : (
+        <span
+          className="tunnel-node__label"
+          {...(name ? { title: name } : {})}
+        >
+          {name || t(kind === 'in' ? 'Portal In' : 'Portal Out', language)}
+        </span>
+      )}
       {count && (
         <span
           className={`tunnel-node__count${exits === 0 ? ' tunnel-node__count--none' : ''}`}
@@ -101,6 +145,7 @@ export function TunnelInNode({ id, data, selected }: NodeProps<TunnelInFlowNode>
   const name = useMemo(() => tunnelLabelOf({ data }), [data]);
   return (
     <TunnelHole
+      id={id}
       kind="in"
       selected={!!selected}
       type={type}
@@ -121,6 +166,7 @@ export function TunnelOutNode({ id, data, selected }: NodeProps<TunnelOutFlowNod
   const language = useAppStore((s) => s.language);
   return (
     <TunnelHole
+      id={id}
       kind="out"
       selected={!!selected}
       type={type}

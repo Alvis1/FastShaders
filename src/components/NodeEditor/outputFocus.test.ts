@@ -262,7 +262,7 @@ describe('several outputs, one active (source pins)', () => {
   });
 
   it('a paste or duplicate keeps Output nodes and strips the active flag off the clones', () => {
-    const paste = nodeEditor.slice(nodeEditor.indexOf('function pasteNodes('), nodeEditor.indexOf('const clones = remapTunnelLinks(sourceNodes.map') + 600);
+    const paste = nodeEditor.slice(nodeEditor.indexOf('function pasteNodes('), nodeEditor.indexOf('const clones = renameCopiedEntrances(remapTunnelLinks(sourceNodes.map') + 600);
     expect(paste.includes("registryType !== 'output'"), 'Outputs are being dropped from the clone set again').toBe(false);
     expect(paste).toContain('delete (cloned.data as Record<string, unknown>).activeOutput');
   });

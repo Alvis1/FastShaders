@@ -22,6 +22,7 @@ import { appendTrimmedOperands } from '@/utils/appendCapacity';
 import { getEdgeOutputShape, getTargetEdges } from '@/engine/cpuEvaluator';
 import type { AppNode, AppEdge, NodeDefinition } from '@/types';
 import { getNodeValues } from '@/types';
+import { hiddenLoopThrough } from './portalWire';
 
 /**
  * Landing a connection on a drag-revealed (still hidden) parameter socket
@@ -142,15 +143,20 @@ export function spliceNodeIntoEdge(
     if (after.length) newEdge2.data = { ...newEdge2.data!, waypoints: after };
   }
 
-  store.setEdges(
-    store.edges
-      .filter((e) => e.id !== edge.id)
-      // Inputs are single-connection. Only reachable once EVERY socket is taken
-      // (pickSpliceInputPort's fallback) — drop that port's stale edge so it
-      // can't end up double-fed.
-      .filter((e) => !(e.target === nodeId && e.targetHandle === inputPortId))
-      .concat(newEdge1, newEdge2) as AppEdge[],
-  );
+  const next = store.edges
+    .filter((e) => e.id !== edge.id)
+    // Inputs are single-connection. Only reachable once EVERY socket is taken
+    // (pickSpliceInputPort's fallback) — drop that port's stale edge so it
+    // can't end up double-fed.
+    .filter((e) => !(e.target === nodeId && e.targetHandle === inputPortId))
+    .concat(newEdge1, newEdge2) as AppEdge[];
+  // A splice is a connect path too: a loop that only a Portal's HIDDEN link
+  // makes (the node dropped on its own entrance's feed wire) is refused here
+  // as `isValidConnection` refuses it on a dragged wire — or the chain folds
+  // out of the shader with no word. A loop the drawn wires show keeps today's
+  // rule.
+  if (hiddenLoopThrough(store.nodes, next, nodeId)) return false;
+  store.setEdges(next);
   // The chosen port may be a hidden param socket (Image/Sound): make the
   // exposure permanent, or the fresh edge points at a handle that never mounts.
   // Same rule — and the same helper — as a wire dropped on a revealed socket.

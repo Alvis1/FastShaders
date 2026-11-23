@@ -252,3 +252,64 @@
 .tunnel-node__count--none {
   opacity: 0.55;
 }
+
+/* The in-place name field (the menu's Rename; portalRename.ts): where the
+   label was, wide enough to read what is typed, in the chrome's input look. */
+.tunnel-node__rename {
+  position: absolute;
+  bottom: calc(100% + 1px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 16ch;
+  box-sizing: border-box;
+  padding: 1px 4px;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  line-height: 1.2;
+  color: var(--text-primary);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-focus);
+  border-radius: 0;
+  outline: none;
+}
+
+/* --- The portal TRACE (NodeEditor/PortalTrace.tsx) -------------------------
+   While a portal end is selected or hovered, every end of that portal wears
+   `data-fs-portal-trace` (an ATTRIBUTE on React Flow's wrapper — see
+   MutedMarks): the hole deepens as on hover and a focus ring rounds it, so the
+   partners read as one thing wherever they sit. */
+.react-flow__node[data-fs-portal-trace] .tunnel-node__hole {
+  box-shadow: var(--fs-tunnel-plate, 0 0 0 transparent), inset 4px 4px 0 rgba(0, 0, 0, 0.45);
+  outline: 2px solid var(--border-focus);
+  outline-offset: 3px;
+}
+
+/* The GHOST LINE from the entrance to each exit: the hidden wire "under the
+   canvas", drawn in the layer between the wires and the nodes, dashed and
+   STILL (never marching), the type colour at about 45%, no hit area. The
+   stroke keeps its screen width at every zoom. Its short fade-in is an
+   animation the app-wide reduced-motion rule collapses (reset.css). */
+.portal-ghost {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.portal-ghost path {
+  fill: none;
+  stroke-width: 2;
+  stroke-dasharray: 6 5;
+  stroke-linecap: butt;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.45;
+  animation: portal-ghost-in 160ms ease-out;
+}
+
+@keyframes portal-ghost-in {
+  from { opacity: 0; }
+  to { opacity: 0.45; }
+}

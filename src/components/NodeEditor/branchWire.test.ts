@@ -147,7 +147,9 @@ describe('feedsFedKnot — a fed Branch refuses a second feed, never replaces it
   it('is the canvas\'s isValidConnection, and the reconnect\'s wire is remembered', () => {
     const src = read('NodeEditor.tsx');
     expect(src).toContain('isValidConnection={isValidConnection}');
-    expect(src).toContain('feedsFedKnot(nodes, edges, connection.target, reconnectingEdgeRef.current, connection.targetHandle)');
+    // Through the ONE refusal the reconnect release shares (portalWire.ts).
+    expect(src).toContain('!connectionRefused(nodes, edges, connection, reconnectingEdgeRef.current)');
+    expect(read('portalWire.ts')).toContain('feedsFedKnot(nodes, edges, c.target, ignoreEdgeId, c.targetHandle)');
     expect(src).toContain('reconnectingEdgeRef.current = edge.id;');
   });
 });
@@ -506,7 +508,7 @@ describe('Step 2 review fixes', () => {
     // …and a pill socket that is no Branch keeps the replace rule.
     expect(feedsFedKnot(nodes, edges, gid, null, '__in_t_x')).toBe(false);
     expect(feedsFedKnot(nodes, edges, gid, null, 'nonsense')).toBe(false);
-    expect(read('NodeEditor.tsx')).toContain('connection.targetHandle');
+    expect(read('portalWire.ts')).toContain('c.targetHandle');
   });
 
   it('F2 (QA): a Branch\'s exit on a collapsed pill is named after what it carries', () => {
@@ -573,6 +575,8 @@ describe('Step 2 review fixes', () => {
     expect(read('menus/EdgeContextMenu.tsx')).toMatch(/branchRefusal\(s\.nodes, s\.edges, edgeId\) === null/);
     const add = read('menus/AddNodeMenu.tsx');
     expect(add).toMatch(/branchRefusal\(s\.nodes, s\.edges, spliceEdgeId\) === null/);
-    expect(add).toMatch(/!query\.trim\(\) && branchOffered/);
+    // The Wires section also holds the Portal rows, so it opens on either.
+    expect(add).toMatch(/!query\.trim\(\) && \(branchOffered \|\|/);
+    expect(add).toContain('{branchOffered && renderBranchRow()}');
   });
 });

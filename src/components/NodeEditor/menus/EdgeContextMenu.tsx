@@ -4,6 +4,8 @@ import { t } from '@/i18n';
 import { addEdgeWaypoint, removeEdgeWaypoint, waypointIndexAt, WAYPOINT_HIT_PX } from '../edges/edgeWaypoints';
 import { promoteWaypoint } from '../branchActions';
 import { branchRefusal } from '../branchWire';
+import { makePortalRefusal } from '../portalWire';
+import { makePortal } from '../portalActions';
 
 interface EdgeContextMenuProps {
   edgeId: string;
@@ -40,6 +42,20 @@ export function EdgeContextMenu({ edgeId }: EdgeContextMenuProps) {
   // collapsed pill's wire) is offered no "Branch from here" — the row would
   // close the menu and do nothing. A boolean, so no re-render per notify.
   const branchOffered = useAppStore((s) => branchRefusal(s.nodes, s.edges, edgeId) === null);
+
+  // "Make portal" (portalActions.ts): the wire becomes a Portal In by its
+  // source and a Portal Out by its target. A wire it would make no sense on
+  // keeps the row, inert, and its tooltip says why (`makePortalRefusal`).
+  const portalRefusal = useAppStore((s) => makePortalRefusal(s.nodes, s.edges, edgeId));
+  const handleMakePortal = () => {
+    if (portalRefusal) return;
+    makePortal(edgeId, getInternalNode);
+    closeContextMenu();
+  };
+  const portalTip =
+    portalRefusal === 'portal' ? t('This wire already goes through a portal', language)
+    : portalRefusal ? t('Open the group first', language)
+    : t('Hide this wire: a Portal In by its start and a Portal Out by its end carry the value, with no wire drawn in between', language);
 
   const handleRemovePoint = () => {
     removeEdgeWaypoint(edgeId, pointIndex);
@@ -91,6 +107,14 @@ export function EdgeContextMenu({ edgeId }: EdgeContextMenuProps) {
           {t('Add routing point', language)}
         </button>
       )}
+      <button
+        className="context-menu__item context-menu__item--inert"
+        aria-disabled={portalRefusal !== null || undefined}
+        title={portalTip}
+        onClick={handleMakePortal}
+      >
+        {t('Make portal', language)}
+      </button>
       <button className="context-menu__item context-menu__item--danger" onClick={handleDelete}>
         {t('Delete Connection', language)}
       </button>

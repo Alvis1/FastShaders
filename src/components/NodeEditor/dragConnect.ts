@@ -82,6 +82,18 @@ export interface ConnectHandle {
   spare?: boolean;
 }
 
+/**
+ * The inputs a drag-connect may land on. `soleFeed` marks a node whose one
+ * input is NEVER replaced — a fed Portal In: every exit reads that feed, so
+ * replacing it would silently re-source each of them (the Branch's rule,
+ * branchWire.ts `feedsFedKnot`, which only the wire path's
+ * `isValidConnection` asks). Such a node's FED input is left out, so the
+ * planner neither rings nor commits it; an unfed one stays.
+ */
+export function connectableInputs(inputs: ConnectHandle[], soleFeed: boolean): ConnectHandle[] {
+  return soleFeed && inputs.some((i) => i.occupied) ? inputs.filter((i) => !i.occupied) : inputs;
+}
+
 export type DragConnectMode = 'feed-hover' | 'feed-dragged';
 
 /** Flow px, in the input sockets' frame: a socket must be this much nearer the

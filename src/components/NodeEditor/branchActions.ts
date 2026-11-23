@@ -19,11 +19,11 @@ import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { isKnot } from '@/utils/passThrough';
 import { branchSpotOnWire, type GetInternalNode } from './edgeHit';
 import { WAYPOINT_HIT_PX } from './edges/edgeWaypoints';
+import { reconnectRefused, type ReconnectEnd } from './portalWire';
 import {
   branchRefusal,
   knotParentFor,
   makeKnotNode,
-  reconnectRefusedOnFedKnot,
   splitEdgeWithKnot,
   splitWaypointsAtIndex,
   wirePoints,
@@ -117,19 +117,21 @@ export function startReconnect(edgeId: string): ReconnectMark {
 
 /**
  * The reconnect's release. Connected: done (`onReconnect` wrote it). Released
- * ON a fed Branch, which refused it (branchWire.ts `reconnectRefusedOnFedKnot`):
- * NOTHING changes — the wire stays, and the start's undo entry is taken back
- * with the redo stack it cleared, provided no other entry came after it.
- * Anywhere else (empty canvas, as before): the drag-off DISCONNECT.
+ * ON a socket the canvas's `isValidConnection` refused (portalWire.ts
+ * `reconnectRefused`, the same `connectionRefused`: a fed Branch or Portal In,
+ * or a loop only a Portal's hidden link makes): NOTHING changes — the wire
+ * stays, and the start's undo entry is taken back with the redo stack it
+ * cleared, provided no other entry came after it. Anywhere else (empty
+ * canvas, as before): the drag-off DISCONNECT.
  */
 export function finishReconnect(
   mark: ReconnectMark,
   succeeded: boolean,
-  end: Parameters<typeof reconnectRefusedOnFedKnot>[3],
+  end: ReconnectEnd,
 ): 'connected' | 'kept' | 'removed' {
   if (succeeded) return 'connected';
   const s = useAppStore.getState();
-  if (reconnectRefusedOnFedKnot(s.nodes, s.edges, mark.edgeId, end)) {
+  if (reconnectRefused(s.nodes, s.edges, mark.edgeId, end)) {
     if (s.past === mark.pushed) useAppStore.setState({ past: mark.past, future: mark.future });
     return 'kept';
   }

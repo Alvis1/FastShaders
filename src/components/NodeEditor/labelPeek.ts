@@ -77,7 +77,7 @@ export const PEEK_EXEMPT_SELECTOR =
  * their sockets carry no names worth pinning (a Portal hole draws no socket
  * at all), and their double-click belongs to their own interactions — the
  * Branch turning back into a routing point, a Portal end gliding to its
- * partner (later steps of the same feature).
+ * partner (portalActions.ts `glideToPortalPartner`).
  */
 export const PEEK_EXEMPT_NODE_TYPES: ReadonlySet<string> = new Set([
   'color',

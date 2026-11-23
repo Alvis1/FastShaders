@@ -133,6 +133,7 @@ import {
 import { sanitizeEdgeExtras } from '@/utils/edgeExtras';
 import { sanitizeGraphShape } from '@/utils/graphShape';
 import { isKnot, passThroughSource, remapTunnelLinks } from '@/utils/passThrough';
+import { renameCopiedEntrances } from '@/utils/portalNames';
 import { toAsciiStorageJson } from '@/utils/asciiStorage';
 import type { DesktopAutosaveRuntime } from '@/utils/desktopAutosave';
 // Eval-mode telemetry: `evalLog` is a no-op outside a study session, so these
@@ -398,8 +399,9 @@ function cloneGroupSnapshot(
 
   // A Portal Out's `link` (utils/passThrough.ts) follows a copied entrance, and
   // otherwise survives only while it names a Portal In of the graph the group
-  // lands in (`live`); anything else arrives as a broken exit.
-  const members: AppNode[] = remapTunnelLinks(originalMembers.map((m) => {
+  // lands in (`live`); anything else arrives as a broken exit. A copied
+  // entrance is a NEW portal and takes a free name (utils/portalNames.ts).
+  const members: AppNode[] = renameCopiedEntrances(remapTunnelLinks(originalMembers.map((m) => {
     const out = {
       ...cloneNodeSharingPayloads(m),
       id: idMap.get(m.id)!,
@@ -408,7 +410,7 @@ function cloneGroupSnapshot(
     } as AppNode & { extent?: unknown };
     delete out.extent;
     return out as AppNode;
-  }), idMap, 'keep-if-live', live);
+  }), idMap, 'keep-if-live', live), live);
 
   const edges: AppEdge[] = snapshot.edges.map((e) => {
     const src = idMap.get(e.source) ?? e.source;
