@@ -128,11 +128,13 @@ function cleanSlateForStudy(): void {
     // tile): the previous participant's ticks would tell the next one which
     // lessons to take — or to skip.
     localStorage.removeItem(TUTORIALS_DONE_KEY);
-    // The preview's fly-through mode and its remembered camera pose
-    // (ShaderPreview's FLY_ON_KEY / FLY_POSE_KEY): the next participant would
-    // otherwise open the preview inside the previous one's flight.
+    // The preview's fly-through mode, its remembered camera pose and its
+    // speed / field of view (ShaderPreview's FLY_ON_KEY / FLY_POSE_KEY /
+    // FLY_SETTINGS_KEY): the next participant would otherwise open the
+    // preview inside the previous one's flight, or fly with their tuning.
     localStorage.removeItem('fs:previewFly');
     localStorage.removeItem('fs:previewFlyPose');
+    localStorage.removeItem('fs:previewFlySettings');
     // ...and their names before the 2026-11-21 rename (FPV → Fly), which the
     // preview would otherwise adopt into the next participant's session.
     localStorage.removeItem('fs:previewFpv');

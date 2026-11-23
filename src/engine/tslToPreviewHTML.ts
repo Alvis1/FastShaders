@@ -161,6 +161,40 @@ export function flyPose(p: unknown): FlyPose | null {
   return { x: px, y: py, z: pz, yaw: w, pitch: Math.max(-FLY_MAX_PITCH, Math.min(FLY_MAX_PITCH, pi)) };
 }
 
+/** The fly-through's two settings (the Fly button's right-click menu): how fast
+ *  W/A/S/D move, in camera FRAME units per second (Shift ×4, the wheel step
+ *  scales with it), and the camera's vertical field of view in degrees while
+ *  flying (default 70°) — the orbit view keeps its own (20°), put back on
+ *  landing. */
+export interface FlySettings {
+  speed: number;
+  fov: number;
+}
+export const FLY_SPEED_DEFAULT = 2;
+export const FLY_SPEED_MIN = 0.1;
+export const FLY_SPEED_MAX = 50;
+/** A walking-eye view (owner, 2026-11-23) — wider than the orbit camera's 20°,
+ *  which a fly-through felt cramped in; the orbit view keeps its own. */
+export const FLY_FOV_DEFAULT = 70;
+export const FLY_FOV_MIN = 10;
+export const FLY_FOV_MAX = 120;
+export const FLY_SETTINGS_DEFAULT: FlySettings = { speed: FLY_SPEED_DEFAULT, fov: FLY_FOV_DEFAULT };
+
+/**
+ * Validate fly settings from storage (`fs:previewFlySettings`) or a caller:
+ * each field a finite number, CLAMPED into its range; a missing or junk field
+ * takes its default. Never coerced (a string "5" is junk). A FRESH object.
+ */
+export function flySettings(p: unknown): FlySettings {
+  const o = typeof p === 'object' && p !== null ? (p as Record<string, unknown>) : {};
+  const pick = (v: unknown, def: number, min: number, max: number): number =>
+    typeof v === 'number' && Number.isFinite(v) ? Math.max(min, Math.min(max, v)) : def;
+  return {
+    speed: pick(o.speed, FLY_SPEED_DEFAULT, FLY_SPEED_MIN, FLY_SPEED_MAX),
+    fov: pick(o.fov, FLY_FOV_DEFAULT, FLY_FOV_MIN, FLY_FOV_MAX),
+  };
+}
+
 export interface CameraPosition {
   x: number;
   y: number;
@@ -198,10 +232,11 @@ export interface PreviewOptions {
   initialRotation?: CameraPosition | null;
   /**
    * Fly mode ON at boot, with the pose to fly from — or a null
-   * pose to start from the orbit view. Absent/null: the orbit controls, as
-   * always. Ignored by the XR popup (the bridge's Fly half is sandbox-only).
+   * pose to start from the orbit view, and the speed / field of view to fly
+   * with (absent: the defaults). Absent/null: the orbit controls, as always.
+   * Ignored by the XR popup (the bridge's Fly half is sandbox-only).
    */
-  initialFly?: { pose: FlyPose | null } | null;
+  initialFly?: { pose: FlyPose | null; settings?: FlySettings } | null;
   /**
    * The backdrop the sandboxed preview draws around the object (STAGE_SCRIPT):
    * a light checker room, a numbered floor grid, or nothing (the default —
@@ -2290,17 +2325,34 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
       // ── Fly: fly through the scene ──────────────────────────────────────
       // W/A/S/D or the arrows move (forward/left/back/right, along the view),
       // Q/E down/up, Shift ×4, the wheel steps forward/back, and a drag on the
-      // canvas turns the view. The orbit controls stand down while it is on
+      // canvas turns the view. Speed and field of view are the user's (the
+      // Fly button's menu, fs:fly / fs:fly-settings); the orbit view's own fov
+      // is put back on landing. The orbit controls stand down while it is on
       // (\`controls.enabled = false\`: their tick and every pointer handler
       // check it) and get their own view back when it is switched off. The
       // pose is reported as fs:fly-pose (never fs:camera, which is the ORBIT
       // view the parent stores) and restored by the parent through
       // __savedFly / fs:fly.
-      var fly = { on: false, yaw: 0, pitch: 0, keys: {}, orbitPos: null, orbitTarget: null, raf: 0, last: 0, drag: null };
-      var FLY_SPEED = 2;
+      var fly = { on: false, yaw: 0, pitch: 0, keys: {}, orbitPos: null, orbitTarget: null, orbitFov: null, raf: 0, last: 0, drag: null, speed: ${FLY_SPEED_DEFAULT}, fov: ${FLY_FOV_DEFAULT} };
+      var FLY_SPEED_DEFAULT = ${FLY_SPEED_DEFAULT};
       var FLY_MAX_R = ${FLY_MAX_RADIUS};
       var FLY_PITCH = 1.55;
       function flyDirty() { try { window.dispatchEvent(new Event("fs-fly")); } catch (e) {} }
+      // Speed / fov from the parent: finite numbers, clamped (flySettings'
+      // ranges); anything else leaves that setting as it is.
+      function flyTune(s) {
+        if (!s || typeof s !== "object") return;
+        if (typeof s.speed === "number" && isFinite(s.speed)) fly.speed = Math.max(${FLY_SPEED_MIN}, Math.min(${FLY_SPEED_MAX}, s.speed));
+        if (typeof s.fov === "number" && isFinite(s.fov)) fly.fov = Math.max(${FLY_FOV_MIN}, Math.min(${FLY_FOV_MAX}, s.fov));
+        var cam = getCam();
+        if (fly.on && cam) flyFov(cam, fly.fov);
+        flyDirty();
+      }
+      function flyFov(cam, deg) {
+        if (!(deg > 0) || cam.fov === deg) return;
+        cam.fov = deg;
+        if (typeof cam.updateProjectionMatrix === "function") cam.updateProjectionMatrix();
+      }
       function flyClamp(p) {
         var r = Math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
         var max = FLY_MAX_R * frameK;
@@ -2337,7 +2389,7 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
         var u = (k.KeyE ? 1 : 0) - (k.KeyQ ? 1 : 0);
         var cam = getCam();
         if (cam && dt > 0 && (f || r || u)) {
-          var step = FLY_SPEED * frameK * (k.ShiftLeft || k.ShiftRight ? 4 : 1) * dt;
+          var step = fly.speed * frameK * (k.ShiftLeft || k.ShiftRight ? 4 : 1) * dt;
           var cy = Math.cos(fly.yaw), sy = Math.sin(fly.yaw);
           var cp = Math.cos(fly.pitch), sp = Math.sin(fly.pitch);
           cam.position.x += (-sy * cp * f + cy * r) * step;
@@ -2350,15 +2402,18 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
         }
         fly.raf = requestAnimationFrame(flyTick);
       }
-      function flySet(on, pose) {
+      function flySet(on, pose, tune) {
         var cam = getCam();
         var c = oc.controls;
         if (!cam || !c) return;
+        flyTune(tune);
         if (on && !fly.on) {
           fly.orbitPos = cam.position.clone();
           fly.orbitTarget = c.target.clone();
+          fly.orbitFov = cam.fov;
           c.enabled = false;
           fly.on = true;
+          flyFov(cam, fly.fov);
           if (!pose) flyLookFrom(cam, c.target);
           flyPose(cam, pose);
           fly.last = 0;
@@ -2371,6 +2426,7 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
           fly.drag = null;
           if (fly.orbitPos) cam.position.copy(fly.orbitPos);
           if (fly.orbitTarget) c.target.copy(fly.orbitTarget);
+          if (fly.orbitFov) flyFov(cam, fly.orbitFov);
           c.enabled = true;
           try { c.update(); } catch (e) {}
         }
@@ -2388,7 +2444,7 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
         flyOrient(cam);
         flyDirty();
       }
-      window.__fsFly = { set: flySet, reset: flyReset, state: fly };
+      window.__fsFly = { set: flySet, reset: flyReset, tune: flyTune, state: fly };
       var FLY_KEYS = { KeyW: 1, KeyA: 1, KeyS: 1, KeyD: 1, KeyQ: 1, KeyE: 1, ArrowUp: 1, ArrowDown: 1, ArrowLeft: 1, ArrowRight: 1, ShiftLeft: 1, ShiftRight: 1 };
       window.addEventListener("keydown", function(e) {
         if (!fly.on || !FLY_KEYS[e.code] || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -2425,7 +2481,7 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
           e.preventDefault();
           var cam = getCam();
           if (!cam) return;
-          var step = Math.max(-1, Math.min(1, -e.deltaY * 0.002)) * frameK;
+          var step = Math.max(-1, Math.min(1, -e.deltaY * 0.002)) * frameK * fly.speed / FLY_SPEED_DEFAULT;
           var cp = Math.cos(fly.pitch);
           cam.position.x += -Math.sin(fly.yaw) * cp * step;
           cam.position.y += Math.sin(fly.pitch) * step;
@@ -2434,8 +2490,9 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
           flyDirty();
         }, { passive: false });
       }
-      if (window.__savedFly) flySet(true, window.__savedFly.pose || null);
-      if (window.__fsFlyPending) { flySet(window.__fsFlyPending.on, window.__fsFlyPending.pose); window.__fsFlyPending = null; }
+      if (window.__savedFly) flySet(true, window.__savedFly.pose || null, window.__savedFly);
+      if (window.__fsFlyTunePending) { flyTune(window.__fsFlyTunePending); window.__fsFlyTunePending = null; }
+      if (window.__fsFlyPending) { flySet(window.__fsFlyPending.on, window.__fsFlyPending.pose, window.__fsFlyPending.tune); window.__fsFlyPending = null; }
 
       var lx = NaN, ly = NaN, lz = NaN, lyaw = NaN, lpitch = NaN;
       setInterval(function() {
@@ -2715,8 +2772,11 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
         if (window.__fsFly) window.__fsFly.reset();
       } else if (msg.type === "fs:fly") {
         var flyPoseMsg = msg.pose && typeof msg.pose === "object" ? msg.pose : null;
-        if (window.__fsFly) window.__fsFly.set(msg.on === true, flyPoseMsg);
-        else window.__fsFlyPending = { on: msg.on === true, pose: flyPoseMsg };
+        if (window.__fsFly) window.__fsFly.set(msg.on === true, flyPoseMsg, msg);
+        else window.__fsFlyPending = { on: msg.on === true, pose: flyPoseMsg, tune: msg };
+      } else if (msg.type === "fs:fly-settings") {
+        if (window.__fsFly) window.__fsFly.tune(msg);
+        else window.__fsFlyTunePending = msg;
       } else if (msg.type === "fs:bg-color") {
         __applyBgColor(msg.color);
       } else if (msg.type === "fs:lighting") {
@@ -4413,9 +4473,10 @@ export function tslToPreviewHTML(
     ? JSON.stringify({ x: initialCameraTarget.x, y: initialCameraTarget.y, z: initialCameraTarget.z })
     : 'null';
 
-  // Fly mode on at boot: `{ pose }`, the pose re-validated here (finite, inside
-  // FLY_MAX_RADIUS) so nothing but numbers is ever spelled into the document.
-  const flyBoot = initialFly ? { pose: flyPose(initialFly.pose) } : null;
+  // Fly mode on at boot: `{ pose, speed, fov }`, the pose re-validated here
+  // (finite, inside FLY_MAX_RADIUS) and the settings clamped, so nothing but
+  // numbers is ever spelled into the document.
+  const flyBoot = initialFly ? { pose: flyPose(initialFly.pose), ...flySettings(initialFly.settings) } : null;
   const savedFlyLiteral = flyBoot ? JSON.stringify(flyBoot) : 'null';
 
   // Seed each hot-update handler's last-applied key with the value baked

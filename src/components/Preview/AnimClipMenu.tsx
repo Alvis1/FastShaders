@@ -1,6 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { fullscreenElement, pickPortalHost, placePopover } from '@/components/inputs/colorPickerModel';
+import { hiddenUntilPlaced, usePreviewPopover } from './usePreviewPopover';
 import { t } from '@/i18n';
 import type { Language } from '@/i18n';
 
@@ -16,17 +15,8 @@ import type { Language } from '@/i18n';
  * is indistinguishable from a broken feature. On a single-clip file the list
  * still answers a real question (what is this clip called).
  *
- * Three mechanics are inherited from `PaletteColorPicker`, for the same reasons
- * documented there:
- *  - the portal host is RESOLVED (`pickPortalHost`), not `document.body`: the
- *    preview fullscreens its own root and the top layer renders only that
- *    subtree, so a body portal would be invisible in exactly the mode where
- *    these controls are meant to stay usable;
- *  - placement is MEASURED (`placePopover` + `useLayoutEffect`), so a menu near
- *    the bottom edge flips above its anchor instead of running off-screen —
- *    and this anchor is always near the bottom edge;
- *  - Escape `stopPropagation()`s, so a leaked key can't also close something
- *    behind the menu.
+ * Host, placement and dismissal are the bottom bar's shared popover mechanics
+ * (`usePreviewPopover`, which says why each is the way it is).
  */
 export function AnimClipMenu({
   anchor,
@@ -55,63 +45,9 @@ export function AnimClipMenu({
   onClose: () => void;
   language: Language;
 }) {
-  const menuRef = useRef<HTMLDivElement>(null);
-  const [host, setHost] = useState<HTMLElement | null>(null);
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
-
-  // Every effect is keyed on `open` — the menu only exists inside the portal,
-  // so one that isn't would attach to nothing.
-  useEffect(() => {
-    if (!open) { setHost(null); setPos(null); return; }
-    setHost(pickPortalHost(fullscreenElement(), anchor, document.body));
-  }, [open, anchor]);
-
-  // `host` is IN the dep list, and that is the whole reason this works: the
-  // portal renders nothing until the host is resolved, which happens in an
-  // effect one render LATER. Without `host` here the layout effect only runs
-  // on the render where `open` flipped — the one where `menuRef.current` is
-  // still null — so it measures nothing, `pos` stays null, and the menu sits
-  // at its off-screen parking position forever. (Measured: the items were in
-  // the DOM, visible and enabled, and outside the viewport.)
-  useLayoutEffect(() => {
-    if (!open || !anchor || !host) return;
-    const el = menuRef.current;
-    if (!el) return;
-    const a = anchor.getBoundingClientRect();
-    const m = el.getBoundingClientRect();
-    setPos(placePopover(
-      { left: a.left, top: a.top, bottom: a.bottom },
-      { width: m.width, height: m.height },
-      { width: window.innerWidth, height: window.innerHeight },
-    ));
-  }, [open, anchor, host, clips.length]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.stopPropagation();
-      onClose();
-    };
-    const onDown = (e: PointerEvent) => {
-      const el = menuRef.current;
-      if (el && e.target instanceof Node && (
-        el.contains(e.target) || anchor?.contains(e.target) || dismissExempt?.contains(e.target)
-      )) return;
-      onClose();
-    };
-    // Leaving fullscreen tears the resolved host down under the menu.
-    document.addEventListener('keydown', onKey, true);
-    document.addEventListener('pointerdown', onDown, true);
-    document.addEventListener('fullscreenchange', onClose);
-    document.addEventListener('webkitfullscreenchange', onClose);
-    return () => {
-      document.removeEventListener('keydown', onKey, true);
-      document.removeEventListener('pointerdown', onDown, true);
-      document.removeEventListener('fullscreenchange', onClose);
-      document.removeEventListener('webkitfullscreenchange', onClose);
-    };
-  }, [open, anchor, dismissExempt, onClose]);
+  const { menuRef, host, pos } = usePreviewPopover<HTMLDivElement>({
+    open, anchor, dismissExempt, onClose, measureKey: clips.length,
+  });
 
   if (!open || !host) return null;
 
@@ -123,7 +59,7 @@ export function AnimClipMenu({
       aria-label={t('Animation clips', language)}
       // Hidden until measured, so the first paint can't flash at (0,0) — the
       // trap PaletteColorPicker's own placement bug left behind.
-      style={pos ? { left: pos.left, top: pos.top } : { left: -9999, top: -9999 }}
+      style={hiddenUntilPlaced(pos)}
     >
       <div className="anim-clip-menu__head">{t('Animation clips', language)}</div>
       {clips.map((name, i) => (

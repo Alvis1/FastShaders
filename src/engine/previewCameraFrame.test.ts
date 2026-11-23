@@ -17,7 +17,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { tslToPreviewHTML, type PreviewOptions } from './tslToPreviewHTML';
+import { flySettings, tslToPreviewHTML, type PreviewOptions } from './tslToPreviewHTML';
 
 const TSL = "import { vec3 } from 'three/tsl';\nconst shader = Fn(() => { return vec3(1); });\nexport default shader;\n";
 
@@ -78,7 +78,7 @@ function runBridge(options: PreviewOptions, { frame = 1, topLevel = false } = {}
   );
   const fire = (type: string, e?: unknown) => { for (const fn of listeners[type] ?? []) fn(e); };
   return {
-    cam, controls, data,
+    cam, controls, data, win,
     /** What fit-bounds' setFrame does: store the frame, fire fs-frame. */
     setFrame(k: number) { win.__fsFrame = k; fire('fs-frame'); },
     /** A parent message, as the stage's message listener receives it. */
@@ -156,5 +156,53 @@ describe('the orbit camera scales with the model it frames', () => {
     const b = runBridge({ geometry: 'sphere', initialCameraPosition: { x: 0, y: 0, z: 8 } });
     expect(xyz(b.cam.position)).toEqual([0, 0, 8]);
     expect([b.controls.minDistance, b.controls.maxDistance]).toEqual([2, 80]);
+  });
+});
+
+describe('the fly-through\'s speed and field of view (the Fly button\'s menu)', () => {
+  const flyState = (b: ReturnType<typeof runBridge>) =>
+    (b.win.__fsFly as { state: { speed: number; fov: number; on: boolean } }).state;
+
+  it('flySettings clamps each field into range and defaults junk, never coercing', () => {
+    expect(flySettings(null)).toEqual({ speed: 2, fov: 70 });
+    expect(flySettings({ speed: 1000, fov: 1 })).toEqual({ speed: 50, fov: 10 });
+    expect(flySettings({ speed: '5', fov: Infinity })).toEqual({ speed: 2, fov: 70 });
+    expect(flySettings({ speed: 0.5, fov: 75 })).toEqual({ speed: 0.5, fov: 75 });
+  });
+
+  it('the fov applies only while flying: take-off sets it, landing puts the orbit camera\'s back', () => {
+    const b = runBridge({ geometry: 'sphere' });
+    b.message({ type: 'fs:fly-settings', speed: 5, fov: 70 });
+    expect(b.cam.fov).toBe(20);
+    expect(flyState(b).speed).toBe(5);
+    b.message({ type: 'fs:fly', on: true, pose: null });
+    expect(b.cam.fov).toBe(70);
+    b.message({ type: 'fs:fly-settings', fov: 90 });
+    expect(b.cam.fov).toBe(90);
+    expect(flyState(b).speed).toBe(5);
+    b.message({ type: 'fs:fly', on: false });
+    expect(b.cam.fov).toBe(20);
+  });
+
+  it('a forged setting is clamped or ignored in the stage', () => {
+    const b = runBridge({ geometry: 'sphere' });
+    b.message({ type: 'fs:fly', on: true, pose: null, speed: 1e9, fov: '45' });
+    expect(flyState(b).speed).toBe(50);
+    expect(b.cam.fov).toBe(70); // the default: '45' is not a number
+  });
+
+  it('untuned, Fly takes off at 70° and lands back on the orbit camera\'s 20°', () => {
+    const b = runBridge({ geometry: 'sphere' });
+    b.message({ type: 'fs:fly', on: true, pose: null });
+    expect(b.cam.fov).toBe(70);
+    b.message({ type: 'fs:fly', on: false });
+    expect(b.cam.fov).toBe(20);
+  });
+
+  it('a document built while flying boots with its settings', () => {
+    const b = runBridge({ geometry: 'sphere', initialFly: { pose: null, settings: { speed: 3, fov: 60 } } });
+    expect(flyState(b).on).toBe(true);
+    expect(flyState(b).speed).toBe(3);
+    expect(b.cam.fov).toBe(60);
   });
 });

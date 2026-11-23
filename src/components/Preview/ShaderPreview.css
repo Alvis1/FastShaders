@@ -516,6 +516,73 @@
   white-space: nowrap;
 }
 
+/* ── Fly settings ─────────────────────────────────────────────────────────
+   Right-click / long-press on the Fly button (FlySettingsMenu): the clip
+   picker's box and head, with a label · slider · field · unit grid. */
+.fly-menu {
+  max-width: none;
+  width: 260px;
+}
+
+.fly-menu__row {
+  display: grid;
+  grid-template-columns: 78px 1fr 44px 10px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.fly-menu__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fly-menu__slider {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+
+.fly-menu__field {
+  width: 100%;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 1px 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 0;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  text-align: center;
+  outline: none;
+}
+
+.fly-menu__field:hover,
+.fly-menu__field:focus {
+  border-color: var(--border-focus);
+}
+
+.fly-menu__unit {
+  color: var(--text-secondary);
+}
+
+.fly-menu__default {
+  justify-content: center;
+  margin-top: 2px;
+  color: var(--text-secondary);
+}
+
+.fly-menu__default:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.fly-menu__default:disabled:hover {
+  background: none;
+}
+
 /* "Compiling shader…" pill shown between a fresh srcDoc and the first painted
    frame, so a multi-second WebGPU boot reads as progress rather than a crash.
    pointer-events:none — it must never eat a drag on the model — and it clears on

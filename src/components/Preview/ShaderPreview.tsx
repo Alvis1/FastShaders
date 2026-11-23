@@ -26,12 +26,13 @@ import {
   buildTeapotAttr,
   decoderAssetUrl,
   flyPose,
+  flySettings,
   getBunnyModelUrl,
   isModelGeometry,
   isTeapotGeometry,
   tslToPreviewHTML,
 } from '@/engine/tslToPreviewHTML';
-import type { CameraPosition, FlyPose, GeometryType, LightingMode, PreviewOptions, PreviewStage } from '@/engine/tslToPreviewHTML';
+import type { CameraPosition, FlyPose, FlySettings, GeometryType, LightingMode, PreviewOptions, PreviewStage } from '@/engine/tslToPreviewHTML';
 import {
   SUBDIVISION_DEFAULT,
   SUBDIVISION_STEPS,
@@ -111,6 +112,7 @@ import { fullscreenElement } from '@/components/inputs/colorPickerModel';
 import { NumberField } from '@/components/inputs/NumberField';
 import { formatFieldNumber, parseFieldNumber } from '@/utils/numberField';
 import { AnimClipMenu } from './AnimClipMenu';
+import { FlySettingsMenu } from './FlySettingsMenu';
 import { useLongPress } from '@/hooks/useLongPress';
 import {
   extractUniforms, isOverridden, overriddenUniforms,
@@ -414,6 +416,19 @@ function adoptLegacyFlyKeys(): void {
       localStorage.removeItem(legacy);
     }
   } catch { /* storage unavailable: nothing to adopt */ }
+}
+/** The fly-through's speed and field of view (`fs:previewFlySettings`, the Fly
+ *  button's right-click menu): a viewing preference, clamped on read by
+ *  `flySettings` (junk fields take their defaults), never in a project file;
+ *  removed by the study clean slate with the other Fly keys. */
+const FLY_SETTINGS_KEY = 'fs:previewFlySettings';
+function loadFlySettings(): FlySettings {
+  try {
+    const raw = localStorage.getItem(FLY_SETTINGS_KEY);
+    return flySettings(raw ? JSON.parse(raw, safeJsonReviver) : null);
+  } catch {
+    return flySettings(null);
+  }
 }
 /** Fly mode on/off — `'true'` exactly, anything else is off. A study's clean
  *  slate removes it with the pose (EvalGate), so no participant inherits it. */
@@ -1252,6 +1267,24 @@ export function ShaderPreview() {
   const [flyOn, setFlyOn] = useState(loadFlyOn);
   const flyOnRef = useRef(flyOn);
   const flyPoseRef = useRef<FlyPose | null>(loadFlyPose());
+  /** Speed and field of view (the Fly button's menu). Read through the ref
+   *  when a document is built, like the pose, so a change hot-updates the live
+   *  stage (`fs:fly-settings`) and never rebuilds it. */
+  const [flyTuning, setFlyTuningState] = useState<FlySettings>(loadFlySettings);
+  const flyTuningRef = useRef(flyTuning);
+  const [flyMenuOpen, setFlyMenuOpen] = useState(false);
+  const closeFlyMenu = useCallback(() => setFlyMenuOpen(false), []);
+  const flyBtnRef = useRef<HTMLButtonElement>(null);
+  /** When a long-press opened the menu — the synthesized-contextmenu window. */
+  const flyMenuTouchTsRef = useRef(0);
+  /** A long-press opened the menu: the click its finger lift may still fire
+   *  must not toggle Fly mode. Cleared by the next press, whatever happens. */
+  const flyLongPressedRef = useRef(false);
+  useLongPress(flyBtnRef, () => {
+    flyMenuTouchTsRef.current = performance.now();
+    flyLongPressedRef.current = true;
+    setFlyMenuOpen(true);
+  });
 
   /**
    * Persist the turntable angle at most once every ROTATION_PERSIST_MS.
@@ -2110,10 +2143,20 @@ export function ShaderPreview() {
     setFlyOn(on);
     try { localStorage.setItem(FLY_ON_KEY, String(on)); } catch { /* */ }
     const frame = iframeRef.current;
-    frame?.contentWindow?.postMessage({ type: 'fs:fly', on, pose: on ? flyPoseRef.current : null }, '*');
+    frame?.contentWindow?.postMessage({ type: 'fs:fly', on, pose: on ? flyPoseRef.current : null, ...flyTuningRef.current }, '*');
     if (on) {
       try { frame?.focus(); } catch { /* */ }
     }
+  }, []);
+
+  /** A speed / field-of-view change from the Fly menu: stored, and posted to the
+   *  live stage, which applies the fov at once while flying (or on take-off). */
+  const setFlyTuning = useCallback((next: FlySettings) => {
+    const tuned = flySettings(next);
+    flyTuningRef.current = tuned;
+    setFlyTuningState(tuned);
+    try { localStorage.setItem(FLY_SETTINGS_KEY, JSON.stringify(tuned)); } catch { /* */ }
+    iframeRef.current?.contentWindow?.postMessage({ type: 'fs:fly-settings', ...tuned }, '*');
   }, []);
 
   const handleReset = useCallback(() => {
@@ -2539,7 +2582,7 @@ export function ShaderPreview() {
       initialCameraPosition: cameraPosRef.current,
       initialCameraTarget: cameraTargetRef.current,
       initialRotation: rotationRef.current,
-      initialFly: flyOnRef.current ? { pose: flyPoseRef.current } : null,
+      initialFly: flyOnRef.current ? { pose: flyPoseRef.current, settings: flyTuningRef.current } : null,
       // The exact bytes the hot channel will post, so the document's baked
       // module and the channel's idempotency seed cannot differ (see
       // PreviewOptions.shaderModule). It is built from the same code passed
@@ -3510,17 +3553,42 @@ export function ShaderPreview() {
             >
               {playing ? '⏸' : '▶'}
             </button>
-            {/* Fly: fly through the scene instead of orbiting it. */}
+            {/* Fly: fly through the scene instead of orbiting it. Right-click
+                (long-press on touch) opens its speed / field-of-view menu. */}
             <button
               type="button"
+              ref={flyBtnRef}
               className={`shader-preview__fly-btn${flyOn ? ' shader-preview__fly-btn--active' : ''}`}
-              onClick={toggleFly}
+              onPointerDown={() => { flyLongPressedRef.current = false; }}
+              onClick={() => {
+                // The finger lift that ends a long-press may also be a click:
+                // that gesture opened the menu, it must not toggle Fly mode.
+                if (flyLongPressedRef.current) { flyLongPressedRef.current = false; return; }
+                toggleFly();
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                // Android/Quest Chromium synthesizes a contextmenu as the
+                // long-press fires — the toggle would close what it just opened.
+                if (performance.now() - flyMenuTouchTsRef.current < 700) return;
+                setFlyMenuOpen((v) => !v);
+              }}
               aria-pressed={flyOn}
-              title={t('Fly through: W A S D or the arrow keys move, Q / E down / up, Shift faster, drag to look around. The position is remembered; Reset (✕) puts it back.', language)}
+              aria-haspopup="dialog"
+              aria-expanded={flyMenuOpen}
+              title={t('Fly through: W A S D or the arrow keys move, Q / E down / up, Shift faster, drag to look around. The position is remembered; Reset (✕) puts it back. Right-click: speed and field of view.', language)}
               aria-label={t('Fly through', language)}
             >
               {t('Fly', language)}
             </button>
+            <FlySettingsMenu
+              anchor={flyBtnRef.current}
+              open={flyMenuOpen}
+              settings={flyTuning}
+              onChange={setFlyTuning}
+              onClose={closeFlyMenu}
+              language={language}
+            />
             {/* `history="none"`: the scene backdrop is a PREVIEW PREFERENCE
                 (`usePersistedState('fs:previewBgColor')`) — it never touches the
                 graph, so bracketing would push an undo entry that restores
