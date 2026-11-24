@@ -183,16 +183,42 @@
 .palette-pop__custom {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  margin-top: 2px;
+  gap: 4px;
+  margin-bottom: 2px;
   font-size: var(--font-size-xs);
   color: var(--text-secondary);
+}
+
+/* The label opens the native picker (htmlFor), as the whole row once did.
+ * It never shrinks; the hex field takes what is left of the 140px content
+ * width (a 6-digit hex needs ~50px in the mono face). */
+.palette-pop__custom label {
+  flex-shrink: 0;
+  white-space: nowrap;
   cursor: pointer;
 }
 
+.palette-pop__hex {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 18px;
+  padding: 0 3px;
+  border: 1px solid var(--border-default);
+  border-radius: 0;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
+.palette-pop__hex:focus {
+  outline: 1px solid var(--border-focus);
+  outline-offset: -1px;
+}
+
 .palette-pop__custom input[type='color'] {
-  width: 44px;
+  flex-shrink: 0;
+  width: 28px;
   height: 18px;
   padding: 0;
   border: 1px solid var(--border-default);

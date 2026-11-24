@@ -4,6 +4,7 @@ import path from 'path';
 import {
   buildPickerSections,
   createColorCommitStager,
+  parseHexEntry,
   pickPortalHost,
   placePopover,
   swatchTitle,
@@ -573,7 +574,7 @@ describe('PaletteColorPicker source guards', () => {
     expect(src).toContain("window.addEventListener('blur', onWinBlur)");
     expect(src).toContain("window.removeEventListener('blur', onWinBlur)");
     // Gated on an IFRAME really taking focus. A bare close-on-blur would also
-    // fire when the OS colour dialog opens from the "Custom" row (macOS), which
+    // fire when the OS colour dialog opens from the HEX row (macOS), which
     // would tear the picker down mid-pick.
     expect(src).toMatch(
       /document\.activeElement instanceof HTMLIFrameElement\) closeSelf\(\);/,
@@ -634,5 +635,21 @@ describe('model constants', () => {
       'utf8',
     );
     expect(Number(/const IDLE_MS = (\d+);/.exec(hook)?.[1])).toBe(COMMIT_IDLE_MS);
+  });
+});
+
+describe('parseHexEntry (the Custom row hex field)', () => {
+  it('reads six digits with or without #, any case, trimmed', () => {
+    expect(parseHexEntry('#FF8800', false)).toBe('#ff8800');
+    expect(parseHexEntry(' ff8800 ', false)).toBe('#ff8800');
+  });
+  it('reads the short form only on a commit', () => {
+    expect(parseHexEntry('#abc', false)).toBeNull();
+    expect(parseHexEntry('abc', true)).toBe('#aabbcc');
+  });
+  it('refuses anything else', () => {
+    for (const s of ['', '#', '#12345', '#1234567', 'ggg', '#12 345', '##123456', 'rgb(1,2,3)']) {
+      expect(parseHexEntry(s, true), s).toBeNull();
+    }
   });
 });

@@ -230,7 +230,7 @@ describe('native colour inputs have been retired from the app', () => {
   /**
    * `<input type="color">` survives in exactly two places, both deliberate:
    *
-   *   · PaletteColorPicker itself — the popover's "Custom" escape hatch, the
+   *   · PaletteColorPicker itself — the popover's HEX-row escape hatch, the
    *     one control that can reach a colour no palette contains.
    *   · PalettesModal — the palette EDITOR. It authors the very swatches the
    *     picker offers, so opening the picker there would be circular, and its

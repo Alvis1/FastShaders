@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 import { useAppStore } from '@/store/useAppStore';
@@ -11,6 +11,7 @@ import {
   COMMIT_IDLE_MS,
   createColorCommitStager,
   fullscreenElement,
+  parseHexEntry,
   pickPortalHost,
   placePopover,
   swatchTitle,
@@ -237,7 +238,7 @@ export function ColorPickerPopover({
   const handleEyeDropper = useCallback(async () => {
     if (!EyeDropperCtor) {
       // Fallback: the system picker, whose own eyedropper samples the screen.
-      // Its picks arrive through the Custom input's onChange (the live path).
+      // Its picks arrive through the HEX row's colour input onChange (the live path).
       const input = customInputRef.current;
       if (!input) return;
       try {
@@ -273,6 +274,34 @@ export function ColorPickerPopover({
       eyeAbortRef.current = null;
     };
   }, [open]);
+
+  /* ── hex field ───────────────────────────────────────────────────────── */
+
+  /** The hex field's text while the user is typing in it; null = not editing,
+   *  so the field shows the CURRENT colour and follows every other pick. A
+   *  typed colour is one the user MIXED, so it takes the live path (a full
+   *  six digits applies as typed) and is recorded as a recent on Enter/blur. */
+  const [hexDraft, setHexDraft] = useState<string | null>(null);
+  const customId = useId();
+
+  const handleHexChange = useCallback(
+    (text: string) => {
+      setHexDraft(text);
+      const hex = parseHexEntry(text, false);
+      if (hex && hex !== current) applyLive(hex);
+    },
+    [current, applyLive],
+  );
+
+  /** Enter or blur: a short `#rgb` applies now, anything unreadable is
+   *  dropped (the field returns to the current colour), and the gesture ends. */
+  const commitHexDraft = useCallback(() => {
+    if (hexDraft === null) return;
+    const hex = parseHexEntry(hexDraft, true);
+    setHexDraft(null);
+    if (hex && hex !== current) applyLive(hex);
+    flushCommit();
+  }, [hexDraft, current, applyLive, flushCommit]);
 
   const handleClearRecents = useCallback(() => {
     clearRecentColors();
@@ -349,7 +378,7 @@ export function ColorPickerPopover({
      *
      * Gated on the newly-focused element actually BEING an iframe. A window
      * blur also fires when the user switches app or tab — and, on macOS, when
-     * the "Custom" row opens the OS colour dialog, where closing the popover
+     * the HEX row's swatch opens the OS colour dialog, where closing the popover
      * would kill the picker mid-pick. Read on a macrotask because at blur time
      * `document.activeElement` is still the old element.
      */
@@ -444,6 +473,75 @@ export function ColorPickerPopover({
         </button>
       )}
 
+      {/* Right under the eyedropper: the two ways to name a colour that is on
+          no swatch row — type it, or open the system picker (the swatch). */}
+      <div className="palette-pop__custom">
+        <label htmlFor={customId}>{t('HEX', language)}</label>
+        <input
+          type="text"
+          className="palette-pop__hex"
+          value={hexDraft ?? current ?? ''}
+          placeholder="#rrggbb"
+          maxLength={9}
+          spellCheck={false}
+          autoComplete="off"
+          aria-label={t('Hex color', language)}
+          title={t('Hex color (#rrggbb)', language)}
+          onChange={(e) => handleHexChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            commitHexDraft();
+          }}
+          onBlur={commitHexDraft}
+        />
+        {/* React maps this to the native `input` event with its own value
+            tracker, so it fires per frame during a wheel drag AND on the
+            dialog's own commit, deduped. It is therefore the LIVE path only —
+            the recent colour is recorded by the idle/blur/close flush. */}
+        <input
+          ref={customInputRef}
+          id={customId}
+          type="color"
+          value={value ?? '#ffffff'}
+          onChange={(e) => applyLive(e.target.value)}
+          onBlur={flushCommit}
+        />
+      </div>
+
+      {/* Third line, under HEX: the colours the user MIXED. Recents COLLAPSE
+          when empty rather than drawing placeholder cells: a
+          row of empty boxes is indistinguishable from a rendering bug, and the
+          popover's height is measured rather than assumed, so a section that
+          comes and goes costs nothing. */}
+      {recents.length > 0 && (
+        <div className="palette-pop__section">
+          <div className="palette-pop__label palette-pop__label--recent">
+            <span>{t('Recent', language)}</span>
+            <button
+              type="button"
+              className="palette-pop__forget"
+              title={t('Clear recent colors', language)}
+              onClick={handleClearRecents}
+            >
+              ✕
+            </button>
+          </div>
+          <div className="palette-pop__row">
+            {recents.map((hex) => (
+              <button
+                key={hex}
+                type="button"
+                className={`palette-pop__swatch ${current === hex ? 'palette-pop__swatch--current' : ''}`}
+                style={{ background: hex }}
+                title={hex}
+                onClick={() => pickSwatch(hex)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       {hasClear && (
         <button type="button" className="palette-pop__clear" onClick={handleClear}>
           <span
@@ -491,52 +589,7 @@ export function ColorPickerPopover({
         );
       })}
 
-      {/* Recents COLLAPSE when empty rather than drawing placeholder cells: a
-          row of empty boxes is indistinguishable from a rendering bug, and the
-          popover's height is measured rather than assumed, so a section that
-          comes and goes costs nothing. */}
-      {recents.length > 0 && (
-        <div className="palette-pop__section">
-          <div className="palette-pop__label palette-pop__label--recent">
-            <span>{t('Recent', language)}</span>
-            <button
-              type="button"
-              className="palette-pop__forget"
-              title={t('Clear recent colors', language)}
-              onClick={handleClearRecents}
-            >
-              ✕
-            </button>
-          </div>
-          <div className="palette-pop__row">
-            {recents.map((hex) => (
-              <button
-                key={hex}
-                type="button"
-                className={`palette-pop__swatch ${current === hex ? 'palette-pop__swatch--current' : ''}`}
-                style={{ background: hex }}
-                title={hex}
-                onClick={() => pickSwatch(hex)}
-              />
-            ))}
-          </div>
-        </div>
-      )}
 
-      <label className="palette-pop__custom">
-        <span>{t('Custom', language)}</span>
-        {/* React maps this to the native `input` event with its own value
-            tracker, so it fires per frame during a wheel drag AND on the
-            dialog's own commit, deduped. It is therefore the LIVE path only —
-            the recent colour is recorded by the idle/blur/close flush. */}
-        <input
-          ref={customInputRef}
-          type="color"
-          value={value ?? '#ffffff'}
-          onChange={(e) => applyLive(e.target.value)}
-          onBlur={flushCommit}
-        />
-      </label>
     </div>,
     host,
   );

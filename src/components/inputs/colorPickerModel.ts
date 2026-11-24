@@ -110,6 +110,20 @@ export function swatchTitle(hex: string, name?: string): string {
   return label ? `${label} — ${hex}` : hex;
 }
 
+/**
+ * What the HEX row's text field reads: `#rrggbb` or `rrggbb`, and the short
+ * `#rgb` / `rgb` form only when `allowShort` (a COMMIT — Enter or blur; while
+ * typing, `abc` is the first half of `abcdef`, so applying `#aabbcc` live would
+ * flash a colour the user never meant). Case and surrounding space are free.
+ * Returns the canonical lowercase `#rrggbb`, or null.
+ */
+export function parseHexEntry(text: string, allowShort: boolean): string | null {
+  const s = text.trim().replace(/^#/, '').toLowerCase();
+  if (/^[0-9a-f]{6}$/.test(s)) return `#${s}`;
+  if (allowShort && /^[0-9a-f]{3}$/.test(s)) return `#${s[0]}${s[0]}${s[1]}${s[1]}${s[2]}${s[2]}`;
+  return null;
+}
+
 /* ============================================================
  * Placement
  * ============================================================ */
