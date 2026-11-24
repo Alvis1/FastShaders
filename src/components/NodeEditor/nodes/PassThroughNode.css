@@ -4,14 +4,16 @@
    card read ONE number. No cost chrome, never cost-scaled. The lift is every
    node's: the shadow from `--fs-node-lift`, the growth from `--fs-node-scale`,
    the thicker frame from `--fs-node-border-scale` — all published on React
-   Flow's node wrapper (NodeBase.css), never a translate. */
+   Flow's node wrapper (NodeBase.css), never a translate. A Portal end takes
+   the growth and the frame but never a shadow (below). */
 
-/* --- The Branch: a ROUTING POINT's dot at twice the size ------------------
+/* --- The Branch: a round DOT -----------------------------------------------
    (owner, 2026-11-23: "Branch = routing point, visually like the dot but 2x
-   bigger"). The node box is fixed in FLOW px (KNOT_SIZE, the dot at zoom 1);
-   the dot inside it is counter-scaled by `--fs-knot-unzoom` (inline, 1/zoom),
-   so like TypedEdge's waypoint circle it keeps one size ON SCREEN at every
-   zoom. Its fill and stroke colours are inline: the waypoint's own pair. */
+   bigger" — routing points went on 2026-11-24, the dot stayed). The node box
+   is fixed in FLOW px (KNOT_SIZE, the dot at zoom 1); the dot inside it is
+   counter-scaled by `--fs-knot-unzoom` (inline, 1/zoom), so it keeps one size
+   ON SCREEN at every zoom. Its fill and stroke colours are inline: the
+   canvas's contrast colour and its opposite. */
 .knot-node {
   position: relative;
 }
@@ -19,8 +21,8 @@
 /* Only the DOT is a target, never the rest of the node box: the box is fixed
    in flow px and the dot in screen px, so at zoom 3 the box is 69 screen px
    around a 23 px dot, and a press on the blank-looking canvas beside the dot
-   grabbed, moved or double-click-removed the Branch (and hid routing points
-   and wire ends under it, and stopped a marquee). A press on the dot still
+   grabbed, moved or double-click-removed the Branch (and hid wire ends under
+   it, and stopped a marquee). A press on the dot still
    reaches React Flow's handlers on the wrapper: pointer-events only decides
    the TARGET, and the event bubbles. `!important` because React Flow writes
    `pointer-events: all` INLINE on the wrapper (GroupNode.css does the same). */
@@ -47,13 +49,13 @@
   inset: 0;
   box-sizing: border-box;
   border-radius: 50%;
-  /* Twice the waypoint's 1.5px stroke; a border SCALE when selected, as every
-     shell's frame thickens. A border-box disc keeps its outer size. */
+  /* KNOT_DOT_STROKE (3px); a border SCALE when selected, as every shell's
+     frame thickens. A border-box disc keeps its outer size. */
   border: calc(3px * var(--fs-node-border-scale, 1)) solid;
-  /* A routing point casts no shadow, and neither does the Branch at rest:
-     only SELECTION lifts it, through the wrapper's `--fs-node-lift` like
-     every node (`--fs-knot-lift`, below). Hard, zero blur. Inside the
-     counter-scaled box, so its offset is a constant screen size too. */
+  /* The Branch casts no shadow at rest: only SELECTION lifts it, through the
+     wrapper's `--fs-node-lift` like every node (`--fs-knot-lift`, below).
+     Hard, zero blur. Inside the counter-scaled box, so its offset is a
+     constant screen size too. */
   box-shadow: var(--fs-knot-lift, 0 0 0 transparent);
   /* The lift's growth alone — the one scale that eases. */
   scale: var(--fs-node-scale, 1);
@@ -71,7 +73,8 @@
 }
 
 /* Both sockets: ZERO-size boxes at the dot's CENTRE, drawing nothing and
-   never pressed (the press belongs to the dot, which moves the node). React
+   never pressed (the press belongs to the dot, which moves the node; "Branch
+   out" reaches `out` with a synthetic press, branchOut.ts). React
    Flow anchors a left target's wire at the handle's left edge and a right
    source's at its right edge — the same point here, so every wire meets the
    centre. Not counter-scaled, so the centres never move with the zoom, and
@@ -133,27 +136,70 @@
      either theme, without publishing the canvas colour as a variable (which
      NodeEditor deliberately does not do). */
   background-image: linear-gradient(var(--tunnel-well), var(--tunnel-well));
-  /* The plate's lift (outer) and the hole's depth (inner): both HARD, zero
-     blur. The inset falls top-left, the app's fixed light, so the top-left
-     inner wall is in shade and the bottom-right one catches the light.
-     A HOLE casts no shadow of its own, so at rest and on hover the outer layer
-     is empty (`--fs-tunnel-plate`); only SELECTION lifts the plate, through
-     the wrapper's `--fs-node-lift` like every node (measured on the canvas: a
-     resting 2px drop shadow under a disc read as a raised button, not a hole).
-     Hover deepens the hole instead (below). */
-  box-shadow: var(--fs-tunnel-plate, 0 0 0 transparent), inset 3px 3px 0 rgba(0, 0, 0, 0.45);
+  /* The hole's depth: an INSET shadow, HARD and zero blur. It falls top-left,
+     the app's fixed light, so the top-left inner wall is in shade and the
+     bottom-right one catches the light. A HOLE casts no shadow of its own, in
+     any state — not even SELECTED (owner, 2026-11-24: "no shadow underneath,
+     just slightly larger and a selection circle"; a drop shadow under a disc
+     read as a raised button, not a hole). Hover deepens the hole instead. */
+  box-shadow: inset 3px 3px 0 rgba(0, 0, 0, 0.45);
+  /* The node lift's GROWTH only (`--fs-node-scale`, NodeBase.css). */
   scale: var(--fs-node-scale, 1);
   transition: box-shadow var(--transition-fast), scale var(--transition-fast);
   cursor: grab;
 }
 
-.tunnel-node--selected {
-  --fs-tunnel-plate: var(--fs-node-lift, var(--shadow-node-selected));
+/* SELECTED: slightly larger (the scale above) and a selection RING — a solid
+   circle round the disc in the CANVAS INK (`--node-cost-text`, published by
+   NodeEditor: black on a light canvas, white on a dark one), never the focus
+   blue, which is the Float wire's own colour: a float portal's rim and a blue
+   ring read as one double rim. The ink is no wire type's colour on any canvas.
+   An outline follows the round corner, and it is neither a size nor a shadow.
+   The SELECTED end alone wears it: its portal's other ends get the trace's
+   weaker mark (below), a hovered one only the deeper inset. */
+.tunnel-node--selected .tunnel-node__hole {
+  outline: 2px solid var(--node-cost-text, var(--text-primary));
+  outline-offset: 3px;
 }
 
-/* Hover deepens the hole. */
+/* Hover deepens the hole — and only that. */
 .react-flow__node:hover .tunnel-node__hole {
-  box-shadow: var(--fs-tunnel-plate, 0 0 0 transparent), inset 4px 4px 0 rgba(0, 0, 0, 0.45);
+  box-shadow: inset 4px 4px 0 rgba(0, 0, 0, 0.45);
+}
+
+/* The hole's DIVE HOST (TunnelNode's `tunnel-node__dive`): the element a
+   wire's stretch over the hole is drawn into (TypedEdge's PortalDive). It
+   covers the hole's BORDER box — the rim included, so the wire runs on over
+   the rim as the owner drew it — by stepping out over the rim's width; it is
+   inside the hole, so it takes the hole's `scale` and the copy's disc is the
+   hole's in every state. Never a pointer target: the socket under it wires. */
+.tunnel-node__dive {
+  position: absolute;
+  left: calc(-2px * var(--fs-node-border-scale, 1));
+  top: calc(-2px * var(--fs-node-border-scale, 1));
+  width: 100%;
+  height: 100%;
+  box-sizing: content-box;
+  padding: calc(2px * var(--fs-node-border-scale, 1));
+  pointer-events: none;
+}
+
+.tunnel-node__dive > .fs-edge-dive {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+/* Preview mode dims the CARD (its wrapper's opacity, NodeBase.css), and the
+   dive drawn inside it with it; the dive's `react-flow__edge` group must not
+   take the wires' own dim on top of that (0.25 × 0.25). On an end the mode
+   leaves undimmed (an exit being previewed) the group dims like its wire. */
+.node-editor__canvas.fs-previewing .react-flow__node:not([data-fs-preview]) .tunnel-node__dive .react-flow__edge {
+  opacity: 1;
 }
 
 .tunnel-node__hole:active {
@@ -181,12 +227,15 @@
   user-select: none;
 }
 
-/* The socket: the INTERIOR, drawing nothing. A band of the interior next to
-   the rim is left to the node, so the rim stays a grab target wide enough to
-   hit. React Flow anchors a left target's wire at the handle's left edge and a
-   right source's at its right edge — both under the disc, so the wire slips
-   under the rim. Every inset is stated because the side classes position a
-   handle with a transform this rule replaces. */
+/* The socket: the INTERIOR, drawing nothing — `TUNNEL_HANDLE` (20) px square,
+   centred (passThroughGeometry.ts; TypedEdge finds the hole's centre half of
+   it from React Flow's anchor). A band of the interior next to the rim is
+   left to the node, so the rim stays a grab target wide enough to hit. React
+   Flow anchors a left target's wire at the handle's left edge and a right
+   source's at its right edge; from there the wire DIVES into the hole,
+   drawn over this node (TypedEdge's `PortalDiveOverlay`). Every inset is
+   stated because the side classes position a handle with a transform this
+   rule replaces. */
 .tunnel-node__hole .react-flow__handle.tunnel-node__handle {
   position: absolute;
   top: 50%;
@@ -253,34 +302,26 @@
   opacity: 0.55;
 }
 
-/* The in-place name field (the menu's Rename; portalRename.ts): where the
-   label was, wide enough to read what is typed, in the chrome's input look. */
-.tunnel-node__rename {
-  position: absolute;
-  bottom: calc(100% + 1px);
-  left: 50%;
-  transform: translateX(-50%);
-  width: 16ch;
-  box-sizing: border-box;
-  padding: 1px 4px;
+/* A search's Portal Out TILE (PortalTileCard.tsx): what the tile is, under
+   the hole — its face shows only the portal's name. Tile chrome beside the
+   card, never part of it. */
+.portal-tile__kind {
   font-family: var(--font-sans);
   font-size: var(--font-size-sm);
   line-height: 1.2;
-  color: var(--text-primary);
-  background: var(--bg-raised);
-  border: 1px solid var(--border-focus);
-  border-radius: 0;
-  outline: none;
+  white-space: nowrap;
+  color: var(--text-secondary);
 }
 
 /* --- The portal TRACE (NodeEditor/PortalTrace.tsx) -------------------------
    While a portal end is selected or hovered, every end of that portal wears
    `data-fs-portal-trace` (an ATTRIBUTE on React Flow's wrapper — see
-   MutedMarks): the hole deepens as on hover and a focus ring rounds it, so the
-   partners read as one thing wherever they sit. */
-.react-flow__node[data-fs-portal-trace] .tunnel-node__hole {
-  box-shadow: var(--fs-tunnel-plate, 0 0 0 transparent), inset 4px 4px 0 rgba(0, 0, 0, 0.45);
-  outline: 2px solid var(--border-focus);
+   MutedMarks). The PARTNERS take a clearly WEAKER mark than selection: a thin
+   DASHED ring in the canvas ink at part strength, plus the ghost line — so
+   the selected end (the solid ring above) stands out from the ends it is
+   joined to, and a hovered end shows only its deeper inset. */
+.react-flow__node[data-fs-portal-trace]:not(.selected):not(:hover) .tunnel-node__hole {
+  outline: 1px dashed color-mix(in srgb, var(--node-cost-text, var(--text-primary)) 60%, transparent);
   outline-offset: 3px;
 }
 

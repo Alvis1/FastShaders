@@ -1,15 +1,14 @@
 /**
  * The BRANCH gestures' store-touching half (docs/dev/canvas-interaction.md,
- * "Branch"). "Branch = routing point" (owner, 2026-11-23): a Branch is made
- * ONLY from a right-click menu, and every one that goes into a wire funnels
- * through `insertBranch` — the edge menu's "Branch from here" on a routing
- * point (`promoteWaypoint`) and Insert node > Branch (`branchIntoWireAt`).
- * The pure geometry and the refusals are branchWire.ts.
+ * "Branch"). A Branch goes into a wire by a double-click on the wire or by
+ * Insert node > Branch, both through `branchIntoWireAt` → `insertBranch`
+ * (owner, 2026-11-24: routing points were removed and "double click to
+ * place"). The pure geometry and the refusals are branchWire.ts.
  *
  * ONE undo entry per act: the add and the split run in one bracket.
  * Telemetry rides the store action that already logs (`addNode` → `node-add`
- * with the node type `knot`, `removeNode` → `node-remove`); nothing new is
- * recorded.
+ * with the node type `knot`, `removeNode` → `node-remove`, `applyConnection`
+ * → `edge-connect`); nothing new is recorded.
  */
 import { useAppStore } from '@/store/useAppStore';
 
@@ -18,35 +17,27 @@ import { generateId } from '@/utils/idGenerator';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { isKnot } from '@/utils/passThrough';
 import { branchSpotOnWire, type GetInternalNode } from './edgeHit';
-import { WAYPOINT_HIT_PX } from './edges/edgeWaypoints';
 import { reconnectRefused, type ReconnectEnd } from './portalWire';
+import { branchDropRefusal, type BranchDropRefusal } from './branchDrop';
 import {
   branchRefusal,
   knotParentFor,
   makeKnotNode,
   splitEdgeWithKnot,
-  splitWaypointsAtIndex,
-  wirePoints,
   type Pt,
 } from './branchWire';
 
 /**
- * Put a new Branch into the wire `edgeId` at `center`, with the wire's
- * routing points shared out as `before` (source half) / `after` (target
- * half). One undo entry. Returns the Branch's id, or null when refused
- * (`branchRefusal`: a missing or hidden wire, a collapsed pill), in which case
- * nothing changes and no undo entry is spent.
+ * Put a new Branch into the wire `edgeId` at `center`. One undo entry.
+ * Returns the Branch's id, or null when refused (`branchRefusal`: a missing
+ * or hidden wire, a collapsed pill), in which case nothing changes and no
+ * undo entry is spent.
  */
-export function insertBranch(
-  edgeId: string,
-  center: Pt,
-  before: readonly Pt[],
-  after: readonly Pt[],
-): string | null {
+export function insertBranch(edgeId: string, center: Pt): string | null {
   const store = useAppStore.getState();
   if (branchRefusal(store.nodes, store.edges, edgeId)) return null;
   const knotId = generateId();
-  const split = splitEdgeWithKnot(store.edges, edgeId, knotId, before, after);
+  const split = splitEdgeWithKnot(store.edges, edgeId, knotId);
   if (!split) return null;
   // On a wire wholly inside an expanded group the Branch is that group's
   // member (`knotParentFor`), or it stays behind when the group moves.
@@ -61,37 +52,62 @@ export function insertBranch(
   return knotId;
 }
 
-/** "Branch from here": routing point `index` of the wire `edgeId` becomes a
- *  Branch at the point's own spot, split at that KNOWN index. */
-export function promoteWaypoint(edgeId: string, index: number): string | null {
-  const edge = useAppStore.getState().edges.find((e) => e.id === edgeId);
-  if (!edge) return null;
-  const split = splitWaypointsAtIndex(wirePoints(edge), index);
-  if (!split) return null;
-  return insertBranch(edgeId, split.at, split.before, split.after);
-}
-
 /**
- * Insert node > Branch on the wire `edgeId`, from where its menu opened (flow
- * point `p`): on one of its routing points that point becomes the Branch (as
- * "Branch from here"), else the Branch goes on the nearest point of the DRAWN
- * curve with the points shared out by segment (`branchSpotOnWire`), so nothing
- * is dissolved. One undo entry. Null, changing nothing, when the wire is not
- * drawn or the Branch may not go into it.
+ * A Branch on the wire `edgeId`, aimed at the flow point `p` — a double-click
+ * on the wire, or Insert node > Branch from where its menu opened: on the
+ * nearest point of the DRAWN curve (`branchSpotOnWire`). One undo entry. Null,
+ * changing nothing, when the wire is not drawn or the Branch may not go into
+ * it (`branchRefusal`: a collapsed pill's wire).
  */
 export function branchIntoWireAt(
   edgeId: string,
   p: Pt,
   getInternalNode: GetInternalNode,
-  zoom: number,
 ): string | null {
   const edge = useAppStore.getState().edges.find((e) => e.id === edgeId);
-  if (!edge || !(zoom > 0)) return null;
-  const spot = branchSpotOnWire(edge, p, getInternalNode, WAYPOINT_HIT_PX / zoom);
+  if (!edge) return null;
+  const spot = branchSpotOnWire(edge, p, getInternalNode);
   if (!spot) return null;
-  return spot.kind === 'point'
-    ? promoteWaypoint(edgeId, spot.index)
-    : insertBranch(edgeId, spot.at, spot.before, spot.after);
+  return insertBranch(edgeId, spot);
+}
+
+/** A connection as the canvas commits it (NodeEditor's `applyConnection`). */
+export interface BranchConnection {
+  source: string;
+  sourceHandle: string;
+  target: string;
+  targetHandle: string;
+}
+
+/**
+ * A Branch dragged onto an input and released there (owner, 2026-11-24: "a
+ * branch dragged over an input branches to that input, keeping the drag's
+ * start location"): the Branch goes BACK to `start` (its node position when
+ * the drag began) and, unless refused (branchDrop.ts `branchDropRefusal` — it
+ * then just goes back), Branch.out is wired into the input through `connect`
+ * (the canvas's ONE connect commit). ONE undo entry, taken AFTER the Branch is
+ * back, so it holds no move: undo removes the wire and nothing moves; a
+ * refusal spends none.
+ */
+export function dropBranchOnInput(
+  knotId: string,
+  start: Pt,
+  socket: { nodeId: string; handleId: string },
+  connect: (c: BranchConnection) => void,
+): 'connected' | BranchDropRefusal {
+  const store = useAppStore.getState();
+  const knot = store.nodes.find((n) => n.id === knotId);
+  if (!isKnot(knot)) return 'missing';
+  // Back where the drag started — a position write, never an undo entry.
+  if (knot!.position.x !== start.x || knot!.position.y !== start.y) {
+    store.setNodes(store.nodes.map((n) => (n.id === knotId ? ({ ...n, position: { x: start.x, y: start.y } } as typeof n) : n)));
+  }
+  const now = useAppStore.getState();
+  const refusal = branchDropRefusal(now.nodes, now.edges, knotId, socket);
+  if (refusal) return refusal;
+  now.pushHistory();
+  connect({ source: knotId, sourceHandle: 'out', target: socket.nodeId, targetHandle: socket.handleId });
+  return 'connected';
 }
 
 /** What `startReconnect` remembers: the history before its entry, and the
@@ -140,13 +156,11 @@ export function finishReconnect(
 }
 
 /**
- * Double-click on a Branch removes it, as a double-click removes a routing
- * point: every wire out of it is fed from the trunk's source again, with the
- * trunk's routing points followed by its own (no point where the Branch was).
- * That is the store's `removeNode`, whose splice is
- * `bridgeEdgesAcrossDeletedNodes` given the nodes — one undo entry and the
- * study's `node-remove`, the same path as X / Delete. False, changing nothing,
- * when `knotId` is not a Branch.
+ * Double-click on a Branch removes it: every wire out of it is fed from the
+ * trunk's source again, each at its own array index. That is the store's
+ * `removeNode`, whose splice is `bridgeEdgesAcrossDeletedNodes` — one undo
+ * entry and the study's `node-remove`, the same path as X / Delete. False,
+ * changing nothing, when `knotId` is not a Branch.
  */
 export function removeBranch(knotId: string): boolean {
   const store = useAppStore.getState();

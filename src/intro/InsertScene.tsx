@@ -295,7 +295,7 @@ export function InsertScene() {
           <button tabIndex={-1} data-intro-row="insert" className={`context-menu__item${state.focus === 'insert' ? ' context-menu__item--focused' : ''}`}>
             {t('Insert node', language)}
           </button>
-          <button tabIndex={-1} className="context-menu__item">{t('Add routing point', language)}</button>
+          <button tabIndex={-1} className="context-menu__item">{t('Make portal', language)}</button>
           <button tabIndex={-1} className="context-menu__item context-menu__item--danger">{t('Delete Connection', language)}</button>
         </div>
       </div>

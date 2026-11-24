@@ -79,41 +79,19 @@ describe('spliceNodeIntoEdge', () => {
   });
 });
 
-describe('spliceNodeIntoEdge — routing points', () => {
-  // a sits at the origin, b far right; the wire carries points at x = 100, 350, 450, 700 (350 and 450 lie inside the node's reach).
-  function seedRouted() {
+describe('spliceNodeIntoEdge — plain wires (routing points were removed, 2026-11-24)', () => {
+  it('writes two plain wires, carrying no drawing over from the old one', () => {
     const a = makeNode('a', 'float');
     const b = makeNode('b', 'float');
     const m = makeNode('m', 'mul');
-    a.position = { x: 0, y: 0 };
-    b.position = { x: 800, y: 0 };
-    m.position = { x: 340, y: -20 }; // centre ≈ (400, 0)
     const e = makeEdge('a', 'out', 'b', 'x');
-    e.data = { dataType: 'any', waypoints: [100, 350, 450, 700].map((x) => ({ x, y: 0 })) };
+    // An unsanitized wire still carrying an older file's points.
+    e.data = { dataType: 'any', waypoints: [{ x: 100, y: 0 }] };
     useAppStore.setState({ nodes: [a, b, m], edges: [e] });
-    return e.id;
-  }
-
-  it('keeps the points outside the node\'s reach, split across the two new wires', () => {
-    spliceNodeIntoEdge('m', def('mul'), seedRouted());
+    spliceNodeIntoEdge('m', def('mul'), e.id);
     const edges = useAppStore.getState().edges;
-    const xs = (e: typeof edges[number] | undefined) =>
-      ((e?.data?.waypoints ?? []) as { x: number }[]).map((w) => w.x);
-    expect(xs(edges.find((e) => e.target === 'm'))).toEqual([100]);
-    expect(xs(edges.find((e) => e.source === 'm'))).toEqual([700]);
-  });
-
-  it('dissolves the points close around the node', () => {
-    spliceNodeIntoEdge('m', def('mul'), seedRouted());
-    const all = useAppStore.getState().edges.flatMap((e) => (e.data?.waypoints ?? []) as { x: number }[]);
-    expect(all.map((w) => w.x).sort((p, q) => p - q)).toEqual([100, 700]);
-  });
-
-  it('adds no waypoints key to a wire that had none', () => {
-    seed();
-    const id = useAppStore.getState().edges[0].id;
-    spliceNodeIntoEdge('m', def('mul'), id);
-    for (const e of useAppStore.getState().edges) expect(e.data?.waypoints).toBeUndefined();
+    expect(edges).toHaveLength(2);
+    for (const w of edges) expect(Object.keys(w.data ?? {})).toEqual(['dataType']);
   });
 });
 
@@ -211,6 +189,23 @@ describe('connectNodes — the one connect rule', () => {
     expect(effectiveExposedPorts(useAppStore.getState().nodes[1])).not.toContain('uv');
     connectNodes('a', 'out', 'img', 'uv');
     expect(effectiveExposedPorts(useAppStore.getState().nodes[1])).toContain('uv');
+  });
+
+  it('refuses a connection from or to a node that is NOT in the graph, writing nothing', () => {
+    // A Branch-out wire outlived its Branch (Cmd+Z mid-wire): the click that
+    // followed wired from a missing source AND replaced the input's old feed.
+    const before = useAppStore.getState().edges;
+    expect(connectNodes('gone', 'out', 'b', 'x')).toBe(false);
+    expect(connectNodes('a', 'out', 'gone', 'x')).toBe(false);
+    expect(useAppStore.getState().edges).toBe(before);
+    expect(connectNodes('a', 'out', 'm', 'a')).toBe(true);
+  });
+
+  it('NodeEditor\'s onConnect refuses it too, BEFORE its undo entry', () => {
+    const editor = readFileSync(new URL('./NodeEditor.tsx', import.meta.url), 'utf8');
+    expect(editor).toMatch(
+      /const onConnect: OnConnect = useCallback\(\s*\(connection: Connection\) => \{\s*(?:\/\/[^\n]*\n\s*)*if \(!connectionNodesExist\(useAppStore\.getState\(\)\.nodes, connection\.source, connection\.target\)\) return;\s*connectSucceeded\.current = true;\s*useAppStore\.getState\(\)\.pushHistory\(\);/,
+    );
   });
 });
 

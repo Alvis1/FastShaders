@@ -3,19 +3,9 @@
  * "Branch"): putting a Branch (flow type `knot`, utils/passThrough.ts) INTO an
  * existing wire, and the one connect a Branch refuses.
  *
- * "Branch = routing point" (owner): a Branch is made only from a right-click
- * menu — "Branch from here" on a routing point, or the Add-node menu's Branch
- * row (Insert node on a wire included) — and every one of those SPLITS the
- * wire at a known place:
- *
- *  - at routing point `k` (the point becomes the Branch): points before it stay
- *    on the source half, points after it go to the target half
- *    (`splitWaypointsAtIndex` — never `splitWaypointsAtNode`, which re-finds
- *    the place by detour and DISSOLVES the points near a node);
- *  - on the wire's body (Insert node > Branch), at the nearest point of the
- *    DRAWN curve: the segment it lies on says which points go where
- *    (`splitWaypointsAtSegment`).
- *
+ * A Branch goes into a wire by a double-click on it, or the Add-node menu's
+ * Branch row (Insert node on a wire included; owner, 2026-11-24), at the
+ * nearest point of the DRAWN curve — and every one of those SPLITS the wire.
  * The consumer-side wire (Branch → old target) is written at the OLD wire's
  * array index and the feed (old source → Branch) right after it
  * (`splitEdgeWithKnot`): topological-sort ties follow edge order, so folded
@@ -26,36 +16,12 @@
  */
 import type { AppEdge, AppNode, GroupNodeData } from '@/types';
 import { generateEdgeId } from '@/utils/idGenerator';
-import { edgeWaypointsOf, unwrapGroupsOnly } from '@/utils/edgeUtils';
+import { unwrapGroupsOnly } from '@/utils/edgeUtils';
 import { KNOT_TYPE, isKnot, isTunnelIn } from '@/utils/passThrough';
 import { KNOT_SIZE } from './nodes/passThroughGeometry';
 import { absoluteNodePosition } from '@/utils/groupFrame';
 
 export type Pt = { x: number; y: number };
-
-/** Routing point `k` of `waypoints` and the two halves around it, or null when
- *  `k` is out of range. Never mutates. */
-export function splitWaypointsAtIndex(
-  waypoints: readonly Pt[],
-  k: number,
-): { at: Pt; before: Pt[]; after: Pt[] } | null {
-  if (!Number.isInteger(k) || k < 0 || k >= waypoints.length) return null;
-  return { at: waypoints[k], before: waypoints.slice(0, k), after: waypoints.slice(k + 1) };
-}
-
-/**
- * The two halves of a wire's routing points around a point on its drawn
- * curve's segment `seg` (segment `i` runs from the wire's point `i` to `i + 1`,
- * point 0 being the source — `nearestOnSegments`): the points before the
- * segment's end stay on the source half. Never mutates.
- */
-export function splitWaypointsAtSegment(
-  waypoints: readonly Pt[],
-  seg: number,
-): { before: Pt[]; after: Pt[] } {
-  const k = Math.max(0, Math.min(waypoints.length, Math.floor(seg)));
-  return { before: waypoints.slice(0, k), after: waypoints.slice(k) };
-}
 
 /** A fresh Branch centred on `center` (flow space). With `parent` (a group
  *  and its ABSOLUTE position) it is that group's member, placed relative to it;
@@ -105,17 +71,15 @@ export function knotParentFor(
   return { id: group.id, origin: absoluteNodePosition(group, byId) };
 }
 
-/** One half of a split wire: the old wire's data type, its share of points.
- *  Shared with the Portal's split (portalWire.ts `splitEdgeWithPortal`). */
+/** One half of a split wire, with the old wire's data type. Shared with the
+ *  Portal's split (portalWire.ts `splitEdgeWithPortal`). */
 export function half(
   old: AppEdge,
   source: string,
   sourceHandle: string | null | undefined,
   target: string,
   targetHandle: string | null | undefined,
-  waypoints: readonly Pt[],
 ): AppEdge {
-  const dataType = old.data?.dataType ?? 'any';
   return {
     id: generateEdgeId(source, sourceHandle ?? 'out', target, targetHandle ?? 'in'),
     source,
@@ -124,22 +88,19 @@ export function half(
     targetHandle,
     type: 'typed',
     animated: true,
-    data: waypoints.length ? { dataType, waypoints: waypoints.map((w) => ({ x: w.x, y: w.y })) } : { dataType },
+    data: { dataType: old.data?.dataType ?? 'any' },
   };
 }
 
 /**
  * `edges` with the wire `edgeId` split by the Branch `knotId`: the
- * consumer-side wire (Branch → old target, the `after` points) at the OLD
- * wire's index, the feed (old source → Branch, the `before` points) right
- * after it. Null when the wire is missing.
+ * consumer-side wire (Branch → old target) at the OLD wire's index, the feed
+ * (old source → Branch) right after it. Null when the wire is missing.
  */
 export function splitEdgeWithKnot(
   edges: readonly AppEdge[],
   edgeId: string,
   knotId: string,
-  before: readonly Pt[],
-  after: readonly Pt[],
 ): AppEdge[] | null {
   const i = edges.findIndex((e) => e.id === edgeId);
   if (i < 0) return null;
@@ -148,8 +109,8 @@ export function splitEdgeWithKnot(
   out.splice(
     i,
     1,
-    half(old, knotId, 'out', old.target, old.targetHandle, after),
-    half(old, old.source, old.sourceHandle, knotId, 'in', before),
+    half(old, knotId, 'out', old.target, old.targetHandle),
+    half(old, old.source, old.sourceHandle, knotId, 'in'),
   );
   return out;
 }
@@ -218,9 +179,4 @@ export function feedsFedKnot(
   if (!node) return false;
   const view = id === target ? edges : unwrapGroupsOnly(nodes as AppNode[], edges as AppEdge[]);
   return view.some((e) => e.target === id && e.id !== ignoreEdgeId);
-}
-
-/** The routing points a wire carries, as `splitWaypointsAt*` reads them. */
-export function wirePoints(edge: AppEdge): Pt[] {
-  return edgeWaypointsOf(edge);
 }

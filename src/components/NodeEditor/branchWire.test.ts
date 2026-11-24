@@ -1,79 +1,34 @@
 /**
  * The Branch gestures (docs/dev/canvas-interaction.md, "Branch"): putting a
- * Branch into a wire at a routing point or on the drawn curve — only ever
- * from a right-click menu — the array index the split writes, the one connect
- * a Branch refuses, and taking a Branch back out by Delete / X / double-click
- * (the trunk's routing points joined onto each wire it fed).
+ * Branch into a wire on its drawn curve — a double-click on the wire, or the
+ * Add-node menu's Branch row — the array index the split writes, the one
+ * connect a Branch refuses, and taking a Branch back out by Delete / X /
+ * double-click. Routing points were removed (owner, 2026-11-24): nothing here
+ * carries or splits one any more.
  */
 import { describe, it, expect, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { Position, type InternalNode } from '@xyflow/react';
-import type { AppEdge, AppNode } from '@/types';
+import type { AppNode } from '@/types';
 import { HISTORY_IDLE, makeKnot, makeNode } from '@/test-utils';
 import { cancelPendingGraphSave, useAppStore } from '@/store/useAppStore';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { graphToCode } from '@/engine/graphToCode';
-import { bridgeEdgesAcrossDeletedNodes, joinWaypoints, makeTypedEdge, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
-import { MAX_WAYPOINTS_PER_EDGE } from '@/utils/edgeExtras';
-import { catmullRomToBeziers, nearestOnSegments } from './edges/bezierGeometry';
-import {
-  branchRefusal,
-  feedsFedKnot,
-  makeKnotNode,
-  splitEdgeWithKnot,
-  splitWaypointsAtIndex,
-  splitWaypointsAtSegment,
-} from './branchWire';
+import { bridgeEdgesAcrossDeletedNodes, makeTypedEdge, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { edgeBezier, nearestOnSegments } from './edges/bezierGeometry';
+import { branchRefusal, feedsFedKnot, makeKnotNode, splitEdgeWithKnot } from './branchWire';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { branchIntoWireAt, finishReconnect, promoteWaypoint, removeBranch, startReconnect } from './branchActions';
+import { branchIntoWireAt, finishReconnect, removeBranch, startReconnect } from './branchActions';
 import { branchSpotOnWire, type GetInternalNode } from './edgeHit';
 import { KNOT_SIZE } from './nodes/passThroughGeometry';
 import { branchMatchesQuery, branchNameMatchesQuery, BRANCH_DESCRIPTION, BRANCH_TOOLTIP } from './branchSearch';
 
 const P = (x: number, y: number) => ({ x, y });
-const routed = (e: AppEdge, waypoints: { x: number; y: number }[]): AppEdge => ({
-  ...e,
-  data: { ...(e.data ?? { dataType: 'any' }), waypoints },
-});
 const read = (rel: string) => readFileSync(resolve(__dirname, rel), 'utf8');
 
-describe('splitting a wire\'s routing points', () => {
-  const wps = [P(1, 1), P(2, 2), P(3, 3), P(4, 4)];
-
-  it('at a KNOWN point: before stays on the source half, after goes to the target half', () => {
-    expect(splitWaypointsAtIndex(wps, 2)).toEqual({ at: P(3, 3), before: [P(1, 1), P(2, 2)], after: [P(4, 4)] });
-    expect(splitWaypointsAtIndex(wps, 0)).toEqual({ at: P(1, 1), before: [], after: wps.slice(1) });
-    expect(splitWaypointsAtIndex(wps, 3)).toEqual({ at: P(4, 4), before: wps.slice(0, 3), after: [] });
-  });
-
-  it('refuses an index that is not a point', () => {
-    for (const k of [-1, 4, 1.5, Number.NaN]) expect(splitWaypointsAtIndex(wps, k)).toBeNull();
-  });
-
-  it('keeps a point lying right beside the split — nothing is dissolved', () => {
-    // splitWaypointsAtNode would drop points within reach of a node; a Branch
-    // sits exactly where the point was, and its neighbours stay.
-    const close = [P(0, 0), P(1, 0), P(2, 0)];
-    expect(splitWaypointsAtIndex(close, 1)).toEqual({ at: P(1, 0), before: [P(0, 0)], after: [P(2, 0)] });
-  });
-
-  it('on the drawn spline: the segment the nearest point lies on decides', () => {
-    const source = P(0, 0);
-    const target = P(400, 0);
-    const route = [P(100, 100), P(200, 0), P(300, 100)];
-    const segs = catmullRomToBeziers([[source.x, source.y], ...route.map((w) => [w.x, w.y] as [number, number]), [target.x, target.y]]);
-    // Near the middle of the SECOND segment (100,100 → 200,0).
-    const hit = nearestOnSegments(segs, 150, 50)!;
-    expect(hit.seg).toBe(1);
-    expect(hit.d).toBeLessThan(5);
-    expect(splitWaypointsAtSegment(route, hit.seg)).toEqual({ before: [P(100, 100)], after: [P(200, 0), P(300, 100)] });
-    // On the first segment, every point goes to the target half; on the last, to the source half.
-    expect(splitWaypointsAtSegment(route, nearestOnSegments(segs, 30, 40)!.seg).before).toEqual([]);
-    expect(splitWaypointsAtSegment(route, nearestOnSegments(segs, 360, 40)!.seg).after).toEqual([]);
-  });
-
-  it('the nearest point is ON the curve', () => {
-    const segs = catmullRomToBeziers([[0, 0], [100, 0]]);
+describe('the nearest point of the drawn curve', () => {
+  it('is ON the curve', () => {
+    const segs = [edgeBezier(0, 0, Position.Right, 100, 0, Position.Left)];
     const hit = nearestOnSegments(segs, 40, 30)!;
     expect(hit.y).toBeCloseTo(0, 6);
     expect(hit.x).toBeCloseTo(40, 1);
@@ -87,16 +42,16 @@ describe('splitEdgeWithKnot — the array index', () => {
   const c = makeTypedEdge('s', 'out', 'v', 'x');
 
   it('writes the consumer side at the OLD index, the feed right after it', () => {
-    const out = splitEdgeWithKnot([b, a, c], a.id, 'k', [P(1, 1)], [P(2, 2)])!;
+    const out = splitEdgeWithKnot([b, a, c], a.id, 'k')!;
     expect(out.map((e) => `${e.source}>${e.target}`)).toEqual(['u>t', 'k>t', 's>k', 's>v']);
-    expect(out[1]).toMatchObject({ sourceHandle: 'out', targetHandle: 'a', data: { waypoints: [P(2, 2)] } });
-    expect(out[2]).toMatchObject({ sourceHandle: 'out', targetHandle: 'in', data: { waypoints: [P(1, 1)] } });
-    expect(splitEdgeWithKnot([b], a.id, 'k', [], [])).toBeNull();
+    expect(out[1]).toMatchObject({ sourceHandle: 'out', targetHandle: 'a', data: { dataType: 'any' } });
+    expect(out[2]).toMatchObject({ sourceHandle: 'out', targetHandle: 'in', data: { dataType: 'any' } });
+    expect(splitEdgeWithKnot([b], a.id, 'k')).toBeNull();
   });
 
   it('folded through the Branch, the edge list reads exactly as before', () => {
     const nodes = [makeNode('s', 'float'), makeNode('u', 'float'), makeNode('t', 'add'), makeNode('v', 'sin'), makeKnot('k')];
-    const out = splitEdgeWithKnot([b, a, c], a.id, 'k', [], [])!;
+    const out = splitEdgeWithKnot([b, a, c], a.id, 'k')!;
     const folded = unwrapCollapsedGroupEdges(nodes, out);
     expect(folded.map((e) => [e.source, e.sourceHandle, e.target, e.targetHandle])).toEqual(
       [b, a, c].map((e) => [e.source, e.sourceHandle, e.target, e.targetHandle]),
@@ -175,104 +130,52 @@ function fakeNode(id: string, x: number, y: number): InternalNode {
   } as unknown as InternalNode;
 }
 
-describe('branchSpotOnWire — Insert node > Branch on one wire', () => {
+describe('branchSpotOnWire — where a Branch goes on one wire', () => {
   const nodes = new Map([['s', fakeNode('s', 0, 0)], ['t', fakeNode('t', 500, 0)]]);
   const get: GetInternalNode = (id) => nodes.get(id);
   // s.out at (100, 15) → t.in at (500, 15): a level wire along y = 15.
   const wire = makeTypedEdge('s', 'out', 't', 'in');
 
-  it('on the body: the nearest point of the drawn curve', () => {
-    const hit = branchSpotOnWire(wire, P(300, 20), get, 9);
-    if (hit?.kind !== 'body') throw new Error('body expected');
-    expect(hit.at.y).toBeCloseTo(15, 0);
-    expect(hit.at.x).toBeCloseTo(300, -1);
-    expect(hit).toMatchObject({ before: [], after: [] });
-  });
-
-  it('a routing point under the menu wins over the body, and splits there', () => {
-    const r = routed(wire, [P(200, 80), P(400, 80)]);
-    expect(branchSpotOnWire(r, P(403, 83), get, 9)).toEqual({ kind: 'point', index: 1 });
-    // Between the points, on the body: the segment from point 0 to point 1.
-    expect(branchSpotOnWire(r, P(300, 80), get, 9)).toMatchObject({ kind: 'body', before: [P(200, 80)], after: [P(400, 80)] });
+  it('the nearest point of the drawn curve', () => {
+    const hit = branchSpotOnWire(wire, P(300, 20), get)!;
+    expect(hit.y).toBeCloseTo(15, 0);
+    expect(hit.x).toBeCloseTo(300, -1);
   });
 
   it('a wire that is not DRAWN is no spot: hidden, or into an unmounted socket', () => {
-    expect(branchSpotOnWire({ ...wire, hidden: true }, P(300, 15), get, 9)).toBeNull();
+    expect(branchSpotOnWire({ ...wire, hidden: true }, P(300, 15), get)).toBeNull();
     const o = fakeNode('o', 600, 0);
     (o.internals.handleBounds as { target: unknown[] }).target = [
       { id: 'color', type: 'target', nodeId: 'o', x: 0, y: 10, width: 0, height: 10, position: Position.Left },
     ];
     const both = new Map([['s', fakeNode('s', 0, 0)], ['o', o]]);
-    const unlit = routed(makeTypedEdge('s', 'out', 'o', 'roughness'), [P(300, 200)]);
-    expect(branchSpotOnWire(unlit, P(302, 201), (id) => both.get(id), 9)).toBeNull();
+    expect(branchSpotOnWire(makeTypedEdge('s', 'out', 'o', 'roughness'), P(302, 15), (id) => both.get(id))).toBeNull();
   });
 });
 
-describe('joinWaypoints and the delete splice', () => {
-  it('joins the trunk\'s points then the wire\'s own, with NO point where the Branch was — capped', () => {
-    expect(joinWaypoints([P(1, 1)], [P(3, 3)])).toEqual([P(1, 1), P(3, 3)]);
-    expect(joinWaypoints([], [])).toEqual([]);
-    const many = Array.from({ length: 50 }, (_, i) => P(i, i));
-    const joined = joinWaypoints(many, many.map((w) => P(w.x + 100, w.y)));
-    expect(joined).toHaveLength(MAX_WAYPOINTS_PER_EDGE);
-    // The points nearest the SOURCE are kept.
-    expect(joined[0]).toEqual(P(0, 0));
-    expect(joined[50]).toEqual(P(100, 0));
-  });
-
-  it('a deleted Branch hands each wire back the trunk\'s points, then its own', () => {
-    const k = { ...makeKnot('k'), position: P(200 - KNOT_SIZE / 2, 50 - KNOT_SIZE / 2) } as AppNode;
-    const nodes = [makeNode('s', 'float'), makeNode('t', 'sin'), makeNode('u', 'cos'), k];
-    const trunk = routed(makeTypedEdge('s', 'out', 'k', 'in'), [P(100, 0)]);
-    const toT = routed(makeTypedEdge('k', 'out', 't', 'x'), [P(300, 0)]);
+describe('the delete splice', () => {
+  it('a deleted Branch hands each wire it fed back to the trunk\'s source, at its own index', () => {
+    const trunk = makeTypedEdge('s', 'out', 'k', 'in');
+    const toT = makeTypedEdge('k', 'out', 't', 'x');
     const toU = makeTypedEdge('k', 'out', 'u', 'x');
-    const out = bridgeEdgesAcrossDeletedNodes([toT, trunk, toU], new Set(['k']), nodes);
+    const out = bridgeEdgesAcrossDeletedNodes([toT, trunk, toU], new Set(['k']));
     expect(out.map((e) => `${e.source}>${e.target}`)).toEqual(['s>t', 's>u']);
-    expect(out[0].data?.waypoints).toEqual([P(100, 0), P(300, 0)]);
-    expect(out[1].data?.waypoints).toEqual([P(100, 0)]);
-    // Without the nodes (every older caller) nothing about the drawing changes.
-    expect(bridgeEdgesAcrossDeletedNodes([toT, trunk], new Set(['k']))[0].data?.waypoints).toEqual([P(300, 0)]);
-  });
-
-  it('a Branch with no routing points on either side leaves a wire with none', () => {
-    const out = bridgeEdgesAcrossDeletedNodes(
-      [makeTypedEdge('s', 'out', 'k', 'in'), makeTypedEdge('k', 'out', 't', 'x')],
-      new Set(['k']),
-      [makeNode('s', 'float'), makeNode('t', 'sin'), makeKnot('k')],
-    );
-    expect(out).toHaveLength(1);
     expect(out[0].data).toEqual({ dataType: 'any' });
   });
 
-  it('through a CHAIN of Branches every trunk\'s points join, nearest the source first', () => {
-    const nodes = [makeNode('s', 'float'), makeNode('t', 'sin'), makeKnot('k1'), makeKnot('k2')];
+  it('through a CHAIN of Branches the wire reaches the first live source', () => {
     const out = bridgeEdgesAcrossDeletedNodes(
-      [
-        routed(makeTypedEdge('s', 'out', 'k1', 'in'), [P(1, 0)]),
-        routed(makeTypedEdge('k1', 'out', 'k2', 'in'), [P(2, 0)]),
-        routed(makeTypedEdge('k2', 'out', 't', 'x'), [P(3, 0)]),
-      ],
+      [makeTypedEdge('s', 'out', 'k1', 'in'), makeTypedEdge('k1', 'out', 'k2', 'in'), makeTypedEdge('k2', 'out', 't', 'x')],
       new Set(['k1', 'k2']),
-      nodes,
     );
-    expect(out).toHaveLength(1);
-    expect(out[0].data?.waypoints).toEqual([P(1, 0), P(2, 0), P(3, 0)]);
+    expect(out.map((e) => `${e.source}>${e.target}`)).toEqual(['s>t']);
   });
 
-  it('a chain through a deleted NON-Branch keeps the wire\'s own points only', () => {
-    const out = bridgeEdgesAcrossDeletedNodes(
-      [makeTypedEdge('s', 'out', 'm', 'x'), routed(makeTypedEdge('m', 'out', 't', 'x'), [P(5, 5)])],
-      new Set(['m']),
-      [makeNode('s', 'float'), makeNode('m', 'sin'), makeNode('t', 'cos')],
-    );
-    expect(out[0].data?.waypoints).toEqual([P(5, 5)]);
-  });
-
-  it('every delete path hands the splice the nodes', () => {
-    expect(read('NodeEditor.tsx')).toMatch(/bridgeEdgesAcrossDeletedNodes\(\s*currentEdges as AppEdge\[\],\s*selectedNodeIds,\s*currentNodes,\s*\)/);
+  it('every delete path goes through the one splice', () => {
+    expect(read('NodeEditor.tsx')).toMatch(/bridgeEdgesAcrossDeletedNodes\(\s*currentEdges as AppEdge\[\],\s*selectedNodeIds,\s*\)/);
     const store = read('../../store/useAppStore.ts');
-    expect(store).toContain('bridgeEdgesAcrossDeletedNodes(state.edges, new Set([nodeId]), state.nodes)');
-    expect(store).toContain('bridgeEdgesAcrossDeletedNodes(state.edges, toRemove, state.nodes)');
+    expect(store).toContain('bridgeEdgesAcrossDeletedNodes(state.edges, new Set([nodeId]))');
+    expect(store).toContain('bridgeEdgesAcrossDeletedNodes(state.edges, toRemove)');
   });
 });
 
@@ -281,9 +184,13 @@ describe('the store gestures', () => {
   const t = makeNode('t', 'sin');
   const u = makeNode('u', 'add');
   const output = makeNode('o', 'output');
-  const wire = routed(makeTypedEdge('s', 'out', 't', 'x'), [P(100, 0), P(200, 50), P(300, 0)]);
+  const wire = makeTypedEdge('s', 'out', 't', 'x');
   const tOut = makeTypedEdge('t', 'out', 'o', 'color');
   const uOut = makeTypedEdge('u', 'out', 'o', 'emissive');
+  // s.out at (100, 15) → t.x at (500, 15).
+  const internals = new Map([['s', fakeNode('s', 0, 0)], ['t', fakeNode('t', 500, 0)]]);
+  (internals.get('t')!.internals.handleBounds as { target: { id: string }[] }).target[0].id = 'x';
+  const get: GetInternalNode = (id) => internals.get(id);
 
   beforeEach(() => {
     cancelPendingGraphSave();
@@ -299,32 +206,33 @@ describe('the store gestures', () => {
     return graphToCode(st.nodes, st.edges, NODE_REGISTRY).code;
   };
 
-  it('"Branch from here" is ONE undo entry, leaves the code alone, and undo restores the graph exactly', () => {
+  it('a double-click on a wire is ONE undo entry, keeps the array index and the code, and undo is exact', () => {
     const before = useAppStore.getState();
     const codeBefore = code();
-    const knot = promoteWaypoint(wire.id, 1)!;
+    const knot = branchIntoWireAt(wire.id, P(300, 40), get)!;
     expect(knot).toBeTruthy();
     const after = useAppStore.getState();
     expect(after.past).toHaveLength(1);
-    expect(after.nodes.find((n) => n.id === knot)?.position).toEqual(P(200 - KNOT_SIZE / 2, 50 - KNOT_SIZE / 2));
+    // On the drawn curve, nearest the double-click.
+    const k = after.nodes.find((n) => n.id === knot)!;
+    expect(k.position.y + KNOT_SIZE / 2).toBeCloseTo(15, 0);
+    expect(k.position.x + KNOT_SIZE / 2).toBeCloseTo(300, -1);
     // The consumer side at the old wire's array index (1), the feed after it.
     expect(after.edges.map((e) => `${e.source}>${e.target}`)).toEqual(['t>o', `${knot}>t`, `s>${knot}`, 'u>o']);
-    expect(after.edges[1].data?.waypoints).toEqual([P(300, 0)]);
-    expect(after.edges[2].data?.waypoints).toEqual([P(100, 0)]);
     expect(code()).toBe(codeBefore);
     useAppStore.getState().undo();
     expect(useAppStore.getState().nodes).toEqual(before.nodes);
     expect(useAppStore.getState().edges).toEqual(before.edges);
   });
 
-  it('a point that is not there promotes nothing and spends no entry', () => {
-    expect(promoteWaypoint(wire.id, 7)).toBeNull();
-    expect(promoteWaypoint('gone', 0)).toBeNull();
+  it('a wire it cannot take changes nothing and spends no entry', () => {
+    expect(branchIntoWireAt('gone', P(300, 15), get)).toBeNull();
+    expect(branchIntoWireAt(tOut.id, P(300, 15), get)).toBeNull(); // not drawn: no internals for o
     expect(useAppStore.getState().past).toHaveLength(0);
   });
 
   it('double-click removes the Branch in ONE entry: every wire out fed from the trunk, at its own index', () => {
-    const knot = promoteWaypoint(wire.id, 1)!;
+    const knot = branchIntoWireAt(wire.id, P(300, 15), get)!;
     // A second wire out, made by connecting TO the Branch from u's input.
     useAppStore.setState({ edges: [...useAppStore.getState().edges, makeTypedEdge(knot, 'out', 'u', 'a')] });
     const pastBefore = useAppStore.getState().past.length;
@@ -333,9 +241,6 @@ describe('the store gestures', () => {
     expect(st.past).toHaveLength(pastBefore + 1);
     expect(st.nodes.some((n) => n.id === knot)).toBe(false);
     expect(st.edges.map((e) => `${e.source}>${e.target}`)).toEqual(['t>o', 's>t', 'u>o', 's>u']);
-    // The promoted point is gone, as a double-clicked routing point is.
-    expect(st.edges[1].data?.waypoints).toEqual([P(100, 0), P(300, 0)]);
-    expect(st.edges[3].data?.waypoints).toEqual([P(100, 0)]);
     expect(code()).toBe(graphToCode(st.nodes, st.edges, NODE_REGISTRY).code);
     // Undo restores the Branch and both its wires exactly.
     const withBranch = st.past[st.past.length - 1];
@@ -363,65 +268,33 @@ describe('where a Branch is made, and what it never does', () => {
     cancelPendingGraphSave();
     useAppStore.setState({ nodes: [], edges: [], past: [], future: [], ...HISTORY_IDLE });
   });
-  const at = (n: AppNode, x: number, y: number) => ({ ...n, position: P(x, y) }) as AppNode;
-  const xs = (e: AppEdge | undefined) => ((e?.data?.waypoints ?? []) as { x: number }[]).map((w) => w.x);
 
   it('a Branch put into a wire between two members of one group becomes a member', () => {
     const g = { id: 'g', type: 'group', position: P(1000, 1000), data: { label: 'G' } } as unknown as AppNode;
     const s = { ...makeNode('s', 'float'), parentId: 'g', position: P(10, 10) } as AppNode;
     const t = { ...makeNode('t', 'sin'), parentId: 'g', position: P(300, 10) } as AppNode;
-    const wire = routed(makeTypedEdge('s', 'out', 't', 'x'), [P(1200, 1060)]);
+    const wire = makeTypedEdge('s', 'out', 't', 'in');
+    // Absolute: s at (1010, 1010), t at (1300, 1010); the wire along y = 1025.
+    const internals = new Map([['s', fakeNode('s', 1010, 1010)], ['t', fakeNode('t', 1300, 1010)]]);
+    const get: GetInternalNode = (id) => internals.get(id);
     useAppStore.setState({ nodes: [g, s, t], edges: [wire] });
-    const knot = promoteWaypoint(wire.id, 0)!;
+    const knot = branchIntoWireAt(wire.id, P(1200, 1025), get)!;
     const k = useAppStore.getState().nodes.find((n) => n.id === knot);
     expect(k?.parentId).toBe('g');
-    expect(k?.position).toEqual(P(200 - KNOT_SIZE / 2, 60 - KNOT_SIZE / 2));
+    // Placed relative to the group.
+    expect(k!.position.y + KNOT_SIZE / 2).toBeCloseTo(25, 0);
     // A wire leaving the group: the Branch stays at the root.
-    useAppStore.setState({ nodes: [g, s, at(makeNode('u', 'sin'), 2000, 0)], edges: [routed(makeTypedEdge('s', 'out', 'u', 'x'), [P(1500, 1000)])] });
-    const k2 = promoteWaypoint(useAppStore.getState().edges[0].id, 0)!;
+    const u = { ...makeNode('u', 'sin'), position: P(2000, 1010) } as AppNode;
+    internals.set('u', fakeNode('u', 2000, 1010));
+    useAppStore.setState({ nodes: [g, s, u], edges: [makeTypedEdge('s', 'out', 'u', 'in')] });
+    const k2 = branchIntoWireAt(useAppStore.getState().edges[0].id, P(1500, 1025), get)!;
     expect(useAppStore.getState().nodes.find((n) => n.id === k2)?.parentId).toBeUndefined();
   });
 
-  describe('Insert node > Branch splits where the menu opened, by the drawn curve', () => {
-    const internals = new Map([['s', fakeNode('s', 0, 0)], ['t', fakeNode('t', 500, 0)]]);
-    const get: GetInternalNode = (id) => internals.get(id);
-    const wire = routed(makeTypedEdge('s', 'out', 't', 'in'), [P(200, 80), P(400, 80)]);
-    const seed = () => useAppStore.setState({ nodes: [makeNode('s', 'float'), makeNode('t', 'sin')], edges: [wire] });
-
-    it('on the body: on the curve, every point kept, one entry', () => {
-      seed();
-      const knot = branchIntoWireAt(wire.id, P(300, 85), get, 1)!;
-      const st = useAppStore.getState();
-      expect(st.past).toHaveLength(1);
-      expect(xs(st.edges.find((e) => e.target === knot))).toEqual([200]);
-      expect(xs(st.edges.find((e) => e.source === knot))).toEqual([400]);
-      const hit = branchSpotOnWire(wire, P(300, 85), get, 9);
-      if (hit?.kind !== 'body') throw new Error('body expected');
-      const k = st.nodes.find((n) => n.id === knot)!;
-      expect(k.position).toEqual(P(hit.at.x - KNOT_SIZE / 2, hit.at.y - KNOT_SIZE / 2));
-    });
-
-    it('on a routing point (the edge menu\'s own on-point test): that point becomes the Branch', () => {
-      seed();
-      const knot = branchIntoWireAt(wire.id, P(404, 83), get, 1)!;
-      const st = useAppStore.getState();
-      expect(st.nodes.find((n) => n.id === knot)?.position).toEqual(P(400 - KNOT_SIZE / 2, 80 - KNOT_SIZE / 2));
-      expect(xs(st.edges.find((e) => e.target === knot))).toEqual([200]);
-      expect(xs(st.edges.find((e) => e.source === knot))).toEqual([]);
-    });
-
-    it('a wire it cannot take changes nothing and spends no entry', () => {
-      seed();
-      expect(branchIntoWireAt('gone', P(300, 85), get, 1)).toBeNull();
-      expect(branchIntoWireAt(wire.id, P(300, 85), get, 0)).toBeNull();
-      expect(useAppStore.getState().past).toHaveLength(0);
-    });
-  });
-
-  it('a Branch never drag-connects, never splices into a wire it is dropped on, and never makes room', () => {
+  it('a Branch never drag-connects as a node does, never splices into a wire it is dropped on, and never makes room', () => {
     const src = read('NodeEditor.tsx');
-    // The drag preview returns before drag-connect and the edge light.
-    expect(src).toContain("if (rfDragged.type === 'group' || rfDragged.type === 'note' || isKnot(rfDragged)) return;");
+    // The drag preview handles a Branch apart, before drag-connect and the edge light.
+    expect(src).toMatch(/if \(isKnot\(rfDragged\)\) \{[\s\S]*?updateBranchDrop\(rfDragged\.id\)[\s\S]*?return;\s*\}/);
     // No drag-connect target, never pushed by a make-room cascade.
     expect(src.match(/other\.type === 'note' \|\| isKnot\(other\)/g)).toHaveLength(1);
     expect(src).toContain("if (n.type === 'group' || n.type === 'note' || isKnot(n)) continue;");
@@ -431,19 +304,24 @@ describe('where a Branch is made, and what it never does', () => {
     expect(src).toContain('if (!isNote && !overNodeBody && def && def.inputs.length > 0 && def.outputs.length > 0) {');
   });
 
-  it('the creation gestures the owner removed stay removed (2026-11-23: menus only)', () => {
+  it('the gestures the owner removed stay removed', () => {
     const editor = read('NodeEditor.tsx');
-    // A dragged wire released on a wire or a routing point makes no Branch.
-    expect(editor).not.toMatch(/branchDropFor|findBranchDrop|insertBranch|promoteWaypoint/);
-    // Shift+drag on a routing point is no gesture.
-    expect(read('edges/TypedEdge.tsx')).not.toMatch(/shiftKey|branchActions/);
+    // A dragged wire released on a wire makes no Branch; routing points are gone.
+    expect(editor).not.toMatch(/findBranchDrop|promoteWaypoint|addEdgeWaypoint/);
+    // No Shift+drag gesture on the wire, and no routing-point handles.
+    const edge = read('edges/TypedEdge.tsx');
+    expect(edge).not.toMatch(/shiftKey|branchActions|EdgeWaypointHandles|waypoints/);
     // A dragged Branch is no splice candidate.
     expect(read('edgeInsert.ts')).not.toMatch(/isKnot|knot/i);
   });
 
-  it('the Branch row and "Branch from here" are the two menu ways in', () => {
-    expect(read('menus/EdgeContextMenu.tsx')).toContain('promoteWaypoint(edgeId, pointIndex)');
-    expect(read('menus/AddNodeMenu.tsx')).toContain('branchIntoWireAt(spliceEdgeId, at, getInternalNode, getViewport().zoom)');
+  it('a double-click on a wire and the Add-node menu\'s Branch row are the ways in', () => {
+    const editor = read('NodeEditor.tsx');
+    expect(editor).toMatch(/const onEdgeDoubleClick = useCallback\([\s\S]*?connection\.inProgress\) return;[\s\S]*?branchIntoWireAt\(/);
+    expect(editor).toContain('onEdgeDoubleClick={onEdgeDoubleClick}');
+    expect(read('menus/AddNodeMenu.tsx')).toContain('branchIntoWireAt(spliceEdgeId, at, getInternalNode)');
+    // The wire's menu has no routing-point rows.
+    expect(read('menus/EdgeContextMenu.tsx')).not.toMatch(/t\('Add routing point'|t\('Remove routing point'|t\('Branch from here'/);
   });
 });
 
@@ -571,8 +449,7 @@ describe('Step 2 review fixes', () => {
     expect(editor).toMatch(/finishReconnect\(\s*mark,\s*reconnectSuccessful\.current,\s*connectionState\s*\)/);
   });
 
-  it('F7: "Branch from here" and Insert node > Branch are not offered on a wire they may not take', () => {
-    expect(read('menus/EdgeContextMenu.tsx')).toMatch(/branchRefusal\(s\.nodes, s\.edges, edgeId\) === null/);
+  it('F7: Insert node > Branch is not offered on a wire it may not take', () => {
     const add = read('menus/AddNodeMenu.tsx');
     expect(add).toMatch(/branchRefusal\(s\.nodes, s\.edges, spliceEdgeId\) === null/);
     // The Wires section also holds the Portal rows, so it opens on either.

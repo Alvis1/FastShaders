@@ -7,7 +7,8 @@ import { stubLocalStorage } from '@/test-utils';
  * level as fs:graph), and instantiating a saved group clones its nodes/edges
  * straight into the live graph. Both render-time sinks throw with no error
  * boundary anywhere in the app: ShaderNode does `new Set(data.exposedPorts)`
- * (`new Set(5)` is a TypeError) and TypedEdge dereferences `waypoints[i].x`.
+ * (`new Set(5)` is a TypeError) and TypedEdge reads `edge.data` (an older
+ * group's routing points are dropped — removed 2026-11-24).
  * A poisoned group must therefore be REPAIRED at load, exactly like loadGraph
  * and applyProjectToStore repair the other two paths.
  */
@@ -55,14 +56,8 @@ describe('loadSavedGroups sanitizes fs:savedGroups as adversarial input', () => 
       expect(ep === undefined || Array.isArray(ep)).toBe(true);
       expect(() => new Set((ep as string[]) ?? [])).not.toThrow();
     }
-    for (const e of groups[0].edges) {
-      const wps = (e.data?.waypoints ?? []) as Array<{ x: number; y: number }>;
-      expect(Array.isArray(wps)).toBe(true);
-      for (const w of wps) {
-        expect(Number.isFinite(w.x)).toBe(true);
-        expect(Number.isFinite(w.y)).toBe(true);
-      }
-    }
+    // Routing points were removed (2026-11-24): a poisoned list is dropped whole.
+    for (const e of groups[0].edges) expect(e.data).toEqual({ dataType: 'any' });
   });
 
   it('keeps well-formed groups intact', () => {
@@ -95,7 +90,9 @@ describe('loadSavedGroups sanitizes fs:savedGroups as adversarial input', () => 
     const groups = loadSavedGroups();
     expect(groups).toHaveLength(1);
     expect((groups[0].nodes[0].data as { exposedPorts?: string[] }).exposedPorts).toEqual(['a']);
-    expect(groups[0].edges[0].data?.waypoints).toEqual([{ x: 10, y: 20 }]);
+    // The wire is kept; an older group's routing point is dropped.
+    expect(groups[0].edges[0]).toMatchObject({ id: 'e1', source: 'x', target: 'a' });
+    expect(groups[0].edges[0].data).toEqual({ dataType: 'any' });
   });
 
   it('non-array and element-shape garbage degrade to an empty library', () => {

@@ -3,8 +3,8 @@
  * it crosses, in ONE undo entry (`store.removeEdges`). Two triggers, one
  * gesture:
  *  - Alt/⌥ + left-drag that STARTS on empty canvas or on a wire — never on a
- *    node, a socket, a routing point, a Branch dot or a portal hole (those are
- *    nodes) — and travels past `CUT_CLICK_SLOP_PX`. A press that never does
+ *    node, a socket, a Branch dot or a portal hole (those are nodes) — and
+ *    travels past `CUT_CLICK_SLOP_PX`. A press that never does
  *    stays today's Alt+click: the click is left alone, so a wire is deleted
  *    by `onEdgeClick` and a node still goes to Preview mode.
  *  - the draw toolbar's SCISSORS (draw mode, `drawCut`): a one-finger or left
@@ -36,7 +36,7 @@ import { CUT_CLICK_SLOP_PX, CUT_SAMPLE_PX, MAX_CUT_POINTS, type Pt } from './cut
 const CHROME = 'input, textarea, select, button, .nodrag, [contenteditable="true"], .react-flow__panel';
 /** Never an Alt cut: what a press there already means. A Branch dot and a
  *  portal hole are NODES, so `.react-flow__node` covers them. */
-const NOT_CUT = '.react-flow__node, .react-flow__handle, .react-flow__nodesselection, .react-flow__edgeupdater, .fs-edge-waypoint';
+const NOT_CUT = '.react-flow__node, .react-flow__handle, .react-flow__nodesselection, .react-flow__edgeupdater';
 /** Where an Alt cut may start: empty canvas, or a wire's body. */
 const CUT_FROM = '.react-flow__pane, .react-flow__edge, .react-flow__background';
 

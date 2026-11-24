@@ -1,8 +1,8 @@
 /**
  * Board drawing layer — data model + pure helpers.
  *
- * Freehand ink annotations on the node-editor canvas, like notes and edge
- * waypoints: VISUAL-ONLY, never part of the shader graph. Strokes live in their
+ * Freehand ink annotations on the node-editor canvas, like notes: VISUAL-ONLY,
+ * never part of the shader graph. Strokes live in their
  * own zustand slice (`drawings`), ride the graph autosave + project embed, and
  * are invisible to graphToCode / cpuEvaluator / the sync engine.
  *

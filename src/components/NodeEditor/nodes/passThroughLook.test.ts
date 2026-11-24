@@ -13,11 +13,10 @@ import {
   KNOT_DOT_R,
   KNOT_DOT_STROKE,
   KNOT_SIZE,
+  TUNNEL_HANDLE,
   TUNNEL_LAYOUT_H,
   TUNNEL_LAYOUT_W,
   TUNNEL_SIZE,
-  WAYPOINT_DOT_R,
-  WAYPOINT_DOT_STROKE,
 } from './passThroughGeometry';
 import { rawNodeTypes } from '../flowTypes';
 import { COST_SCALED_TYPES, estimateNodeSize } from '@/engine/layoutEngine';
@@ -189,28 +188,63 @@ describe('the look', () => {
     expect(css).toContain('var(--tunnel-well)');
   });
 
-  it('draws the Portal hole ROUND (the owner\'s exception) and the Branch as a routing point\'s dot', () => {
+  it('draws the Portal hole ROUND (the owner\'s exception) and the Branch as a round dot', () => {
     const block = (sel: string) => css.slice(css.indexOf(`${sel} {`), css.indexOf('}', css.indexOf(`${sel} {`)));
     expect(block('.tunnel-node__hole')).toContain('border-radius: 50%');
     expect(block('.knot-node__dot')).toContain('border-radius: 50%');
   });
 
-  it('draws the Branch at TWICE a routing point, at every zoom (owner, 2026-11-23)', () => {
-    // One pair of numbers for both: TypedEdge's waypoint circle reads them.
-    expect(KNOT_DOT_R).toBe(2 * WAYPOINT_DOT_R);
-    expect(KNOT_DOT_STROKE).toBe(2 * WAYPOINT_DOT_STROKE);
-    const edge = read('../edges/TypedEdge.tsx');
-    expect(edge).toContain('const r = WAYPOINT_DOT_R / zoom;');
-    expect(edge).toContain('strokeWidth={WAYPOINT_DOT_STROKE / zoom}');
+  it('draws the Branch dot at one size ON SCREEN at every zoom (its 2026-11-23 size kept)', () => {
+    // Twice the 5 px routing point it was drawn after; routing points are gone.
+    expect(KNOT_DOT_R).toBe(10);
+    expect(KNOT_DOT_STROKE).toBe(3);
+    expect(css).toContain('border: calc(3px * var(--fs-node-border-scale, 1)) solid');
     // The box is the dot at zoom 1; the dot inside it is counter-scaled.
     expect(KNOT_SIZE).toBe(2 * KNOT_DOT_R + KNOT_DOT_STROKE);
     const knot = decomment(read('./KnotNode.tsx'));
     expect(knot).toMatch(/'--fs-knot-unzoom': unzoom/);
     expect(knot).toMatch(/s\.transform\[2\]/);
-    // Its fill and stroke are the waypoint's own pair.
+    // The canvas's contrast colour, with the opposite stroke.
     expect(knot).toContain('getContrastColor(canvas)');
-    expect(edge).toContain("const stroke = fill === '#ffffff' ? '#000000' : '#ffffff';");
     expect(knot).toContain("const stroke = fill === '#ffffff' ? '#000000' : '#ffffff';");
+  });
+
+  it('gives a SELECTED portal end no shadow: it grows a little and wears a selection ring (owner, 2026-11-24)', () => {
+    // No outer shadow layer in any state: every box-shadow on the hole, in
+    // every rule that styles it, is the inset alone.
+    const holeShadows: string[] = [];
+    for (const [, sel, body] of css.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+      if (!sel.includes('tunnel-node__hole')) continue;
+      for (const m of body.matchAll(/box-shadow:([^;]+);/g)) holeShadows.push(m[1].trim());
+    }
+    expect(holeShadows.length).toBeGreaterThanOrEqual(2); // rest, hover
+    for (const s of holeShadows) expect(s).toMatch(/^inset \d+px \d+px 0 /);
+    expect(css).not.toMatch(/--fs-tunnel-plate/);
+    // The growth is the node lift's scale; the ring an outline in the CANVAS
+    // INK — never `--border-focus`, which is #3366CC, the Float wire's colour:
+    // a float portal's rim and that ring read as one double rim.
+    expect(css).toMatch(/\.tunnel-node__hole \{[^}]*scale: var\(--fs-node-scale, 1\)/);
+    const ring = css.slice(css.indexOf('.tunnel-node--selected .tunnel-node__hole {'));
+    const rule = ring.slice(0, ring.indexOf('}'));
+    expect(rule).toContain('outline: 2px solid var(--node-cost-text, var(--text-primary))');
+    expect(rule).toContain('outline-offset: 3px');
+    expect(css).not.toMatch(/outline:[^;]*--border-focus/);
+  });
+
+  it('marks the selected end alone with the solid ring; its partners a WEAKER dashed one; a hovered end only its inset', () => {
+    // The first cut gave the trace and hover the SAME ring and inset as
+    // selection, so the selected end could not be told from its partners.
+    const at = (sel: string) => {
+      const i = css.indexOf(`${sel} {`);
+      expect(i, sel).toBeGreaterThanOrEqual(0);
+      return css.slice(i, css.indexOf('}', i));
+    };
+    const trace = at('.react-flow__node[data-fs-portal-trace]:not(.selected):not(:hover) .tunnel-node__hole');
+    expect(trace).toMatch(/outline: 1px dashed /);
+    expect(trace).not.toContain('box-shadow');
+    expect(css).not.toContain('.react-flow__node[data-fs-portal-trace] .tunnel-node__hole {');
+    const hover = at('.react-flow__node:hover .tunnel-node__hole');
+    expect(hover).not.toContain('outline');
   });
 
   it('makes only the Branch DOT a target, never the rest of its flow-px box', () => {
@@ -228,9 +262,12 @@ describe('the look', () => {
     expect(rule('.knot-node__dot {')).toContain('pointer-events: auto !important');
   });
 
-  it('puts both Branch sockets at the CENTRE, drawing nothing, never starting a wire', () => {
+  it('puts both Branch sockets at the CENTRE, drawing nothing and never pressed', () => {
     const knot = decomment(read('./KnotNode.tsx'));
-    expect(knot.match(/isConnectableStart=\{false\}/g)).toHaveLength(2);
+    // The input never starts a wire; the output only by "Branch out"'s
+    // synthetic press (branchOut.ts) — it takes no pointer events (below).
+    expect(knot.match(/isConnectableStart=\{false\}/g)).toHaveLength(1);
+    expect(knot).toMatch(/id="out"\s+className="knot-node__handle"\s+isConnectableStart\s*\/>/);
     expect(knot).not.toMatch(/TypedHandle/);
     const block = css.slice(css.indexOf('.knot-node > .react-flow__handle.knot-node__handle {'));
     const rule = block.slice(0, block.indexOf('}'));
@@ -258,5 +295,13 @@ describe('the look', () => {
     expect(rule).toContain('border: none');
     expect(rule).toContain('pointer-events: all');
     expect(rule).toContain('cursor: crosshair');
+    // The socket's size is the one TypedEdge finds the hole's centre by.
+    expect(rule).toContain(`width: ${TUNNEL_HANDLE}px`);
+    expect(rule).toContain(`height: ${TUNNEL_HANDLE}px`);
+  });
+
+  it('names its portal only in the menu: no in-card name field is left', () => {
+    expect(decomment(read('./TunnelNode.tsx'))).not.toMatch(/<input|tunnel-node__rename|portalRename/);
+    expect(css).not.toContain('tunnel-node__rename');
   });
 });

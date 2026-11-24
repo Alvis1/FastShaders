@@ -79,17 +79,12 @@ describe('sameGraphSemantics', () => {
     ).toBe(false);
   });
 
-  it('edge endpoint change is semantic; waypoint-only rewrite is inert', () => {
+  it('edge endpoint change is semantic; an edge-data-only rewrite is inert', () => {
     const rerouted = [makeEdge('a', 'out', 'out1', 'position')];
     expect(sameGraphSemantics(baseNodes, baseNodes, baseEdges, rerouted)).toBe(false);
 
-    const withWaypoints = [
-      {
-        ...baseEdges[0],
-        data: { ...(baseEdges[0].data ?? { dataType: 'any' }), waypoints: [{ x: 1, y: 2 }] },
-      } as AppEdge,
-    ];
-    expect(sameGraphSemantics(baseNodes, baseNodes, baseEdges, withWaypoints)).toBe(true);
+    const retinted = [{ ...baseEdges[0], data: { dataType: 'vec3' } } as AppEdge];
+    expect(sameGraphSemantics(baseNodes, baseNodes, baseEdges, retinted)).toBe(true);
   });
 
   it('added edge is semantic', () => {
@@ -116,14 +111,9 @@ describe('selectionOnlyGraphChange', () => {
     expect(selectionOnlyGraphChange(prev, next, baseEdges, baseEdges)).toBe(false);
   });
 
-  it('waypoint edits must save', () => {
-    const withWaypoints = [
-      {
-        ...baseEdges[0],
-        data: { ...(baseEdges[0].data ?? { dataType: 'any' }), waypoints: [{ x: 1, y: 2 }] },
-      } as AppEdge,
-    ];
-    expect(selectionOnlyGraphChange(baseNodes, baseNodes, baseEdges, withWaypoints)).toBe(false);
+  it('edge data edits must save', () => {
+    const retinted = [{ ...baseEdges[0], data: { dataType: 'vec3' } } as AppEdge];
+    expect(selectionOnlyGraphChange(baseNodes, baseNodes, baseEdges, retinted)).toBe(false);
   });
 
   it('membership changes must save', () => {

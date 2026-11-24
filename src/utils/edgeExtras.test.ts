@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeEdgeExtras, MAX_WAYPOINTS_PER_EDGE } from './edgeExtras';
+import { sanitizeEdgeExtras } from './edgeExtras';
 import type { AppEdge } from '@/types';
 
 const withData = (data: unknown): AppEdge =>
@@ -7,11 +7,10 @@ const withData = (data: unknown): AppEdge =>
 
 describe('sanitizeEdgeExtras', () => {
   it('returns the SAME array (and same edge objects) when nothing needs fixing', () => {
-    const edges = [withData({ dataType: 'float', waypoints: [{ x: 1, y: 2 }] })];
+    const edges = [withData({ dataType: 'float' })];
     const out = sanitizeEdgeExtras(edges);
     expect(out).toBe(edges);
     expect(out[0]).toBe(edges[0]);
-    expect(out[0].data!.waypoints).toBe(edges[0].data!.waypoints);
   });
 
   it('passes through an edge with no data at all', () => {
@@ -19,33 +18,36 @@ describe('sanitizeEdgeExtras', () => {
     expect(sanitizeEdgeExtras(edges)).toBe(edges);
   });
 
-  // The crash set: these reach TypedEdge's render and throw with no error boundary.
-  it('drops null waypoint entries (would throw on w.x during render)', () => {
-    const out = sanitizeEdgeExtras([withData({ dataType: 'any', waypoints: [null, { x: 1, y: 2 }] })]);
-    expect(out[0].data!.waypoints).toEqual([{ x: 1, y: 2 }]);
+  // A file's edge `className` is adversarial: TypedEdge's dive selector called
+  // `.includes` on it during render and blanked the app on every boot.
+  it('strips a NON-STRING className (keeping the wire), and keeps a string one by identity', () => {
+    for (const className of [5, true, { a: 1 }, ['fs-collapsed-edge'], null]) {
+      const out = sanitizeEdgeExtras([{ ...withData({ dataType: 'float' }), className } as unknown as AppEdge]);
+      expect('className' in out[0], String(className)).toBe(false);
+      expect(out[0]).toMatchObject({ id: 'e1', source: 'a', target: 'b', data: { dataType: 'float' } });
+    }
+    const clean = [{ ...withData({ dataType: 'float' }), className: 'fs-collapsed-edge' } as unknown as AppEdge];
+    expect(sanitizeEdgeExtras(clean)).toBe(clean);
   });
 
-  it('rejects a string masquerading as a waypoint list (its .length passes the gate)', () => {
-    const out = sanitizeEdgeExtras([withData({ dataType: 'any', waypoints: 'abc' })]);
-    expect(out[0].data!.waypoints).toBeUndefined();
+  // Routing points were REMOVED (owner, 2026-11-24): an older file's
+  // `waypoints` — well-formed or poisoned — is simply dropped, never converted.
+  it('DROPS an older file\'s routing points, keeping the wire and its type', () => {
+    const out = sanitizeEdgeExtras([withData({ dataType: 'vec3', waypoints: [{ x: 1, y: 2 }, { x: 3, y: 4 }] })]);
+    expect(out[0].data).toEqual({ dataType: 'vec3' });
+    expect(out[0]).toMatchObject({ id: 'e1', source: 'a', target: 'b' });
   });
 
-  it('drops non-finite coordinates (1e999 parses to Infinity and voids the path)', () => {
-    const out = sanitizeEdgeExtras([
-      withData({ dataType: 'any', waypoints: [{ x: Infinity, y: 0 }, { x: NaN, y: 1 }, { x: 5, y: 6 }] }),
-    ]);
-    expect(out[0].data!.waypoints).toEqual([{ x: 5, y: 6 }]);
-  });
-
-  it('clamps out-of-bounds coordinates rather than dropping them', () => {
-    const out = sanitizeEdgeExtras([withData({ dataType: 'any', waypoints: [{ x: 1e12, y: -1e12 }] })]);
-    expect(out[0].data!.waypoints).toEqual([{ x: 1e6, y: -1e6 }]);
-  });
-
-  it('caps the waypoint count', () => {
-    const many = Array.from({ length: 5000 }, (_, i) => ({ x: i, y: i }));
-    const out = sanitizeEdgeExtras([withData({ dataType: 'any', waypoints: many })]);
-    expect(out[0].data!.waypoints).toHaveLength(MAX_WAYPOINTS_PER_EDGE);
+  it('drops a poisoned routing-point list too (null entries, a string, Infinity, thousands of points)', () => {
+    for (const waypoints of [
+      [null, { x: 1, y: 2 }],
+      'abc',
+      [{ x: Infinity, y: 0 }, { x: NaN, y: 1 }],
+      Array.from({ length: 5000 }, (_, i) => ({ x: i, y: i })),
+    ]) {
+      const out = sanitizeEdgeExtras([withData({ dataType: 'any', waypoints })]);
+      expect(out[0].data).toEqual({ dataType: 'any' });
+    }
   });
 
   it('degrades an unknown dataType to any', () => {

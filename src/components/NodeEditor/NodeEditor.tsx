@@ -41,9 +41,10 @@ import { CONNECTION_RADIUS } from './nodes/connectionReveal';
 import { clearSocketTapTooltip } from './handles/TypedHandle';
 import { distancePointToSpline, splinePath } from './edges/bezierGeometry';
 import { findNearestEdge, handleAnchor, type GetInternalNode } from './edgeHit';
-import { finishReconnect, removeBranch, startReconnect, type ReconnectMark } from './branchActions';
+import { branchIntoWireAt, dropBranchOnInput, finishReconnect, removeBranch, startReconnect, type ReconnectMark } from './branchActions';
 import { feedsFedKnot } from './branchWire';
-import { addEdgeWaypoint } from './edges/edgeWaypoints';
+import { branchDropRefusal, branchDropSocket, type InputSocket } from './branchDrop';
+import { KNOT_SIZE } from './nodes/passThroughGeometry';
 import { DrawingLayer } from './DrawingLayer';
 import { DrawToolbar } from './DrawToolbar';
 import {
@@ -76,6 +77,7 @@ import {
   TILE_DRAG_END_EVENT,
   getHtml5TileDrag,
   endHtml5TileDrag,
+  PORTAL_LINK_DRAG_TYPE,
   type TileDropEventDetail,
   type TilePayload,
 } from './tileDrag';
@@ -92,7 +94,8 @@ import {
 } from './dragConnect';
 import { applyGroupMarqueeRule } from './groupMarqueeSelection';
 import { resolveOverlapCascade, type CascadeBox, type CascadeShift } from './overlapCascade';
-import { connectNodes, exposeConnectedTarget, spliceNodeIntoEdge, type DroppedPin } from './edgeInsert';
+import { connectNodes, connectionNodesExist, exposeConnectedTarget, spliceNodeIntoEdge, type DroppedPin } from './edgeInsert';
+import { branchOutActive, installBranchPull } from './branchOut';
 import {
   costFocusId, focusNodes, focusNode, glideFitAll, zoomStepTarget, VIEW_GLIDE_MS,
   outputCycleOrder, nextOutputFocus,
@@ -131,10 +134,19 @@ import { canMuteNode, detachEdges, isMutedNode } from '@/utils/nodeMute';
 import { isTypingTarget } from '@/utils/isTypingTarget';
 import { beginDragChrome } from '@/utils/dragChrome';
 import { bridgeEdgesAcrossDeletedNodes, unwrapCollapsedGroupEdges, unwrapGroupsOnly } from '@/utils/edgeUtils';
-import { isKnot, isTunnelIn, isTunnelOut, remapTunnelLinks, resolvePassThroughEndpoint, topologyEdges } from '@/utils/passThrough';
+import {
+  TUNNEL_IN_TYPE,
+  TUNNEL_OUT_TYPE,
+  isKnot,
+  isTunnelIn,
+  isTunnelOut,
+  remapTunnelLinks,
+  resolvePassThroughEndpoint,
+  topologyEdges,
+} from '@/utils/passThrough';
 import { renameCopiedEntrances } from '@/utils/portalNames';
 import { connectionRefused, spliceClosesHiddenLoop } from './portalWire';
-import { glideToPortalPartner } from './portalActions';
+import { addPortalIn, addPortalOut, cyclePortalFocus, glideToPortalPartner } from './portalActions';
 import { PortalTrace } from './PortalTrace';
 import { parseCsv, COLUMN_WARN_THRESHOLD } from '@/utils/csvParser';
 import { makeDataNodeData } from '@/utils/dataNode';
@@ -405,6 +417,34 @@ function connectSnapOffset(
   };
 }
 
+/** Every element that draws the wire `edgeId`: React Flow's own edge group,
+ *  and the copy diving into a Portal's hole (TypedEdge's PortalDiveOverlay,
+ *  `data-fs-dive`) — so the drop-on-edge highlight thickens the whole wire. */
+function edgeHighlightEls(edgeId: string): Element[] {
+  const id = CSS.escape(edgeId);
+  return [...document.querySelectorAll(`.react-flow__edge[data-id="${id}"], [data-fs-dive="${id}"]`)];
+}
+
+/** The dragged Branch's wrapper class while its dot is over a valid input
+ *  (NodeEditor.css): ABOVE `fs-connect-front`, which raises the input's node
+ *  and would otherwise hide the very dot being dropped on it. */
+const BRANCH_DROP_DRAGGED_CLASS = 'fs-branch-drop-dragged';
+
+/**
+ * Put a valid Branch drop's marks on (again): the lit socket, its node raised
+ * (`fs-connect-front`), and the dragged Branch raised above that node. EVERY
+ * frame, as showConnectPreview does — React rewrites a wrapper's whole
+ * `className` on a select/drag change and erases hand-added classes, and an
+ * early return on an unchanged socket left the ring wiped mid-hover.
+ */
+function markBranchDrop(cur: { knotId: string; socket: InputSocket; valid: boolean }): void {
+  if (!cur.valid) return;
+  const node = nodeEl(cur.socket.nodeId);
+  handleEl(node, 'target', cur.socket.handleId)?.classList.add('fs-connect-socket');
+  node?.classList.add('fs-connect-front');
+  nodeEl(cur.knotId)?.classList.add(BRANCH_DROP_DRAGGED_CLASS);
+}
+
 /** Whether dropping this tile could splice into an edge — only node tiles
  *  with both inputs and outputs qualify (placeTilePayload's own guard).
  *  Anything else must not get the drop-on-edge highlight: it would promise
@@ -475,7 +515,7 @@ function makeRoomBoxes(
 ): CascadeBox[] {
   const out: CascadeBox[] = [];
   for (const n of allNodes) {
-    // A Branch is a dot on the wires, like a routing point: never pushed.
+    // A Branch is a dot on the wires: never pushed.
     if (n.type === 'group' || n.type === 'note' || isKnot(n)) continue;
     if (isCollapsedMember(n)) continue;
     const box = nodeVisualBox(n, allNodes, edges);
@@ -790,14 +830,13 @@ export function NodeEditor() {
     if (!isDoubleActivation(prev, node.id, t)) return;
     // Consumed: a third click starts a fresh pair rather than toggling again.
     lastActivationRef.current = null;
-    // Two clicks inside a control on the card (the entrance's in-place name
-    // field, a value box) are that control's own — never a node gesture: a
-    // double-click selecting a word in the name field glided the view away.
+    // Two clicks inside a control on the card (a value box, a button) are
+    // that control's own — never a node gesture.
     const el = e.target as Element | null;
     if (el?.closest?.(PEEK_EXEMPT_SELECTOR)) return;
-    // A Branch is removed, as a double-click removes a routing point: its
-    // wires out are fed from the trunk's source again (branchActions.ts,
-    // through removeNode's splice — one undo entry). No label peek.
+    // A Branch is removed: its wires out are fed from the trunk's source
+    // again (branchActions.ts, through removeNode's splice — one undo
+    // entry). No label peek.
     if (isKnot(node)) {
       removeBranch(node.id);
       return;
@@ -1379,6 +1418,10 @@ export function NodeEditor() {
       // panel div, so with one open Cmd+D duplicated and Backspace deleted the
       // selection behind it (measured 2026-10-11).
       if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      // …nor under a Branch-out wire following the pointer (branchOut.ts,
+      // which also stops these keys at the window): an X or Cmd+V there
+      // rewrote the graph the pending wire was about to connect into.
+      if (branchOutActive()) return;
 
       // Esc leaves draw mode (before any accelerator).
       if (e.key === 'Escape' && useAppStore.getState().drawToolActive) {
@@ -1493,14 +1536,11 @@ export function NodeEditor() {
           // Splice-delete: bridge outgoing edges of deleted nodes onto their
           // first connected input's upstream, then drop the user's explicitly
           // selected edges. Chain deletes (X→A→B→C with A and B selected)
-          // resolve across the whole deleted run to produce X→C.
-          // With the nodes, a deleted Branch keeps its drawing: each bridged
-          // wire runs through the trunk's routing points, then its own — no
-          // point where the Branch was (edgeUtils.ts `joinWaypoints`).
+          // resolve across the whole deleted run to produce X→C — a deleted
+          // Branch's wires out are fed from its trunk's source again.
           const afterBridge = bridgeEdgesAcrossDeletedNodes(
             currentEdges as AppEdge[],
             selectedNodeIds,
-            currentNodes,
           );
           store.setEdges(afterBridge.filter((e) => !selectedEdgeIds.has(e.id)));
         });
@@ -1537,9 +1577,7 @@ export function NodeEditor() {
   /** Remove the CSS highlight class from the currently highlighted edge (if any). */
   const clearEdgeHighlight = useCallback(() => {
     if (highlightedEdgeRef.current) {
-      document
-        .querySelector(`.react-flow__edge[data-id="${CSS.escape(highlightedEdgeRef.current)}"]`)
-        ?.classList.remove('fs-edge-drop-target');
+      for (const el of edgeHighlightEls(highlightedEdgeRef.current)) el.classList.remove('fs-edge-drop-target');
       highlightedEdgeRef.current = null;
     }
   }, []);
@@ -1555,6 +1593,64 @@ export function NodeEditor() {
    * wire). Frames and notes are never pulled: they sit in no chain.
    */
   const altDetachRef = useRef<{ ids: Set<string>; done: boolean; pushed: boolean } | null>(null);
+
+  /**
+   * A BRANCH dragged onto an INPUT (owner, 2026-11-24; branchDrop.ts): the
+   * input socket its dot is over — the nearest one of another node within
+   * the connection radius — and whether it may be wired there. A valid one
+   * is lit the way drag-connect lights its socket (`fs-connect-socket`, its
+   * node lifted by `fs-connect-front`), imperatively, as that preview is.
+   * Released over one, the drag ends in `dropBranchOnInput`.
+   */
+  const branchDropRef = useRef<{ knotId: string; socket: InputSocket; valid: boolean } | null>(null);
+  const clearBranchDrop = useCallback(() => {
+    const cur = branchDropRef.current;
+    if (!cur) return;
+    branchDropRef.current = null;
+    if (!cur.valid) return;
+    const node = nodeEl(cur.socket.nodeId);
+    handleEl(node, 'target', cur.socket.handleId)?.classList.remove('fs-connect-socket');
+    node?.classList.remove('fs-connect-front');
+    nodeEl(cur.knotId)?.classList.remove(BRANCH_DROP_DRAGGED_CLASS);
+  }, []);
+  const updateBranchDrop = useCallback((knotId: string) => {
+    const knot = getInternalNode(knotId);
+    if (!knot) {
+      clearBranchDrop();
+      return;
+    }
+    const center = {
+      x: knot.internals.positionAbsolute.x + (knot.measured?.width ?? KNOT_SIZE) / 2,
+      y: knot.internals.positionAbsolute.y + (knot.measured?.height ?? KNOT_SIZE) / 2,
+    };
+    // Every mounted input socket of a shown node, from React Flow's measured
+    // handle bounds (what a dragged wire snaps to) — never the DOM.
+    const sockets: InputSocket[] = [];
+    for (const n of flowStore.getState().nodeLookup.values()) {
+      if (n.id === knotId || isCollapsedMember(n.internals.userNode as AppNode)) continue;
+      const bounds = n.internals.handleBounds?.target;
+      if (!bounds) continue;
+      const p = n.internals.positionAbsolute;
+      for (const h of bounds) {
+        if (h.id == null) continue;
+        sockets.push({ nodeId: n.id, handleId: h.id, x: p.x + h.x + h.width / 2, y: p.y + h.y + h.height / 2 });
+      }
+    }
+    const { nodes, edges } = useAppStore.getState();
+    const socket = branchDropSocket(center, sockets, knotId, CONNECTION_RADIUS, edges);
+    const prev = branchDropRef.current;
+    // The same socket as last frame: its refusal cannot have changed mid-drag,
+    // but its marks may have been erased — put them back.
+    if (prev && socket && prev.knotId === knotId && prev.socket.nodeId === socket.nodeId && prev.socket.handleId === socket.handleId) {
+      markBranchDrop(prev);
+      return;
+    }
+    clearBranchDrop();
+    if (!socket) return;
+    const next = { knotId, socket, valid: branchDropRefusal(nodes, edges, knotId, socket) === null };
+    branchDropRef.current = next;
+    markBranchDrop(next);
+  }, [flowStore, getInternalNode, clearBranchDrop]);
 
   // Capture the start position; defer the history push to onNodeDragStop
   // (so click-only "drags" don't pollute the undo buffer with no-op snapshots).
@@ -1851,9 +1947,7 @@ export function NodeEditor() {
       if (bestId !== highlightedEdgeRef.current) {
         clearEdgeHighlight();
         if (bestId) {
-          document
-            .querySelector(`.react-flow__edge[data-id="${CSS.escape(bestId)}"]`)
-            ?.classList.add('fs-edge-drop-target');
+          for (const el of edgeHighlightEls(bestId)) el.classList.add('fs-edge-drop-target');
           highlightedEdgeRef.current = bestId;
         }
       }
@@ -1884,10 +1978,16 @@ export function NodeEditor() {
           }
         }
       }
-      // A Branch only MOVES, like a routing point: no drag-connect (wires out
-      // of it are made by connecting TO it) and never a splice into the wire
-      // it is dropped on (it would replace its own trunk) — so no preview.
-      if (rfDragged.type === 'group' || rfDragged.type === 'note' || isKnot(rfDragged)) return;
+      // A Branch never drag-connects as a node does and never splices into
+      // the wire it is dropped on (it would replace its own trunk): its one
+      // drop gesture is ONTO AN INPUT (owner, 2026-11-24) — lit while its dot
+      // is over one, alone in the drag (`updateBranchDrop`).
+      if (isKnot(rfDragged)) {
+        if (draggedNodes.length === 1 && !altDetachRef.current?.pushed) updateBranchDrop(rfDragged.id);
+        else clearBranchDrop();
+        return;
+      }
+      if (rfDragged.type === 'group' || rfDragged.type === 'note') return;
 
       const store = useAppStore.getState();
       const draggedNode = withStorePosition(rfDragged, store.nodes);
@@ -1978,6 +2078,8 @@ export function NodeEditor() {
       updateEdgeHighlight,
       getInternalNode,
       getViewport,
+      updateBranchDrop,
+      clearBranchDrop,
     ],
   );
 
@@ -1997,6 +2099,24 @@ export function NodeEditor() {
       // undo entry, before the cut (onNodeDrag).
       const detachedEntry = altDetachRef.current?.pushed === true;
       altDetachRef.current = null;
+
+      // A Branch released over an input (owner, 2026-11-24): wired into it
+      // unless refused, and back where the drag started either way — ONE undo
+      // entry with no move in it (branchActions.ts `dropBranchOnInput`).
+      const branchDrop = branchDropRef.current;
+      clearBranchDrop();
+      const branchStart = dragStartPosRef.current;
+      if (
+        branchDrop && isKnot(draggedNode) && branchStart && !detachedEntry
+        // A jitter is a click, never a drop.
+        && Math.hypot(draggedNode.position.x - branchStart.x, draggedNode.position.y - branchStart.y) >= DRAG_HISTORY_THRESHOLD
+      ) {
+        dragStartPosRef.current = null;
+        clearEdgeHighlight();
+        clearConnectPreview();
+        dropBranchOnInput(draggedNode.id, branchStart, branchDrop.socket, applyConnection);
+        return;
+      }
 
       clearEdgeHighlight();
       // Capture the drag-connect plan the preview promised, then tear the
@@ -2156,8 +2276,8 @@ export function NodeEditor() {
           GAP,
         );
       } else if (!isNote && !isKnot(freshDragged)) {
-        // (A Branch is a dot on the wires, like a routing point: it never makes
-        // room, and makeRoomBoxes never moves one either.)
+        // (A Branch is a dot on the wires: it never makes room, and
+        // makeRoomBoxes never moves one either.)
         // --- Make room: the dropped node stays EXACTLY where it was released,
         // and whatever it landed on moves out from under it (plain moves and
         // drop-on-edge splices) — the drag-connect drop's own rule above,
@@ -2207,7 +2327,7 @@ export function NodeEditor() {
 
       store.setNodes(updated);
     },
-    [clearEdgeHighlight, clearConnectPreview, applyConnection, getInternalNode, getViewport],
+    [clearEdgeHighlight, clearConnectPreview, applyConnection, getInternalNode, getViewport, clearBranchDrop],
   );
 
   // Multi-node drag: React Flow fires this for selection drags (instead of
@@ -2366,6 +2486,9 @@ export function NodeEditor() {
 
   const onConnect: OnConnect = useCallback(
     (connection: Connection) => {
+      // A pending wire can outlive its node (a Branch out whose Branch went
+      // in an undo): refused before the undo entry, writing nothing.
+      if (!connectionNodesExist(useAppStore.getState().nodes, connection.source, connection.target)) return;
       connectSucceeded.current = true;
       useAppStore.getState().pushHistory();
       applyConnection(connection);
@@ -2468,19 +2591,25 @@ export function NodeEditor() {
     [removeEdge]
   );
 
-  // Double-click an edge → drop a routing waypoint at the click point
-  // (addEdgeWaypoint orders it along the wire). Double-clicking a waypoint dot
-  // removes it (handled in EdgeWaypointHandles, which stops propagation).
+  // Double-click a wire → a BRANCH there, on the nearest point of its drawn
+  // curve (owner, 2026-11-24: routing points were removed, "allow to also
+  // double click to place"; branchActions.ts `branchIntoWireAt`): the wire
+  // split, the consumer side at its old array index, ONE undo entry. Nothing
+  // on a collapsed pill's wire (`branchRefusal`), and never while a wire is
+  // being dragged (a Branch out, item 6) — an edge is no node, so the label
+  // peek never sees it.
   const onEdgeDoubleClick = useCallback(
     (event: React.MouseEvent, edge: Edge) => {
       event.stopPropagation();
-      addEdgeWaypoint(
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      if (flowStore.getState().connection.inProgress) return;
+      branchIntoWireAt(
         edge.id,
         screenToFlowPosition({ x: event.clientX, y: event.clientY }),
         getInternalNode,
       );
     },
-    [screenToFlowPosition, getInternalNode]
+    [flowStore, screenToFlowPosition, getInternalNode]
   );
 
   // Drag-to-delete: track reconnect start + save history
@@ -2640,8 +2769,11 @@ export function NodeEditor() {
         });
       };
       // A 1/2/3+click add (`fromKey`) came from no palette: its node-add is
-      // the whole record, like an Add-node menu pick.
-      if (!isGroupAsset && !fromKey) logAssetDrop(0);
+      // the whole record, like an Add-node menu pick. A PORTAL tile logs only
+      // once its add has happened (below): a Portal Out of a portal that is
+      // gone adds nothing, and must not read as a palette drop.
+      const portalTile = payload.kind === 'node' && (payload.nodeType === TUNNEL_IN_TYPE || payload.nodeType === TUNNEL_OUT_TYPE);
+      if (!isGroupAsset && !fromKey && !portalTile) logAssetDrop(0);
 
       // A DRAGGED group lands with its frame's top-right corner on the pointer
       // or finger; a click/Enter add keeps the top-left at its scattered
@@ -2680,6 +2812,19 @@ export function NodeEditor() {
       // The asset bar's Note tile: the Add menu's own action (NoteTileCard).
       if (payload.nodeType === NOTE_TILE_TYPE) {
         useAppStore.getState().addNote(position);
+        return;
+      }
+      // A search's portal tiles (PortalTileCard): the Add menu's own portal
+      // actions — a Portal In ("portal N"), or a Portal Out of the tile's
+      // portal — each one undo entry, centred where it lands.
+      if (payload.nodeType === TUNNEL_IN_TYPE) {
+        addPortalIn(position);
+        if (!fromKey) logAssetDrop(0);
+        return;
+      }
+      if (payload.nodeType === TUNNEL_OUT_TYPE) {
+        const added = typeof payload.link === 'string' ? addPortalOut(payload.link, position) : null;
+        if (added !== null && !fromKey) logAssetDrop(0);
         return;
       }
 
@@ -3242,7 +3387,9 @@ export function NodeEditor() {
         clearConnectPreview();
         return;
       }
-      placeTilePayload({ kind: 'node', nodeType }, event.clientX, event.clientY);
+      // A Portal Out tile names its portal beside the type (PortalTileCard).
+      const link = nodeType === TUNNEL_OUT_TYPE ? event.dataTransfer.getData(PORTAL_LINK_DRAG_TYPE) : '';
+      placeTilePayload(link ? { kind: 'node', nodeType, link } : { kind: 'node', nodeType }, event.clientX, event.clientY);
     },
     [clearEdgeHighlight, clearConnectPreview, placeTilePayload, placeCsvFile, placePictureFiles],
   );
@@ -3329,6 +3476,8 @@ export function NodeEditor() {
       // (measured 2026-10-11, Feedback dialog). The accelerators' guard, verbatim.
       if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      // No canvas key under a Branch-out wire (branchOut.ts).
+      if (branchOutActive()) return;
       // 1 / 2 / 3: held, the next click on empty canvas drops a constant
       // there (onPaneClick). By the key's PLACE as well as its character, so
       // a layout that types the digits with Shift arms too.
@@ -3346,6 +3495,10 @@ export function NodeEditor() {
       }
       if (key === 'f' && !e.shiftKey) {
         e.preventDefault();
+        // ONE selected portal end: F goes on to the NEXT end of its portal
+        // (owner, 2026-11-24; portalActions.ts `cyclePortalFocus`), on the
+        // same glide, selection only. Anything else is framed as ever.
+        if (cyclePortalFocus(fitView)) return;
         const nodesNow = useAppStore.getState().nodes;
         const selected = nodesNow.filter((n) => n.selected).map((n) => n.id);
         if (!focusNodes(fitView, nodesNow, selected)) glideFitAll(fitView);
@@ -3386,6 +3539,16 @@ export function NodeEditor() {
       window.removeEventListener('blur', onBlur);
     };
   }, [fitView]);
+
+  // Ctrl (Windows, Linux) / Cmd (macOS) + DRAG on a Branch pulls a new wire
+  // out of it (owner, 2026-11-24; branchOut.ts `installBranchPull`): the
+  // press is held back from the node drag, and past the slop it becomes the
+  // menu's Branch out under the held button. A Ctrl/Cmd click stays Attach.
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    return installBranchPull(el);
+  }, []);
 
   // Touch d3 cannot hear (touchAsMouse.ts): replay its node / selection-box
   // drags as the mouse events React Flow's d3-drag listens for.
@@ -4047,11 +4210,11 @@ export function NodeEditor() {
           // effect above.
           panOnDrag={isCoarsePointer ? false : DESKTOP_PAN_ON_DRAG}
           zoomOnScroll
-          // Double-click is reserved for edge routing waypoints (add on an edge,
-          // remove on a point). React Flow attaches onEdgeDoubleClick as a plain
-          // synthetic handler, so it CANNOT stopPropagation the pane's native
-          // d3 `dblclick.zoom` (which fires first, at an ancestor) — leaving it
-          // on would zoom the canvas every time a waypoint is placed/removed.
+          // Double-click on a wire places a Branch (onEdgeDoubleClick). React
+          // Flow attaches onEdgeDoubleClick as a plain synthetic handler, so it
+          // CANNOT stopPropagation the pane's native d3 `dblclick.zoom` (which
+          // fires first, at an ancestor) — leaving it on would zoom the canvas
+          // every time a Branch is placed.
           zoomOnDoubleClick={false}
           // Fit only when there is nothing remembered. A stored viewport means
           // the user left the canvas somewhere deliberate and the graph it was

@@ -113,6 +113,11 @@ export function EdgeChipValues({ count, values }: { count: number; values: reado
   );
 }
 
+/** How long after the chip mounts it lets clicks through to its wire: the
+ *  common OS double-click window (Windows' and macOS's default, 500 ms). */
+export const CHIP_DOUBLE_CLICK_MS = 500;
+const CHIP_UNARMED_STYLE = { pointerEvents: 'none' } as const;
+
 interface EdgeInfoCardProps {
   /** The wire this chip belongs to — what its ✕ deletes. */
   edgeId: string;
@@ -142,6 +147,19 @@ export function EdgeInfoCard({
 
   const [range, setRange] = useState<RangeResult | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+
+  // The chip mounts on the click that SELECTED its wire, so the second click
+  // of a DOUBLE-click — which places a Branch on the wire — can land on it,
+  // often on its ✕: a double-click deleted the wire (QA, 2026-11-24: 3 of 18
+  // human-speed trials). For the double-click window after it mounts the chip
+  // takes no pointer, so that click reaches the wire beneath it and the
+  // browser's dblclick is the wire's; and the ✕ ignores any click that is
+  // the second of a pair (`detail >= 2`).
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setArmed(true), CHIP_DOUBLE_CLICK_MS);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Through the shared ctx, which walks the UNWRAPPED edges: passing the raw
   // store array here (as this did) is the trap getUnwrappedEdges' contract
@@ -212,6 +230,7 @@ export function EdgeInfoCard({
       className="edge-info-card nodrag nopan"
       style={{
         transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+        ...(armed ? null : CHIP_UNARMED_STYLE),
       }}
       onClick={(e) => e.stopPropagation()}
     >
@@ -222,6 +241,8 @@ export function EdgeInfoCard({
           className="edge-info-card__delete"
           onClick={(e) => {
             e.stopPropagation();
+            // The second click of a double-click is never a delete.
+            if (e.detail >= 2) return;
             useAppStore.getState().removeEdge(edgeId);
           }}
           title={deleteLabel}

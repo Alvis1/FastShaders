@@ -5,18 +5,15 @@
  * node). The cards apply them inline; PassThroughNode.css states none of them.
  */
 
-/** A ROUTING POINT's dot on a wire (TypedEdge's waypoint circle): its radius
- *  and stroke width in SCREEN px — the dot is counter-scaled with the zoom. */
-export const WAYPOINT_DOT_R = 5;
-export const WAYPOINT_DOT_STROKE = 1.5;
-
 /**
- * The Branch is drawn as a routing point's dot at TWICE its size (owner,
- * 2026-11-23: "Branch = routing point, visually like the dot but 2x bigger"):
- * radius and stroke both doubled, in SCREEN px, at every zoom.
+ * The Branch's dot: its radius and stroke width in SCREEN px — the dot is
+ * counter-scaled with the zoom, so it keeps one size on screen. Twice the
+ * routing point's dot it was first drawn after (owner, 2026-11-23: "Branch =
+ * routing point, visually like the dot but 2x bigger"); routing points
+ * themselves were removed on 2026-11-24, and the Branch kept its size.
  */
-export const KNOT_DOT_R = 2 * WAYPOINT_DOT_R;
-export const KNOT_DOT_STROKE = 2 * WAYPOINT_DOT_STROKE;
+export const KNOT_DOT_R = 10;
+export const KNOT_DOT_STROKE = 3;
 
 /**
  * The Branch's node box in FLOW px: the dot's outer diameter at zoom 1 (the
@@ -28,6 +25,13 @@ export const KNOT_SIZE = 2 * KNOT_DOT_R + KNOT_DOT_STROKE;
 
 /** A Portal end's hole: a disc this many flow px across (rim included). */
 export const TUNNEL_SIZE = 32;
+
+/** A Portal end's socket: a square this many flow px across, centred in the
+ *  hole (PassThroughNode.css states the same number). React Flow anchors a
+ *  wire at its left (Portal In) or right (Portal Out) edge, half of it from
+ *  the hole's centre — which is how TypedEdge finds the centre its dive arcs
+ *  around. */
+export const TUNNEL_HANDLE = 20;
 
 /**
  * What the layout engine reserves for a Portal end: the hole plus the name

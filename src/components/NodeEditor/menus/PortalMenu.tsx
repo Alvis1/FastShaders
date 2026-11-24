@@ -1,17 +1,123 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useReactFlow } from '@xyflow/react';
 import { useAppStore } from '@/store/useAppStore';
-import { t } from '@/i18n';
+import { t, type Language } from '@/i18n';
 import { isTunnelIn, tunnelLabelOf } from '@/utils/passThrough';
-import { focusNode } from '../outputFocus';
-import { entranceOf, portalRenameRefusal, relinkMakesLoop, unportalRefusal } from '../portalWire';
-import { glideToPortalPartner, relinkExit, selectWholePortal, turnPortalBackIntoWires } from '../portalActions';
-import { startPortalRename } from '../portalRename';
+import { PORTAL_NAME_MAX } from '@/utils/portalNames';
+import { entranceOf, portalNameToCommit, portalRenameRefusal, relinkMakesLoop, unportalRefusal } from '../portalWire';
+import { glideToPortalPartner, relinkExit, renamePortal, selectWholePortal, turnPortalBackIntoWires } from '../portalActions';
 import { liveEntranceLabel, tunnelExitCount } from '../nodes/passThroughLook';
 
 /**
+ * The portal's NAME, as the editable field at the top of a portal end's menu
+ * (owner, 2026-11-24: "right click, and there should be a box at the top to
+ * write a name"). An exit's field names its ENTRANCE. Typing edits the field
+ * only; Enter, a click away (blur) or the menu closing COMMITS — `renamePortal`:
+ * cleaned, capped, unique among the entrances, every exit's cache in the SAME
+ * undo entry — and ONLY what the user typed (`portalNameToCommit`): opening
+ * and closing the menu writes nothing, even over a stored name that is not
+ * clean (StrictMode's extra mount/unmount pair, a blur with nothing typed).
+ * Escape reverts and closes the menu without a write.
+ *
+ * READ-ONLY on a broken exit or while the entrance is in a collapsed group
+ * (`portalRenameRefusal`) — `readOnly`, never `disabled`: it still takes the
+ * focus when the menu opens, so it is still the typing target that keeps every
+ * canvas key out (a disabled or unfocused field let A then X select and delete
+ * every node behind the open menu), and it says why in a visible line under it.
+ * No tooltip on the field: it opened at once and covered the rows below.
+ */
+function PortalNameField({
+  entranceId,
+  name,
+  readOnlyReason,
+  language,
+  onClose,
+  autoFocus,
+}: {
+  entranceId: string | null;
+  name: string;
+  /** Why the name cannot be edited here, or null when it can. */
+  readOnlyReason: string | null;
+  language: Language;
+  onClose: () => void;
+  /** Take the focus on mount: only the menu's FIRST field does — one started
+   *  over after a commit must not pull the focus back from a row. */
+  autoFocus: boolean;
+}) {
+  const [value, setValue] = useState(name);
+  // What the user TYPED, or null while they have typed nothing: the only
+  // text a commit may write.
+  const typedRef = useRef<string | null>(null);
+  // Committed or cancelled since the field last took focus: nothing more to do.
+  const settled = useRef(false);
+  const commit = () => {
+    if (settled.current) return;
+    settled.current = true;
+    const next = portalNameToCommit(name, typedRef.current);
+    if (next !== null && readOnlyReason === null && entranceId !== null) renamePortal(entranceId, next);
+  };
+  const commitRef = useRef(commit);
+  commitRef.current = commit;
+  // The menu closing (a press anywhere else unmounts it, often before a blur
+  // can fire) commits what was typed. Re-armed on every mount, so StrictMode's
+  // extra mount/unmount pair settles nothing.
+  useEffect(() => {
+    settled.current = false;
+    return () => commitRef.current();
+  }, []);
+  const readOnly = readOnlyReason !== null;
+  const reasonId = useId();
+  return (
+    <>
+      <input
+        className={`context-menu__search portal-menu__name${readOnly ? ' portal-menu__name--readonly' : ''}`}
+        value={value}
+        maxLength={PORTAL_NAME_MAX}
+        readOnly={readOnly}
+        spellCheck={false}
+        autoFocus={autoFocus}
+        aria-label={t('Portal name', language)}
+        aria-describedby={readOnly ? reasonId : undefined}
+        placeholder={t('Portal name', language)}
+        onFocus={(e) => {
+          settled.current = false;
+          e.currentTarget.select();
+        }}
+        onChange={(e) => {
+          typedRef.current = e.target.value;
+          setValue(e.target.value);
+        }}
+        onKeyDown={(e) => {
+          // The field's keys are its own: no menu or canvas shortcut sees
+          // them — read-only or not.
+          e.stopPropagation();
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commit();
+            onClose();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            settled.current = true;
+            typedRef.current = null;
+            setValue(name);
+            onClose();
+          }
+        }}
+        onBlur={commit}
+      />
+      {readOnly && (
+        <div id={reasonId} className="portal-menu__name-reason">
+          {readOnlyReason}
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
  * A PORTAL END's right-click menu (docs/dev/canvas-interaction.md, "Portal";
- * owner, 2026-11-23: "keep it minimal"): Rename, Go to entrance / Go to
+ * owner, 2026-11-23: "keep it minimal"): the NAME FIELD at the top (owner,
+ * 2026-11-24, in place of the title and a Rename row), Go to entrance / Go to
  * exits, Select whole portal, Turn back into wires, and — on a BROKEN exit
  * only — "Connect to a portal…", then the delete row every node menu ends on.
  *
@@ -35,24 +141,21 @@ export function PortalMenu({ nodeId }: { nodeId: string }) {
   const [picking, setPicking] = useState(false);
   const broken = entranceId === null;
 
-  // A broken exit has no name to edit; an entrance in a COLLAPSED group has
-  // no card for the in-place field to open on (portalWire.ts).
+  // A broken exit has no name to edit; an entrance in a COLLAPSED group is a
+  // name the canvas cannot show (portalWire.ts `portalRenameRefusal`).
   const renameRefusal = useAppStore((s) => portalRenameRefusal(s.nodes, nodeId));
-  const renameInert = renameRefusal !== null;
-  const entranceHidden = renameRefusal === 'collapsed';
 
   const goneTip = t('Its Portal In is gone', language);
+  // The name field takes the focus when the menu opens, never again.
+  const firstField = useRef(true);
+  useEffect(() => {
+    firstField.current = false;
+  }, []);
 
   const run = (inert: boolean, act: () => void) => () => {
     if (inert) return;
     act();
   };
-
-  const rename = run(renameInert, () => {
-    closeContextMenu();
-    if (!isEntrance) focusNode(fitView, useAppStore.getState().nodes, entranceId!);
-    startPortalRename(entranceId!);
-  });
 
   const goNoWhere = isEntrance ? exitCount === 0 : broken;
   const go = run(goNoWhere, () => {
@@ -93,25 +196,23 @@ export function PortalMenu({ nodeId }: { nodeId: string }) {
   };
 
   return (
-    <div className="context-menu__list">
-      <div className="context-menu__category">{t(isEntrance ? 'Portal In' : 'Portal Out', language)}</div>
-      {name && (
-        <div style={{ padding: 'var(--space-1) var(--space-3)', fontSize: 'var(--font-size-sm)', color: 'var(--text-secondary)' }}>
-          {name}
-        </div>
-      )}
-      <button
-        className="context-menu__item context-menu__item--inert"
-        aria-disabled={renameInert || undefined}
-        title={
-          broken ? goneTip
-          : entranceHidden ? t('Open the group first', language)
-          : t('Give the portal a new name. Its Portal Outs show it too', language)
+    <>
+      {/* Keyed on the live name: a rename made elsewhere (an undo while the
+          menu is open) starts the field over from the new name. */}
+      <PortalNameField
+        key={`${entranceId ?? ''}\n${name}`}
+        entranceId={entranceId}
+        name={name}
+        readOnlyReason={
+          renameRefusal === 'broken' ? goneTip
+          : renameRefusal === 'collapsed' ? t('Open the group first', language)
+          : null
         }
-        onClick={rename}
-      >
-        {t('Rename', language)}
-      </button>
+        language={language}
+        onClose={closeContextMenu}
+        autoFocus={firstField.current}
+      />
+    <div className="context-menu__list">
       <button
         className="context-menu__item context-menu__item--inert"
         aria-disabled={goNoWhere || undefined}
@@ -177,5 +278,6 @@ export function PortalMenu({ nodeId }: { nodeId: string }) {
         {t('Delete Node', language)}
       </button>
     </div>
+    </>
   );
 }

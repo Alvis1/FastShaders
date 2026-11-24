@@ -16,7 +16,6 @@ import { effectiveExposedPorts, usesExposedPorts } from '@/utils/exposedPorts';
 import { makeTypedEdge } from '@/utils/edgeUtils';
 import { pickSpliceInputPort } from './edgeSplice';
 import { primaryInputId } from '@/utils/primaryInput';
-import { splitWaypointsAtNode } from './edges/bezierGeometry';
 import { inheritedImageUv } from './imageUvHandoff';
 import { appendTrimmedOperands } from '@/utils/appendCapacity';
 import { getEdgeOutputShape, getTargetEdges } from '@/engine/cpuEvaluator';
@@ -53,31 +52,6 @@ export function exposeConnectedTarget(
   );
 }
 
-/** Flow-px margin past the node's own half-diagonal inside which a spliced
- *  wire's routing points are dissolved. */
-const SPLICE_DISSOLVE_MARGIN = 24;
-
-type Measured = AppNode & { measured?: { width?: number; height?: number } };
-
-/** A node's centre in flow space — absolute (parent chain walked), from the
- *  measured box with the canvas's usual fallback before it has been measured. */
-function flowCenter(node: AppNode, all: AppNode[]): { x: number; y: number; w: number; h: number } {
-  let x = node.position.x;
-  let y = node.position.y;
-  const seen = new Set<string>();
-  let cur: AppNode = node;
-  while (cur.parentId && !seen.has(cur.parentId)) {
-    seen.add(cur.parentId);
-    const parent = all.find((p) => p.id === cur.parentId);
-    if (!parent) break;
-    x += parent.position.x;
-    y += parent.position.y;
-    cur = parent;
-  }
-  const w = (node as Measured).measured?.width ?? 120;
-  const h = (node as Measured).measured?.height ?? 40;
-  return { x: x + w / 2, y: y + h / 2, w, h };
-}
 
 /**
  * Splice `nodeId` into the edge `edgeId`: source → node → original target, with
@@ -124,25 +98,6 @@ export function spliceNodeIntoEdge(
   const newEdge1 = makeTypedEdge(edge.source, edge.sourceHandle, nodeId, inputPortId);
   const newEdge2 = makeTypedEdge(nodeId, outputPort.id, edge.target, edge.targetHandle);
 
-  // The wire's routing points survive the splice (visual-only, edge.data): the
-  // ones before the node stay on the source half, the ones after on the target
-  // half, and only those within reach of the node itself are dissolved.
-  const wps = (edge.data?.waypoints ?? []) as { x: number; y: number }[];
-  const src = store.nodes.find((n) => n.id === edge.source);
-  const tgt = store.nodes.find((n) => n.id === edge.target);
-  if (wps.length && node && src && tgt) {
-    const c = flowCenter(node, store.nodes);
-    const { before, after } = splitWaypointsAtNode(
-      flowCenter(src, store.nodes),
-      flowCenter(tgt, store.nodes),
-      wps,
-      c,
-      Math.hypot(c.w, c.h) / 2 + SPLICE_DISSOLVE_MARGIN,
-    );
-    if (before.length) newEdge1.data = { ...newEdge1.data!, waypoints: before };
-    if (after.length) newEdge2.data = { ...newEdge2.data!, waypoints: after };
-  }
-
   const next = store.edges
     .filter((e) => e.id !== edge.id)
     // Inputs are single-connection. Only reachable once EVERY socket is taken
@@ -178,14 +133,20 @@ export function spliceNodeIntoEdge(
  * image→normal colour-space flip stay with it, because they need the node scan
  * and the flip is unreachable from the menu (the Image node is a hidden def you
  * can only drag in as a file).
+ *
+ * A connection whose source or target node is NOT in the graph is refused,
+ * writing nothing (false): React Flow's pending wire outlives its node (a
+ * Branch out whose Branch an undo removed), and the replace above would
+ * delete the input's old feed for a wire that can never draw.
  */
 export function connectNodes(
   source: string,
   sourceHandle: string | null,
   target: string,
   targetHandle: string | null,
-): void {
+): boolean {
   const store = useAppStore.getState();
+  if (!connectionNodesExist(store.nodes, source, target)) return false;
   // Read before the replacement below drops the input's current wire: an Image
   // taking another source's place samples where that source sampled
   // (imageUvHandoff.ts).
@@ -199,6 +160,13 @@ export function connectNodes(
   exposeConnectedTarget(target, targetHandle);
   if (uv) exposeConnectedTarget(source, 'uv');
   announceAppendTrim(target, targetHandle);
+  return true;
+}
+
+/** Are both ends of a connection nodes of the graph? Every connect path asks
+ *  (`connectNodes`, and NodeEditor's onConnect BEFORE its undo entry). */
+export function connectionNodesExist(nodes: readonly AppNode[], source: string, target: string): boolean {
+  return nodes.some((n) => n.id === source) && nodes.some((n) => n.id === target);
 }
 
 /**

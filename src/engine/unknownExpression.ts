@@ -387,7 +387,7 @@ export const MAX_UNKNOWN_REFS = 32;
 
 /** The positional socket a bound reference arrives on. Positional, so no user
  *  text reaches a handle id, an edge id or a DOM selector, and a rename keeps
- *  the edge id (and its waypoints) across an Apply. */
+ *  the edge id across an Apply. */
 export const unknownRefHandle = (i: number): string => `ref${i}`;
 
 /** A JS IdentifierName — what a bound name must be, written or read. */

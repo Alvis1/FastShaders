@@ -19,7 +19,7 @@ import { isTunnelIn, isTunnelOut, tunnelExits, tunnelLabelOf } from '@/utils/pas
 import { portalNamesTaken, uniquePortalName } from '@/utils/portalNames';
 import { connectNodes } from './edgeInsert';
 import { edgeDrawnSegments, type GetInternalNode } from './edgeHit';
-import { feedsFedKnot, knotParentFor, wirePoints, type Pt } from './branchWire';
+import { feedsFedKnot, knotParentFor, type Pt } from './branchWire';
 import { focusNode, focusNodes, focusTargets } from './outputFocus';
 import {
   entranceOf,
@@ -27,10 +27,10 @@ import {
   makePortalRefusal,
   makeTunnelInNode,
   makeTunnelOutNode,
+  nextPortalEnd,
   portalMembers,
   portalSourceName,
   portalSpots,
-  portalWaypointHalves,
   relinkedExitNodes,
   renamedPortalNodes,
   splitEdgeWithPortal,
@@ -49,9 +49,8 @@ export interface PortalPin {
  * "Make portal" on the wire `edgeId`: a Portal In `PORTAL_GAP` along the
  * DRAWN wire from its source, a Portal Out as far back from its target, the
  * wire split into source → In and Out → target (at the old index), the
- * routing points next to each end kept by that end, the portal named after
- * the source. One undo entry. Null, changing nothing, when refused
- * (`makePortalRefusal`) or the wire is not drawn.
+ * portal named after the source. One undo entry. Null, changing nothing, when
+ * refused (`makePortalRefusal`) or the wire is not drawn.
  */
 export function makePortal(edgeId: string, getInternalNode: GetInternalNode): { inId: string; outId: string } | null {
   const store = useAppStore.getState();
@@ -60,10 +59,9 @@ export function makePortal(edgeId: string, getInternalNode: GetInternalNode): { 
   const segs = edgeDrawnSegments(edge, getInternalNode);
   const spots = segs ? portalSpots(segs) : null;
   if (!spots) return null;
-  const { before, after } = portalWaypointHalves(wirePoints(edge), spots.inSeg, spots.outSeg);
   const inId = generateId();
   const outId = generateId();
-  const split = splitEdgeWithPortal(store.edges, edgeId, inId, outId, before, after);
+  const split = splitEdgeWithPortal(store.edges, edgeId, inId, outId);
   if (!split) return null;
   const name = uniquePortalName(
     portalSourceName(store.nodes, store.edges, store.nodeVarNames, edge.source),
@@ -190,6 +188,39 @@ export function selectWholePortal(nodeId: string): boolean {
   const entrance = entranceOf(useAppStore.getState().nodes, nodeId);
   if (!entrance) return false;
   selectShown(portalMembers(useAppStore.getState().nodes, entrance.id));
+  return true;
+}
+
+/** The end the last F press went to, and the node SHOWN for it (itself, or
+ *  the collapsed group's pill standing in for it), so the next F carries on
+ *  from a hidden end whose pill is what got selected. */
+let lastCycled: { end: string; shown: string } | null = null;
+
+/**
+ * F on ONE selected portal end (owner, 2026-11-24: "when selected and
+ * pressed F, cycle focus through all connected nodes"): glide on F's glide
+ * (`VIEW_GLIDE_MS`, `focusNode`) to the NEXT end of the same portal
+ * (`nextPortalEnd`: the entrance, then the exits, wrapping) and select it —
+ * a hidden end framed AND selected as its pill (`selectShown`), and the press
+ * after that carries on from the hidden end. Selection only: no undo entry.
+ * False, doing nothing, for any other selection: F then frames it as ever.
+ */
+export function cyclePortalFocus(fitView: FitView): boolean {
+  const nodes = useAppStore.getState().nodes;
+  const selected = nodes.filter((n) => n.selected);
+  const carried = lastCycled;
+  lastCycled = null;
+  if (selected.length !== 1) return false;
+  const sel = selected[0];
+  let current: string | null = null;
+  if (isTunnelIn(sel) || isTunnelOut(sel)) current = sel.id;
+  else if (carried && carried.shown === sel.id && nodes.some((n) => n.id === carried.end)) current = carried.end;
+  if (current === null) return false;
+  const next = nextPortalEnd(nodes, current);
+  if (next === null) return false;
+  focusNode(fitView, nodes, next);
+  selectShown([next]);
+  lastCycled = { end: next, shown: focusTargets(nodes, [next])[0]?.id ?? next };
   return true;
 }
 

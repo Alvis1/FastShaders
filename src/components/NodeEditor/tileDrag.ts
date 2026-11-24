@@ -18,10 +18,17 @@
 import type { KeyboardEvent } from 'react';
 
 export type TilePayload =
-  | { kind: 'node'; nodeType: string }
+  /** `link`: a Portal Out tile's entrance (PortalTileCard.tsx) — which
+   *  portal the added exit belongs to. A node id from the live graph, never
+   *  logged (the study's `asset-drop` names the node TYPE only). */
+  | { kind: 'node'; nodeType: string; link?: string }
   | { kind: 'savedGroup'; id: string }
   | { kind: 'texture'; id: string }
   | { kind: 'preset'; id: string };
+
+/** The HTML5 drag type carrying a Portal Out tile's `link` beside its node
+ *  type (`application/reactflow-type` = `tunnelOut`). */
+export const PORTAL_LINK_DRAG_TYPE = 'application/x-fs-portal-link';
 
 export interface TileDropEventDetail {
   payload: TilePayload;

@@ -8,8 +8,12 @@ import {
   distancePointToCubicBezier,
   catmullRomToBeziers,
   splinePath,
-  insertWaypointOrdered,
   distancePointToSpline,
+  portalDive,
+  segmentsPath,
+  DIVE_END_X,
+  DIVE_END_Y,
+  DIVE_HANDLE,
   edgeBezier,
   bezierMarkAt,
   arrowMarks,
@@ -137,40 +141,15 @@ describe('splinePath', () => {
   });
 });
 
-describe('insertWaypointOrdered', () => {
-  const s = { x: 0, y: 0 };
-  const t = { x: 100, y: 0 };
-
-  it('adds the first waypoint into an empty list', () => {
-    expect(insertWaypointOrdered(s, t, [], { x: 50, y: 10 })).toEqual([{ x: 50, y: 10 }]);
-  });
-
-  it('orders a new point BEFORE an existing one when it sits nearer the source', () => {
-    const out = insertWaypointOrdered(s, t, [{ x: 50, y: 0 }], { x: 25, y: 5 });
-    expect(out).toEqual([{ x: 25, y: 5 }, { x: 50, y: 0 }]);
-  });
-
-  it('orders a new point AFTER an existing one when it sits nearer the target', () => {
-    const out = insertWaypointOrdered(s, t, [{ x: 50, y: 0 }], { x: 75, y: 5 });
-    expect(out).toEqual([{ x: 50, y: 0 }, { x: 75, y: 5 }]);
-  });
-
-  it('does not mutate the input array', () => {
-    const wps = [{ x: 50, y: 0 }];
-    insertWaypointOrdered(s, t, wps, { x: 25, y: 5 });
-    expect(wps).toEqual([{ x: 50, y: 0 }]);
-  });
-});
-
-describe('distancePointToSpline', () => {
+describe('distancePointToSpline (board ink)', () => {
   const line: Array<[number, number]> = [[0, 0], [1000, 0], [2000, 0]];
 
-  it('reports ~0 for a point on a collinear routed spline', () => {
+  it('reports ~0 for a point on a collinear spline', () => {
     expect(distancePointToSpline(line, 500, 0)).toBeLessThan(0.5);
     expect(distancePointToSpline(line, 1500, 0)).toBeLessThan(0.5);
   });
 
-  it('reports ~0 at a waypoint (waypoints are on the curve)', () => {
+  it('reports ~0 at a point the spline passes through', () => {
     expect(distancePointToSpline(line, 1000, 0)).toBeLessThan(0.5);
   });
 
@@ -179,8 +158,66 @@ describe('distancePointToSpline', () => {
     expect(distancePointToSpline(line, 500, 5)).toBeLessThan(5.5);
   });
 
-  it('reports a large distance far from the routed path', () => {
+  it('reports a large distance far from the path', () => {
     expect(distancePointToSpline(line, 1000, 400)).toBeGreaterThan(300);
+  });
+});
+
+describe('portalDive — a wire diving into a Portal\'s hole (owner, 2026-11-24)', () => {
+  const r = 16;
+  it('into a Portal In: from the anchor on, level first, then straight DOWN to below the middle', () => {
+    // The anchor: the socket's left edge, 10 px left of the centre (200, 100).
+    const seg = portalDive('in', 190, 100, 200, 100, r);
+    expect(seg.slice(0, 2)).toEqual([190, 100]);
+    // Leaves the anchor horizontally, the way the wire arrived.
+    expect(seg[3]).toBe(100);
+    expect(seg[2]).toBeGreaterThan(190);
+    // Ends inside the hole, right of and below the centre, arriving vertically.
+    expect(seg.slice(6)).toEqual([200 + DIVE_END_X * r, 100 + DIVE_END_Y * r]);
+    expect(seg[4]).toBe(seg[6]);
+    expect(seg[5]).toBeLessThan(seg[7]);
+    expect(Math.hypot(seg[6] - 200, seg[7] - 100)).toBeLessThan(r);
+  });
+
+  it('out of a Portal Out: its mirror, rising out of the hole to the anchor', () => {
+    const seg = portalDive('out', 210, 100, 200, 100, r);
+    expect(seg.slice(0, 2)).toEqual([200 - DIVE_END_X * r, 100 + DIVE_END_Y * r]);
+    expect(seg.slice(6)).toEqual([210, 100]);
+    // Rises vertically, then reaches the anchor level.
+    expect(seg[2]).toBe(seg[0]);
+    expect(seg[5]).toBe(100);
+  });
+
+  it('segmentsPath chains segments into one path, each from where the last ended', () => {
+    expect(segmentsPath([])).toBe('');
+    const a: BezierSegment = [0, 0, 1, 0, 2, 0, 3, 0];
+    const b: BezierSegment = [3, 0, 4, 1, 5, 1, 6, 2];
+    expect(segmentsPath([a, b])).toBe('M0,0 C1,0 2,0 3,0 C4,1 5,1 6,2');
+  });
+
+  it('bends as a QUARTER ELLIPSE — level at the anchor, vertical at the deep end — never with a kink', () => {
+    // The first cut put the drop's handle at 0.88 of its leg and drew a
+    // corner where the dive turned down.
+    for (const kind of ['in', 'out'] as const) {
+      const ax = kind === 'in' ? 190 : 210;
+      const seg = portalDive(kind, ax, 100, 200, 100, r);
+      const [a, b] = kind === 'in' ? [seg.slice(0, 2), seg.slice(6)] : [seg.slice(6), seg.slice(0, 2)];
+      const level = kind === 'in' ? seg.slice(2, 4) : seg.slice(4, 6);
+      const drop = kind === 'in' ? seg.slice(4, 6) : seg.slice(2, 4);
+      expect((level[0] - a[0]) / (b[0] - a[0])).toBeCloseTo(DIVE_HANDLE, 9);
+      expect((b[1] - drop[1]) / (b[1] - a[1])).toBeCloseTo(DIVE_HANDLE, 9);
+    }
+    expect(DIVE_HANDLE).toBeCloseTo(0.5523, 4);
+  });
+
+  it('is drawn over the hole by TypedEdge, masked to the disc, with the wire\'s own lines', () => {
+    const edge = readFileSync(new URL('./TypedEdge.tsx', import.meta.url), 'utf8');
+    expect(edge).toMatch(/mask=\{`url\(#\$\{id\}-m\)`\}/);
+    // The copy is the wire's own channel lines (`lines`), never a second
+    // drawing of it: once in the edge layer, once per diving end.
+    expect(edge.match(/\{lines\}/g)?.length).toBe(3);
+    // The hit area stays the wire's own curve: a press in the hole is the node's.
+    expect(edge).toMatch(/const centerPath = radial\s*\?/);
   });
 });
 
@@ -297,7 +334,7 @@ describe('arrowMarks', () => {
     expect(hi / lo).toBeLessThan(1.35);
   });
 
-  it('walks a waypoint spline across its segment seams', () => {
+  it('walks a chain of segments across its seams', () => {
     const segs = [straight(0, 0, 300, 0), straight(300, 0, 300, 300)];
     const marks = arrowMarks(segs, 100);
     // 600 px of arc at ~100 px → an odd count, the middle one on the seam corner.
@@ -312,8 +349,8 @@ describe('arrowMarks', () => {
   });
 
   it('caps the count at ARROW_MAX however long the wire — a hostile length is a hang otherwise', () => {
-    // Restored node positions need only be FINITE and waypoints may span
-    // ±1e6, so a `.fastshader` can make ONE wire astronomically long. Uncapped,
+    // Restored node positions need only be FINITE, so a `.fastshader` can
+    // make ONE wire astronomically long. Uncapped,
     // a node at x = 1e12 asked a single render for ~8e9 chevrons.
     expect(ARROW_MAX % 2).toBe(1);
     for (const len of [1e5, 1e6, 1e12, 1e300]) {
@@ -324,7 +361,7 @@ describe('arrowMarks', () => {
       expect(marks[(ARROW_MAX - 1) / 2].x / len, `len ${len}`).toBeCloseTo(0.5, 6);
       expect(performance.now() - t0, `len ${len}`).toBeLessThan(250);
     }
-    // 64 waypoints zig-zagging across the whole sanitized box (edgeExtras).
+    // A chain zig-zagging 64 times across a ±1e6 box.
     const pts: Array<[number, number]> = [[0, 0]];
     for (let i = 0; i < 64; i++) pts.push(i % 2 ? [1e6, -1e6] : [-1e6, 1e6]);
     pts.push([0, 0]);

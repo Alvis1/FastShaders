@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { t, formatNodeLabel, portLabel } from '@/i18n';
 import { getNodeValues } from '@/types';
@@ -20,6 +21,7 @@ import { hasUnitRangeFlag } from '@/utils/unitRange';
 import { modeOf } from '@/engine/moduleHelpers';
 import { isKnot, isTunnelIn, isTunnelOut } from '@/utils/passThrough';
 import { PortalMenu } from './PortalMenu';
+import { startBranchOut } from '../branchOut';
 
 
 interface NodeSettingsMenuProps {
@@ -38,16 +40,37 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
   // whole row list on every FRAME of an unrelated node drag, and only
   // `onPaneClick` closes it, so that is an ordinary state to be in.
   const node = useAppStore((s) => s.nodes.find((n) => n.id === nodeId));
+  // A Branch or Portal end deleted while its menu is open (X, Delete, an undo)
+  // takes its menu with it: rendering nothing left an empty strip on screen.
+  const closeContextMenu = useAppStore((s) => s.closeContextMenu);
+  const passThroughRef = useRef(false);
+  if (node) passThroughRef.current = isKnot(node) || isTunnelIn(node) || isTunnelOut(node);
+  useEffect(() => {
+    if (!node && passThroughRef.current) closeContextMenu();
+  }, [node, closeContextMenu]);
   if (!node) return null;
 
-  // A BRANCH has nothing to set: its menu is its name and the delete row
-  // (owner, 2026-11-23: "keep it minimal"). Delete is `removeNode`, the same
-  // splice as X / Delete and its double-click — the trunk's routing points
-  // are joined onto every wire it fed.
+  // A BRANCH has nothing to set: its menu is its name, "Branch out" and the
+  // delete row (owner, 2026-11-23: "keep it minimal"; 2026-11-24: "right mouse
+  // on the branch gives an option to branch out"). "Branch out" starts a new
+  // wire from its output that follows the pointer until a click on an input
+  // connects it (branchOut.ts; Escape or empty canvas cancels, no undo
+  // entry). Delete is `removeNode`, the same splice as X / Delete and its
+  // double-click — every wire it fed is fed from the trunk's source again.
   if (isKnot(node)) {
     return (
       <div className="context-menu__list">
         <div className="context-menu__category">{t('Branch', language)}</div>
+        <button
+          className="context-menu__item"
+          title={t('Start a new wire from this Branch. Click an input to connect it; Esc cancels', language)}
+          onClick={(e) => {
+            useAppStore.getState().closeContextMenu();
+            startBranchOut(nodeId, e.clientX, e.clientY);
+          }}
+        >
+          {t('Branch out', language)}
+        </button>
         <div className="context-menu__divider" />
         <button
           className="context-menu__item context-menu__item--danger"

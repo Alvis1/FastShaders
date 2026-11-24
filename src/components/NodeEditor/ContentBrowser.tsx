@@ -13,6 +13,8 @@ import { getBuiltinTextureIds } from '@/registry/builtinTextureIds';
 import { NodePreviewCard } from './NodePreviewCard';
 import { NoteTileCard } from './NoteTileCard';
 import { noteMatchesQuery } from './noteSearch';
+import { PortalTileCard } from './PortalTileCard';
+import { parsePortalList, portalListKey, portalSearchResults } from './portalSearch';
 import { SavedGroupCard } from './SavedGroupCard';
 import { TutorialCard } from '@/tutorials/TutorialCard';
 import { TUTORIALS } from '@/tutorials/tutorialDefs';
@@ -763,6 +765,14 @@ export const ContentBrowser = memo(function ContentBrowser() {
     return savedGroups.filter((g) => foldSearchText(g.name).includes(q));
   }, [savedGroups, q]);
 
+  // PORTALS (owner, 2026-11-24: "all defined portals can be found through the
+  // search box by the word portal and by the portal's name"): a search shows
+  // the Portal In tile and the live portals' Portal Out tiles by the Add-node
+  // menu's own rule (portalSearch.ts `portalSearchResults`). The live portals
+  // ride ONE string (a primitive per notify), read only while a search runs.
+  const portalKey = useAppStore((s) => (q ? portalListKey(s.nodes) : ''));
+  const portalResults = useMemo(() => portalSearchResults(q, parsePortalList(portalKey)), [q, portalKey]);
+
   // The lessons, by title or summary in either language. Only on their own
   // tab: a lesson is not an asset you drop, so a search elsewhere never
   // surfaces one (the presets and textures DO fan out — they land on the canvas).
@@ -907,9 +917,10 @@ export const ContentBrowser = memo(function ContentBrowser() {
     // "An ordinary result" is the ALL tab's: nodes, the note, ready-made assets.
     const hasResults =
       rankDefs(allDefs).length > 0 || noteMatchesQuery(q) ||
+      portalResults.portalIn || portalResults.exits.length > 0 ||
       filteredPresets.length + filteredPresets2.length + filteredTextures.length > 0;
     return detectPrompt(settledSearch, { hasResults, known: aiKnown });
-  }, [aiKnown, q, settledSearch, rankDefs, allDefs, filteredPresets, filteredPresets2, filteredTextures]);
+  }, [aiKnown, q, settledSearch, rankDefs, allDefs, filteredPresets, filteredPresets2, filteredTextures, portalResults]);
   const searchRef = useRef<HTMLInputElement>(null);
   /** Did THIS box open the dialog? Then its closing hands the focus back. */
   const openedGeneratorRef = useRef(false);
@@ -1083,14 +1094,22 @@ export const ContentBrowser = memo(function ContentBrowser() {
     const noteCard = q
       ? noteMatchesQuery(q)
       : activeCategory === 'all';
-    items = defCards.length + assetCards.length === 0 && !noteCard
+    // The portal tiles a search finds — first for the Portal's own name or a
+    // portal's exact name, else after the node tiles (portalSearchResults).
+    const portalCards = [
+      ...(portalResults.portalIn ? [<PortalTileCard key="__portal_in__" entranceId={null} name="" />] : []),
+      ...portalResults.exits.map((p) => <PortalTileCard key={`portal:${p.id}`} entranceId={p.id} name={p.name} />),
+    ];
+    items = defCards.length + assetCards.length + portalCards.length === 0 && !noteCard
       ? (q
         ? (libraries
           ? noMatch(promptDetected ? 'No matches for “{query}”. Press Enter to make it with AI.' : 'No matches for “{query}”.')
           : null)
         : empty(t('Nothing here yet.', language)))
       : q
-        ? [...defCards, ...(noteCard ? [<NoteTileCard key="__note__" />] : []), ...assetCards]
+        ? portalResults.lead
+          ? [...portalCards, ...defCards, ...(noteCard ? [<NoteTileCard key="__note__" />] : []), ...assetCards]
+          : [...defCards, ...(noteCard ? [<NoteTileCard key="__note__" />] : []), ...portalCards, ...assetCards]
         : [...(noteCard ? [<NoteTileCard key="__note__" />] : []), ...defCards, ...assetCards];
   }
 

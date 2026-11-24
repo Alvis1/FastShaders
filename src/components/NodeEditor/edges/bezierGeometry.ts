@@ -96,7 +96,7 @@ export function cardinalControlPoint(
 export type BezierSegment = [number, number, number, number, number, number, number, number];
 
 /**
- * The cubic a waypoint-free edge draws: the target always enters along its
+ * The cubic an edge draws: the target always enters along its
  * cardinal side; the source leaves along its cardinal side, or along a unit
  * RADIAL `[rx, ry]` (a color-circle source). The same two control points
  * React Flow's getBezierPath and TypedEdge's radial path use.
@@ -114,6 +114,57 @@ export function edgeBezier(
   return [sx, sy, c1x, c1y, c2x, c2y, tx, ty];
 }
 
+/* ---------------- a wire diving into a Portal's hole ---------------- */
+
+/** Where the dive ends, as fractions of the hole's radius from its centre:
+ *  a little right of and below the middle, so the wire arcs over the hole and
+ *  goes DOWN into it (the owner's sketch, 2026-11-24). */
+export const DIVE_END_X = 0.35;
+export const DIVE_END_Y = 0.5;
+
+/** A cubic's handle length, as a fraction of its leg, for a quarter ellipse:
+ *  4/3·(√2 − 1). */
+export const DIVE_HANDLE = (4 / 3) * (Math.SQRT2 - 1);
+
+/**
+ * The last stretch of a wire into a Portal In's hole, or the first of one out
+ * of a Portal Out's (owner, 2026-11-24: "let the edge dive in the hole"). The
+ * wire reaches its socket anchor `(ax, ay)` — inside the hole, level with its
+ * centre `(cx, cy)` — and carries on: into the hole it keeps going the way it
+ * came, then bends DOWN to its end below the middle; out of a hole it rises
+ * from there and turns toward its anchor. `r` is the hole's radius. A wire
+ * keeps its own curve outside the hole: this only adds a piece at the hole
+ * end, which the canvas draws over the hole (TypedEdge's dive).
+ *
+ * The bend is a QUARTER ELLIPSE (both handles `DIVE_HANDLE` of their leg):
+ * level at the anchor — the wire's own tangent there, so the join has no
+ * corner — and vertical at the deep end. Handles bunched toward the corner
+ * of the two legs (the first cut's 0.88 of the drop) drew a kink.
+ */
+export function portalDive(
+  kind: 'in' | 'out',
+  ax: number, ay: number,
+  cx: number, cy: number,
+  r: number,
+): BezierSegment {
+  const ex = kind === 'in' ? cx + DIVE_END_X * r : cx - DIVE_END_X * r;
+  const ey = cy + DIVE_END_Y * r;
+  const levelX = ax + DIVE_HANDLE * (ex - ax);
+  const dropY = ey - DIVE_HANDLE * (ey - ay);
+  return kind === 'in'
+    ? [ax, ay, levelX, ay, ex, dropY, ex, ey]
+    : [ex, ey, ex, dropY, levelX, ay, ax, ay];
+}
+
+/** SVG path `d` for a chain of cubic segments, each starting where the last
+ *  ended (the first one's start is the `M`). Empty for an empty chain. */
+export function segmentsPath(segs: readonly BezierSegment[]): string {
+  if (segs.length === 0) return '';
+  let d = `M${segs[0][0]},${segs[0][1]}`;
+  for (const [, , c1x, c1y, c2x, c2y, px, py] of segs) d += ` C${c1x},${c1y} ${c2x},${c2y} ${px},${py}`;
+  return d;
+}
+
 /* ---------------- direction chevrons (a STILL wire's arrows) ---------------- */
 
 /** Flow px of arc per chevron, roughly — the count is rounded to an ODD number
@@ -129,12 +180,11 @@ export const ARROW_MIN_ARC = 36;
 export const ARROW_FLARE = 2.75;
 /** The most chevrons ONE wire carries, however long — odd, so the midpoint
  *  rule holds; past it the spacing simply grows. Wire length is adversarial:
- *  a restored node position need only be FINITE (graphShape) and a waypoint
- *  may sit anywhere in ±1e6 (edgeExtras), so uncapped a hostile `.fastshader`
- *  asked ONE render for millions of chevrons (64 waypoints inside the
- *  sanitized box: 1.4M; a node at x = 1e12: ~8e9, a loop that never ends) —
- *  a hung tab that the autosave brings back on every reload. 63 still spaces
- *  an 8,000 px wire at ARROW_SPACING. */
+ *  a restored node position need only be FINITE (graphShape), so uncapped a
+ *  hostile `.fastshader` asked ONE render for millions of chevrons (a node at
+ *  x = 1e12: ~8e9, a loop that never ends) — a hung tab that the autosave
+ *  brings back on every reload. 63 still spaces an 8,000 px wire at
+ *  ARROW_SPACING. */
 export const ARROW_MAX = 63;
 
 /** A chevron's anchor: a point on the curve and the unit tangent there,
@@ -170,7 +220,7 @@ export function bezierMarkAt(seg: BezierSegment, t: number): ArrowMark {
 
 /**
  * Where a still wire's chevrons go: evenly along the ARC LENGTH of the chain
- * `segs` (one segment, or a waypoint spline's several), an odd count about
+ * `segs` (one segment, or a chain of several), an odd count about
  * `spacing` apart so the middle one always sits on the midpoint, none on an
  * arc shorter than `minArc`, and never more than ARROW_MAX. `minArc` defaults
  * to 0 — a canvas wire ALWAYS carries one, even at zero length; only the
@@ -315,9 +365,9 @@ function clipChord(
  * Convert a poly-line of points into a chain of smooth cubic bezier segments
  * using a (clamped) Catmull-Rom spline: the curve passes THROUGH every point,
  * with tangents derived from each point's neighbours. End tangents clamp to the
- * end point (duplicated), so the spline starts/ends without overshoot. Used for
- * edges routed through user waypoints — shared by the renderer (TypedEdge) and
- * the drop-on-edge hit test so what highlights is exactly what the wire draws.
+ * end point (duplicated), so the spline starts/ends without overshoot. Board
+ * ink's stroke (DrawingLayer, the eraser's hit test, the intro's DrawScene) —
+ * wires have no routing points any more (owner, 2026-11-24).
  */
 export function catmullRomToBeziers(pts: Array<[number, number]>): BezierSegment[] {
   const segs: BezierSegment[] = [];
@@ -343,69 +393,6 @@ export function splinePath(pts: Array<[number, number]>): string {
     d += ` C${c1x},${c1y} ${c2x},${c2y} ${px},${py}`;
   }
   return d;
-}
-
-function hypot(a: { x: number; y: number }, b: { x: number; y: number }): number {
-  return Math.hypot(a.x - b.x, a.y - b.y);
-}
-
-type Pt = { x: number; y: number };
-
-/**
- * Where in `waypoints` a new point `p` belongs: the index that adds the least
- * detour to the poly-line source → …waypoints… → target.
- */
-function waypointInsertIndex(source: Pt, target: Pt, waypoints: readonly Pt[], p: Pt): number {
-  const pts = [source, ...waypoints, target];
-  let bestIdx = 0;
-  let bestCost = Infinity;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const a = pts[i];
-    const b = pts[i + 1];
-    const detour = hypot(a, p) + hypot(p, b) - hypot(a, b);
-    if (detour < bestCost) {
-      bestCost = detour;
-      bestIdx = i;
-    }
-  }
-  return bestIdx;
-}
-
-/**
- * Insert a new routing waypoint `p` into `waypoints` at the position that adds
- * the least detour to the poly-line source → …waypoints… → target. Returns a new
- * array (never mutates). Ordering by minimum added length keeps a freshly-placed
- * point on the visually-correct part of the wire regardless of click order.
- */
-export function insertWaypointOrdered(
-  source: Pt,
-  target: Pt,
-  waypoints: Array<Pt>,
-  p: Pt,
-): Array<Pt> {
-  const next = waypoints.slice();
-  next.splice(waypointInsertIndex(source, target, waypoints, p), 0, { x: p.x, y: p.y });
-  return next;
-}
-
-/**
- * Share one wire's routing points between the two halves a node spliced onto it
- * leaves behind. The node's `center` sits at the position it would take as a
- * waypoint, so what lies before it stays with the source half and what lies
- * after goes with the target half. Points within `radius` of the node are
- * DISSOLVED — they would sit under the card or kink the new wires into it —
- * and every other point is kept exactly. Never mutates.
- */
-export function splitWaypointsAtNode(
-  source: Pt,
-  target: Pt,
-  waypoints: readonly Pt[],
-  center: Pt,
-  radius: number,
-): { before: Pt[]; after: Pt[] } {
-  const k = waypointInsertIndex(source, target, waypoints, center);
-  const far = (w: Pt) => hypot(w, center) > radius;
-  return { before: waypoints.slice(0, k).filter(far), after: waypoints.slice(k).filter(far) };
 }
 
 /** Minimum distance from (px,py) to a Catmull-Rom spline through `pts`. */
@@ -507,11 +494,9 @@ export function nearestOnCubicBezier(
 }
 
 /**
- * The nearest point of a chain of segments (a routed wire's spline, or a plain
- * wire's one cubic) to a probe, with the INDEX of the segment it lies on:
- * segment `i` runs from the wire's point `i` to point `i + 1` (point 0 the
- * source, the last the target), so the routing points before it are
- * `waypoints.slice(0, i)`. Null for an empty chain.
+ * The nearest point of a chain of segments (a wire's one cubic, or several)
+ * to a probe, with the INDEX of the segment it lies on. Null for an empty
+ * chain.
  */
 export function nearestOnSegments(
   segs: readonly BezierSegment[],

@@ -236,8 +236,9 @@ export function parseStoredGroupsReport(parsed: unknown): StoredGroupsReport {
       // level as fs:graph), and instantiating a group clones these
       // nodes/edges straight into the live graph — so it gets the same
       // repairs loadGraph and applyProjectToStore run: image/data payload
-      // bounds, edge-`data` sanitizing (TypedEdge dereferences `waypoints`
-      // during RENDER, no error boundary), and exposedPorts normalization
+      // bounds, edge-`data` sanitizing (TypedEdge reads `data` during RENDER,
+      // no error boundary; an older file's routing points are dropped there),
+      // and exposedPorts normalization
       // (ShaderNode does `new Set(data.exposedPorts)` during render, and
       // `new Set(5)` throws) — and Output mesh-target lists, since a group may
       // legitimately CONTAIN an Output (groupSelection filters only groups and
@@ -1370,10 +1371,11 @@ export function parseStoredGraph(input: unknown): StoredGraph | null {
       data.nodes = secs.nodes;
 
       // Edge `data` is adversarial too, and it is the one graph payload nothing
-      // validated — TypedEdge maps `waypoints` and dereferences `w.x` during
-      // RENDER, with no error boundary anywhere in the app, so `waypoints:
-      // [null]` from a tampered value blanks the whole editor on every boot.
-      // BEFORE the split, which walks the edge list and re-points some of it.
+      // validated — TypedEdge read it during RENDER, with no error boundary
+      // anywhere in the app, so a tampered value blanked the whole editor on
+      // every boot. An older file's routing points are DROPPED here (removed
+      // 2026-11-24). BEFORE the split, which walks the edge list and re-points
+      // some of it.
       data.edges = sanitizeEdgeExtras(data.edges);
       {
         // ONE Output NODE per material — see projectImport for the reasoning;
@@ -1797,8 +1799,8 @@ interface AppState {
   // model, and the popover names it. Null until the preview reports.
   previewShape: PreviewShape | null;
 
-  // Board drawings (freehand ink annotations) — VISUAL-ONLY, like notes /
-  // waypoints. Separate slice so graphToCode / cpuEvaluator / the sync engine
+  // Board drawings (freehand ink annotations) — VISUAL-ONLY, like notes.
+  // Separate slice so graphToCode / cpuEvaluator / the sync engine
   // never see them; they ride graph autosave + history + the project embed.
   drawings: DrawStroke[];
   // Draw-tool prefs (persisted). `drawToolActive` / `drawEraser` are session
@@ -1833,16 +1835,6 @@ interface AppState {
    * ignored; none present → nothing changes and no history is pushed.
    */
   removeEdges: (edgeIds: readonly string[]) => void;
-  /**
-   * Replace an edge's routing waypoints (visual-only). `history` pushes an undo
-   * entry (once per gesture: at drag-start / on add / on remove — NOT on every
-   * drag-move frame). Passing `undefined`/`[]` clears them.
-   */
-  setEdgeWaypoints: (
-    edgeId: string,
-    waypoints: Array<{ x: number; y: number }> | undefined,
-    opts?: { history?: boolean },
-  ) => void;
   updateNodeData: (nodeId: string, data: Partial<AppNode['data']>) => void;
   /** Make an output node THE ACTIVE SINK (utils/sdfPartition.ts `activeSink`):
    *  the flag lands on `nodeId` and leaves every other sink in ONE history
@@ -2290,8 +2282,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
       const nodes = state.nodes.filter((n) => n.id !== nodeId);
       // Splice-delete: outgoing edges of the removed node re-parent to its
       // first connected input's upstream so the signal stays wired up (a
-      // Branch's drawing is joined back onto each bridged wire).
-      const bridged = bridgeEdgesAcrossDeletedNodes(state.edges, new Set([nodeId]), state.nodes);
+      // removed Branch's wires out are fed from its trunk's source again).
+      const bridged = bridgeEdgesAcrossDeletedNodes(state.edges, new Set([nodeId]));
       const norm = normalizeChainOperands(nodes, bridged);
       return { nodes: norm.nodes, edges: norm.edges, syncSource: 'graph', isUndoRedo: false };
     });
@@ -2325,27 +2317,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
         isUndoRedo: false,
       };
     });
-  },
-
-  setEdgeWaypoints: (edgeId, waypoints, opts) => {
-    if (opts?.history) get().pushHistory();
-    set((state) => ({
-      edges: state.edges.map((e) =>
-        e.id === edgeId
-          ? {
-              ...e,
-              data: {
-                ...(e.data ?? { dataType: 'any' }),
-                waypoints: waypoints && waypoints.length ? waypoints : undefined,
-              },
-            }
-          : e,
-      ) as AppEdge[],
-      // Waypoints are visual — mark the change graph-sourced so the sync engine
-      // regenerates code (a no-op string it dedupes) without a code→graph loop.
-      syncSource: 'graph',
-      isUndoRedo: false,
-    }));
   },
 
   updateNodeData: (nodeId, data) => {
@@ -3640,7 +3611,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     get().pushHistory();
     // Splice-delete edges across the removed run so signal stays wired when
     // the group sat mid-graph; then drop any edge still touching the removal set.
-    const bridged = bridgeEdgesAcrossDeletedNodes(state.edges, toRemove, state.nodes);
+    const bridged = bridgeEdgesAcrossDeletedNodes(state.edges, toRemove);
     const edges = bridged.filter((e) => !toRemove.has(e.source) && !toRemove.has(e.target));
     const norm = normalizeChainOperands(
       state.nodes.filter((n) => !toRemove.has(n.id)),
@@ -4326,7 +4297,7 @@ useAppStore.subscribe(
       // A bare selection click / Escape replaces the arrays without changing
       // anything the payload stores — don't arm a full-graph JSON.stringify
       // (multi-MB once images are embedded) for it. Positions, values,
-      // waypoints and topology all fail this predicate and still save.
+      // edge data and topology all fail this predicate and still save.
       if (
         state.drawings === prev.drawings &&
         state.shaderPalettes === prev.shaderPalettes &&

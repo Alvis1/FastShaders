@@ -15,7 +15,7 @@
  * and cleaned on write (`cleanPortalName`). Pure: no store, no React.
  */
 import type { AppEdge, AppNode } from '@/types';
-import { edgeWaypointsOf, joinWaypoints, unwrapGroupsOnly } from '@/utils/edgeUtils';
+import { unwrapGroupsOnly } from '@/utils/edgeUtils';
 import { generateEdgeId } from '@/utils/idGenerator';
 import { isCollapsedMember } from '@/utils/groupFrame';
 import { cleanPortalName, portalNamesTaken, uniquePortalName } from '@/utils/portalNames';
@@ -33,7 +33,7 @@ import {
   tunnelLinkOf,
 } from '@/utils/passThrough';
 import { wouldCreateCycle } from './dragConnect';
-import { branchRefusal, feedsFedKnot, half, splitWaypointsAtSegment, type BranchRefusal, type Pt } from './branchWire';
+import { branchRefusal, feedsFedKnot, half, type BranchRefusal, type Pt } from './branchWire';
 import type { BezierSegment } from './edges/bezierGeometry';
 import { TUNNEL_SIZE } from './nodes/passThroughGeometry';
 
@@ -129,85 +129,63 @@ function cubicAt(s: BezierSegment, t: number): Pt {
   return { x: a * s[0] + b * s[2] + c * s[4] + d * s[6], y: a * s[1] + b * s[3] + c * s[5] + d * s[7] };
 }
 
-/** The drawn curve as a polyline: every sample with its segment and its
- *  running arc length from the source. */
-function arcTable(segs: readonly BezierSegment[]): { p: Pt; seg: number; at: number }[] {
-  const out: { p: Pt; seg: number; at: number }[] = [];
+/** The drawn curve as a polyline: every sample with its running arc length
+ *  from the source. */
+function arcTable(segs: readonly BezierSegment[]): { p: Pt; at: number }[] {
+  const out: { p: Pt; at: number }[] = [];
   let at = 0;
   let prev: Pt | null = null;
   segs.forEach((s, seg) => {
     for (let k = seg === 0 ? 0 : 1; k <= ARC_SAMPLES; k++) {
       const p = cubicAt(s, k / ARC_SAMPLES);
       if (prev) at += Math.hypot(p.x - prev.x, p.y - prev.y);
-      out.push({ p, seg, at });
+      out.push({ p, at });
       prev = p;
     }
   });
   return out;
 }
 
-function pointAt(table: ReturnType<typeof arcTable>, d: number): { at: Pt; seg: number } {
+function pointAt(table: ReturnType<typeof arcTable>, d: number): Pt {
   for (let i = 1; i < table.length; i++) {
     const b = table[i];
     if (b.at < d) continue;
     const a = table[i - 1];
     const span = b.at - a.at;
     const f = span > 0 ? (d - a.at) / span : 0;
-    return { at: { x: a.p.x + (b.p.x - a.p.x) * f, y: a.p.y + (b.p.y - a.p.y) * f }, seg: b.seg };
+    return { x: a.p.x + (b.p.x - a.p.x) * f, y: a.p.y + (b.p.y - a.p.y) * f };
   }
-  const last = table[table.length - 1];
-  return { at: { ...last.p }, seg: last.seg };
+  return { ...table[table.length - 1].p };
 }
 
 /**
  * Where "Make portal" puts the two ends on a wire DRAWN as `segs` (the
  * curve TypedEdge draws, edgeHit.ts `edgeDrawnSegments`): the entrance
  * `PORTAL_GAP` flow px along the curve from the source socket, the exit as
- * far back from the target socket — a third of a short wire each — with the
- * segment each lies on (segment `i` runs from the wire's point `i` to `i + 1`,
- * point 0 the source). Null for no curve or a non-finite one.
+ * far back from the target socket — a third of a short wire each. Null for no
+ * curve or a non-finite one.
  */
 export function portalSpots(
   segs: readonly BezierSegment[],
   gap = PORTAL_GAP,
-): { inAt: Pt; inSeg: number; outAt: Pt; outSeg: number } | null {
+): { inAt: Pt; outAt: Pt } | null {
   if (segs.length === 0 || !segs.every((s) => s.every(Number.isFinite))) return null;
   const table = arcTable(segs);
   const total = table[table.length - 1].at;
   const d = Math.min(gap, total / 3);
-  const a = pointAt(table, d);
-  const b = pointAt(table, total - d);
-  return { inAt: a.at, inSeg: a.seg, outAt: b.at, outSeg: b.seg };
-}
-
-/**
- * The routing points each half keeps: the entrance's wire keeps the points
- * BEFORE the entrance, the exit's wire those AFTER the exit, and the middle
- * ones go — the hidden part of the wire has no drawing.
- */
-export function portalWaypointHalves(
-  waypoints: readonly Pt[],
-  inSeg: number,
-  outSeg: number,
-): { before: Pt[]; after: Pt[] } {
-  return {
-    before: splitWaypointsAtSegment(waypoints, inSeg).before,
-    after: splitWaypointsAtSegment(waypoints, outSeg).after,
-  };
+  return { inAt: pointAt(table, d), outAt: pointAt(table, total - d) };
 }
 
 /**
  * `edges` with the wire `edgeId` replaced by the Portal pair: exit → old
- * target (the `after` points) at the OLD wire's index, old source → entrance
- * (the `before` points) right after it. Null when the wire is missing.
+ * target at the OLD wire's index, old source → entrance right after it. Null
+ * when the wire is missing.
  */
 export function splitEdgeWithPortal(
   edges: readonly AppEdge[],
   edgeId: string,
   inId: string,
   outId: string,
-  before: readonly Pt[],
-  after: readonly Pt[],
 ): AppEdge[] | null {
   const i = edges.findIndex((e) => e.id === edgeId);
   if (i < 0) return null;
@@ -216,8 +194,8 @@ export function splitEdgeWithPortal(
   out.splice(
     i,
     1,
-    half(old, outId, 'out', old.target, old.targetHandle, after),
-    half(old, old.source, old.sourceHandle, inId, 'in', before),
+    half(old, outId, 'out', old.target, old.targetHandle),
+    half(old, old.source, old.sourceHandle, inId, 'in'),
   );
   return out;
 }
@@ -321,15 +299,27 @@ export function entranceOf(nodes: readonly AppNode[], nodeId: string): AppNode |
 }
 
 /**
- * Why Rename refuses on the portal end `nodeId`: a broken exit (no portal to
- * name), or an entrance inside a COLLAPSED group — the in-place field opens
- * on the entrance's card, which is not drawn, so it would sit unseen and
- * unfocused and then pop open, uninvited, when the group is expanded.
+ * Why the menu's name field is read-only on the portal end `nodeId` (owner,
+ * 2026-11-24): a broken exit (no portal to name), or an entrance inside a
+ * COLLAPSED group — a name the canvas cannot show while it is hidden.
  */
 export function portalRenameRefusal(nodes: readonly AppNode[], nodeId: string): 'broken' | 'collapsed' | null {
   const entrance = entranceOf(nodes, nodeId);
   if (!entrance) return 'broken';
   return isCollapsedMember(entrance) ? 'collapsed' : null;
+}
+
+/**
+ * What the menu's name field may hand `renamePortal` when it commits: ONLY
+ * what the user typed (`typed`, null while nothing was typed), and nothing
+ * when that is the name it showed (`shown`). Opening and closing the menu
+ * must never spend an undo entry or rewrite the exits' caches — the first cut
+ * committed the shown text, which `renamePortal` cleans, so a stored name that
+ * was not clean (a file's) was rewritten on every open, and StrictMode's
+ * extra mount/unmount pair did it with nothing on screen.
+ */
+export function portalNameToCommit(shown: string, typed: string | null): string | null {
+  return typed === null || typed === shown ? null : typed;
 }
 
 /** Why "Turn back into wires" refuses: a broken exit (no portal to undo) or
@@ -348,8 +338,7 @@ export function unportalRefusal(nodes: readonly AppNode[], nodeId: string): Unpo
 /**
  * "Turn back into wires" on either end: every wire out of every exit is fed
  * from the entrance's own feeder again (which is what the fold already reads
- * it as), each at that exit wire's array index, its routing points the feed's
- * then its own (`joinWaypoints`, capped); the feed is removed; an UNFED
+ * it as), each at that exit wire's array index; the feed is removed; an UNFED
  * portal's wires simply go. Returns the new edges and the ends to remove, or
  * null when refused (`unportalRefusal`).
  */
@@ -366,7 +355,6 @@ export function unportalPlan(
   // A feed out of one of this portal's own ends is a loop only a forged file
   // holds: the portal is unfed.
   const feed = feedWire && !members.has(feedWire.source) ? feedWire : null;
-  const feedPoints = feed ? edgeWaypointsOf(feed) : [];
   const taken = new Set<string>();
   const out: AppEdge[] = [];
   for (const e of edges) {
@@ -380,16 +368,12 @@ export function unportalPlan(
     const port = `${e.target}\0${e.targetHandle ?? 'in'}`;
     if (taken.has(port)) continue;
     taken.add(port);
-    const points = joinWaypoints(feedPoints, edgeWaypointsOf(e));
-    const { waypoints: _old, ...rest } = (e.data ?? { dataType: 'any' }) as NonNullable<AppEdge['data']> & { waypoints?: unknown };
-    void _old;
     out.push({
       ...e,
       id: generateEdgeId(feed.source, feed.sourceHandle ?? 'out', e.target, e.targetHandle ?? 'in'),
       source: feed.source,
       sourceHandle: feed.sourceHandle,
       selected: false,
-      data: (points.length ? { ...rest, waypoints: points } : rest) as AppEdge['data'],
     });
   }
   return { edges: out, removeIds: [...members] };
@@ -585,6 +569,23 @@ const NONE: readonly string[] = Object.freeze([]);
 /** An entrance and all its exits: the ids the trace marks. */
 export function portalMembers(nodes: readonly AppNode[], entranceId: string): string[] {
   return [entranceId, ...tunnelExits(nodes as AppNode[], entranceId).map((n) => n.id)];
+}
+
+/**
+ * The end F goes to from the portal end `endId` (owner, 2026-11-24: "when
+ * selected and pressed F, cycle focus through all connected nodes"): the
+ * NEXT end of the same portal in its stable order — the entrance, then its
+ * exits in graph order (`portalMembers`) — wrapping around. Null, leaving F
+ * its usual framing, for anything that is not an end of a portal with a
+ * second end: another node, a broken exit, an entrance with no exit.
+ */
+export function nextPortalEnd(nodes: readonly AppNode[], endId: string): string | null {
+  const entrance = entranceOf(nodes, endId);
+  if (!entrance) return null;
+  const members = portalMembers(nodes, entrance.id);
+  if (members.length < 2) return null;
+  const i = members.indexOf(endId);
+  return i < 0 ? null : members[(i + 1) % members.length];
 }
 
 /**

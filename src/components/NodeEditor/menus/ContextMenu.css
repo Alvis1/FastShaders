@@ -129,6 +129,26 @@
   color: var(--text-muted);
 }
 
+/* A portal end's NAME field (menus/PortalMenu.tsx): the search box's look at
+   the top of the menu. Read-only — a broken exit, a hidden entrance — it
+   still takes the focus (so no canvas key fires behind the menu) and VISIBLY
+   reads as text: muted, italic, on the menu's own surface instead of the
+   input's, with the reason in the line under it (no tooltip — one opened at
+   once over the rows below). */
+.portal-menu__name[readonly] {
+  color: var(--text-secondary);
+  font-style: italic;
+  background: transparent;
+  cursor: default;
+}
+
+.portal-menu__name-reason {
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
 /* Fills whatever the flex column has left under the search box, so the list
    shrinks with the viewport instead of being pinned to a fixed height. */
 .context-menu__list {

@@ -265,6 +265,13 @@
   z-index: 10000 !important;
 }
 
+/* A Branch dragged onto an input (branchDrop.ts): the input's node is raised
+   by the rule above so its ringed socket shows — and the dragged Branch goes
+   one step higher still, or that raised card hid the dot being dropped on it. */
+.node-editor .react-flow__node.fs-branch-drop-dragged {
+  z-index: 10001 !important;
+}
+
 /* Drag-connect: the input socket vertical alignment picked. Box-shadow ring
    only — handles are positioned via transform, so transform is off-limits
    (see TypedHandle.css), and sockets never move or scale. */

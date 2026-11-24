@@ -91,10 +91,10 @@ describe('a lifted node', () => {
       ['./nodes/NoteNode.css', '.note-node'],
       ['./nodes/GroupNode.css', '.group-node--collapsed'],
     ];
-    // knot (Branch): drawn as a routing point's dot, counter-scaled by the
-    // zoom on its OWN box that never eases (an eased 1/zoom pulsed the dot on
-    // every wheel step), and like a Portal hole it casts no shadow until
-    // SELECTED, when it takes the wrapper's lift (`--fs-knot-lift`).
+    // knot (Branch): a round dot, counter-scaled by the zoom on its OWN box
+    // that never eases (an eased 1/zoom pulsed the dot on every wheel step);
+    // it casts no shadow until SELECTED, when it takes the wrapper's lift
+    // (`--fs-knot-lift`).
     {
       const css = read('./nodes/PassThroughNode.css');
       const at = (sel: string) => css.slice(css.indexOf(`${sel} {`), css.indexOf('}', css.indexOf(`${sel} {`)));
@@ -113,15 +113,17 @@ describe('a lifted node', () => {
     }
   });
 
-  it('lifts a Portal hole only when SELECTED: a hole casts no shadow at rest (owner, 2026-11-23)', () => {
-    // tunnelIn / tunnelOut: the plate's outer shadow is empty until selection
-    // hands it the wrapper's lift; hover deepens the INSET instead.
+  it('never lifts a Portal hole on a shadow: it GROWS and wears a ring when SELECTED (owner, 2026-11-24)', () => {
+    // tunnelIn / tunnelOut: "no shadow underneath, just slightly larger and a
+    // selection circle" — the node lift's growth, never its shadow; hover
+    // deepens the INSET instead.
     const css = read('./nodes/PassThroughNode.css');
     const block = (sel: string) => css.slice(css.indexOf(`${sel} {`), css.indexOf('}', css.indexOf(`${sel} {`)));
     const hole = block('.tunnel-node__hole');
     expect(hole).toContain('scale: var(--fs-node-scale, 1);');
-    expect(hole).toContain('box-shadow: var(--fs-tunnel-plate, 0 0 0 transparent), inset 3px 3px 0');
-    expect(block('.tunnel-node--selected')).toContain('--fs-tunnel-plate: var(--fs-node-lift');
+    expect(hole).toContain('box-shadow: inset 3px 3px 0');
+    expect(hole).not.toContain('--fs-node-lift');
+    expect(block('.tunnel-node--selected .tunnel-node__hole')).toContain('outline: 2px solid var(--node-cost-text');
     expect(block('.react-flow__node:hover .tunnel-node__hole')).toContain('inset 4px 4px 0');
   });
 

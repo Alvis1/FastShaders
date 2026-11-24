@@ -197,8 +197,9 @@ function applyProjectToStore(
   const drawings = sanitizeDrawings(project.drawings);
   const palettes = sanitizePalettes(project.palettes);
 
-  // Edge `data` likewise: waypoints arrive unchecked, and TypedEdge maps them
-  // during render (docs/dev/canvas-interaction.md).
+  // Edge `data` likewise: it arrives unchecked, and TypedEdge reads it during
+  // render; an older file's routing points are dropped here
+  // (docs/dev/canvas-interaction.md).
   const edges = sanitizeEdgeExtras(project.graph.edges);
 
   // The restore chain: sanitize → unfold → normalize, then prune the `m<k>:`

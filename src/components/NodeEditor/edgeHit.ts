@@ -1,24 +1,24 @@
 /**
  * Hit-testing WIRES on the canvas against the curve each one is DRAWN as —
- * the drop-on-edge splice, the tile drag's highlight and Insert node > Branch
- * (branchActions.ts) all ask here, so what lights is exactly what is hit.
+ * the drop-on-edge splice, the tile drag's highlight, the cut stroke and a
+ * Branch placed on a wire (double-click, Insert node > Branch;
+ * branchActions.ts) all ask here, so what lights is exactly what is hit.
  * Moved out of NodeEditor.tsx (2026-11-23) so the Branch could reuse the
- * curve rather than restate it.
+ * curve rather than restate it. A wire is always its ONE plain cubic: routing
+ * points were removed (owner, 2026-11-24).
  *
  * Reads React Flow's internal nodes (measured handle bounds), never the DOM.
  */
 import { Position, type InternalNode } from '@xyflow/react';
 import type { AppEdge } from '@/types';
 import {
-  catmullRomToBeziers,
   distancePointToCubicBezier,
-  distancePointToSpline,
   edgeBezier,
   nearestOnSegments,
   type BezierSegment,
 } from './edges/bezierGeometry';
-import { waypointIndexAt } from './edges/edgeWaypoints';
-import { splitWaypointsAtSegment, wirePoints, type Pt } from './branchWire';
+import type { Pt } from './branchWire';
+import { edgeClassHas } from './edges/portalDive';
 import { prepareStroke, strokeCrossesSegments } from './cutStroke';
 
 export type GetInternalNode = (id: string) => InternalNode | undefined;
@@ -84,15 +84,16 @@ function edgeEndpointDrawable(
   return bounds.some((b) => b.id === handleId);
 }
 
-/** Is this wire hit-testable at all: drawn, not a collapsed group's inside. */
+/** Is this wire hit-testable at all: drawn, not a collapsed group's inside.
+ *  The class is read as data (`edgeClassHas`): a file's edge `className` may
+ *  be no string, and `.includes` on one threw mid-drag. */
 function edgeHittable(edge: AppEdge): boolean {
   if (edge.hidden) return false;
-  return !(edge as { className?: string }).className?.includes('fs-collapsed-edge');
+  return !edgeClassHas((edge as { className?: unknown }).className, 'fs-collapsed-edge');
 }
 
 /** Does React Flow DRAW this wire — both ends' nodes known and both NAMED
- *  handles mounted (`edgeEndpointDrawable`)? A routing point of a wire it does
- *  not draw is not drawn either, so it can never be hit. */
+ *  handles mounted (`edgeEndpointDrawable`)? */
 function edgeDrawn(edge: AppEdge, getInternalNode: GetInternalNode): boolean {
   const srcNode = getInternalNode(edge.source);
   const tgtNode = getInternalNode(edge.target);
@@ -102,11 +103,11 @@ function edgeDrawn(edge: AppEdge, getInternalNode: GetInternalNode): boolean {
 }
 
 /**
- * The centreline an edge is DRAWN as, in flow space: the Catmull-Rom spline
- * through its routing points, else the one cubic React Flow draws (with the
- * Color node's radial exit) — TypedEdge's own curve, through the shared
- * `edgeBezier`/`catmullRomToBeziers`. Segment `i` runs from the wire's point
- * `i` to `i + 1` (0 = the source anchor). Null when an end is not drawn.
+ * The centreline an edge is DRAWN as, in flow space: the one cubic React Flow
+ * draws (with the Color node's radial exit) — TypedEdge's own curve, through
+ * the shared `edgeBezier`. A one-segment chain, so callers that walk chains
+ * (the cut stroke, Make portal's arc length) need no special case. Null when
+ * an end is not drawn.
  */
 export function edgeDrawnSegments(edge: AppEdge, getInternalNode: GetInternalNode): BezierSegment[] | null {
   if (!edgeDrawn(edge, getInternalNode)) return null;
@@ -114,10 +115,6 @@ export function edgeDrawnSegments(edge: AppEdge, getInternalNode: GetInternalNod
   const tgtNode = getInternalNode(edge.target)!;
   const s = handleAnchor(srcNode, edge.sourceHandle, 'source');
   const t = handleAnchor(tgtNode, edge.targetHandle, 'target');
-  const wps = (edge.data?.waypoints ?? []) as { x: number; y: number }[];
-  if (wps.length) {
-    return catmullRomToBeziers([[s.x, s.y], ...wps.map((w) => [w.x, w.y] as [number, number]), [t.x, t.y]]);
-  }
   return [edgeBezier(s.x, s.y, radialExit(srcNode, s) ?? s.position, t.x, t.y, t.position)];
 }
 
@@ -164,42 +161,29 @@ export function findNearestEdge(
     const s = handleAnchor(srcNode, edge.sourceHandle, 'source');
     const t = handleAnchor(tgtNode, edge.targetHandle, 'target');
 
-    // Routed edges (user waypoints) draw a spline, not a single bezier — measure
-    // against the SAME spline so what highlights is exactly what snaps.
-    const wps = (edge.data?.waypoints ?? []) as { x: number; y: number }[];
-    let d: number;
-    if (wps.length) {
-      d = distancePointToSpline(
-        [[s.x, s.y], ...wps.map((w) => [w.x, w.y] as [number, number]), [t.x, t.y]],
-        cx, cy,
-      );
-    } else {
-      // Color nodes are circles whose output rides the perimeter and exits along
-      // the radial (TypedEdge's getRadialBezierPath) — everything else uses the
-      // cardinal exit. Match whichever this edge is actually drawn with, through
-      // `edgeBezier`, the ONE curve the renderer and the chevrons also call, so
-      // the "never fork the curve" rule holds by construction.
-      const exit = radialExit(srcNode, s) ?? s.position;
-      const [, , c1x, c1y, c2x, c2y] = edgeBezier(s.x, s.y, exit, t.x, t.y, t.position);
-      // Reject on the control hull before paying for the solve. A cubic bezier
-      // lies inside the convex hull of its four control points, so a curve
-      // whose control AABB is further than `bestDist` from the probe cannot
-      // contain a closer point — an EXACT test, so it can never change which
-      // edge is picked (the "what highlights is exactly what snaps" contract
-      // holds). Worth it because this runs per edge per drag FRAME and
-      // `distancePointToCubicBezier` is 31 coarse samples plus 3 refine passes
-      // of 13 — 70 curve evaluations, measured at ~50 µs for 294 edges against
-      // ~2 µs with the reject. The waypoint branch above is deliberately NOT
-      // guarded this way: a Catmull-Rom spline can overshoot its own control
-      // polygon, so the same bounds would not be conservative there.
-      const loX = Math.min(s.x, c1x, c2x, t.x);
-      const hiX = Math.max(s.x, c1x, c2x, t.x);
-      const loY = Math.min(s.y, c1y, c2y, t.y);
-      const hiY = Math.max(s.y, c1y, c2y, t.y);
-      if (cx < loX - bestDist || cx > hiX + bestDist
-        || cy < loY - bestDist || cy > hiY + bestDist) continue;
-      d = distancePointToCubicBezier(s.x, s.y, c1x, c1y, c2x, c2y, t.x, t.y, cx, cy);
-    }
+    // Color nodes are circles whose output rides the perimeter and exits along
+    // the radial (TypedEdge's getRadialBezierPath) — everything else uses the
+    // cardinal exit. Match whichever this edge is actually drawn with, through
+    // `edgeBezier`, the ONE curve the renderer and the chevrons also call, so
+    // the "never fork the curve" rule holds by construction.
+    const exit = radialExit(srcNode, s) ?? s.position;
+    const [, , c1x, c1y, c2x, c2y] = edgeBezier(s.x, s.y, exit, t.x, t.y, t.position);
+    // Reject on the control hull before paying for the solve. A cubic bezier
+    // lies inside the convex hull of its four control points, so a curve
+    // whose control AABB is further than `bestDist` from the probe cannot
+    // contain a closer point — an EXACT test, so it can never change which
+    // edge is picked (the "what highlights is exactly what snaps" contract
+    // holds). Worth it because this runs per edge per drag FRAME and
+    // `distancePointToCubicBezier` is 31 coarse samples plus 3 refine passes
+    // of 13 — 70 curve evaluations, measured at ~50 µs for 294 edges against
+    // ~2 µs with the reject.
+    const loX = Math.min(s.x, c1x, c2x, t.x);
+    const hiX = Math.max(s.x, c1x, c2x, t.x);
+    const loY = Math.min(s.y, c1y, c2y, t.y);
+    const hiY = Math.max(s.y, c1y, c2y, t.y);
+    if (cx < loX - bestDist || cx > hiX + bestDist
+      || cy < loY - bestDist || cy > hiY + bestDist) continue;
+    const d = distancePointToCubicBezier(s.x, s.y, c1x, c1y, c2x, c2y, t.x, t.y, cx, cy);
     if (d < bestDist) {
       bestDist = d;
       bestId = edge.id;
@@ -235,36 +219,21 @@ export function edgesCrossedByStroke(
   return out;
 }
 
-/** Where on ONE wire a Branch would go: one of its routing points (by index),
- *  or a point on its drawn curve with the wire's routing points shared out. */
-export type BranchSpot =
-  | { kind: 'point'; index: number }
-  | { kind: 'body'; at: Pt; before: Pt[]; after: Pt[] };
-
 /**
- * Insert node > Branch on the wire `edge`, from where its menu opened (flow
- * point `p`): ON one of its routing points (within `pointRadius`, the edge
- * menu's own on-point test) that point becomes the Branch, as "Branch from
- * here" makes it; else the Branch goes on the NEAREST point of the curve the
- * wire is DRAWN as, and the segment that point lies on shares the routing
- * points out — nothing is dissolved. Null when the wire is not drawn (hidden,
- * a collapsed pill's inside, an unmounted socket): what is not drawn cannot
- * be pointed at.
+ * Where a Branch goes on the wire `edge`, for a point `p` (flow space) aimed
+ * at it — the double-click on the wire, or the spot Insert node's menu opened
+ * at: the NEAREST point of the curve the wire is DRAWN as. Null when the wire
+ * is not drawn (hidden, a collapsed pill's inside, an unmounted socket): what
+ * is not drawn cannot be pointed at.
  */
 export function branchSpotOnWire(
   edge: AppEdge,
   p: Pt,
   getInternalNode: GetInternalNode,
-  pointRadius: number,
-): BranchSpot | null {
+): Pt | null {
   if (!edgeHittable(edge)) return null;
   const segs = edgeDrawnSegments(edge, getInternalNode);
   if (!segs) return null;
-  const wps = wirePoints(edge);
-  const index = wps.length ? waypointIndexAt(wps, p, pointRadius) : -1;
-  if (index >= 0) return { kind: 'point', index };
   const hit = nearestOnSegments(segs, p.x, p.y);
-  if (!hit) return null;
-  const { before, after } = splitWaypointsAtSegment(wps, hit.seg);
-  return { kind: 'body', at: { x: hit.x, y: hit.y }, before, after };
+  return hit ? { x: hit.x, y: hit.y } : null;
 }

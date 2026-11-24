@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useCallback, useMemo, useRef, type ReactNode } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import type { TSLDataType, TunnelInFlowNode, TunnelOutFlowNode } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
@@ -7,9 +7,7 @@ import { t, type Language } from '@/i18n';
 import { TUNNEL_OUT_TYPE, tunnelLabelOf, tunnelLinkOf } from '@/utils/passThrough';
 import { exitCountText, liveEntranceLabel, passThroughTypeOf, tunnelExitCount } from './passThroughLook';
 import { TUNNEL_SIZE } from './passThroughGeometry';
-import { PORTAL_NAME_MAX } from '@/utils/portalNames';
-import { endPortalRename, usePortalRenaming } from '../portalRename';
-import { renamePortal } from '../portalActions';
+import { setDiveHost } from '../edges/portalDive';
 import './PassThroughNode.css';
 
 /**
@@ -24,14 +22,18 @@ import './PassThroughNode.css';
  * shadow, a hole sinks on a hard inner one.
  *
  * The socket is the hole's CENTRE: a React Flow Handle the size of the
- * interior that draws nothing, so a wire visibly ends at the rim and slips
- * UNDER it (wires draw under every node). Pressing the interior WIRES; the
- * rim band and the name label MOVE the node (the cursor says which).
+ * interior that draws nothing. A wire DIVES into the hole (owner, 2026-11-24):
+ * TypedEdge draws it on over the rim and down into the interior, inside this
+ * card (its dive host, below). Pressing the interior WIRES; the rim band and
+ * the name label MOVE the node (the cursor says which).
  *
  * The name sits above the hole as TEXT (data is adversarial: read through
  * `tunnelLabelOf`, never coerced); an exit shows its entrance's CURRENT name,
  * read live, and falls back to its own cache only when the entrance is gone.
- * No cost chrome, never cost-scaled, never muted: it computes nothing.
+ * It is edited in the end's right-click menu (menus/PortalMenu.tsx), never on
+ * the card. No cost chrome, never cost-scaled, never muted: it computes
+ * nothing. A selected end casts no shadow: it grows a little and wears a
+ * selection ring (owner, 2026-11-24).
  */
 
 interface HoleProps {
@@ -55,43 +57,12 @@ function holeTitle(kind: 'in' | 'out', type: TSLDataType | null, dangling: boole
 }
 
 /**
- * The entrance's IN-PLACE name field (the menus' Rename, portalRename.ts):
- * where the label was, the current name selected. Enter or a click away
- * commits ONE undo entry (`renamePortal`: cleaned, unique, every exit's cache
- * in the same write — nothing when unchanged); Escape cancels. `nodrag` /
- * `nopan` / `nowheel` keep typing and pointing inside it from moving the
- * canvas, and every canvas key stands down on a typing target.
+ * A Portal end as drawn, with whatever sits in the hole as `children` (the
+ * canvas card's socket). The canvas card and the palette's portal tiles
+ * (PortalTileCard.tsx) both draw THIS, so a tile is the card at the tile's
+ * scale, never a restyled copy.
  */
-function RenameField({ id, name, language }: { id: string; name: string; language: Language }) {
-  const done = useRef(false);
-  const finish = (commit: boolean, value: string) => {
-    if (done.current) return;
-    done.current = true;
-    if (commit) renamePortal(id, value);
-    endPortalRename(id);
-  };
-  return (
-    <input
-      className="tunnel-node__rename nodrag nopan nowheel"
-      defaultValue={name}
-      maxLength={PORTAL_NAME_MAX}
-      autoFocus
-      spellCheck={false}
-      aria-label={t('Portal name', language)}
-      title={t('Portal name: Enter saves, Escape cancels', language)}
-      onFocus={(e) => e.currentTarget.select()}
-      onKeyDown={(e) => {
-        e.stopPropagation();
-        if (e.key === 'Enter') finish(true, e.currentTarget.value);
-        else if (e.key === 'Escape') finish(false, '');
-      }}
-      onBlur={(e) => finish(true, e.currentTarget.value)}
-    />
-  );
-}
-
-function TunnelHole({ id, kind, selected, type, dangling, name, exits, language }: HoleProps & { id: string }) {
-  const renaming = usePortalRenaming(id);
+export function TunnelFace({ kind, selected, type, dangling, name, exits, language, children }: HoleProps & { children?: ReactNode }) {
   const canvas = useAppStore((s) => s.nodeEditorBgColor);
   const rim = dangling ? 'var(--cat-unknown)' : getTypeColor(type ?? 'any');
   const count = exits === null ? '' : exitCountText(exits);
@@ -107,24 +78,14 @@ function TunnelHole({ id, kind, selected, type, dangling, name, exits, language 
         title={holeTitle(kind, type, dangling, language)}
       >
         {dangling && <span className="tunnel-node__unknown" aria-hidden="true">?</span>}
-        <Handle
-          type={kind === 'in' ? 'target' : 'source'}
-          position={kind === 'in' ? Position.Left : Position.Right}
-          id={kind}
-          className="tunnel-node__handle"
-          isConnectableStart
-        />
+        {children}
       </div>
-      {renaming && kind === 'in' ? (
-        <RenameField id={id} name={name} language={language} />
-      ) : (
-        <span
-          className="tunnel-node__label"
-          {...(name ? { title: name } : {})}
-        >
-          {name || t(kind === 'in' ? 'Portal In' : 'Portal Out', language)}
-        </span>
-      )}
+      <span
+        className="tunnel-node__label"
+        {...(name ? { title: name } : {})}
+      >
+        {name || t(kind === 'in' ? 'Portal In' : 'Portal Out', language)}
+      </span>
       {count && (
         <span
           className={`tunnel-node__count${exits === 0 ? ' tunnel-node__count--none' : ''}`}
@@ -134,6 +95,35 @@ function TunnelHole({ id, kind, selected, type, dangling, name, exits, language 
         </span>
       )}
     </div>
+  );
+}
+
+/**
+ * The canvas card: the face with its dot-less socket in the hole, and the
+ * hole's DIVE HOST — the element a wire's stretch over the hole is drawn into
+ * (TypedEdge's `PortalDive`, registered through edges/portalDive.ts), last in
+ * the hole so it paints over the socket and the "?", inside this card's own
+ * layer: under any card that covers this one, scaled with the hole.
+ */
+function TunnelHole({ id, ...props }: HoleProps & { id: string }) {
+  const { kind } = props;
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const setHost = useCallback((el: HTMLDivElement | null) => {
+    const prev = hostRef.current;
+    hostRef.current = el;
+    setDiveHost(id, el, prev);
+  }, [id]);
+  return (
+    <TunnelFace {...props}>
+      <Handle
+        type={kind === 'in' ? 'target' : 'source'}
+        position={kind === 'in' ? Position.Left : Position.Right}
+        id={kind}
+        className="tunnel-node__handle"
+        isConnectableStart
+      />
+      <div ref={setHost} className="tunnel-node__dive" aria-hidden="true" />
+    </TunnelFace>
   );
 }
 

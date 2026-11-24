@@ -1,9 +1,9 @@
-import { useCallback, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useId, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import {
   EdgeLabelRenderer,
   getBezierPath,
   Position,
-  useReactFlow,
   useStore as useReactFlowStore,
   type EdgeProps,
   type ReactFlowState,
@@ -11,114 +11,94 @@ import {
 import type { AppEdge } from '@/types';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '@/store/useAppStore';
-import { COUNT_EDGE_COLORS, canvasWireColor, getContrastColor } from '@/utils/colorUtils';
+import { COUNT_EDGE_COLORS, canvasWireColor } from '@/utils/colorUtils';
 import { setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
+import { diveKeyOf, useDiveHost } from './portalDive';
 import { evaluateEdgeSource, getEdgeOutputShape, getLiveUpstreamSet, getUnwrappedEdge } from '@/engine/cpuEvaluator';
 import {
   ARROW_FLARE,
   arrowMarks,
-  catmullRomToBeziers,
   chevronPath,
+  DIVE_END_X,
+  DIVE_END_Y,
   edgeBezier,
+  portalDive,
   ribbonHalfWidth,
   ribbonNormal,
   ribbonOffsets,
   ribbonStrokeWidth,
-  splinePath,
+  segmentsPath,
+  type BezierSegment,
 } from './bezierGeometry';
 import { handleEl, nodeEl } from '../nodeElement';
-import { removeEdgeWaypoint } from './edgeWaypoints';
 import { EdgeInfoCard } from './EdgeInfoCard';
-import { WAYPOINT_DOT_R, WAYPOINT_DOT_STROKE } from '../nodes/passThroughGeometry';
-
-type Waypoint = { x: number; y: number };
+import { TUNNEL_HANDLE, TUNNEL_SIZE } from '../nodes/passThroughGeometry';
 
 /**
- * Draggable dots for an edge's routing waypoints. Rendered only when an edge
- * actually has waypoints, so the (per-edge) zoom subscription below only costs
- * the few routed edges — not every wire on the canvas. Dots are scale-
- * compensated (radius ÷ zoom) so they stay a constant on-screen size. Drag to
- * move, double-click to remove. History is pushed once per gesture.
+ * A wire DIVES into a Portal's hole (owner, 2026-11-24: "let the edge dive in
+ * the hole", with a sketch of the wire running on over the rim and down into
+ * it). Every wire draws UNDER every node (NodeEditor.css), so the part over
+ * the hole is drawn a second time INSIDE that Portal end's own card — its
+ * hole's dive host (portalDive.ts, registered by TunnelNode) — the SAME
+ * channel lines, masked to the hole's disc and fading toward the deep end.
+ * Inside the card it paints where the card paints: over the hole, and under
+ * every card that covers the hole (a layer one z-step above the node layer
+ * painted over a group member dropped on it). The host rides the hole's own
+ * `scale`, so the copy's disc is the hole's in every state: outside it the
+ * wire is drawn once (no darker band), inside it once (no gap). The copy is
+ * `react-flow__edge animated` like the wire itself, so a live wire marches and
+ * the drop highlight (`data-fs-dive`) thickens it; Preview mode's dim is the
+ * card's (PassThroughNode.css). The chevrons are never copied: no arrow is
+ * drawn over a hole. Never a pointer target.
+ *
+ * `centre` is the hole's centre in flow px: the socket is centred in the hole,
+ * so React Flow's anchor is half a socket from it (`TUNNEL_HANDLE`); the host's
+ * origin is the card's top-left, half a hole from the centre.
  */
-function EdgeWaypointHandles({
+function PortalDive({
+  host,
+  centre,
+  deep,
   edgeId,
-  waypoints,
-  bgColor,
+  selected,
+  children,
 }: {
+  host: HTMLElement;
+  centre: { x: number; y: number };
+  /** The dive's deep end, where the wire has faded out. */
+  deep: { x: number; y: number };
   edgeId: string;
-  waypoints: Waypoint[];
-  bgColor: string;
+  selected: boolean;
+  children: ReactNode;
 }) {
-  const zoom = useReactFlowStore((s: ReactFlowState) => s.transform[2]);
-  const { screenToFlowPosition } = useReactFlow();
-  const dragRef = useRef<{ index: number; startX: number; startY: number; moved: boolean } | null>(null);
-  const fill = getContrastColor(bgColor);
-  const stroke = fill === '#ffffff' ? '#000000' : '#ffffff';
-  // The Branch (nodes/KnotNode.tsx) is this dot at twice the size: one pair
-  // of numbers for both (passThroughGeometry.ts).
-  const r = WAYPOINT_DOT_R / zoom;
-
-  const onPointerDown = (e: React.PointerEvent, index: number) => {
-    if (e.button !== 0) return;
-    e.stopPropagation();
-    (e.target as SVGElement).setPointerCapture(e.pointerId);
-    // Don't push history yet — a plain click (or the two clicks of a
-    // double-click-to-remove) must NOT create undo entries. History is pushed
-    // lazily on the first real movement (below), so a drag = exactly one entry.
-    dragRef.current = { index, startX: e.clientX, startY: e.clientY, moved: false };
-  };
-  const endDrag = (e: React.PointerEvent) => {
-    if (!dragRef.current) return;
-    // Capture may already be gone after a pointercancel — releasing then throws.
-    try { (e.target as SVGElement).releasePointerCapture(e.pointerId); } catch { /* already released */ }
-    dragRef.current = null;
-  };
-  const onPointerMove = (e: React.PointerEvent) => {
-    const d = dragRef.current;
-    if (!d) return;
-    // A stale drag (e.g. after a swallowed pointercancel) would otherwise make a
-    // no-button hover drag the point around — bail if the button isn't held.
-    if (e.buttons === 0) { endDrag(e); return; }
-    if (!d.moved) {
-      if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < 2) return;
-      d.moved = true;
-      useAppStore.getState().pushHistory();
-    }
-    const p = screenToFlowPosition({ x: e.clientX, y: e.clientY });
-    const store = useAppStore.getState();
-    const edge = store.edges.find((ed) => ed.id === edgeId);
-    const wps = ((edge?.data?.waypoints ?? []) as Waypoint[]).slice();
-    if (d.index >= wps.length) return;
-    wps[d.index] = { x: p.x, y: p.y };
-    store.setEdgeWaypoints(edgeId, wps);
-  };
-  const onDoubleClick = (e: React.MouseEvent, index: number) => {
-    e.stopPropagation();
-    removeEdgeWaypoint(edgeId, index);
-  };
-
-  return (
-    <g>
-      {waypoints.map((w, i) => (
-        <circle
-          key={i}
-          // Named so the cut stroke never starts on a point (useCutStroke).
-          className="fs-edge-waypoint"
-          cx={w.x}
-          cy={w.y}
-          r={r}
-          fill={fill}
-          stroke={stroke}
-          strokeWidth={WAYPOINT_DOT_STROKE / zoom}
-          style={{ cursor: 'grab', pointerEvents: 'all' }}
-          onPointerDown={(e) => onPointerDown(e, i)}
-          onPointerMove={onPointerMove}
-          onPointerUp={endDrag}
-          onPointerCancel={endDrag}
-          onDoubleClick={(e) => onDoubleClick(e, i)}
-        />
-      ))}
-    </g>
+  // One mask per dive; React's id, stripped to the characters a `url(#…)`
+  // reference can always carry.
+  const id = `fs-dive-${useId().replace(/[^A-Za-z0-9_-]/g, '')}`;
+  // The hole's own radius, rim included: the host grows with the hole.
+  const r = TUNNEL_SIZE / 2;
+  return createPortal(
+    <svg className="fs-edge-dive" aria-hidden="true" focusable="false">
+      {/* Flow coordinates, moved to the card's own: its top-left is the origin. */}
+      <g transform={`translate(${r - centre.x},${r - centre.y})`}>
+        <defs>
+          <radialGradient id={`${id}-g`} gradientUnits="userSpaceOnUse" cx={deep.x} cy={deep.y} r={r * 0.95}>
+            <stop offset="0" stopColor="#000" />
+            <stop offset="1" stopColor="#fff" />
+          </radialGradient>
+          <mask id={`${id}-m`} maskUnits="userSpaceOnUse" x={centre.x - r} y={centre.y - r} width={2 * r} height={2 * r}>
+            <circle cx={centre.x} cy={centre.y} r={r} fill={`url(#${id}-g)`} />
+          </mask>
+        </defs>
+        <g
+          className={`react-flow__edge animated${selected ? ' selected' : ''}`}
+          data-fs-dive={edgeId}
+          mask={`url(#${id}-m)`}
+        >
+          {children}
+        </g>
+      </g>
+    </svg>,
+    host,
   );
 }
 
@@ -221,7 +201,6 @@ export function TypedEdge({
   sourcePosition,
   targetPosition,
   selected,
-  data,
 }: EdgeProps<AppEdge>) {
   const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
   /**
@@ -344,24 +323,42 @@ export function TypedEdge({
   const strokeWidth = ribbonStrokeWidth(count) * boost;
 
   const [px, py] = ribbonNormal(sourceX, sourceY, targetX, targetY);
-  const waypoints = (data?.waypoints ?? []) as Waypoint[];
-  const hasWaypoints = waypoints.length > 0;
   const paths: string[] = [];
+
+  // Does the wire end in a Portal In's hole, or start in a Portal Out's? Then
+  // it DIVES into it (PortalDive), drawn inside that end's card. One PRIMITIVE
+  // per edge ('i' / 'o' / both / '', portalDive.ts `diveKeyOf`), so a drag
+  // frame re-renders nothing for it; a wire hidden in a collapsed group
+  // (`fs-collapsed-edge`) dives nowhere — its hole is not drawn either. The
+  // class is read as data: a file's edge `className` may be no string.
+  const diveKey = useReactFlowStore(
+    useCallback(
+      (s: ReactFlowState): string =>
+        diveKeyOf(s.edgeLookup.get(id)?.className, s.nodeLookup.get(source)?.type, s.nodeLookup.get(target)?.type),
+      [id, source, target],
+    ),
+  );
+  const diveIn = diveKey.includes('i');
+  const diveOut = diveKey.includes('o');
+  const inHost = useDiveHost(diveIn ? target : null);
+  const outHost = useDiveHost(diveOut ? source : null);
+  const holeR = TUNNEL_SIZE / 2;
+  const inCentre = diveIn ? { x: targetX + TUNNEL_HANDLE / 2, y: targetY } : null;
+  const outCentre = diveOut ? { x: sourceX - TUNNEL_HANDLE / 2, y: sourceY } : null;
 
   for (let i = 0; i < offsets.length; i++) {
     const d = offsets[i];
     let path: string;
-    if (hasWaypoints) {
-      // Route through the user's waypoints as a smooth spline. The per-channel
-      // perpendicular offset is applied to EVERY point so parallel multi-channel
-      // lines stay parallel. An explicit route overrides the color-circle radial
-      // exit — routing intent wins over the socket's natural exit tangent.
-      const pts: Array<[number, number]> = [
-        [sourceX + d * px, sourceY + d * py],
-        ...waypoints.map((w) => [w.x + d * px, w.y + d * py] as [number, number]),
-        [targetX + d * px, targetY + d * py],
-      ];
-      path = splinePath(pts);
+    if (inCentre || outCentre) {
+      // The wire's own curve, plus the dive at each portal end — every point
+      // shifted by the channel's offset, so the ribbon stays parallel.
+      const ox = d * px;
+      const oy = d * py;
+      const segs: BezierSegment[] = [];
+      if (outCentre) segs.push(portalDive('out', sourceX + ox, sourceY + oy, outCentre.x + ox, outCentre.y + oy, holeR));
+      segs.push(edgeBezier(sourceX + ox, sourceY + oy, radial ?? sourcePosition, targetX + ox, targetY + oy, targetPosition));
+      if (inCentre) segs.push(portalDive('in', targetX + ox, targetY + oy, inCentre.x + ox, inCentre.y + oy, holeR));
+      path = segmentsPath(segs);
     } else if (radial) {
       [path] = getRadialBezierPath({
         sourceX: sourceX + d * px,
@@ -384,28 +381,18 @@ export function TypedEdge({
     paths.push(path);
   }
 
-  // Center path for the invisible interaction hit area
-  const centerPts: Array<[number, number]> | null = hasWaypoints
-    ? [
-        [sourceX, sourceY],
-        ...waypoints.map((w) => [w.x, w.y] as [number, number]),
-        [targetX, targetY],
-      ]
-    : null;
-  const centerPath = centerPts
-    ? splinePath(centerPts)
-    : radial
-      ? getRadialBezierPath({ sourceX, sourceY, radial, targetX, targetY, targetPosition })[0]
-      : getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })[0];
+  // Center path for the invisible interaction hit area — the wire's own
+  // curve, never the dive (a press inside a hole belongs to the node).
+  const centerPath = radial
+    ? getRadialBezierPath({ sourceX, sourceY, radial, targetX, targetY, targetPosition })[0]
+    : getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })[0];
 
   // A STILL wire's direction chevrons: on the CENTRELINE, measured along the
   // same curve the hit test measures (bezierGeometry), sized to the ribbon and
   // scaled by the same boost, so a selected or hovered wire's arrows grow with
   // it. ONE path element per edge however many chevrons it carries.
   // The same centreline also anchors the value chip (EdgeInfoCard).
-  const centerSegs = centerPts
-    ? catmullRomToBeziers(centerPts)
-    : [edgeBezier(sourceX, sourceY, radial ?? sourcePosition, targetX, targetY, targetPosition)];
+  const centerSegs = [edgeBezier(sourceX, sourceY, radial ?? sourcePosition, targetX, targetY, targetPosition)];
   const arrows = live
     ? ''
     : chevronPath(arrowMarks(centerSegs), (ribbonHalfWidth(count) + ARROW_FLARE) * boost);
@@ -459,6 +446,23 @@ export function TypedEdge({
     dragStart.current = null;
   };
 
+  // The drawn wire's channel lines. Rendered in the edge layer and, for a
+  // portal end, once more inside the hole (PortalDive) — the lines alone: a
+  // still wire's chevrons stay in the edge layer, so no arrow is ever drawn
+  // over a hole (where the wire loops across it, the hole hides them).
+  const lines = paths.map((path, i) => (
+    <path
+      key={i}
+      d={path}
+      className={live ? undefined : 'fs-edge-still'}
+      fill="none"
+      stroke={channelColors[i]}
+      strokeWidth={strokeWidth}
+      opacity={selected ? 1 : 0.9}
+      style={live ? LIVE_PATH_STYLE : STILL_PATH_STYLE}
+    />
+  ));
+
   return (
     <>
       {/* Invisible wide hit area — drag to disconnect, click to select */}
@@ -471,21 +475,7 @@ export function TypedEdge({
         onPointerEnter={() => setHovered(true)}
         onPointerLeave={() => setHovered(false)}
       />
-      {paths.map((path, i) => {
-        const lineColor = channelColors[i];
-        return (
-          <path
-            key={i}
-            d={path}
-            className={live ? undefined : 'fs-edge-still'}
-            fill="none"
-            stroke={lineColor}
-            strokeWidth={strokeWidth}
-            opacity={selected ? 1 : 0.9}
-            style={live ? LIVE_PATH_STYLE : STILL_PATH_STYLE}
-          />
-        );
-      })}
+      {lines}
       {arrows && (
         <path
           d={arrows}
@@ -498,8 +488,27 @@ export function TypedEdge({
           style={STILL_PATH_STYLE}
         />
       )}
-      {hasWaypoints && (
-        <EdgeWaypointHandles edgeId={id} waypoints={waypoints} bgColor={nodeEditorBgColor} />
+      {inCentre && inHost && (
+        <PortalDive
+          host={inHost}
+          centre={inCentre}
+          deep={{ x: inCentre.x + DIVE_END_X * holeR, y: inCentre.y + DIVE_END_Y * holeR }}
+          edgeId={id}
+          selected={!!selected}
+        >
+          {lines}
+        </PortalDive>
+      )}
+      {outCentre && outHost && (
+        <PortalDive
+          host={outHost}
+          centre={outCentre}
+          deep={{ x: outCentre.x - DIVE_END_X * holeR, y: outCentre.y + DIVE_END_Y * holeR }}
+          edgeId={id}
+          selected={!!selected}
+        >
+          {lines}
+        </PortalDive>
       )}
       {logical && (
         <EdgeLabelRenderer>

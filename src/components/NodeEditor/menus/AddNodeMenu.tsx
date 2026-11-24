@@ -15,6 +15,7 @@ import {
   portalListKey,
   portalMatchesQuery,
   portalNameMatchesQuery,
+  portalNamedExactly,
 } from '../portalSearch';
 import { addPortalIn, addPortalOut, portalOutRefusal } from '../portalActions';
 import { isTunnelOut } from '@/utils/passThrough';
@@ -107,7 +108,7 @@ export function AddNodeMenu() {
   // "Unlimited": the figure stays, in the colourless grey every card uses.
   const costUnlimited = useBudgetUnlimited();
   const language = useAppStore((s) => s.language);
-  const { screenToFlowPosition, fitView, getInternalNode, getViewport } = useReactFlow();
+  const { screenToFlowPosition, fitView, getInternalNode } = useReactFlow();
 
   const canGroup = groupableCount >= 2;
   const canOrganize = organizableCount >= 2;
@@ -186,7 +187,10 @@ export function AddNodeMenu() {
     return shown.map((p) => ({ ...p, refusal: portalOutRefusal(p.id, pinIn ?? undefined) }));
   }, [spliceEdgeId, pinOut, pinIn, portals, query]);
   const portalInOffered = !spliceEdgeId && !sourceNodeId && (!query.trim() || portalMatchesQuery(query));
-  const portalFirst = !!query.trim() && portalNameMatchesQuery(query);
+  // A search finds every portal by "portal" and by its NAME (owner,
+  // 2026-11-24; portalSearch.ts `portalSearchResults`, the palette's rule
+  // too): the rows lead for the Portal's own name or a portal's exact name.
+  const portalFirst = !!query.trim() && (portalNameMatchesQuery(query) || portalNamedExactly(portalOutRows, query));
 
   // "Generate “…” with AI": the LAST row, when the query reads as a request
   // (utils/promptDetect.ts; docs/dev/node-generator.md § The search-box
@@ -195,8 +199,11 @@ export function AddNodeMenu() {
   const aiOffered = useGeneratorOffer();
   const aiDetected = useMemo(() => {
     if (!aiOffered || sourceNodeId || spliceEdgeId) return false;
-    return detectPrompt(query, { hasResults: results.length > 0 || noteMatches || branchMatches, known: knownNodeNames() });
-  }, [aiOffered, sourceNodeId, spliceEdgeId, query, results, noteMatches, branchMatches]);
+    return detectPrompt(query, {
+      hasResults: results.length > 0 || noteMatches || branchMatches || portalOutRows.length > 0,
+      known: knownNodeNames(),
+    });
+  }, [aiOffered, sourceNodeId, spliceEdgeId, query, results, noteMatches, branchMatches, portalOutRows]);
   /** Open the generator on this query; an unwired result lands where the menu
    *  was opened. `autostart` is Ctrl/Cmd+Enter with a route that already works. */
   const handleGenerate = useCallback((autostart = false) => {
@@ -375,18 +382,16 @@ export function AddNodeMenu() {
   }, [addNote, screenToFlowPosition, contextMenu.x, contextMenu.y, closeContextMenu]);
 
   // A BRANCH (flow type `knot`, utils/passThrough.ts), centred where the menu
-  // was opened — one of the two ways a Branch is made, both right-click menus
-  // (owner, 2026-11-23). From a dropped wire it is wired to the pulled socket
-  // — an output feeds its input, an input is fed from its output — and from
-  // an edge's Insert node it goes into that wire where the menu was opened:
-  // on a routing point that point becomes it, else the nearest point of the
-  // drawn curve, with no routing point dissolved (branchActions.ts
-  // `branchIntoWireAt`; a wire it may not take changes nothing). One undo
-  // entry, as for every row here; `addNode` logs the add.
+  // was opened. From a dropped wire it is wired to the pulled socket — an
+  // output feeds its input, an input is fed from its output — and from an
+  // edge's Insert node it goes into that wire at the nearest point of the
+  // drawn curve where the menu was opened, as a double-click on the wire puts
+  // it (branchActions.ts `branchIntoWireAt`; a wire it may not take changes
+  // nothing). One undo entry, as for every row here; `addNode` logs the add.
   const handleAddBranch = useCallback(() => {
     const at = screenToFlowPosition({ x: contextMenu.x, y: contextMenu.y });
     if (spliceEdgeId) {
-      branchIntoWireAt(spliceEdgeId, at, getInternalNode, getViewport().zoom);
+      branchIntoWireAt(spliceEdgeId, at, getInternalNode);
       closeContextMenu();
       return;
     }
@@ -400,7 +405,7 @@ export function AddNodeMenu() {
       }
       closeContextMenu();
     });
-  }, [addNode, screenToFlowPosition, getInternalNode, getViewport, contextMenu.x, contextMenu.y, sourceNodeId, sourceHandleId, sourceHandleType, spliceEdgeId, closeContextMenu]);
+  }, [addNode, screenToFlowPosition, getInternalNode, contextMenu.x, contextMenu.y, sourceNodeId, sourceHandleId, sourceHandleType, spliceEdgeId, closeContextMenu]);
 
   /** The Branch row, in the browse list and when a search names it. */
   const renderBranchRow = () => (

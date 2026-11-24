@@ -2,8 +2,9 @@
  * The cut stroke's pure parts: the polyline-versus-curve crossing test
  * (cutStroke.ts) and the choice of wires it cuts (edgeHit.ts
  * `edgesCrossedByStroke`), measured against the curve each wire is DRAWN as —
- * routing points, the Color node's radial exit, hidden and collapsed wires,
- * and inputs a file can make huge or degenerate.
+ * its one cubic (routing points were removed, 2026-11-24), the Color node's
+ * radial exit, hidden and collapsed wires, and inputs a file can make huge or
+ * degenerate.
  * docs/dev/canvas-interaction.md, "Cut stroke".
  */
 import { describe, it, expect } from 'vitest';
@@ -38,9 +39,6 @@ function fakeNode(id: string, x: number, y: number, type = 'shader'): InternalNo
     },
   } as unknown as InternalNode;
 }
-
-const routed = (e: AppEdge, waypoints: { x: number; y: number }[]): AppEdge =>
-  ({ ...e, data: { ...(e.data ?? {}), waypoints } }) as AppEdge;
 
 const stroke = (...pts: [number, number][]) => pts.map(([x, y]) => P(x, y));
 
@@ -101,13 +99,6 @@ describe('strokeCrossesSegments — one wire\'s drawn curve', () => {
     expect(strokeCrossesSegments(prepareStroke(stroke([100, 0], [100, 60]))!, s, 0.5)).toBe(true);
   });
 
-  it('a routing-point spline is cut through its points', () => {
-    const segs = catmullRomToBeziers([[100, 15], [300, 300], [500, 15]]);
-    expect(strokeCrossesSegments(prepareStroke(stroke([280, 300], [320, 300]))!, segs, 0.5)).toBe(true);
-    // Where the straight wire would be, there is nothing to cut.
-    expect(strokeCrossesSegments(prepareStroke(stroke([300, 0], [300, 30]))!, segs, 0.5)).toBe(false);
-  });
-
   it('non-finite segments and tolerances are survived, never thrown on', () => {
     const s = prepareStroke(stroke([300, 0], [300, 30]))!;
     const bad = [[NaN, 0, 1, 1, 2, 2, 3, 3] as BezierSegment, ...level];
@@ -125,7 +116,7 @@ describe('strokeCrossesSegments — one wire\'s drawn curve', () => {
     expect(performance.now() - t0).toBeLessThan(200);
   });
 
-  it('the restore cap of routing points, zig-zagging, with a canvas-long stroke stays bounded', () => {
+  it('a long zig-zag chain of segments, with a canvas-long stroke, stays bounded', () => {
     const zig: [number, number][] = [[0, 0]];
     for (let i = 1; i <= 64; i++) zig.push([i * 100, i % 2 ? 1000 : 0]);
     zig.push([6600, 0]);
@@ -144,21 +135,27 @@ describe('edgesCrossedByStroke — which wires a stroke cuts', () => {
   const nodes = new Map<string, InternalNode>([
     ['s', fakeNode('s', 0, 0)], ['t', fakeNode('t', 500, 0)], // y = 15
     ['u', fakeNode('u', 0, 200)], ['v', fakeNode('v', 500, 200)], // y = 215
-    ['p', fakeNode('p', 0, 600)], ['q', fakeNode('q', 500, 600)], // y = 615, routed up
+    ['p', fakeNode('p', 0, 600)], ['q', fakeNode('q', 500, 600)], // y = 615
   ]);
   const get: GetInternalNode = (id) => nodes.get(id);
   const top = makeTypedEdge('s', 'out', 't', 'in');
   const mid = makeTypedEdge('u', 'out', 'v', 'in');
-  const viaPoint = routed(makeTypedEdge('p', 'out', 'q', 'in'), [P(300, 100)]);
+  const low = makeTypedEdge('p', 'out', 'q', 'in');
   const tol = 0.5;
 
   it('cuts exactly the wires the stroke crosses, in edge order', () => {
     const down = stroke([300, -10], [300, 250]);
-    expect(edgesCrossedByStroke(down, [top, mid, viaPoint], get, tol)).toEqual([top.id, mid.id, viaPoint.id]);
-    // Between the two level wires: only the one routed through (300, 100).
-    expect(edgesCrossedByStroke(stroke([300, 50], [300, 120]), [top, mid, viaPoint], get, tol)).toEqual([viaPoint.id]);
-    // Under the routed wire's endpoints, where it would run unrouted: nothing.
-    expect(edgesCrossedByStroke(stroke([300, 600], [300, 630]), [viaPoint], get, tol)).toEqual([]);
+    expect(edgesCrossedByStroke(down, [top, mid, low], get, tol)).toEqual([top.id, mid.id]);
+    // Between the two level wires: nothing.
+    expect(edgesCrossedByStroke(stroke([300, 50], [300, 120]), [top, mid, low], get, tol)).toEqual([]);
+    expect(edgesCrossedByStroke(stroke([300, 600], [300, 630]), [low], get, tol)).toEqual([low.id]);
+  });
+
+  it('an older file\'s routing points draw nothing, so they are never cut along', () => {
+    // An unsanitized wire still carrying points is measured as its plain curve.
+    const old = { ...low, data: { dataType: 'any', waypoints: [P(300, 100)] } } as AppEdge;
+    expect(edgesCrossedByStroke(stroke([300, 50], [300, 120]), [old], get, tol)).toEqual([]);
+    expect(edgesCrossedByStroke(stroke([300, 600], [300, 630]), [old], get, tol)).toEqual([old.id]);
   });
 
   it('never cuts what is not drawn: hidden, a collapsed pill\'s insides, an unmounted socket', () => {

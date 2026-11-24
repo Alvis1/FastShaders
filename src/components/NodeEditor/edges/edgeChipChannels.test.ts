@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { edgeChipChannels } from './EdgeInfoCard';
+import { readFileSync } from 'node:fs';
+import { CHIP_DOUBLE_CLICK_MS, edgeChipChannels } from './EdgeInfoCard';
 
 /** The selected wire's chip: two-decimal figures per channel — the precise
  *  readout the compact on-node labels defer to. */
@@ -43,5 +44,23 @@ describe('edgeChipChannels', () => {
   it('pads with "…" up to the static shape when the range knows fewer channels', () => {
     expect(edgeChipChannels(null, 3)).toEqual({ count: 3, values: ['…', '…', '…'] });
     expect(edgeChipChannels({ min: [0], max: [1] }, 2)).toEqual({ count: 2, values: ['0.00…1.00', '…'] });
+  });
+});
+
+describe('the chip\'s ✕ and a double-click on its wire (QA, 2026-11-24)', () => {
+  // The chip mounts on the click that selects its wire, so the SECOND click
+  // of a double-click (which places a Branch) landed on its ✕ and deleted
+  // the wire. Source pins: the env is node and the chip is a component.
+  const card = readFileSync(new URL('./EdgeInfoCard.tsx', import.meta.url), 'utf8');
+
+  it('takes no pointer for the double-click window after it mounts, so that click reaches the wire', () => {
+    expect(CHIP_DOUBLE_CLICK_MS).toBeGreaterThanOrEqual(500);
+    expect(card).toMatch(/setTimeout\(\(\) => setArmed\(true\), CHIP_DOUBLE_CLICK_MS\)/);
+    expect(card).toContain("...(armed ? null : CHIP_UNARMED_STYLE)");
+    expect(card).toContain("const CHIP_UNARMED_STYLE = { pointerEvents: 'none' } as const;");
+  });
+
+  it('never deletes on the second click of a pair', () => {
+    expect(card).toMatch(/if \(e\.detail >= 2\) return;\s*useAppStore\.getState\(\)\.removeEdge\(edgeId\);/);
   });
 });

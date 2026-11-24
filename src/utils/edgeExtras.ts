@@ -1,28 +1,25 @@
 /**
- * `edge.data` is adversarial and visual-only (the `dataType` tint, routing
- * waypoints): the engine never reads it, while TypedEdge dereferences it during
- * RENDER with no error boundary. Sanitized on all three restore paths, like
- * `sanitizeDrawings`. Reasoning: docs/dev/canvas-interaction.md → Edge interactions.
+ * `edge.data` is adversarial and visual-only (the `dataType` tint): the engine
+ * never reads it, while TypedEdge dereferences it during RENDER with no error
+ * boundary. Sanitized on all three restore paths, like `sanitizeDrawings`.
+ * Reasoning: docs/dev/canvas-interaction.md → Edge interactions.
+ *
+ * Routing points were REMOVED (owner, 2026-11-24: "just remove the routing
+ * points without replacing"). An older file's `data.waypoints` is simply
+ * DROPPED here, on every restore path — no conversion, the wire draws as its
+ * plain curve, and the code cannot change (no engine ever read them).
  */
 
 import type { AppEdge, TSLDataType } from '@/types';
 
-/** Routing points per edge. The UI adds them one double-click at a time and a
- *  hand-routed wire uses a handful, so this is generous by an order of
- *  magnitude while still bounding the per-render spline build and the one
- *  <circle> per point EdgeWaypointHandles mounts. */
-export const MAX_WAYPOINTS_PER_EDGE = 64;
-
-/** Flow-coordinate clamp — the same bound board ink uses. */
-const COORD_LIMIT = 1e6;
-
 /** The whole vocabulary of `edge.data`. Collapse state rides `edge.className`,
  *  not `data`, so nothing else is ever written; anything else in an imported
- *  file is payload we would structuredClone into every history snapshot and
- *  JSON.stringify into every 300 ms autosave for nothing. Keep in sync with
- *  `TypedEdgeData` (types/node.types.ts) — its index signature means TS will
- *  not flag a new key for you. */
-const ALLOWED_DATA_KEYS: ReadonlySet<string> = new Set(['dataType', 'waypoints']);
+ *  file (an older file's `waypoints` included) is payload we would
+ *  structuredClone into every history snapshot and JSON.stringify into every
+ *  300 ms autosave for nothing. Keep in sync with `TypedEdgeData`
+ *  (types/node.types.ts) — its index signature means TS will not flag a new
+ *  key for you. */
+const ALLOWED_DATA_KEYS: ReadonlySet<string> = new Set(['dataType']);
 
 /** Written as a Record over the union so adding a TSLDataType fails to compile
  *  here instead of silently degrading every edge's tint to 'any'. */
@@ -30,42 +27,6 @@ const DATA_TYPE_TABLE: Record<TSLDataType, true> = {
   float: true, int: true, vec2: true, vec3: true, vec4: true, color: true, any: true,
 };
 const VALID_DATA_TYPES: ReadonlySet<string> = new Set(Object.keys(DATA_TYPE_TABLE));
-
-/** One finite, in-bounds coordinate or `null` if unusable. Same shape as
- *  drawings.ts's `cleanCoord` — note JSON.parse turns `1e999` into Infinity,
- *  which is exactly the value that produces an invalid, invisible path `d`. */
-function cleanCoord(n: unknown): number | null {
-  const v = typeof n === 'number' ? n : Number(n);
-  if (!Number.isFinite(v)) return null;
-  return Math.max(-COORD_LIMIT, Math.min(COORD_LIMIT, v));
-}
-
-/**
- * Returns the ORIGINAL array when every point is already valid and in budget
- * (so a clean edge keeps its `data` identity), a bounded copy when anything
- * needed fixing, or `undefined` for "no routing" — which is what
- * `setEdgeWaypoints` itself stores for an empty list.
- */
-function cleanWaypoints(raw: unknown): Array<{ x: number; y: number }> | undefined {
-  if (raw === undefined) return undefined;
-  if (!Array.isArray(raw)) return undefined;
-  let pristine = raw.length <= MAX_WAYPOINTS_PER_EDGE;
-  const clean: Array<{ x: number; y: number }> = [];
-  for (const w of raw) {
-    if (clean.length >= MAX_WAYPOINTS_PER_EDGE) break;
-    if (!w || typeof w !== 'object' || Array.isArray(w)) { pristine = false; continue; }
-    const rec = w as Record<string, unknown>;
-    const x = cleanCoord(rec.x);
-    const y = cleanCoord(rec.y);
-    if (x === null || y === null) { pristine = false; continue; }
-    // Coerced, clamped, or carrying smuggled extra keys — rebuild rather than
-    // pass the caller's object through.
-    if (x !== rec.x || y !== rec.y || Object.keys(rec).length !== 2) pristine = false;
-    clean.push({ x, y });
-  }
-  if (clean.length === 0) return undefined;
-  return pristine ? (raw as Array<{ x: number; y: number }>) : clean;
-}
 
 /**
  * Bound the visual `data` payload of a restored edge list. Returns the SAME
@@ -78,10 +39,21 @@ function cleanWaypoints(raw: unknown): Array<{ x: number; y: number }> | undefin
 export function sanitizeEdgeExtras(edges: AppEdge[]): AppEdge[] {
   let changed = false;
   const out: AppEdge[] = [];
-  for (const e of edges) {
+  for (let e of edges) {
     if (!e || typeof e !== 'object' || Array.isArray(e)) {
       changed = true;
       continue;
+    }
+    // `className` is adversarial too: the app writes only a string (a
+    // collapsed group's `fs-collapsed-edge`), and a number, a boolean or an
+    // object there threw in a per-edge render selector (`.includes`) on
+    // every boot. Any non-string one is stripped; a string stays as it is.
+    const cls = (e as { className?: unknown }).className;
+    if (cls !== undefined && typeof cls !== 'string') {
+      const { className: _c, ...rest } = e as AppEdge & { className?: unknown };
+      void _c;
+      e = rest as AppEdge;
+      changed = true;
     }
     const raw = (e as { data?: unknown }).data;
     if (raw === undefined || raw === null) { out.push(e); continue; }
@@ -94,19 +66,12 @@ export function sanitizeEdgeExtras(edges: AppEdge[]): AppEdge[] {
     const dataType = VALID_DATA_TYPES.has(src.dataType as string)
       ? (src.dataType as TSLDataType)
       : 'any';
-    const waypoints = cleanWaypoints(src.waypoints);
-    if (
-      dataType === src.dataType &&
-      waypoints === src.waypoints &&
-      Object.keys(src).every((k) => ALLOWED_DATA_KEYS.has(k))
-    ) {
+    if (dataType === src.dataType && Object.keys(src).every((k) => ALLOWED_DATA_KEYS.has(k))) {
       out.push(e);
       continue;
     }
     changed = true;
-    const next: Record<string, unknown> = { dataType };
-    if (waypoints) next.waypoints = waypoints;
-    out.push({ ...e, data: next } as AppEdge);
+    out.push({ ...e, data: { dataType } } as AppEdge);
   }
   return changed ? out : edges;
 }

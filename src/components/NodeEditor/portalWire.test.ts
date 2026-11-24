@@ -1,12 +1,13 @@
 /**
  * The Portal gestures (docs/dev/canvas-interaction.md, "Portal"): Make portal
- * (placement along the DRAWN wire, the array index, the routing points each
- * end keeps, the name), naming and paste renaming, rename, turn back into
+ * (placement along the DRAWN wire, the array index, the name), naming and
+ * paste renaming, rename (the menu's name field), search, turn back into
  * wires, delete, the hidden-loop refusal, the trace's ghost lines and the
  * keyboard hop through the hidden link — the pure half (portalWire.ts,
  * utils/portalNames.ts, portalSearch.ts) and the store half (portalActions.ts).
  */
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { Position, type InternalNode } from '@xyflow/react';
 import type { AppEdge, AppNode } from '@/types';
 import { HISTORY_IDLE, makeKnot, makeNode, makeTunnelIn, makeTunnelOut } from '@/test-utils';
@@ -15,7 +16,6 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { graphToCode } from '@/engine/graphToCode';
 import { autoLayout } from '@/engine/layoutEngine';
 import { bridgeEdgesAcrossDeletedNodes, makeTypedEdge, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
-import { MAX_WAYPOINTS_PER_EDGE } from '@/utils/edgeExtras';
 import { topologyEdges, tunnelEntrance } from '@/utils/passThrough';
 import {
   PORTAL_NAME_MAX,
@@ -25,6 +25,7 @@ import {
   uniquePortalName,
 } from '@/utils/portalNames';
 import { COLLAPSED_MEMBER_CLASS } from '@/utils/groupFrame';
+import lv from '@/i18n/lv.json';
 import type { BezierSegment } from './edges/bezierGeometry';
 import { feedsFedKnot } from './branchWire';
 import type { GetInternalNode } from './edgeHit';
@@ -37,9 +38,10 @@ import {
   ghostLines,
   ghostPath,
   makePortalRefusal,
+  nextPortalEnd,
+  portalNameToCommit,
   portalSourceName,
   portalSpots,
-  portalWaypointHalves,
   relinkedExitNodes,
   renamedPortalNodes,
   splitEdgeWithPortal,
@@ -50,6 +52,7 @@ import {
 import {
   addPortalIn,
   addPortalOut,
+  cyclePortalFocus,
   makePortal,
   portalOutRefusal,
   relinkExit,
@@ -65,14 +68,13 @@ import {
   portalListKey,
   portalMatchesQuery,
   portalNameMatchesQuery,
+  portalNamedExactly,
+  portalSearchResults,
 } from './portalSearch';
 
+const lvUi = lv.ui;
 const P = (x: number, y: number) => ({ x, y });
 const at = (n: AppNode, x: number, y: number) => ({ ...n, position: P(x, y) }) as AppNode;
-const routed = (e: AppEdge, waypoints: { x: number; y: number }[]): AppEdge => ({
-  ...e,
-  data: { ...(e.data ?? { dataType: 'any' }), waypoints },
-});
 const pairs = (edges: readonly AppEdge[]) => edges.map((e) => `${e.source}>${e.target}`);
 /** A straight cubic from (x0, y) to (x1, y). */
 const line = (x0: number, x1: number, y = 0): BezierSegment => [
@@ -190,14 +192,12 @@ describe('where Make portal puts the two ends', () => {
     expect(spots.outAt.x).toBeCloseTo(60, 0);
   });
 
-  it('measures ALONG the curve: on a routed wire the arc, not the chord', () => {
+  it('measures ALONG the curve: the arc, not the chord', () => {
     // Up 100, then right 400: 60 along lands on the first, vertical, leg.
     const segs = [[0, 0, 0, -33, 0, -67, 0, -100] as BezierSegment, line(0, 400, -100)];
     const spots = portalSpots(segs)!;
-    expect(spots.inSeg).toBe(0);
     expect(spots.inAt.x).toBeCloseTo(0, 4);
     expect(spots.inAt.y).toBeCloseTo(-60, 0);
-    expect(spots.outSeg).toBe(1);
     expect(spots.outAt.x).toBeCloseTo(340, 0);
   });
 
@@ -206,21 +206,13 @@ describe('where Make portal puts the two ends', () => {
     expect(portalSpots([[0, 0, NaN, 0, 1, 0, 2, 0]])).toBeNull();
   });
 
-  it('the routing points next to each end stay with it, the middle ones go', () => {
-    const wps = [P(1, 0), P(2, 0), P(3, 0), P(4, 0)];
-    // Entrance on segment 1 (after point 0), exit on segment 4 (after point 3).
-    expect(portalWaypointHalves(wps, 1, 4)).toEqual({ before: [P(1, 0)], after: [] });
-    expect(portalWaypointHalves(wps, 0, 3)).toEqual({ before: [], after: [P(4, 0)] });
-    expect(portalWaypointHalves(wps, 2, 2)).toEqual({ before: [P(1, 0), P(2, 0)], after: [P(3, 0), P(4, 0)] });
-  });
-
   it('the split writes exit → target at the OLD wire\'s index and source → entrance right after', () => {
     const edges = [makeTypedEdge('a', 'out', 'o', 'color'), makeTypedEdge('s', 'out', 't', 'x'), makeTypedEdge('b', 'out', 'o', 'emissive')];
-    const out = splitEdgeWithPortal(edges, edges[1].id, 'IN', 'OUT', [P(1, 1)], [P(2, 2)])!;
+    const out = splitEdgeWithPortal(edges, edges[1].id, 'IN', 'OUT')!;
     expect(pairs(out)).toEqual(['a>o', 'OUT>t', 's>IN', 'b>o']);
-    expect(out[1]).toMatchObject({ sourceHandle: 'out', targetHandle: 'x', data: { waypoints: [P(2, 2)] } });
-    expect(out[2]).toMatchObject({ sourceHandle: 'out', targetHandle: 'in', data: { waypoints: [P(1, 1)] } });
-    expect(splitEdgeWithPortal(edges, 'gone', 'IN', 'OUT', [], [])).toBeNull();
+    expect(out[1]).toMatchObject({ sourceHandle: 'out', targetHandle: 'x', data: { dataType: 'any' } });
+    expect(out[2]).toMatchObject({ sourceHandle: 'out', targetHandle: 'in', data: { dataType: 'any' } });
+    expect(splitEdgeWithPortal(edges, 'gone', 'IN', 'OUT')).toBeNull();
   });
 
   it('refuses a wire that already goes into a Portal In or out of a Portal Out', () => {
@@ -240,7 +232,7 @@ describe('the store gestures', () => {
   const t = at(makeNode('t', 'sin'), 500, 0);
   const u = makeNode('u', 'add');
   const o = makeNode('o', 'output');
-  const wire = routed(makeTypedEdge('s', 'out', 't', 'x'), [P(150, 15), P(300, 200), P(450, 15)]);
+  const wire = makeTypedEdge('s', 'out', 't', 'x');
   const tOut = makeTypedEdge('t', 'out', 'o', 'color');
   const uOut = makeTypedEdge('u', 'out', 'o', 'emissive');
   const internals = new Map([['s', fakeNode('s', 0, 0)], ['t', fakeNode('t', 500, 0, 'x')]]);
@@ -270,9 +262,9 @@ describe('the store gestures', () => {
     const outN = st.nodes.find((n) => n.id === made.outId)!;
     expect(inN.data.label).toBe('float1');
     expect(outN.data).toMatchObject({ link: made.inId, label: 'float1' });
-    // The middle routing point (300, 200) went; the ones by each end stayed.
-    expect(st.edges[2].data?.waypoints).toEqual([P(150, 15)]);
-    expect(st.edges[1].data?.waypoints).toEqual([P(450, 15)]);
+    // Both halves are plain wires.
+    expect(st.edges[2].data).toEqual({ dataType: 'any' });
+    expect(st.edges[1].data).toEqual({ dataType: 'any' });
     // Each hole sits on the curve, centred where portalSpots put it.
     expect(inN.position.x + TUNNEL_SIZE / 2).toBeGreaterThan(100);
     expect(code()).toBe(codeBefore);
@@ -304,8 +296,6 @@ describe('the store gestures', () => {
     expect(st.past).toHaveLength(pastBefore + 1);
     expect(st.nodes.some((n) => n.type === 'tunnelIn' || n.type === 'tunnelOut')).toBe(false);
     expect(pairs(st.edges)).toEqual(['t>o', 's>t', 'u>o', 's>u']);
-    // Source half then target half: the two kept points, nothing where the holes were.
-    expect(st.edges[1].data?.waypoints).toEqual([P(150, 15), P(450, 15)]);
     expect(code()).toBe(codeWith);
   });
 
@@ -357,7 +347,7 @@ describe('the store gestures', () => {
     expect(useAppStore.getState().nodes).toEqual(withPortal.nodes);
     expect(useAppStore.getState().edges).toEqual(withPortal.edges);
     // The keyboard Delete path is the same splice.
-    expect(pairs(bridgeEdgesAcrossDeletedNodes(withPortal.edges, new Set([made.inId]), withPortal.nodes)))
+    expect(pairs(bridgeEdgesAcrossDeletedNodes(withPortal.edges, new Set([made.inId]))))
       .toEqual(['t>o', `${made.outId}>t`, 'u>o']);
   });
 
@@ -446,12 +436,10 @@ describe('pure refusals and rewrites', () => {
     expect(unportalPlan([makeTunnelOut('X', 'gone')], [], 'X')).toBeNull();
   });
 
-  it('turn back caps the joined routing points', () => {
-    const many = Array.from({ length: MAX_WAYPOINTS_PER_EDGE }, (_, i) => P(i, 0));
-    const e = [routed(edges[0], many), routed(edges[1], [P(999, 9)]), edges[2]];
-    const plan = unportalPlan(nodes, e, 'OUT')!;
-    expect(plan.edges[0].data?.waypoints).toHaveLength(MAX_WAYPOINTS_PER_EDGE);
+  it('turn back writes plain wires and names every end it removes', () => {
+    const plan = unportalPlan(nodes, edges, 'OUT')!;
     expect(pairs(plan.edges)).toEqual(['a>b', 'b>c']);
+    expect(plan.edges[0].data).toEqual(edges[1].data);
     expect(plan.removeIds.sort()).toEqual(['IN', 'OUT']);
   });
 });
@@ -561,5 +549,228 @@ describe('the Add-node menu\'s portal rows', () => {
     expect(filterPortalsByName(list, '').map((p) => p.id)).toEqual(['a', 'b']);
     expect(filterPortalsByName(list, 'portal').map((p) => p.id)).toEqual(['a', 'b']);
     expect(portalListKey([makeNode('x', 'sin')])).toBe('');
+  });
+});
+
+describe('both search boxes find every portal (owner, 2026-11-24)', () => {
+  const list = parsePortalList(portalListKey([
+    makeTunnelIn('a', 'speed'),
+    makeTunnelIn('b', 'Ātrums'),
+    makeTunnelIn('c', 'sin1'),
+  ]));
+  const ids = (r: { exits: { id: string }[] }) => r.exits.map((p) => p.id);
+
+  it('"portal" (and "portāls", folded) lists the Portal In and every portal', () => {
+    for (const q of ['portal', 'Portal', 'portāls', 'portals', 'POR']) {
+      const r = portalSearchResults(q, list);
+      expect(r.portalIn, q).toBe(true);
+      expect(ids(r), q).toEqual(['b', 'c', 'a']);
+      // The start of the Portal's own name puts the rows first.
+      expect(r.lead, q).toBe(true);
+    }
+    // An `Also:` word finds them too, after the node results.
+    const alias = portalSearchResults('wireless', list);
+    expect(alias.portalIn).toBe(true);
+    expect(alias.lead).toBe(false);
+  });
+
+  it('a portal\'s NAME finds that portal (no Portal In row), first when it is the whole name', () => {
+    expect(portalSearchResults('atr', list)).toEqual({ portalIn: false, exits: [list[0]], lead: false });
+    expect(portalSearchResults('ātrums', list)).toMatchObject({ portalIn: false, lead: true });
+    expect(ids(portalSearchResults('SIN1', list))).toEqual(['c']);
+    // "sin" is a node's name: the portal follows the node results.
+    expect(portalSearchResults('sin', list).lead).toBe(false);
+    expect(portalNamedExactly(list, ' Speed ')).toBe(true);
+    expect(portalNamedExactly(list, 'spe')).toBe(false);
+  });
+
+  it('finds nothing for an empty or unrelated query, and offers no Portal In then', () => {
+    expect(portalSearchResults('', list)).toEqual({ portalIn: false, exits: [], lead: false });
+    expect(portalSearchResults('multiply', list)).toEqual({ portalIn: false, exits: [], lead: false });
+    // With no portal yet, "portal" still offers the Portal In.
+    expect(portalSearchResults('portal', [])).toEqual({ portalIn: true, exits: [], lead: true });
+  });
+
+  it('the palette and the Add-node menu ask the same rule, and the palette adds through the portal actions', () => {
+    const browser = readFileSync(new URL('./ContentBrowser.tsx', import.meta.url), 'utf8');
+    expect(browser).toContain('portalSearchResults(q, parsePortalList(portalKey))');
+    expect(browser).toContain("useAppStore((s) => (q ? portalListKey(s.nodes) : ''))");
+    const menu = readFileSync(new URL('./menus/AddNodeMenu.tsx', import.meta.url), 'utf8');
+    expect(menu).toContain('portalNamedExactly(portalOutRows, query)');
+    const editor = readFileSync(new URL('./NodeEditor.tsx', import.meta.url), 'utf8');
+    expect(editor).toMatch(/payload\.nodeType === TUNNEL_IN_TYPE\) \{\s*addPortalIn\(position\);/);
+    expect(editor).toMatch(/payload\.nodeType === TUNNEL_OUT_TYPE\) \{\s*const added = typeof payload\.link === 'string' \? addPortalOut\(payload\.link, position\) : null;/);
+    expect(editor).toContain('event.dataTransfer.getData(PORTAL_LINK_DRAG_TYPE)');
+  });
+
+  it('a Portal Out tile SAYS what it is: a "Portal Out" caption under the hole, not only the portal\'s name', () => {
+    const tile = readFileSync(new URL('./PortalTileCard.tsx', import.meta.url), 'utf8');
+    expect(tile).toMatch(/\{entranceId !== null && \(\s*<span className="portal-tile__kind">\{t\('Portal Out', language\)\}<\/span>/);
+    expect((lvUi as Record<string, string>)['Portal Out']).toBe('Portāla izeja');
+  });
+
+  it('a portal tile logs its asset-drop only AFTER its add, and a refused Portal Out logs none', () => {
+    // The first cut logged every node tile up front, so a Portal Out of a
+    // portal gone since the search still read as a palette drop.
+    const editor = readFileSync(new URL('./NodeEditor.tsx', import.meta.url), 'utf8');
+    expect(editor).toContain('if (!isGroupAsset && !fromKey && !portalTile) logAssetDrop(0);');
+    expect(editor).toMatch(/addPortalIn\(position\);\s*if \(!fromKey\) logAssetDrop\(0\);/);
+    expect(editor).toMatch(/if \(added !== null && !fromKey\) logAssetDrop\(0\);/);
+    // A refused add (no such entrance) adds nothing: addPortalOut says null.
+    resetStore();
+    expect(addPortalOut('gone', P(0, 0))).toBeNull();
+    expect(useAppStore.getState().nodes).toHaveLength(0);
+  });
+});
+
+describe('the portal menu\'s NAME FIELD (owner, 2026-11-24)', () => {
+  const menu = readFileSync(new URL('./menus/PortalMenu.tsx', import.meta.url), 'utf8');
+
+  beforeEach(resetStore);
+  afterAll(resetStore);
+
+  it('replaces the title and the Rename row, and names the ENTRANCE from an exit too', () => {
+    expect(menu).toContain('<PortalNameField');
+    expect(menu).not.toMatch(/t\('Rename'|startPortalRename|portalRename'/);
+    expect(menu).toContain('entranceId={entranceId}');
+    // Read-only, with the reason, on a broken exit or a hidden entrance.
+    expect(menu).toContain('readOnly={readOnly}');
+    expect(menu).toContain("renameRefusal === 'broken' ? goneTip");
+    expect(menu).toContain("renameRefusal === 'collapsed' ? t('Open the group first', language)");
+  });
+
+  it('a READ-ONLY field still takes the focus and swallows every key, and says why in a visible line', () => {
+    // An unfocused read-only field let A then X select all and delete every
+    // node behind the open menu (QA, 2026-11-24): the focus is what makes it
+    // the typing target every canvas key stands down for.
+    expect(menu).toContain('autoFocus={autoFocus}');
+    expect(menu).not.toMatch(/autoFocus=\{autoFocus && /);
+    expect(menu).toMatch(/onKeyDown=\{\(e\) => \{\s*\/\/[^\n]*\n\s*\/\/[^\n]*\n\s*e\.stopPropagation\(\);/);
+    expect(menu).toContain('className="portal-menu__name-reason"');
+    expect(menu).toContain("portal-menu__name--readonly");
+    const field = menu.slice(menu.indexOf('<input'), menu.indexOf('onBlur={commit}', menu.indexOf('<input')));
+    expect(field).not.toMatch(/\sdisabled=/);
+    // No tooltip on the field: it opened at once over the rows below.
+    expect(field).not.toMatch(/\stitle=/);
+  });
+
+  it('commits through renamePortal on Enter, blur or the menu closing — only what was TYPED; Escape reverts with no write', () => {
+    expect(menu).toContain('const next = portalNameToCommit(name, typedRef.current);');
+    expect(menu).toMatch(/if \(next !== null && readOnlyReason === null && entranceId !== null\) renamePortal\(entranceId, next\);/);
+    expect(menu).toMatch(/onChange=\{\(e\) => \{\s*typedRef\.current = e\.target\.value;/);
+    expect(menu).toMatch(/if \(e\.key === 'Enter'\) \{\s*e\.preventDefault\(\);\s*commit\(\);/);
+    // Escape settles the field WITHOUT a commit and puts the old name back.
+    expect(menu).toMatch(/e\.key === 'Escape'\) \{\s*e\.preventDefault\(\);\s*settled\.current = true;\s*typedRef\.current = null;\s*setValue\(name\);/);
+    expect(menu).toContain('onBlur={commit}');
+    expect(menu).toMatch(/return \(\) => commitRef\.current\(\);/);
+    expect(menu).toContain('maxLength={PORTAL_NAME_MAX}');
+  });
+
+  it('opening and closing the menu writes NOTHING, even over a stored name that is not clean', () => {
+    // The first cut committed the SHOWN text on close; renamePortal cleans it,
+    // so a file's padded name was rewritten (an undo entry, every exit's
+    // cache) each time the menu opened — StrictMode's extra mount/unmount
+    // pair did it with nothing on screen.
+    expect(portalNameToCommit('  speed\n', null)).toBeNull();
+    expect(portalNameToCommit('speed', 'speed')).toBeNull();
+    expect(portalNameToCommit('speed', 'speed 2')).toBe('speed 2');
+    expect(portalNameToCommit('speed', '')).toBe('');
+    const dirty = makeTunnelIn('A', '  speed\n');
+    useAppStore.setState({ nodes: [dirty], edges: [] });
+    const next = portalNameToCommit('  speed\n', null);
+    if (next !== null) renamePortal('A', next);
+    expect(useAppStore.getState().past).toHaveLength(0);
+    expect(useAppStore.getState().nodes[0]).toBe(dirty);
+  });
+
+  it('a Branch or Portal end deleted while its menu is open takes the menu with it', () => {
+    const settings = readFileSync(new URL('./menus/NodeSettingsMenu.tsx', import.meta.url), 'utf8');
+    expect(settings).toMatch(/if \(node\) passThroughRef\.current = isKnot\(node\) \|\| isTunnelIn\(node\) \|\| isTunnelOut\(node\);/);
+    expect(settings).toMatch(/if \(!node && passThroughRef\.current\) closeContextMenu\(\);/);
+  });
+
+  it('a rename from an exit\'s field is ONE entry, unique, every cache updated; Escape\'s no-commit spends none', () => {
+    const inA = makeTunnelIn('A', 'speed');
+    const inB = makeTunnelIn('B', 'color');
+    const exitB = makeTunnelOut('OB', 'B', 'color');
+    useAppStore.setState({ nodes: [inA, inB, exitB], edges: [] });
+    // The field of the exit OB names its entrance B.
+    expect(renamePortal('B', 'speed')).toBe(true);
+    const st = useAppStore.getState();
+    expect(st.past).toHaveLength(1);
+    expect(st.nodes.find((n) => n.id === 'B')?.data.label).toBe('speed 2');
+    expect(st.nodes.find((n) => n.id === 'OB')?.data.label).toBe('speed 2');
+    // A commit that changes nothing (Escape put the name back) spends nothing.
+    expect(renamePortal('B', 'speed 2')).toBe(false);
+    expect(useAppStore.getState().past).toHaveLength(1);
+    // Capped and cleaned.
+    expect(renamePortal('A', `  ${'x'.repeat(PORTAL_NAME_MAX + 9)}\n`)).toBe(true);
+    expect(String(useAppStore.getState().nodes.find((n) => n.id === 'A')?.data.label)).toHaveLength(PORTAL_NAME_MAX);
+  });
+});
+
+describe('F on ONE selected portal end cycles through its portal (owner, 2026-11-24)', () => {
+  beforeEach(resetStore);
+  afterAll(resetStore);
+  const sel = (n: AppNode, on = true) => ({ ...n, selected: on }) as AppNode;
+  const selectedIds = () => useAppStore.getState().nodes.filter((n) => n.selected).map((n) => n.id);
+  let framed: string[][] = [];
+  const fitView = (o?: { nodes?: { id: string }[] }) => {
+    framed.push((o?.nodes ?? []).map((n) => n.id));
+  };
+  beforeEach(() => {
+    framed = [];
+  });
+
+  it('nextPortalEnd: the entrance, then its exits in graph order, wrapping; null for anything else', () => {
+    const nodes = [makeTunnelOut('O1', 'A'), makeNode('f', 'float'), makeTunnelIn('A'), makeTunnelOut('O2', 'A'), makeTunnelIn('lone'), makeTunnelOut('broken', 'gone')];
+    expect(nextPortalEnd(nodes, 'A')).toBe('O1');
+    expect(nextPortalEnd(nodes, 'O1')).toBe('O2');
+    expect(nextPortalEnd(nodes, 'O2')).toBe('A');
+    expect(nextPortalEnd(nodes, 'f')).toBeNull();
+    expect(nextPortalEnd(nodes, 'lone')).toBeNull();
+    expect(nextPortalEnd(nodes, 'broken')).toBeNull();
+    expect(nextPortalEnd(nodes, 'missing')).toBeNull();
+  });
+
+  it('each F glides to the NEXT end and selects it, wrapping — selection only, no undo entry', () => {
+    useAppStore.setState({ nodes: [makeTunnelIn('A'), sel(makeTunnelOut('O1', 'A')), makeTunnelOut('O2', 'A')], edges: [] });
+    expect(cyclePortalFocus(fitView)).toBe(true);
+    expect(selectedIds()).toEqual(['O2']);
+    expect(cyclePortalFocus(fitView)).toBe(true);
+    expect(selectedIds()).toEqual(['A']);
+    expect(cyclePortalFocus(fitView)).toBe(true);
+    expect(selectedIds()).toEqual(['O1']);
+    expect(framed).toEqual([['O2'], ['A'], ['O1']]);
+    expect(useAppStore.getState().past).toHaveLength(0);
+  });
+
+  it('a HIDDEN end is framed and selected as its pill, and the next F carries on from it', () => {
+    const group = { id: 'G', type: 'group', position: P(0, 0), data: { label: 'g', collapsed: true } } as unknown as AppNode;
+    const hidden = { ...makeTunnelOut('O2', 'A'), parentId: 'G', className: COLLAPSED_MEMBER_CLASS } as AppNode;
+    useAppStore.setState({ nodes: [group, makeTunnelIn('A'), sel(makeTunnelOut('O1', 'A')), hidden], edges: [] });
+    expect(cyclePortalFocus(fitView)).toBe(true);
+    expect(framed[framed.length - 1]).toEqual(['G']);
+    expect(selectedIds()).toEqual(['G']);
+    expect(cyclePortalFocus(fitView)).toBe(true);
+    expect(selectedIds()).toEqual(['A']);
+  });
+
+  it('F on any other selection keeps its framing: nothing done here', () => {
+    useAppStore.setState({ nodes: [sel(makeNode('f', 'float')), makeTunnelIn('A'), makeTunnelOut('O1', 'A')], edges: [] });
+    expect(cyclePortalFocus(fitView)).toBe(false);
+    // Two portal ends selected: F frames the selection, as ever.
+    useAppStore.setState({ nodes: [sel(makeTunnelIn('A')), sel(makeTunnelOut('O1', 'A'))], edges: [] });
+    expect(cyclePortalFocus(fitView)).toBe(false);
+    // A group the user selected is not a cycle's pill.
+    const group = { id: 'G', type: 'group', position: P(0, 0), data: { label: 'g', collapsed: true }, selected: true } as unknown as AppNode;
+    useAppStore.setState({ nodes: [group, makeTunnelIn('A'), makeTunnelOut('O1', 'A')], edges: [] });
+    expect(cyclePortalFocus(fitView)).toBe(false);
+    expect(framed).toEqual([]);
+  });
+
+  it('the canvas\'s F asks it first, under F\'s own guards', () => {
+    const editor = readFileSync(new URL('./NodeEditor.tsx', import.meta.url), 'utf8');
+    expect(editor).toMatch(/if \(key === 'f' && !e\.shiftKey\) \{\s*e\.preventDefault\(\);\s*(?:\/\/[^\n]*\n\s*)*if \(cyclePortalFocus\(fitView\)\) return;/);
   });
 });

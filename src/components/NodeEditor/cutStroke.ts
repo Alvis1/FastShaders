@@ -5,10 +5,10 @@
  * each wire's curve exactly as the drop-on-edge hit test does and asks here.
  * docs/dev/canvas-interaction.md, "Cut stroke".
  *
- * Every input is bounded: the stroke is capped at `MAX_CUT_POINTS`, a wire's
- * routing points at the restore cap, and a cubic is never flattened past
- * `MAX_SUBDIVISION_DEPTH` or `MAX_SUBCURVES` pieces, so neither a wire a
- * million units long nor one doubling back on itself can stall a release.
+ * Every input is bounded: the stroke is capped at `MAX_CUT_POINTS`, and a
+ * cubic is never flattened past `MAX_SUBDIVISION_DEPTH` or `MAX_SUBCURVES`
+ * pieces, so neither a wire a million units long nor one doubling back on
+ * itself can stall a release.
  */
 import type { BezierSegment } from './edges/bezierGeometry';
 

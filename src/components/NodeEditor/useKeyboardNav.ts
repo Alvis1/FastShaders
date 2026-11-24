@@ -13,6 +13,7 @@ import {
 import { isTypingTarget } from '@/utils/isTypingTarget';
 import { nodeEl } from './nodeElement';
 import { topologyEdges } from '@/utils/passThrough';
+import { branchOutActive } from './branchOut';
 
 /**
  * App-wide keyboard navigation.
@@ -168,6 +169,10 @@ export function useKeyboardNav({ drawToolActive }: Options): void {
       if (isTyping(e.target)) return;
       // Every aria-modal dialog in the app renders only while open.
       if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      // A Branch-out wire is following the pointer (branchOut.ts): no graph
+      // key runs under it. This listener is capture-phase on the window and
+      // registered first, so the wire's own key guard cannot reach it.
+      if (branchOutActive()) return;
 
       const active = document.activeElement as HTMLElement | null;
 

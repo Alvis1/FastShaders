@@ -82,3 +82,37 @@ export function filterPortalsByName<T extends { name: string }>(portals: readonl
   if (q === '' || portalNameMatchesQuery(query)) return [...portals];
   return portals.filter((p) => fold(p.name).includes(q));
 }
+
+/** Does `query` name one of `portals` EXACTLY (folded)? Then its rows lead,
+ *  as an exact-name hit does in the ranked search. */
+export function portalNamedExactly(portals: readonly { name: string }[], query: string): boolean {
+  const q = fold(query.trim());
+  return q !== '' && portals.some((p) => fold(p.name) === q);
+}
+
+/**
+ * Which portal results a SEARCH shows (owner, 2026-11-24: "all defined
+ * portals can be found through the search box by the word portal and by the
+ * portal's name") — the palette's tiles (PortalTileCard.tsx) and the
+ * Add-node menu's rows ask the same thing. `portals` are the live entrances
+ * (`parsePortalList`).
+ *
+ *  - a query naming the Portal ("portal", "portāls", an `Also:` word) shows
+ *    the Portal In and one Portal Out per portal;
+ *  - any other query shows the portals whose NAME contains it (folded), and
+ *    no Portal In;
+ *  - they LEAD — before the node results — for the start of the Portal's own
+ *    name ("por") or a portal's exact name, as the ranked search puts a name
+ *    hit first, and otherwise follow the node results, so a node match keeps
+ *    Enter and the front of the strip.
+ */
+export function portalSearchResults<T extends { id: string; name: string }>(
+  query: string,
+  portals: readonly T[],
+): { portalIn: boolean; exits: T[]; lead: boolean } {
+  if (!query.trim()) return { portalIn: false, exits: [], lead: false };
+  const named = portalMatchesQuery(query);
+  const exits = named ? [...portals] : filterPortalsByName(portals, query);
+  const lead = portalNameMatchesQuery(query) || portalNamedExactly(exits, query);
+  return { portalIn: named, exits, lead: lead && (named || exits.length > 0) };
+}

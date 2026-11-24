@@ -18,11 +18,11 @@ import type { AppNode, AppEdge } from '@/types';
 /**
  * True when the update CANNOT change compiled output or CPU-evaluated values:
  * same nodes (id + `data` ref, in order) and same edges by endpoint tuple.
- * Edge `data` is deliberately ignored — it carries only visual payload
- * (dataType tint, routing waypoints), which graphToCode/cpuEvaluator never
- * read, so a waypoint drag stays inert here.
+ * Edge `data` is deliberately ignored — it carries only visual payload (the
+ * dataType tint), which graphToCode/cpuEvaluator never read, so a rewrite of
+ * it stays inert here.
  *
- * NOT for persistence decisions: positions and waypoints DO persist — use
+ * NOT for persistence decisions: positions and edge data DO persist — use
  * `selectionOnlyGraphChange` for the autosave path instead.
  */
 export function sameGraphSemantics(
@@ -69,7 +69,7 @@ export function sameGraphSemantics(
  * `resizing`, and the `measured` sizes React Flow re-derives on mount.
  * Anything that persists — positions, EXPLICIT width/height (the note/group
  * corner-resize writes those, and loadGraph restores them), `data` (values,
- * waypoints), group membership, edge topology — returns false so the autosave
+ * edge data), group membership, edge topology — returns false so the autosave
  * still arms.
  */
 export function selectionOnlyGraphChange(
