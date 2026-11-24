@@ -21,10 +21,10 @@ describe('builtinPresets', () => {
   const presets = getBuiltinPresets();
 
   it('ships the 13 recipes and the full three-tier library, with unique ids', () => {
-    expect(presets.length).toBe(37);
-    expect(new Set(presets.map((p) => p.id)).size).toBe(37);
+    expect(presets.length).toBe(39);
+    expect(new Set(presets.map((p) => p.id)).size).toBe(39);
     expect(recipes()).toHaveLength(13);
-    expect(original()).toHaveLength(24);
+    expect(original()).toHaveLength(26);
     // Ordered easy→advanced: tiers never decrease along the list, so the
     // recipes (tier 0) come first.
     const tiers = presets.map((p) => p.tier);

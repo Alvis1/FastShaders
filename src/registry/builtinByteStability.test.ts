@@ -46,6 +46,6 @@ describe('built-in textures and presets emit byte-identical code', () => {
     // asset already means writing a snapshot entry; bumping this number is the
     // same deliberate edit. (The per-library counts are pinned separately in
     // builtinPresets.test.ts; this is the TOTAL the two snapshots cover.)
-    expect(getBuiltinTextures().length + getBuiltinPresets().length).toBe(46);
+    expect(getBuiltinTextures().length + getBuiltinPresets().length).toBe(48);
   });
 });
