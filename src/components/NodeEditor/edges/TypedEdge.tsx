@@ -14,7 +14,13 @@ import { useAppStore } from '@/store/useAppStore';
 import { COUNT_EDGE_COLORS, canvasWireColor } from '@/utils/colorUtils';
 import { setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { diveKeyOf, useDiveHost } from './portalDive';
-import { evaluateEdgeSource, getEdgeOutputShape, getLiveUpstreamSet, getUnwrappedEdge } from '@/engine/cpuEvaluator';
+import {
+  evaluateEdgeSource,
+  getEdgeOutputShape,
+  getFoldedWireSource,
+  getLiveUpstreamSet,
+  getUnwrappedEdge,
+} from '@/engine/cpuEvaluator';
 import {
   ARROW_FLARE,
   arrowMarks,
@@ -272,11 +278,13 @@ export function TypedEdge({
     useShallow((s) => {
       if (!selected) return null;
       const un = getUnwrappedEdge(s.nodes, s.edges, id);
+      // A wire INTO a Branch/Portal In is folded away: read what it carries.
+      const via = un ? null : getFoldedWireSource(s.nodes, s.edges, id);
       return {
-        source: un?.source ?? source,
+        source: un?.source ?? via?.source ?? source,
         target: un?.target ?? target,
         // The socket the wire really leaves — the same one the ribbon counts.
-        sourceHandle: un?.sourceHandle ?? sourceHandleId ?? null,
+        sourceHandle: un?.sourceHandle ?? via?.sourceHandle ?? sourceHandleId ?? null,
       };
     }),
   );
@@ -295,7 +303,13 @@ export function TypedEdge({
     // vector and draw a plausible-looking, wrong-width ribbon. The same real
     // source is what makes a Time feeder inside a collapsed frame count.
     const un = getUnwrappedEdge(s.nodes, s.edges, id);
-    const e = { source: un?.source ?? source, sourceHandle: un?.sourceHandle ?? sourceHandleId };
+    // A wire INTO a Branch or Portal In is not in the fold (the engines read
+    // past it), so it is resolved on its own: a Branch → Branch wire carries
+    // the first Branch's feeder, never the Branch itself (one black channel).
+    const via = un ? null : getFoldedWireSource(s.nodes, s.edges, id);
+    const e = un
+      ? { source: un.source, sourceHandle: un.sourceHandle }
+      : via ?? { source, sourceHandle: sourceHandleId };
     const evaluated = evaluateEdgeSource(e, s.nodes, s.edges, 0);
     const evalLen = evaluated?.length ?? 0;
     const shapeLen = getEdgeOutputShape(e, s.nodes, s.edges);

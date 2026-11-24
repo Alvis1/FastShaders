@@ -13,7 +13,7 @@
 import { useAppStore } from '@/store/useAppStore';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { effectiveExposedPorts, usesExposedPorts } from '@/utils/exposedPorts';
-import { makeTypedEdge } from '@/utils/edgeUtils';
+import { makeTypedEdge, unwrapGroupsOnly } from '@/utils/edgeUtils';
 import { pickSpliceInputPort } from './edgeSplice';
 import { primaryInputId } from '@/utils/primaryInput';
 import { inheritedImageUv } from './imageUvHandoff';
@@ -22,6 +22,7 @@ import { getEdgeOutputShape, getTargetEdges } from '@/engine/cpuEvaluator';
 import type { AppNode, AppEdge, NodeDefinition } from '@/types';
 import { getNodeValues } from '@/types';
 import { hiddenLoopThrough } from './portalWire';
+import { isPassThroughNode, passThroughConsumers } from '@/utils/passThrough';
 
 /**
  * Landing a connection on a drag-revealed (still hidden) parameter socket
@@ -160,6 +161,14 @@ export function connectNodes(
   exposeConnectedTarget(target, targetHandle);
   if (uv) exposeConnectedTarget(source, 'uv');
   announceAppendTrim(target, targetHandle);
+  // A wire into a Branch or Portal In reaches whatever it feeds: an Append
+  // behind it trims the new value just the same (the first note wins).
+  const after = useAppStore.getState();
+  if (isPassThroughNode(after.nodes.find((n) => n.id === target))) {
+    for (const e of passThroughConsumers(after.nodes, unwrapGroupsOnly(after.nodes, after.edges), target)) {
+      announceAppendTrim(e.target, e.targetHandle ?? null);
+    }
+  }
   return true;
 }
 

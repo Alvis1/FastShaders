@@ -43,8 +43,10 @@ describe('TypedEdge — the live flag', () => {
     // LIVE_BIT must sit above every channel count, or a 4-channel wire reads live.
     const bit = Number(/const LIVE_BIT = (\d+);/.exec(EDGE)![1]);
     expect(bit).toBeGreaterThan(4);
-    // Asked of the UNWRAPPED source, so a collapsed frame changes nothing.
-    expect(EDGE).toContain('const e = { source: un?.source ?? source,');
+    // Asked of the UNWRAPPED source, so a collapsed frame changes nothing —
+    // and a wire INTO a Branch/Portal In (folded away) of what it carries.
+    expect(EDGE).toContain('? { source: un.source, sourceHandle: un.sourceHandle }');
+    expect(EDGE).toContain(': via ?? { source, sourceHandle: sourceHandleId };');
   });
 
   it('tags every still path — ribbon lines and the chevron path alike', () => {

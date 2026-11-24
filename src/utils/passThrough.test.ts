@@ -8,6 +8,7 @@ import {
   isPassThroughNode,
   isTunnelIn,
   isTunnelOut,
+  passThroughConsumers,
   passThroughSource,
   remapTunnelLinks,
   resolvePassThroughEndpoint,
@@ -22,7 +23,12 @@ import { canMuteNode, isMutedNode } from './nodeMute';
 import { sanitizeGraphShape, sanitizeTunnelLinks } from './graphShape';
 import { parseStoredGraph } from '@/store/useAppStore';
 import { wouldCreateCycle } from '@/components/NodeEditor/dragConnect';
-import { getUnwrappedEdge } from '@/engine/cpuEvaluator';
+import {
+  getEdgeOutputShape,
+  getFoldedWireSource,
+  getLiveUpstreamSet,
+  getUnwrappedEdge,
+} from '@/engine/cpuEvaluator';
 import { graphToCode } from '@/engine/graphToCode';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { previewGraph, previewableOutputs } from './nodePreview';
@@ -135,6 +141,74 @@ describe('foldPassThroughEdges', () => {
     expect(passThroughSource(nodes, edges, 's')).toBeNull();
     expect(resolvePassThroughEndpoint(nodes, edges, 's', 'out')).toEqual({ source: 's', sourceHandle: 'out' });
     expect(resolvePassThroughEndpoint(nodes, edges, 'o1', 'out')).toEqual({ source: 't', sourceHandle: 'out' });
+  });
+
+  it('a wire INTO a pass-through carries its feeder, for the canvas to draw', () => {
+    // Branch → Branch drew one black still channel: the fold drops the wire,
+    // so TypedEdge looked its source up as the Branch itself.
+    const nodes = [
+      makeNode('t', 'time'),
+      makeNode('v', 'vec3'),
+      makeNode('m', 'mul'),
+      makeKnot('k1'),
+      makeKnot('k2'),
+      makeKnot('k3'),
+      makeTunnelIn('in1'),
+      makeNode('s', 'sin'),
+    ];
+    const tv = makeEdge('t', 'out', 'm', 'a');
+    const vm = makeEdge('v', 'out', 'm', 'b');
+    const intoK1 = makeEdge('m', 'out', 'k1', 'in');
+    const k1k2 = makeEdge('k1', 'out', 'k2', 'in');
+    const k2in = makeEdge('k2', 'out', 'in1', 'in');
+    const unfed = makeEdge('k3', 'out', 's', 'x');
+    const edges = [tv, vm, intoK1, k1k2, k2in, unfed];
+    for (const w of [intoK1, k1k2, k2in]) {
+      expect(getUnwrappedEdge(nodes, edges, w.id)).toBeUndefined();
+      const via = getFoldedWireSource(nodes, edges, w.id);
+      expect(via).toEqual({ source: 'm', sourceHandle: 'out' });
+      expect(getEdgeOutputShape(via!, nodes, edges)).toBe(3);
+      expect(getLiveUpstreamSet(nodes, edges).has(via!.source)).toBe(true);
+    }
+    // A wire the fold keeps is not this helper's; an unfed chain carries nothing.
+    expect(getFoldedWireSource(nodes, edges, tv.id)).toBeNull();
+    expect(getFoldedWireSource(nodes, edges, unfed.id)).toBeNull();
+    expect(getFoldedWireSource(nodes, [makeEdge('k3', 'out', 'k1', 'in')], 'nope')).toBeNull();
+  });
+
+  it('passThroughConsumers runs the resolver forward, as drawn', () => {
+    const nodes = [
+      makeNode('t', 'time'),
+      makeKnot('k1'),
+      makeKnot('k2'),
+      makeTunnelIn('in1'),
+      makeTunnelOut('o1', 'in1'),
+      makeTunnelOut('o2', 'in1'),
+      makeNode('s', 'sin'),
+      makeNode('c', 'cos'),
+      makeNode('a', 'add'),
+      makeNode('f', 'float'),
+    ];
+    const edges = [
+      makeEdge('t', 'out', 'k1', 'in'),
+      makeEdge('k1', 'out', 's', 'x'),
+      makeEdge('k1', 'out', 'k2', 'in'),
+      makeEdge('k2', 'out', 'in1', 'in'),
+      makeEdge('o1', 'out', 'c', 'x'),
+      makeEdge('o2', 'out', 'a', 'a'),
+    ];
+    expect(passThroughConsumers(nodes, edges, 'k1').map(tuple).sort()).toEqual([
+      'k1.out → s.x',
+      'o1.out → c.x',
+      'o2.out → a.a',
+    ]);
+    // A real node, and a Branch whose FIRST wire is another's: nothing.
+    expect(passThroughConsumers(nodes, edges, 's')).toEqual([]);
+    const second = [makeEdge('f', 'out', 'k2', 'in'), ...edges];
+    expect(passThroughConsumers(nodes, second, 'k1').map(tuple)).toEqual(['k1.out → s.x']);
+    // A cycle ends the walk.
+    const loop = [makeEdge('k2', 'out', 'k1', 'in'), makeEdge('k1', 'out', 'k2', 'in')];
+    expect(passThroughConsumers(nodes, loop, 'k1')).toEqual([]);
   });
 
   it('a Branch reads its FIRST incoming wire in array order', () => {

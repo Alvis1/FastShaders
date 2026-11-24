@@ -222,6 +222,59 @@ export function resolvePassThroughEndpoint(
 }
 
 /**
+ * The wires that carry what the pass-through `nodeId` holds into REAL nodes —
+ * the resolver run FORWARD, as drawn (`groupEdges`, the group-only view):
+ * through every Branch it reaches by that Branch's FIRST incoming wire (the one
+ * a Branch reads), and from a Portal In to each of its live exits. A wire out
+ * of a Portal In (only a forged file holds one) carries nothing. Empty for a
+ * real node or an id that is no node; a cycle ends the walk. The question a
+ * connect-time check asks when the new wire's target is a pass-through: the
+ * consumer sockets whose value that wire just changed.
+ */
+export function passThroughConsumers(
+  nodes: readonly AppNode[],
+  groupEdges: readonly AppEdge[],
+  nodeId: string,
+): AppEdge[] {
+  const pass = passThroughMap(nodes);
+  if (!pass || !pass.has(nodeId)) return [];
+  const exits = new Map<string, string[]>();
+  for (const n of pass.values()) {
+    if (!isTunnelOut(n)) continue;
+    const link = tunnelLinkOf(n);
+    if (link === null || !isTunnelIn(pass.get(link))) continue;
+    const list = exits.get(link);
+    if (list) list.push(n.id);
+    else exits.set(link, [n.id]);
+  }
+  const firstIn = new Map<string, AppEdge>();
+  const bySource = new Map<string, AppEdge[]>();
+  for (const e of groupEdges) {
+    if (pass.has(e.target) && !firstIn.has(e.target)) firstIn.set(e.target, e);
+    const list = bySource.get(e.source);
+    if (list) list.push(e);
+    else bySource.set(e.source, [e]);
+  }
+  const out: AppEdge[] = [];
+  const seen = new Set<string>();
+  const stack = [nodeId];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (isTunnelIn(pass.get(id))) {
+      stack.push(...(exits.get(id) ?? []));
+      continue;
+    }
+    for (const e of bySource.get(id) ?? []) {
+      if (!pass.has(e.target)) out.push(e);
+      else if (firstIn.get(e.target) === e) stack.push(e.target);
+    }
+  }
+  return out;
+}
+
+/**
  * The FOLD: the edges as the engines read them. Every wire INTO a
  * pass-through is dropped; a wire OUT of one takes the resolved source and
  * source handle (KEEPING its id, so a lookup by id — TypedEdge, EdgeInfoCard —

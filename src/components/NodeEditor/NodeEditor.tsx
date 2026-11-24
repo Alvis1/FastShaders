@@ -133,7 +133,7 @@ import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { canMuteNode, detachEdges, isMutedNode } from '@/utils/nodeMute';
 import { isTypingTarget } from '@/utils/isTypingTarget';
 import { beginDragChrome } from '@/utils/dragChrome';
-import { bridgeEdgesAcrossDeletedNodes, unwrapCollapsedGroupEdges, unwrapGroupsOnly } from '@/utils/edgeUtils';
+import { bridgeEdgesAcrossDeletedNodes, unwrapGroupsOnly } from '@/utils/edgeUtils';
 import {
   TUNNEL_IN_TYPE,
   TUNNEL_OUT_TYPE,
@@ -141,13 +141,13 @@ import {
   isTunnelIn,
   isTunnelOut,
   remapTunnelLinks,
-  resolvePassThroughEndpoint,
   topologyEdges,
 } from '@/utils/passThrough';
 import { renameCopiedEntrances } from '@/utils/portalNames';
 import { connectionRefused, spliceClosesHiddenLoop } from './portalWire';
 import { addPortalIn, addPortalOut, cyclePortalFocus, glideToPortalPartner } from './portalActions';
 import { PortalTrace } from './PortalTrace';
+import { imageToLinearize } from './normalMapFlip';
 import { parseCsv, COLUMN_WARN_THRESHOLD } from '@/utils/csvParser';
 import { makeDataNodeData } from '@/utils/dataNode';
 import {
@@ -160,7 +160,6 @@ import {
 import { stashImageOrigin } from '@/utils/imageOriginCache';
 import { filePictureOrientation } from '@/utils/pictureOrientation';
 import { droppedModelPictureOrientation } from '@/utils/droppedModelOrientation';
-import { isImageChannelHandle } from '@/utils/imageChannels';
 import { importNoteLineText, importNoteHasConvertLine, importNoteLifetimeMs } from '@/utils/importNote';
 import { fillTemplate } from '@/utils/fillTemplate';
 import {
@@ -1887,55 +1886,19 @@ export function NodeEditor() {
         });
       }
 
-      // Auto-linearize an image wired into the Output's Normal socket. The
-      // codegen decodes it as a tangent-space normal MAP via normalMap(), which
-      // needs LINEAR sampling — so flip the Image node to the 'data' colorSpace.
-      // Skip when the same image also drives an sRGB channel (color/emissive):
-      // one texture carries a single colorSpace and can't satisfy both, so we
-      // leave the user's choice alone rather than silently wrong-colour it.
-      // Mutating via setNodes here (mirroring updateNodeData's shape, but not
-      // calling it) keeps the connect + colorSpace flip under the caller's
-      // single pushHistory() → one undo step reverses the whole gesture.
-      // Only the image's Color (`out`) socket is decoded as a normal map, so
-      // only it needs linear sampling: a channel wire (Alpha/R/G/B) into Normal
-      // is a raw scalar, and flipping the texture's colour space for it would
-      // silently change every other consumer of the image. The `feedsSrgb`
-      // scan stays handle-blind — any edge from the image into color/emissive
-      // is the conservative answer.
-      if (connection.targetHandle === 'normal') {
-        const { nodes, edges: liveEdges } = useAppStore.getState();
-        // Through a Branch or Portal Out the image is what the wire RESOLVES
-        // to (utils/passThrough.ts), and its other consumers are read on the
-        // folded view for the same reason.
-        const from = resolvePassThroughEndpoint(
-          nodes,
-          unwrapGroupsOnly(nodes, liveEdges),
-          connection.source,
-          connection.sourceHandle,
+      // Auto-linearize an image that now reaches a Normal socket (normalMapFlip.ts),
+      // written here under the caller's single pushHistory: one undo reverses
+      // the connect and the flip together.
+      const { nodes, edges: liveEdges } = useAppStore.getState();
+      const flipId = imageToLinearize(nodes, liveEdges, connection);
+      if (flipId !== null) {
+        useAppStore.getState().setNodes(
+          nodes.map((n) =>
+            n.id === flipId
+              ? { ...n, data: { ...n.data, values: { ...getNodeValues(n), colorSpace: 'data' } } }
+              : n,
+          ) as AppNode[],
         );
-        const srcId = from?.source;
-        const src = srcId === undefined ? undefined : nodes.find((n) => n.id === srcId);
-        if (src?.data.registryType === 'imageNode' && !isImageChannelHandle(from?.sourceHandle)) {
-          // The live list: the edge just made targets `normal`, so it can never
-          // match the two handles below and reading before or after is the same
-          // answer — but reading fresh cannot go stale. Folded only when a
-          // pass-through is involved, so every other graph reads the raw list.
-          const readEdges = src.id === connection.source ? liveEdges : unwrapCollapsedGroupEdges(nodes, liveEdges);
-          const feedsSrgb = readEdges.some(
-            (e) =>
-              e.source === src.id &&
-              (e.targetHandle === 'color' || e.targetHandle === 'emissive'),
-          );
-          if (!feedsSrgb && getNodeValues(src).colorSpace !== 'data') {
-            useAppStore.getState().setNodes(
-              nodes.map((n) =>
-                n.id === src.id
-                  ? { ...n, data: { ...n.data, values: { ...getNodeValues(n), colorSpace: 'data' } } }
-                  : n,
-              ) as AppNode[],
-            );
-          }
-        }
       }
     },
     [setEdges],

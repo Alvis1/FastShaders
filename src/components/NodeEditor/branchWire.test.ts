@@ -407,6 +407,20 @@ describe('Step 2 review fixes', () => {
     const outs = (g.data as { collapsedOutputs: { originalNodeId: string; name?: string }[] }).collapsedOutputs;
     const branchExit = outs.find((s) => s.originalNodeId === 'k')!;
     expect(branchExit.name).toBe('n');
+    // …and TYPED after what it carries, never `any` (a Branch has no port).
+    expect((branchExit as { dataType?: string }).dataType).toBe('float');
+  });
+
+  it('a pill socket into a Branch is typed after what feeds it', () => {
+    useAppStore.setState({
+      nodes: [makeNode('v', 'vec3'), makeKnot('k'), makeNode('sub', 'sub')],
+      edges: [makeTypedEdge('v', 'out', 'k', 'in'), makeTypedEdge('k', 'out', 'sub', 'a')],
+    });
+    const gid = useAppStore.getState().groupSelection(['k', 'sub'])!;
+    useAppStore.getState().toggleGroupCollapsed(gid);
+    const g = useAppStore.getState().nodes.find((x) => x.id === gid)!;
+    const ins = (g.data as { collapsedInputs: { originalNodeId: string; dataType: string }[] }).collapsedInputs;
+    expect(ins.find((s) => s.originalNodeId === 'k')?.dataType).toBe('vec3');
   });
 
   it('F1: a reconnect released on a FED Branch keeps the wire and spends no undo entry', () => {

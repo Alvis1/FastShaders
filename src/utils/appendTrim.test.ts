@@ -16,7 +16,7 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { graphToCode } from '@/engine/graphToCode';
 import { connectNodes } from '@/components/NodeEditor/edgeInsert';
 import { useAppStore, cancelPendingGraphSave } from '@/store/useAppStore';
-import { makeNode, makeEdge, HISTORY_IDLE } from '@/test-utils';
+import { makeNode, makeEdge, makeKnot, HISTORY_IDLE } from '@/test-utils';
 
 const APPEND = NODE_REGISTRY.get('append')!;
 const WIDTH: Record<string, number> = { float: 1, vec2: 2, vec3: 3, vec4: 4 };
@@ -108,6 +108,15 @@ describe('the note a wire into a full Append posts', () => {
     expect(note()).toBeNull();
     // Position (3) into `a` now leaves `b` one channel of its three.
     connectNodes('pos', 'out', 'ap', 'a');
+    expect(note()).toEqual([{ kind: 'append-trimmed', name: 'vec31', kept: 1 }]);
+  });
+
+  it('a wire into a Branch that feeds the Append says so too', () => {
+    useAppStore.setState({ nodes: [...useAppStore.getState().nodes, makeKnot('k')] });
+    connectNodes('pos', 'out', 'ap', 'a');
+    connectNodes('k', 'out', 'ap', 'b');
+    expect(note()).toBeNull();
+    connectNodes('v', 'out', 'k', 'in');
     expect(note()).toEqual([{ kind: 'append-trimmed', name: 'vec31', kept: 1 }]);
   });
 

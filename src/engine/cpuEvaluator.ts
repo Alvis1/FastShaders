@@ -24,6 +24,7 @@ import { intLiteral, isIntSource, type IntGraph } from './intPromotion';
 import { SOUND_CHANNELS, soundChannelForHandle } from '@/utils/soundAnalysis';
 import { readSoundSettings } from '@/utils/soundSettings';
 import { unwrapCollapsedGroupEdges, unwrapGroupsOnly } from '@/utils/edgeUtils';
+import { isPassThroughNode, isTunnelIn, passThroughSources, type PassThroughSource } from '@/utils/passThrough';
 import { bypassMutedEdges, mutedNodeIds, passSources, type PassSource } from '@/utils/nodeMute';
 import { hasNoiseRangeFlag, isUnsignedNoise } from '@/utils/noiseRange';
 import { isUnitRange, unitWave } from '@/utils/unitRange';
@@ -175,6 +176,9 @@ interface EvalCtx {
   /** Lazy index of the wires AS DRAWN (getDrawnTargetEdges): `edgeIndex` itself
    *  when no wire touches a Branch or Portal. */
   drawnIndex: Map<string, AppEdge[]> | null;
+  /** Lazy wire id → what a wire the FOLD drops carries (getFoldedWireSource):
+   *  only wires INTO a Branch or Portal In, empty when there are none. */
+  foldedWireSource: Map<string, PassThroughSource | null> | null;
 }
 
 /**
@@ -268,6 +272,7 @@ function getCtx(nodes: AppNode[], edges: AppEdge[]): EvalCtx {
       fieldUpstream: null,
       surfaceFieldUpstream: null,
       drawnIndex: null,
+      foldedWireSource: null,
     };
     byEdges.set(edges, ctx);
     // Internal recursion (e.g. computeRange → evaluateNodeOutput) re-enters
@@ -304,6 +309,43 @@ export function getUnwrappedEdge(nodes: AppNode[], edges: AppEdge[], edgeId: str
     for (const e of ctx.edges) ctx.edgeById.set(e.id, e);
   }
   return ctx.edgeById.get(edgeId);
+}
+
+/**
+ * What a wire the FOLD drops carries — a wire INTO a Branch or Portal In, which
+ * the engines never read (the consumer past it reads the real source), yet is
+ * drawn: its source socket as the shader would read it, through any chain of
+ * pass-throughs (Branch → Branch: the first Branch's own feeder). Null for an
+ * unfed chain, a Portal In's (forged) output, or an id the fold does not drop
+ * — ask getUnwrappedEdge first. Without it such a wire looked its source up as
+ * the Branch itself: no registry entry, so one black channel and never live.
+ * Lazy, once per graph version.
+ */
+export function getFoldedWireSource(
+  nodes: AppNode[],
+  edges: AppEdge[],
+  edgeId: string,
+): PassThroughSource | null {
+  const ctx = getCtx(nodes, edges);
+  if (!ctx.foldedWireSource) {
+    const map = new Map<string, PassThroughSource | null>();
+    const drawn = unwrapGroupsOnly(nodes, edges);
+    let sources: Map<string, PassThroughSource | null> | null = null;
+    for (const e of drawn) {
+      if (!isPassThroughNode(ctx.nodeIndex.get(e.target))) continue;
+      const src = ctx.nodeIndex.get(e.source);
+      if (!isPassThroughNode(src)) {
+        map.set(e.id, { source: e.source, sourceHandle: e.sourceHandle });
+      } else if (isTunnelIn(src)) {
+        map.set(e.id, null);
+      } else {
+        sources ??= passThroughSources(nodes, drawn);
+        map.set(e.id, sources.get(e.source) ?? null);
+      }
+    }
+    ctx.foldedWireSource = map;
+  }
+  return ctx.foldedWireSource.get(edgeId) ?? null;
 }
 
 /**

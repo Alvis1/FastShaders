@@ -15,6 +15,7 @@ import type {
   BoundarySocket,
   CodeSpan,
   CodeNodeSpans,
+  TSLDataType,
 } from '@/types';
 import { getNodeValues } from '@/types';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
@@ -132,7 +133,7 @@ import {
 } from '@/utils/palettes';
 import { sanitizeEdgeExtras } from '@/utils/edgeExtras';
 import { sanitizeGraphShape } from '@/utils/graphShape';
-import { isKnot, passThroughSource, remapTunnelLinks } from '@/utils/passThrough';
+import { isKnot, isPassThroughNode, passThroughSource, remapTunnelLinks } from '@/utils/passThrough';
 import { renameCopiedEntrances } from '@/utils/portalNames';
 import { toAsciiStorageJson } from '@/utils/asciiStorage';
 import type { DesktopAutosaveRuntime } from '@/utils/desktopAutosave';
@@ -3713,6 +3714,22 @@ export const useAppStore = create<AppState>()((set, get) => ({
       return ports?.find((p) => p.id === (handleId ?? (side === 'output' ? 'out' : 'in')));
     };
 
+    /** A boundary socket's TYPE: the port's declared type — and for a wire
+     *  out of or into a Branch/Portal, which has no registry port, the type of
+     *  what it CARRIES (its resolved feeder's output port), else `any`. */
+    let groupView: AppEdge[] | null = null;
+    const carriedType = (
+      nodeId: string,
+      handleId: string | null | undefined,
+      side: 'input' | 'output',
+    ): TSLDataType => {
+      const n = nodeById.get(nodeId);
+      if (!isPassThroughNode(n)) return portDef(nodeId, handleId, side)?.dataType ?? 'any';
+      groupView ??= unwrapGroupsOnly(state.nodes, state.edges);
+      const fed = passThroughSource(state.nodes, groupView, nodeId);
+      return (fed && portDef(fed.source, fed.sourceHandle, 'output')?.dataType) || 'any';
+    };
+
     /** Look up a node's display label, used to name boundary sockets. */
     const nodeLabel = (nodeId: string): string | undefined => {
       const n = nodeById.get(nodeId);
@@ -3795,7 +3812,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
               socketId: `__out_${e.source}_${e.sourceHandle ?? 'out'}`,
               originalNodeId: e.source,
               originalHandleId: e.sourceHandle ?? 'out',
-              dataType: portDef(e.source, e.sourceHandle, 'output')?.dataType ?? 'any',
+              dataType: carriedType(e.source, e.sourceHandle, 'output'),
               name: exitLabel(e.source),
             };
             outputSocketByPin.set(pinKey, socket);
@@ -3825,7 +3842,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
               socketId: `__in_${e.target}_${e.targetHandle ?? 'in'}`,
               originalNodeId: e.target,
               originalHandleId: e.targetHandle ?? 'in',
-              dataType: port?.dataType ?? 'any',
+              dataType: carriedType(e.target, e.targetHandle, 'input'),
               name: port?.label ?? e.targetHandle ?? undefined,
             };
             inputSocketByPin.set(pinKey, socket);

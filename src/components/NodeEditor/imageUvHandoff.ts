@@ -26,7 +26,12 @@
  */
 import type { AppNode, AppEdge } from '@/types';
 import { getEdgeOutputShape, getSurfaceFieldUpstreamSet } from '@/engine/cpuEvaluator';
-import { foldPassThroughEdges } from '@/utils/passThrough';
+import {
+  foldPassThroughEdges,
+  isPassThroughNode,
+  passThroughConsumers,
+  passThroughSource,
+} from '@/utils/passThrough';
 import { wouldCreateCycle } from './dragConnect';
 
 /** The sockets a sampler reads its coordinate from. */
@@ -60,12 +65,20 @@ export function inheritedImageUv(
   // — and one that resolves to nothing displaces nothing. `edges` itself when
   // there is no pass-through, so every other graph reads exactly as before.
   const read = foldPassThroughEdges(nodeList, edgeList);
-  const displaced = read.find((e) => e.target === target && e.targetHandle === targetHandle);
+  // A wire INTO a Branch or Portal In (which the fold drops) displaces that
+  // pass-through's own feed, and the Image then reaches every socket it feeds.
+  const intoPass = isPassThroughNode(byId.get(target));
+  const displaced: Pick<AppEdge, 'source' | 'sourceHandle'> | null | undefined = intoPass
+    ? passThroughSource(nodeList, edgeList, target)
+    : read.find((e) => e.target === target && e.targetHandle === targetHandle);
   if (!displaced || displaced.source === source) return null;
+  const steered: Pick<AppEdge, 'target' | 'targetHandle'>[] = intoPass
+    ? passThroughConsumers(nodeList, edgeList, target)
+    : [{ target, targetHandle }];
 
   // Varies over the SURFACE — never a uniform-built vec2 (Sound, the camera).
   const field = getSurfaceFieldUpstreamSet(nodeList, edgeList);
-  const isCoordinate = (e: AppEdge) =>
+  const isCoordinate = (e: Pick<AppEdge, 'source' | 'sourceHandle'>) =>
     field.has(e.source) && getEdgeOutputShape(e, nodeList, edgeList) === 2;
   const coord = isCoordinate(displaced)
     ? displaced
@@ -79,10 +92,11 @@ export function inheritedImageUv(
   // Group frames carry no shader semantics; a coordinate is a real node.
   if (byId.get(coord.source)?.type === 'group') return null;
   // The coordinate must not depend on the picture it would steer — counted on
-  // the graph as it will be, with the Image already wired into the target.
+  // the graph as it will be, with the Image already wired into the target
+  // (through a pass-through: into every socket it feeds).
   const after = [
-    ...read.filter((e) => !(e.target === target && e.targetHandle === targetHandle)),
-    { source, target },
+    ...read.filter((e) => !steered.some((a) => a.target === e.target && a.targetHandle === e.targetHandle)),
+    ...steered.map((a) => ({ source, target: a.target })),
   ];
   if (wouldCreateCycle(after, coord.source, source)) return null;
   return { source: coord.source, sourceHandle: coord.sourceHandle ?? null };

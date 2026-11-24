@@ -204,16 +204,13 @@ describe('gates — only the Color socket is an image to Normal and Environment'
   });
 
   it('NodeEditor.applyConnection flips the colour space for the Color socket only', () => {
-    const s = src('../components/NodeEditor/NodeEditor.tsx');
-    expect(s).toContain("import { isImageChannelHandle } from '@/utils/imageChannels';");
-    const at = s.indexOf("if (connection.targetHandle === 'normal') {");
-    expect(at).toBeGreaterThan(0);
-    const block = s.slice(at, s.indexOf("colorSpace: 'data'", at));
+    // The decision lives in normalMapFlip.ts (behaviour: normalMapFlip.test.ts);
+    // applyConnection is its one caller.
+    expect(src('../components/NodeEditor/NodeEditor.tsx')).toContain('imageToLinearize(nodes, liveEdges, connection)');
+    const s = src('../components/NodeEditor/normalMapFlip.ts');
     // The socket the wire RESOLVES to through a Branch or Portal Out
     // (utils/passThrough.ts) — the wire's own socket when there is none.
-    expect(block).toContain(
-      "src?.data.registryType === 'imageNode' && !isImageChannelHandle(from?.sourceHandle)",
-    );
+    expect(s).toContain("src?.data.registryType !== 'imageNode' || isImageChannelHandle(from?.sourceHandle)");
   });
 
   it('graphToCode gates both the normalMap decode and the Environment texture object', () => {
@@ -292,7 +289,7 @@ describe('memo keys already fold sourceHandle (re-wiring Color → Alpha must re
     ['../components/NodeEditor/nodes/ClockNode.tsx', "${e.sourceHandle ?? ''}"],
     ['../components/NodeEditor/nodes/LiveEdgeValue.tsx', '[sourceId, sourceHandle, animated, range, compact]'],
     ['../components/NodeEditor/edges/EdgeInfoCard.tsx', '[sourceId, sourceHandle, isTimeDriven]'],
-    ['../components/NodeEditor/edges/TypedEdge.tsx', 'sourceHandle: un?.sourceHandle ?? sourceHandleId ?? null,'],
+    ['../components/NodeEditor/edges/TypedEdge.tsx', 'sourceHandle: un?.sourceHandle ?? via?.sourceHandle ?? sourceHandleId ?? null,'],
   ])('%s', (file, needle) => {
     expect(src(file)).toContain(needle);
   });

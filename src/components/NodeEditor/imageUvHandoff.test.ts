@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useAppStore } from '@/store/useAppStore';
-import { makeNode, makeEdge } from '@/test-utils';
+import { makeNode, makeEdge, makeKnot } from '@/test-utils';
 import { effectiveExposedPorts } from '@/utils/exposedPorts';
 import { connectNodes } from './edgeInsert';
 import { inheritedImageUv } from './imageUvHandoff';
@@ -48,6 +48,24 @@ describe('an Image replacing a source inherits its coordinate', () => {
     // The socket is hidden at rest: the hand-off must expose it, or the wire
     // exists in the store, steers the codegen, and never draws.
     expect(effectiveExposedPorts(imageNode() as never)).toContain('uv');
+  });
+
+  it('takes the coordinate when the Image replaces what feeds a Branch', () => {
+    // noise → Branch → Max: the wire into the Branch is folded away, so the
+    // hand-off reads the Branch's own feed.
+    useAppStore.setState({
+      nodes: [...useAppStore.getState().nodes, makeKnot('k')],
+      edges: [
+        makeEdge('u', 'out', 'd', 'a'),
+        makeEdge('g', 'out', 'd', 'b'),
+        makeEdge('d', 'out', 'n', 'pos'),
+        makeEdge('n', 'out', 'k', 'in'),
+        makeEdge('k', 'out', 'mx', 'a'),
+      ],
+    });
+    connectNodes('img', 'out', 'k', 'in');
+    expect(into('k', 'in').map((e) => e.source)).toEqual(['img']);
+    expect(into('img', 'uv').map((e) => e.source)).toEqual(['d']);
   });
 
   it('takes the wire a deleted noise left behind (Divide bridged into Max)', () => {
