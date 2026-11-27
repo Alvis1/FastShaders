@@ -2,41 +2,6 @@
 
 exports[`built-in textures and presets emit byte-identical code > presets 1`] = `
 {
-  "cavity-occlusion": "import { Fn, add, color, div, max, mix, mul, mx_noise_float, positionGeometry, sub, uniform, vec3 } from 'three/tsl';
-
-const shader = Fn(() => {
-  const cavityScale = uniform(2.2);
-  const cavityHeight = uniform(0.22);
-  const cavityAmount = uniform(1);
-  const cavityRockColor = uniform(color(0xc9b89e));
-  const positionGeometry1 = positionGeometry;
-  const mul1 = mul(cavityHeight, cavityScale);
-  const mul2 = mul(positionGeometry1, cavityScale);
-  const noise1 = mx_noise_float(mul2);
-  const mul3 = mul(mul2, 2.3);
-  const sub1 = sub(0.3, noise1);
-  const noise2 = mx_noise_float(mul3);
-  const max1 = max(sub1, 0);
-  const mul4 = mul(noise2, 0.5);
-  const sub2 = sub(0.3, noise2);
-  const mul5 = mul(max1, 2);
-  const add1 = add(noise1, mul4);
-  const max2 = max(sub2, 0);
-  const mul6 = mul(add1, cavityHeight);
-  const mul7 = mul(max2, 2.3);
-  const add2 = add(mul5, mul7);
-  const mul8 = mul(add2, mul1);
-  const mul9 = mul(mul8, mul8);
-  const add3 = add(mul9, 1);
-  const div1 = div(1, add3);
-  const mix1 = mix(1, div1, cavityAmount);
-  const mul10 = mul(cavityRockColor, mix1);
-
-  return vec3(1, 0, 0);
-});
-
-export default shader;
-",
   "checker": "import { Fn, add, color, floor, mix, mod, mul, uniform, uv, vec3 } from 'three/tsl';
 
 const shader = Fn(() => {
@@ -1627,66 +1592,6 @@ const shader = Fn(() => {
   const add1 = add(positionGeometry1, time1);
   const noise1 = mx_noise_float(add1.mul(2)).mul(0.5).add(0.5);
   const mul1 = mul(noise1, 0.2);
-
-  return vec3(1, 0, 0);
-});
-
-export default shader;
-",
-  "shoreline": "import { Fn, abs, add, color, div, max, mix, mul, mx_noise_float, positionGeometry, positionWorld, pow, sin, smoothstep, sub, time, uniform, vec3 } from 'three/tsl';
-
-const shader = Fn(() => {
-  const waterLevel = uniform(-0.15);
-  const shoreDepth = uniform(0.35);
-  const foamWidth = uniform(0.12);
-  const waveHeight = uniform(0.04);
-  const shoreSandColor = uniform(color(0xd8c29a));
-  const positionGeometry1 = positionGeometry;
-  const positionWorld1 = positionWorld;
-  const time1 = time;
-  const color1 = color(0x5fb8d0);
-  const color2 = color(0x1e6e8c);
-  const color3 = color(0xf2f8f8);
-  const sub1 = sub(waterLevel, waveHeight);
-  const mul1 = mul(positionGeometry1, 2.5);
-  const mul2 = mul(positionGeometry1, 9);
-  const mul3 = mul(positionGeometry1, 14);
-  const mul4 = mul(time1, 2.2);
-  const mul5 = mul(time1, 1.3);
-  const mul6 = mul(time1, 0.4);
-  const noise1 = mx_noise_float(mul1);
-  const sub2 = sub(sub1, positionWorld1.y);
-  const sin1 = sin(mul5);
-  const add1 = add(mul3, mul6);
-  const mul7 = mul(noise1, 0.08);
-  const add2 = add(mul2.x, mul4);
-  const sub3 = sub(mul2.z, mul4);
-  const smoothstep1 = smoothstep(0, 0.04, sub2);
-  const mul8 = mul(sin1, waveHeight);
-  const noise2 = mx_noise_float(add1);
-  const sin2 = sin(add2);
-  const sin3 = sin(sub3);
-  const add3 = add(waterLevel, mul8);
-  const mul9 = mul(noise2, 0.5);
-  const mul10 = mul(sin2, sin3);
-  const sub4 = sub(add3, positionWorld1.y);
-  const sub5 = sub(positionWorld1.y, add3);
-  const add4 = add(mul9, 0.5);
-  const mul11 = mul(mul10, 0.012);
-  const max1 = max(sub4, 0);
-  const abs1 = abs(sub4);
-  const max2 = max(sub5, 0);
-  const mix1 = mix(mul7, mul11, smoothstep1);
-  const div1 = div(max1, shoreDepth);
-  const div2 = div(abs1, foamWidth);
-  const smoothstep2 = smoothstep(0, 0.25, max2);
-  const pow1 = pow(color1, div1);
-  const add5 = add(div2, 0.12);
-  const mix2 = mix(0.55, 1, smoothstep2);
-  const smoothstep3 = smoothstep(div2, add5, add4);
-  const mul12 = mul(shoreSandColor, mix2);
-  const mix3 = mix(color2, mul12, pow1);
-  const mix4 = mix(mix3, color3, smoothstep3);
 
   return vec3(1, 0, 0);
 });

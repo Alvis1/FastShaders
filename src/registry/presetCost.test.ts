@@ -91,17 +91,9 @@ const EXPECTED: Record<string, number> = {
   'teleport-beam': 29,
   'force-field': 64,
   'stylized-water': 49,
-  // 78 — two cross products at 12 each, three dot products, a pow.
+  // 78 — the library's priciest preset (two cross products at 12 each, three
+  // dot products, a pow). Still only 39 of the cost bar's 100 on a Quest 3.
   'studio-shine': 78,
-  // 93 — two Perlins (35 each) are most of it; the occlusion itself, from the
-  // same two samples, is about a dozen ALU points.
-  'cavity-occlusion': 93,
-  // 155 — the library's priciest preset: two Perlins (shore bumps + foam), a
-  // pow for the absorption, three smoothsteps and four sines (swash, two
-  // ripple trains). The bump Perlin, the ripples and the shore/water split
-  // only feed Displacement, so on the GPU they run per VERTEX; the table
-  // prices them flat.
-  shoreline: 155,
 };
 
 describe('preset GPU cost', () => {

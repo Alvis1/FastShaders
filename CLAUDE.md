@@ -136,7 +136,7 @@ src/
   registry/
     nodeRegistry.ts    — 103 hardcoded node definitions (+ hidden unknown/dataNode)
     nodeCategories.ts  — 15 categories; optionalCategories.ts — Textures + Distance fields + Presets 2 switches
-    builtinTextures.ts (9) / builtinPresets.ts (13 recipes + the 26 of Presets 2) / builtinPalettes.ts / codeGroupBuilder.ts
+    builtinTextures.ts (9) / builtinPresets.ts (13 recipes + the 24 of Presets 2) / builtinPalettes.ts / codeGroupBuilder.ts
     colormapData.ts (GENERATED) / colormaps.ts / complexity.json (per-node GPU cost)
     citations / descriptionSplice / legacyNodeTypes / editorVisibility
     vrHeadsets.ts      — LEAF: VR_HEADSETS + deviceCostOverrides (the store re-exports both; the compare page reads them)
