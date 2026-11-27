@@ -13,18 +13,20 @@ import { buildThreeEmbedHTML } from '@/engine/tslToThreeHTML';
 import { MARCH_WINDOW_GEOMETRY } from '@/engine/tslToPreviewHTML';
 import { marchWindowRadius } from '@/utils/sdfPartition';
 import { getUnwrappedEdges } from '@/engine/cpuEvaluator';
-import { importShaderText, importShaderZip, isZipFile, reportZipImportError } from '@/engine/projectImport';
 import { detectMeshKind } from '@/utils/previewMesh';
 import { requestPreviewModelLoad } from '@/utils/previewModelDrop';
 import { evalLog } from '@/eval/telemetry';
 import { isEvalMode } from '@/eval/evalMode';
 import { requestShaderImport } from '@/utils/shaderDropRequest';
+import { IMPORT_BUTTON_TITLE, IMPORT_FILE_ACCEPT, requestFileImport } from '@/utils/fileImport';
 import { GLB_EXPORT_KEYS } from '@/utils/glbExportCopy';
 import { fillTemplate } from '@/utils/fillTemplate';
-import { parseCostFile, parseCostProfileBundle } from '@/utils/costOverride';
+import { importCostJsonText } from '@/utils/costJsonImport';
 import { getNodeValues } from '@/types';
+import { panelText } from '@/utils/codeDraft';
 import type { OutputNodeData } from '@/types';
 import { useNodeCodeHighlight } from './useNodeCodeHighlight';
+import { AiPromptDialog } from './AiPromptDialog';
 import './CodeEditor.css';
 
 /** The tab label's note for a graph with import-built index sections: the
@@ -82,7 +84,13 @@ const READONLY_EDITOR_OPTIONS = { ...BASE_EDITOR_OPTIONS, readOnly: true };
 const CODE_SETTLE_MS = 200;
 
 export function CodeEditor() {
-  const code = useAppStore((s) => s.code);
+  // What the panel SHOWS: the text an Apply kept because part of it did not
+  // reach the graph (utils/codeDraft.ts), else the graph's own code.
+  const code = useAppStore(panelText);
+  // While a text is kept, the module the embed tabs read is the store's `code`
+  // (the graph's), never the panel's text. It holds still for as long as the
+  // hold does, so it needs no settling; null (and stable) otherwise.
+  const heldModuleCode = useAppStore((s) => (s.codeDraft ? s.code : null));
   const language = useAppStore((s) => s.language);
   const codeErrors = useAppStore((s) => s.codeErrors);
   const setCode = useAppStore((s) => s.setCode);
@@ -286,7 +294,7 @@ export function CodeEditor() {
     if (activeTab !== 'script' && activeTab !== 'three') return '';
     try {
       return tslToShaderModule(
-        settledCode,
+        heldModuleCode ?? settledCode,
         materialSettings,
         properties,
         materialPartsMirror,
@@ -297,7 +305,7 @@ export function CodeEditor() {
     // settledCode, not `code`: this tab is a read-only snapshot, so it can wait
     // out a scrub (CODE_SETTLE_MS) instead of rebuilding the whole module per
     // pointermove.
-  }, [settledCode, activeTab, materialSettings, properties, materialPartsMirror]);
+  }, [settledCode, heldModuleCode, activeTab, materialSettings, properties, materialPartsMirror]);
 
   // ── The A-Frame tab: a copy-ready index.html, and nothing else ──────────
   //
@@ -402,121 +410,53 @@ export function CodeEditor() {
   const isTSL = activeTab === 'tsl';
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // The "?" before the TSL tab: the prompt for another AI (AiPromptDialog).
+  const [aiPromptOpen, setAiPromptOpen] = useState(false);
+  const closeAiPrompt = useCallback(() => setAiPromptOpen(false), []);
 
   const handleLoadScript = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
 
-  // Project/script import logic is shared with the canvas drop —
-  // see src/engine/projectImport.ts. This wrapper only adds the tab switch.
-  //
-  // `fromDrop` is what tells the two callers apart, and the difference is the
-  // whole point: a file DROPPED here asks Open or Add (the dialog), while
-  // "Load Script…" is already an explicit instruction to open one and must not
-  // grow a question in front of it.
-  const importScriptFile = useCallback((file: File, opts?: { fromDrop?: boolean }) => {
+  // A file DROPPED on the code panel. Project/script import logic is shared
+  // with the canvas drop (src/engine/projectImport.ts); a dropped shader asks
+  // Open or Add (the dialog). The Import BUTTON is not this path: it opens
+  // every kind of file through the canvas's router (utils/fileImport.ts), and
+  // a picked file is already an instruction to open it, so it never asks.
+  const importScriptFile = useCallback((file: File) => {
     // A 3D model is not a script: hand it to the 3D preview's own model path
     // (utils/previewModelDrop.ts), exactly as the canvas does, so every surface
     // validates and announces a model the same way. Before anything else here,
-    // since the plain-text fallback below would read a .glb as a shader.
+    // since the shader path below would read a .glb as a script.
     if (detectMeshKind(file.name) !== null) {
       requestPreviewModelLoad(file);
       return;
     }
     // A benchmark complexity patch / suggestion .json reprices node costs (adds
     // a measured device profile) — it is NOT a shader script, so handle it
-    // before the script/zip import path. Adversarial: parseCostFile validates.
+    // before the shader path. Adversarial: the cost parsers validate.
     if (/\.json$/i.test(file.name)) {
       file.text()
         .then((text) => {
-          // An exported PROFILE BUNDLE first — the CostBar's own "Export
-          // profiles… → all" file. It has no top-level `costs`, so the single
-          // parser reads it as junk and this surface would reject a file the
-          // app wrote seconds earlier (while accepting its single-profile
-          // sibling, which is the confusing half of the asymmetry).
-          const bundle = parseCostProfileBundle(text, file.name);
-          if (bundle) {
-            const bad = bundle.filter((p) => p.meta.valid === false);
-            let list = bundle;
-            if (bad.length && !window.confirm(
-              `${t('This file contains {n} benchmark runs flagged invalid:', language).replace('{n}', String(bad.length))}\n\n` +
-              `${bad.map((p) => `• ${p.self?.label ?? p.meta.device ?? '?'}: ${p.meta.reasons.join('; ')}`).join('\n')}\n\n` +
-              t('Add them as device profiles anyway? Cancel imports only the valid ones.', language),
-            )) {
-              list = bundle.filter((p) => p.meta.valid !== false);
-            }
-            if (list.length) useAppStore.getState().importCostProfiles(list, { select: 'current' });
-            return;
-          }
-          const parsed = parseCostFile(text, file.name);
-          if (!parsed) {
+          if (!importCostJsonText(text, file.name, language)) {
             window.alert(t('That JSON is not a recognizable complexity patch or bench suggestion.', language));
-            return;
           }
-          if (
-            parsed.meta.valid === false &&
-            !window.confirm(
-              `${t('This benchmark run was flagged invalid:', language)}\n\n` +
-              `${parsed.meta.reasons.join('\n')}\n\n` +
-              t('Add it as a device profile anyway?', language),
-            )
-          ) return;
-          useAppStore.getState().importCostProfile(parsed);
         })
         .catch(() => window.alert(t('Could not read that file.', language)));
       return;
     }
     // The dropped-shader dialog owns the import and every message about it
     // from here; the tab still switches, but only once something landed.
-    // "Load Script…" (not a drop) is already an explicit open: the path below.
-    if (opts?.fromDrop) {
-      requestShaderImport(file, 'dom', (outcome) => { if (outcome === 'imported') setActiveTab('tsl'); });
-      return;
-    }
-    if (isZipFile(file)) {
-      importShaderZip(file)
-        .then((result) => {
-          if (result === null) {
-            window.alert(
-              t('{name} does not contain a shader script (.js / .mjs / .tsl).', language)
-                .replace('{name}', () => `“${file.name}”`),
-            );
-            return;
-          }
-          setActiveTab('tsl');
-        })
-        .catch((e) => {
-          // A zip the reader refused says why (shared mapping, all surfaces).
-          if (reportZipImportError(e, file.name)) return;
-          // Imported files are adversarial input — a crash inside the import
-          // must surface, not silently no-op the Load.
-          window.alert(
-            t('Could not import {name} — the file appears corrupted.', language)
-              .replace('{name}', () => `“${file.name}”`),
-          );
-        });
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        importShaderText(String(reader.result ?? ''));
-        setActiveTab('tsl');
-      } catch {
-        window.alert(
-          t('Could not import {name} — the file appears corrupted.', language)
-            .replace('{name}', () => `“${file.name}”`),
-        );
-      }
-    };
-    reader.readAsText(file);
+    requestShaderImport(file, 'dom', (outcome) => { if (outcome === 'imported') setActiveTab('tsl'); });
   }, [language]);
 
+  // Import: every picked file goes to the canvas's router, the one the
+  // canvas's own Import button uses.
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) importScriptFile(file);
+    const files = Array.from(e.target.files ?? []);
     e.target.value = '';
-  }, [importScriptFile]);
+    requestFileImport(files);
+  }, []);
 
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const dragDepthRef = useRef(0);
@@ -558,7 +498,7 @@ export function CodeEditor() {
       );
       return;
     }
-    importScriptFile(file, { fromDrop: true });
+    importScriptFile(file);
   }, [importScriptFile, language]);
 
   return (
@@ -572,7 +512,8 @@ export function CodeEditor() {
       <input
         ref={fileInputRef}
         type="file"
-        accept=".js,.mjs,.tsl,.zip,.json"
+        multiple
+        accept={IMPORT_FILE_ACCEPT}
         style={{ display: 'none' }}
         onChange={handleFileChange}
       />
@@ -586,14 +527,36 @@ export function CodeEditor() {
       )}
       <div className="code-editor__tabbar">
         <div className="code-editor__tabs">
+          {/* The "?" leads the row, just before the TSL tab (owner,
+              2026-11-26), on every tab so the row never shifts. No frame, and
+              never in a study session: a written request to an outside AI is
+              the same help the generator is gated off for there
+              (docs/dev/eval-mode.md). */}
+          {!isEvalMode() && (
+            <button
+              type="button"
+              className="code-editor__help"
+              onClick={() => setAiPromptOpen(true)}
+              title={t('Write TSL with another AI', language)}
+              aria-label={t('Write TSL with another AI', language)}
+              aria-haspopup="dialog"
+            >
+              ?
+            </button>
+          )}
+          {/* `data-label`: each tab reserves its bold width (CodeEditor.css). */}
           <button
+            type="button"
             className={`code-editor__tab ${activeTab === 'tsl' ? 'code-editor__tab--active' : ''}`}
+            data-label="TSL"
             onClick={() => setActiveTab('tsl')}
           >
             TSL
           </button>
           <button
+            type="button"
             className={`code-editor__tab ${activeTab === 'script' ? 'code-editor__tab--active' : ''}`}
+            data-label="A-Frame"
             onClick={() => {
               setActiveTab('script');
               setEmbedStamp((n) => n + 1);
@@ -602,7 +565,9 @@ export function CodeEditor() {
             A-Frame
           </button>
           <button
+            type="button"
             className={`code-editor__tab ${activeTab === 'three' ? 'code-editor__tab--active' : ''}`}
+            data-label="Three.js"
             onClick={() => {
               setActiveTab('three');
               setEmbedStamp((n) => n + 1);
@@ -638,7 +603,7 @@ export function CodeEditor() {
             </button>
           )}
           {isTSL && (
-            <button className="code-editor__btn code-editor__btn--accent" onClick={handleLoadScript} title={t('Import a shaderloader .js file into the editor', language)}>
+            <button className="code-editor__btn code-editor__btn--accent" onClick={handleLoadScript} title={t(IMPORT_BUTTON_TITLE, language)}>
               {t('Import', language)}
             </button>
           )}
@@ -715,7 +680,18 @@ export function CodeEditor() {
             {errors.length > 0 ? (
               <div className="code-editor__error-hint">{t('Fix the errors above, then press Apply to update the node view.', language)}</div>
             ) : (
-              <div className="code-editor__error-hint">{t('Unknown functions are preserved as-is in the graph.', language)}</div>
+              <>
+                {/* Only an unknown function is KEPT (ParseError.kept); every
+                    other warning quotes code that never reached the graph —
+                    dropped code, owner 2026-11-26. Shown in a study session
+                    too, by owner decision. */}
+                {warnings.some((w) => w.kept) && (
+                  <div className="code-editor__error-hint">{t('Unknown functions are preserved as-is in the graph.', language)}</div>
+                )}
+                {warnings.some((w) => !w.kept) && (
+                  <div className="code-editor__error-hint">{t('The code these lines quote did not reach the graph. Write it the way they say and press Apply again.', language)}</div>
+                )}
+              </>
             )}
           </div>
         );
@@ -768,6 +744,7 @@ export function CodeEditor() {
           </div>
         )}
       </div>
+      {aiPromptOpen && <AiPromptDialog onClose={closeAiPrompt} />}
     </div>
   );
 }

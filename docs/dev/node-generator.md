@@ -176,6 +176,23 @@ Examples (`examples.ts`) are built-ins chosen by shared words, with names weight
 
 Repair rounds (`orchestrate.ts`, at most three) are STATELESS: the request, the rejected program and its problem lines go in a fresh prompt. Prefix-cache reuse is unreliable on the local models measured, and a growing conversation overflows small windows. The system prompt is byte-identical every round, which is also what lets the Claude route re-read it from the prompt cache. The run refuses in a study session.
 
+## A prompt for ANOTHER AI: the code panel's "?"
+
+The code panel's frameless "?" (owner, 2026-11-26) opens `components/CodeEditor/AiPromptDialog.tsx`. It LEADS the tab row, just before the TSL tab (owner, the same day; it first sat beside Import), on every tab so the row never shifts. The dialog shows a text to copy into any AI chat (ChatGPT, Claude, Gemini…). The user adds what the shader should look like, pastes the reply into the TSL panel and presses Apply. Nothing is sent anywhere by the app.
+
+- **What reads the reply is `codeToGraph`, never the gate.** So the text (`llm/externalPrompt.ts`) asks for what the code panel's parser turns into nodes, and the whole reply can be pasted: Apply reads the code out of its fence (docs/dev/codegen.md, "The forms a pasted AI reply uses are read").
+- **SHORT on purpose** (owner, 2026-11-26: "can it be made shorter?"). It is a text a person pastes into a chat box, read by a large chat model that already knows three.js: 3,772 characters and 50 lines with the default categories, from 8,599 and 124. `externalPrompt.test.ts` holds it under 4,000 and under 0.6 of the generator's own rules and list. Three cuts made it:
+  - **Its own four rules, not the generator's eight.** The first cut shared the generator's `STYLE_RULES` word for word. That wording was measured on small local models, where every rule pays for itself; it stays in `llm/prompt.ts`, one `RULES` text again, untouched. A chat model needs only the rules the parser cannot back up.
+  - **Bare signatures for three.js's own functions.** `smoothstep(edge0, edge1, x)` needs no gloss. Only the functions `three/tsl` does NOT export — the app's module helpers, five today (`fsFresnel`, `heightToNormal`, `hsl`, `toHsl`, `brightContrast`) — keep the one sentence the generator's list gives them, and the Perlin family says "(-1 to 1)".
+  - **No template.** The example carries the shape.
+- **Every rule is a form the parser really drops or misreads**, and the test runs each one against it: an operator, a branch and a helper function are dropped; a method call is read argument by argument, which for `mix` and `smoothstep` is not what three.js computes; a swizzle of several letters leaves its const unwired, and an inline call is dropped where names are read (an Append-shaped vector); a uniform of anything but a number or a hex colour loses its value; a bare number in a channel is dropped. What the parser now READS is no longer a rule: a one-value vector, `color(r, g, b)`, `PI`, a comment, three's `colorNode` key.
+- **The channels** are `EXTERNAL_CHANNELS`, held to the Output's sockets by the test: every one but Environment, which takes a picture pasted code cannot carry. A fixed value there is `float(…)` or `color(0x…)`; the example stores `roughness: float(0.3)`.
+- **The node list is the catalogue** under the user's own optional-category switches, the same ADD SURFACE as above, so it never names a function the parser cannot read back. The ONE example is parsed by the test: no error, one node per const, the colour wired, the roughness stored.
+- **English on purpose.** The code is English, and a Latvian UI adds one line saying the request can be written in Latvian.
+- **Loaded with `import()` when the dialog opens.** Neither the dialog nor CodeEditor imports `src/llm/` statically.
+- **Never in a study session, and it logs nothing.** It is the generator's help by another route, so the generator's study decision covers it (docs/dev/eval-mode.md). The embed has no code panel.
+- **Not built, offered to the owner (2026-11-26):** reading operators and plain numbers directly instead of warning (the parser would take `a * b` as `mul(a, b)`; it changes what Apply accepts in every session, so it is the owner's call); a "copy the warnings for the AI" button that closes the repair loop; an "include my current shader" tick for follow-up requests.
+
 ## The local route
 
 `providers/local.ts` speaks the OpenAI-compatible chat API over any `LocalTransport`:

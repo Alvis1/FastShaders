@@ -81,6 +81,11 @@ function Chevron({ up }: { up: boolean }) {
 interface Props {
   open: boolean;
   onClose: () => void;
+  /** Palette files picked with an Import button (utils/paletteImportRequest.ts),
+   *  read here exactly as this dialog's own "Open file" reads one. */
+  importFiles?: readonly File[];
+  /** Called once the dialog has taken `importFiles`, so each is read once. */
+  onImportFilesTaken?: () => void;
 }
 
 /**
@@ -120,7 +125,7 @@ interface Props {
  * while the OS picker is dragged). `flushDrafts` commits whatever is open when
  * the dialog closes by a route that skips blur.
  */
-export function PalettesModal({ open, onClose }: Props) {
+export function PalettesModal({ open, onClose, importFiles, onImportFilesTaken }: Props) {
   const language = useAppStore((s) => s.language);
   const palettes = useAppStore((s) => s.shaderPalettes);
   const shaderName = useAppStore((s) => s.shaderName);
@@ -360,6 +365,17 @@ export function PalettesModal({ open, onClose }: Props) {
     },
     [applyParsed, language, refuse],
   );
+
+  // Files an Import button picked: taken once, then read in turn through the
+  // same gate and parser as "Open file" (the report shows the last one).
+  useEffect(() => {
+    if (!open || !importFiles || importFiles.length === 0) return;
+    const files = importFiles;
+    onImportFilesTaken?.();
+    void (async () => {
+      for (const f of files) await handleFile(f);
+    })();
+  }, [open, importFiles, onImportFilesTaken, handleFile]);
 
   /**
    * The second import path, kept as a REAL FIELD rather than a document-level

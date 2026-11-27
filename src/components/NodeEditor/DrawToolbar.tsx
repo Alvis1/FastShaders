@@ -3,6 +3,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { OPACITY_STEP } from '@/utils/drawings';
 import { t, type Language } from '@/i18n';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
+import { SettingButton } from '@/components/inputs/SettingButton';
 
 /**
  * Draw-mode control cluster, rendered inside NodeEditor's bottom-center
@@ -70,6 +71,16 @@ export const DrawToolbar = memo(function DrawToolbar() {
   );
 });
 
+type DrawTool = 'off' | 'pencil' | 'eraser' | 'cut';
+
+/** The draw tools, in the list's order. */
+const DRAW_TOOLS: readonly { value: DrawTool; label: string }[] = [
+  { value: 'off', label: 'Off' },
+  { value: 'pencil', label: 'Pencil' },
+  { value: 'eraser', label: 'Eraser' },
+  { value: 'cut', label: 'Scissors' },
+];
+
 /**
  * The cluster as drawn: the pencil toggle and, while active, the floating box
  * of ink settings. DrawToolbar owns the store; the intro window's stage draws
@@ -99,19 +110,42 @@ export function DrawToolbarView({
   inert?: boolean;
 }) {
   const tab = inert ? -1 : undefined;
+  // Pencil, eraser and scissors are ONE choice in the store, so the three
+  // buttons share one list (owner, 2026-11-26: every setting button lists its
+  // options on a right-click): off, or the tool in hand.
+  const tool: DrawTool = !active ? 'off' : eraser ? 'eraser' : cut ? 'cut' : 'pencil';
+  const pickTool = (to: DrawTool) => {
+    if (to === 'off') return onActive(false);
+    onActive(true);
+    if (to === 'eraser') onEraser(true);
+    else if (to === 'cut') onCut(true);
+    else {
+      onEraser(false);
+      onCut(false);
+    }
+  };
+  const toolMenu = {
+    options: DRAW_TOOLS.map((o) => ({ value: o.value, label: t(o.label, language) })),
+    value: tool,
+    onSelect: pickTool,
+    menuLabel: t('Drawing', language),
+    inert,
+    // The canvas bar sits just above the asset bar, which is drawn on top.
+    placement: 'above' as const,
+  };
+  const more = t('Right-click: all options.', language);
   return (
     <>
-      <button
-        type="button"
-        tabIndex={tab}
+      <SettingButton
+        {...toolMenu}
         className={`fs-draw-btn fs-draw-btn--icon${active ? ' is-active' : ''}`}
         aria-pressed={active}
         aria-label={t('Draw', language)}
-        title={active ? t('Exit draw mode (Esc)', language) : t('Draw on the board', language)}
+        title={`${active ? t('Exit draw mode (Esc)', language) : t('Draw on the board', language)}. ${more}`}
         onClick={() => onActive(!active)}
       >
         <span aria-hidden="true">✏️</span>
-      </button>
+      </SettingButton>
 
       {active && (
         <div className="fs-draw-controls" role="group" aria-label={t('Draw settings', language)}>
@@ -145,29 +179,27 @@ export function DrawToolbarView({
             <b>{width}</b>
           </label>
 
-          <button
-            type="button"
-            tabIndex={tab}
+          <SettingButton
+            {...toolMenu}
             className={`fs-draw-btn fs-draw-btn--sm${eraser ? ' is-active' : ''}`}
             aria-pressed={eraser}
-            title={t('Eraser — drag over strokes to remove them', language)}
+            title={`${t('Eraser — drag over strokes to remove them', language)}. ${more}`}
             onClick={() => onEraser(!eraser)}
           >
             <span aria-hidden="true">🩹</span> {t('Erase', language)}
-          </button>
+          </SettingButton>
 
           {/* The cut stroke for touch and the laser, which have no Alt key:
               a drag cuts every wire it crosses (NodeEditor, useCutStroke). */}
-          <button
-            type="button"
-            tabIndex={tab}
+          <SettingButton
+            {...toolMenu}
             className={`fs-draw-btn fs-draw-btn--sm${cut ? ' is-active' : ''}`}
             aria-pressed={cut}
-            title={t('Scissors — drag across wires to cut them. With a mouse: Alt/⌥ + drag on the canvas', language)}
+            title={`${t('Scissors — drag across wires to cut them. With a mouse: Alt/⌥ + drag on the canvas', language)}. ${more}`}
             onClick={() => onCut(!cut)}
           >
             <span aria-hidden="true">✂️</span> {t('Scissors', language)}
-          </button>
+          </SettingButton>
 
           <button
             type="button"

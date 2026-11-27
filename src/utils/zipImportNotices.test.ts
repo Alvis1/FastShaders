@@ -138,7 +138,6 @@ describe('every string this package added is translated', () => {
     '{name} does not contain a shader script (.js / .mjs / .tsl).',
     'Could not import {name}: {reason}',
     'Loaded {name}. {n} other dropped file(s) were ignored — drop a project on its own.',
-    'Could not import {name} — the file appears corrupted.',
     '{name} is not a shader script (.js / .mjs / .tsl), a FastShaders .zip, a 3D model (.obj / .glb / .gltf), a Gaussian splat (.splat / .spz / .ply / .ksplat), or a benchmark complexity .json.',
     'Could not load {name}:\n{error}',
     'Could not read {name}.',
@@ -164,14 +163,17 @@ describe('every import surface says why a zip was refused', () => {
   const STORE = read('store/useAppStore.ts');
 
   it('routes its catch through reportZipImportError first', () => {
+    // The code panel opens no zip itself any more: its drop goes through the
+    // Open/Add dialog and its Import through the canvas's router.
     for (const [name, src] of [
       ['NodeEditor', NODE_EDITOR],
-      ['CodeEditor', CODE_EDITOR],
       ['ShaderImportModal', SHADER_DIALOG],
       ['WorkFolder', WORK_FOLDER],
     ] as const) {
       expect(src, name).toContain('reportZipImportError(');
     }
+    expect(CODE_EDITOR).not.toContain('importShaderZip(');
+    expect(CODE_EDITOR).toContain('requestFileImport(files);');
     expect(read('components/Modals/limitNoticeCopy.ts')).toContain("case 'zip-limit'");
   });
 

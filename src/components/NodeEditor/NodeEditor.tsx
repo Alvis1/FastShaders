@@ -169,10 +169,13 @@ import {
 } from '@/utils/imageImportNote';
 import { encodeImageFile, isImageFile, isSvgFile, type ImageConvertMode } from '@/utils/imageImport';
 import { PLACE_PICTURES_EVENT, type PlacePicturesDetail } from '@/utils/picturePlaceRequest';
-import { GRAPH_MERGED_EVENT, isZipFile, openDroppedShader, reportZipImportError } from '@/engine/projectImport';
-import { detectMeshKind } from '@/utils/previewMesh';
+import { GRAPH_MERGED_EVENT, openDroppedShader, reportZipImportError } from '@/engine/projectImport';
 import { requestPreviewModelLoad } from '@/utils/previewModelDrop';
 import { requestShaderImport } from '@/utils/shaderDropRequest';
+import { IMPORT_BUTTON_TITLE, IMPORT_FILE_ACCEPT, IMPORT_FILES_EVENT, importFileKind, importFilesOf } from '@/utils/fileImport';
+import { importCostJsonText } from '@/utils/costJsonImport';
+import { looksLikePaletteFile } from '@/utils/palettes';
+import { requestPaletteImport } from '@/utils/paletteImportRequest';
 import type { AppNode, AppEdge, ShaderNodeData, OutputNodeData, NodeDefinition } from '@/types';
 import { getNodeValues } from '@/types';
 import { t } from '@/i18n';
@@ -870,31 +873,8 @@ export function NodeEditor() {
   // NEW button → save-first confirmation. Local state like the toolbar's
   // feedback dialog: nothing outside this component opens it.
   const [newShaderOpen, setNewShaderOpen] = useState(false);
+  // The Import button's picker; what it picked goes to `importPickedFiles`.
   const importInputRef = useRef<HTMLInputElement>(null);
-  const onImportFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    openDroppedShader(file)
-      .then((result) => {
-        if (result === null) {
-          window.alert(
-            t('{name} does not contain a shader script (.js / .mjs / .tsl).', language)
-              .replace('{name}', () => `“${file.name}”`),
-          );
-        }
-      })
-      .catch((err) => {
-        // Imported files are adversarial input — a failure must surface.
-        if (reportZipImportError(err, file.name)) return;
-        window.alert(
-          fillTemplate(t('Could not import {name}: {reason}', language), {
-            name: `“${file.name}”`,
-            reason: err instanceof Error ? err.message : String(err),
-          }),
-        );
-      });
-  }, [language]);
   // The export pre-flight's dialog (N1) for NEW's save-first download.
   const { ask: askExportPreflight, glb: glbExportUi, modal: exportPreflightModal } = useExportPreflight();
   // In-flight image imports, one ghost per file at its drop point (see
@@ -3223,19 +3203,190 @@ export function NodeEditor() {
     return () => window.removeEventListener(PLACE_PICTURES_EVENT, onPlace);
   }, [placePictureFiles, flowToScreenPosition]);
 
+  /**
+   * Bring OS files into the document: a DROP on the canvas (at the pointer) or
+   * a PICK from either Import button (at the middle of the view;
+   * utils/fileImport.ts). ONE partition and one set of rules, so a dropped and
+   * a picked file always land the same way — each `.csv` becomes a Data node,
+   * each picture an Image node, and a 3D model is not placed on the canvas at
+   * all but handed to the 3D preview's own model path
+   * (utils/previewModelDrop.ts). A pick also takes palettes and device
+   * profiles, and says which files it cannot open; a drop ignores those.
+   */
+  const importFiles = useCallback(
+    (list: File[], clientX: number, clientY: number, how: 'drop' | 'pick') => {
+      const lang = useAppStore.getState().language;
+      const csvs: File[] = [];
+      const images: File[] = [];
+      const models: File[] = [];
+      // A `.zip` export or a shader script (.js/.mjs/.tsl) is a *project* —
+      // importing it REPLACES the whole graph, so it can't be combined with
+      // the loose data-file appends below (they would race the replace and
+      // be lost).
+      const projects: File[] = [];
+      // The pick's own kinds: palettes, .json (a device profile or a palette)
+      // and what nothing here reads. The embed has no 3D view and no Palettes
+      // dialog, so a picked model or palette is one it cannot open there.
+      const palettes: File[] = [];
+      const jsons: File[] = [];
+      const others: File[] = [];
+      const embedded = isEmbedMode();
+      // Partitioned ONCE and mutually exclusively (utils/fileImport.ts: the csv
+      // test wins, a model is tested before a picture), so a mixed batch
+      // places everything and no file can match twice.
+      for (const f of list) {
+        const kind = importFileKind(f);
+        if (kind === 'csv') csvs.push(f);
+        else if (kind === 'shader') projects.push(f);
+        else if (kind === 'model') (how === 'pick' && embedded ? others : models).push(f);
+        else if (kind === 'picture') images.push(f);
+        else if (how === 'drop') continue;
+        else if (kind === 'palette') (embedded ? others : palettes).push(f);
+        else if (kind === 'json') jsons.push(f);
+        else others.push(f);
+      }
+      if (others.length > 0) {
+        window.alert(
+          fillTemplate(t('FastShaders cannot open {names} here.', lang), {
+            names: others.map((f) => `“${f.name}”`).join(', '),
+          }),
+        );
+      }
+
+      // Project import wins and is exclusive: load exactly one and ignore
+      // everything else (with a notice) rather than clobbering the imported
+      // graph with appended data nodes — or losing one project to another.
+      if (projects.length > 0) {
+        const proj = projects[0];
+        const ignored = projects.length - 1 + csvs.length + images.length + palettes.length + jsons.length;
+        // Everything this import still owes once the shader half has settled:
+        // the 3D model that came with it (PAIRED, so the preview never offers
+        // to build a shader from it) and the "other files ignored" notice,
+        // which may only follow an import that actually landed.
+        const finishDrop = (ok: boolean) => {
+          if (models.length > 0) requestPreviewModelLoad(models[0], { pairedWithShader: true });
+          if (ok && ignored > 0) {
+            window.alert(
+              fillTemplate(
+                t(
+                  how === 'drop'
+                    ? 'Loaded {name}. {n} other dropped file(s) were ignored — drop a project on its own.'
+                    : 'Loaded {name}. {n} other file(s) were ignored — open a shader on its own.',
+                  lang,
+                ),
+                { name: `“${proj.name}”`, n: ignored },
+              ),
+            );
+          }
+        };
+        if (how === 'pick') {
+          // A PICKED shader is already an instruction to open it: no Open or
+          // Add question (that belongs to a drop).
+          openDroppedShader(proj)
+            .then((result) => {
+              if (result === null) {
+                window.alert(
+                  t('{name} does not contain a shader script (.js / .mjs / .tsl).', lang)
+                    .replace('{name}', () => `“${proj.name}”`),
+                );
+              }
+              finishDrop(result !== null);
+            })
+            .catch((err) => {
+              // Imported files are adversarial input — a failure must surface.
+              if (reportZipImportError(err, proj.name)) return;
+              window.alert(
+                fillTemplate(t('Could not import {name}: {reason}', lang), {
+                  name: `“${proj.name}”`,
+                  reason: err instanceof Error ? err.message : String(err),
+                }),
+              );
+            });
+          return;
+        }
+        // A dropped shader ASKS first — Open or Add (utils/shaderDropRequest.ts).
+        // The dialog owns the import and every message about it from here, and
+        // calls back when it settles so the rest of the drop can follow; a
+        // CANCELLED drop is dropped whole, model included.
+        requestShaderImport(proj, 'dom', (outcome) => {
+          if (outcome !== 'cancelled') finishDrop(outcome === 'imported');
+        });
+        return;
+      }
+
+      // No project file: csv + image appends don't conflict (each addNode is a
+      // functional update). Shared cascade so multi-file drops don't overlap.
+      const STEP = 34;
+      let slot = 0;
+      // As on the preview, only the first model is used.
+      if (models.length > 0) requestPreviewModelLoad(models[0]);
+      // Pictures in the same drop are stored for THIS model, not the one on
+      // screen: the preview shows it only after its own read — a textured GLB
+      // only after its dialog — long after they are encoded.
+      const droppedModelOrientation =
+        models.length > 0 && images.length > 0 ? droppedModelPictureOrientation(models[0]) : null;
+      for (const csv of csvs) {
+        const off = STEP * slot++;
+        placeCsvFile(csv, clientX + off, clientY + off);
+      }
+      placePictureFiles(images, clientX + STEP * slot, clientY + STEP * slot, droppedModelOrientation);
+      slot += images.length;
+      // A palette opens the Palettes dialog, which reads it as its own "Open
+      // file" does; a .json is a device profile or, failing that, a palette.
+      for (const p of palettes) requestPaletteImport(p);
+      for (const j of jsons) {
+        j.text()
+          .then((text) => {
+            if (importCostJsonText(text, j.name, lang)) return;
+            if (!embedded && looksLikePaletteFile(text)) {
+              requestPaletteImport(j);
+              return;
+            }
+            window.alert(
+              fillTemplate(t('{name} is neither a device profile nor a FastShaders palette.', lang), { name: `“${j.name}”` }),
+            );
+          })
+          .catch(() => window.alert(t('Could not read {name}.', lang).replace('{name}', () => `“${j.name}”`)));
+      }
+    },
+    [placeCsvFile, placePictureFiles],
+  );
+
+  // An Import button's pick, at the middle of the view: the canvas's own
+  // button, and the code panel's through IMPORT_FILES_EVENT.
+  const importPickedFiles = useCallback(
+    (picked: File[]) => {
+      if (picked.length === 0) return;
+      const rect = canvasRef.current?.getBoundingClientRect();
+      const x = rect ? rect.left + rect.width / 2 : window.innerWidth / 2;
+      const y = rect ? rect.top + rect.height / 2 : window.innerHeight / 2;
+      importFiles(picked, x, y, 'pick');
+    },
+    [importFiles],
+  );
+  const onImportFileChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const picked = Array.from(e.target.files ?? []);
+      e.target.value = '';
+      importPickedFiles(picked);
+    },
+    [importPickedFiles],
+  );
+  useEffect(() => {
+    const onImport = (e: Event) => importPickedFiles(importFilesOf(e));
+    window.addEventListener(IMPORT_FILES_EVENT, onImport);
+    return () => window.removeEventListener(IMPORT_FILES_EVENT, onImport);
+  }, [importPickedFiles]);
+
   const onDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault();
       clearEdgeHighlight();
 
-      // OS file drop (a real file from disk) — each `.csv` becomes a Data
-      // node, each image an Image node, and a 3D model (.obj/.glb/.gltf) is
-      // not placed on the canvas at all but handed to the 3D preview's own
-      // model path (utils/previewModelDrop.ts). Checked first because
+      // OS file drop (a real file from disk), through the one path a picked
+      // file takes too (`importFiles`). Checked first because
       // dataTransfer.files is only populated for genuine file drops, never
-      // for the app's internal tile drags. Partitioned ONCE and mutually
-      // exclusively (csv test wins) so a mixed drop places everything and no
-      // file can match twice.
+      // for the app's internal tile drags.
       const files = event.dataTransfer.files;
       if (files && files.length > 0) {
         // A drop carrying OS files is never a tile drag — any live tile
@@ -3254,73 +3405,7 @@ export function NodeEditor() {
           window.alert(t('Drop a benchmark complexity.json on the cost bar (top-right) or the code panel to reprice nodes.', lang));
           return;
         }
-
-        const csvs: File[] = [];
-        const images: File[] = [];
-        const models: File[] = [];
-        // A `.zip` export or a shader script (.js/.mjs/.tsl) is a *project* —
-        // importing it REPLACES the whole graph, so it can't be combined with
-        // the loose data-file appends below (they would race the replace and
-        // be lost).
-        const projects: File[] = [];
-        for (const f of Array.from(files)) {
-          const lower = f.name.toLowerCase();
-          if (lower.endsWith('.csv') || f.type === 'text/csv') csvs.push(f);
-          else if (isZipFile(f) || /\.(js|mjs|tsl)$/.test(lower)) projects.push(f);
-          // Before images: a model is never an image, but test the specific
-          // rule first so a MIME-typed oddity cannot be mistaken for one.
-          else if (detectMeshKind(f.name) !== null) models.push(f);
-          else if (isImageFile(f)) images.push(f);
-        }
-
-        // Project import wins and is exclusive: load exactly one and ignore
-        // everything else (with a notice) rather than clobbering the imported
-        // graph with appended data nodes — or losing one project to another.
-        if (projects.length > 0) {
-          const proj = projects[0];
-          const ignored = projects.length - 1 + csvs.length + images.length;
-          // Everything this drop still owes once the shader half has settled:
-          // the 3D model that came with it (PAIRED, so the preview never
-          // offers to build a shader from it) and the "other files ignored"
-          // notice, which may only follow an import that actually landed.
-          const finishDrop = (ok: boolean) => {
-            if (models.length > 0) requestPreviewModelLoad(models[0], { pairedWithShader: true });
-            if (ok && ignored > 0) {
-              window.alert(
-                fillTemplate(t('Loaded {name}. {n} other dropped file(s) were ignored — drop a project on its own.', lang), {
-                  name: `“${proj.name}”`,
-                  n: ignored,
-                }),
-              );
-            }
-          };
-          // A dropped shader ASKS first — Open or Add (utils/shaderDropRequest.ts).
-          // The dialog owns the import and every message about it from here, and
-          // calls back when it settles so the rest of the drop can follow; a
-          // CANCELLED drop is dropped whole, model included.
-          requestShaderImport(proj, 'dom', (outcome) => {
-            if (outcome !== 'cancelled') finishDrop(outcome === 'imported');
-          });
-          return;
-        }
-
-        // No project file: csv + image appends don't conflict (each addNode is a
-        // functional update). Shared cascade so multi-file drops don't overlap.
-        const STEP = 34;
-        let slot = 0;
-        // As on the preview, only the first model is used.
-        if (models.length > 0) requestPreviewModelLoad(models[0]);
-        // Pictures in the same drop are stored for THIS model, not the one on
-        // screen: the preview shows it only after its own read — a textured GLB
-        // only after its dialog — long after they are encoded.
-        const droppedModelOrientation =
-          models.length > 0 && images.length > 0 ? droppedModelPictureOrientation(models[0]) : null;
-        for (const csv of csvs) {
-          const off = STEP * slot++;
-          placeCsvFile(csv, event.clientX + off, event.clientY + off);
-        }
-        placePictureFiles(images, event.clientX + STEP * slot, event.clientY + STEP * slot, droppedModelOrientation);
-        slot += images.length;
+        importFiles(Array.from(files), event.clientX, event.clientY, 'drop');
         // A real file drop never doubles as a tile drag — swallow it even when
         // nothing matched instead of falling through to the getData branches.
         return;
@@ -3354,7 +3439,7 @@ export function NodeEditor() {
       const link = nodeType === TUNNEL_OUT_TYPE ? event.dataTransfer.getData(PORTAL_LINK_DRAG_TYPE) : '';
       placeTilePayload(link ? { kind: 'node', nodeType, link } : { kind: 'node', nodeType }, event.clientX, event.clientY);
     },
-    [clearEdgeHighlight, clearConnectPreview, placeTilePayload, placeCsvFile, placePictureFiles],
+    [clearEdgeHighlight, clearConnectPreview, placeTilePayload, importFiles],
   );
 
 
@@ -4080,21 +4165,24 @@ export function NodeEditor() {
           >
             {t('New', language)}
           </button>
-          {/* IMPORT: the system file picker, then an explicit OPEN — a picked
-              file is already an instruction to open it, so it never asks Open
-              or Add (that question belongs to a DROP). */}
+          {/* IMPORT: the system file picker for EVERY kind of file FastShaders
+              reads (utils/fileImport.ts), each landing as a drop of it would —
+              except that a picked shader is an explicit OPEN: a picked file is
+              already an instruction to open it, so it never asks Open or Add
+              (that question belongs to a DROP). */}
           <button
             type="button"
             className="node-editor__new-btn node-editor__import-btn"
             onClick={() => importInputRef.current?.click()}
-            title={t('Open a shader file (.js / .zip) from your computer — replaces the current shader; can be undone with Ctrl+Z / ⌘Z', language)}
+            title={t(IMPORT_BUTTON_TITLE, language)}
           >
             {t('Import', language)}
           </button>
           <input
             ref={importInputRef}
             type="file"
-            accept=".js,.mjs,.tsl,.zip"
+            multiple
+            accept={IMPORT_FILE_ACCEPT}
             style={{ display: 'none' }}
             onChange={onImportFileChange}
           />

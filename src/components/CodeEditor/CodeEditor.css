@@ -4,6 +4,14 @@
   flex-direction: column;
   height: 100%;
   background: var(--bg-panel);
+  /* Monaco's own editor background (its `vs` / `vs-dark` themes, which follow
+     the app's theme): the chosen tab wears it, so tab and editor read as one
+     surface. */
+  --code-editor-page: #fffffe;
+}
+
+:root[data-theme="dark"] .code-editor {
+  --code-editor-page: #1e1e1e;
 }
 
 /* Drop overlay shown while a file is being dragged over the editor.
@@ -42,55 +50,55 @@
   color: var(--text-secondary);
 }
 
-/* Tab bar — sits above the editor, contains folder tabs + actions */
+/* Tab bar — sits above the editor: the tabs on the left, the actions on the
+   right, and along its foot the 2px line the tabs stand on (owner, 2026-11-26:
+   the same browser tabs as the intro window and the asset bar). The line is
+   painted INSIDE the bar, as the asset bar's is, so the chosen tab can reach
+   down over it.
+
+   The top padding is breathing room under the preview/code seam, which lands
+   directly on this bar. It sits HERE, not as a gap above the seam, because the
+   seam reads as the 3D viewport's own bottom edge — content butting the line
+   from below is the side that can afford to give way.
+
+   Bar height = 4 + the chosen tab (--ctl-size + 5 = 33) = 37px, and ONE other
+   number is derived from that 37 and must move with it: SplitPane's
+   CROSS_MIN_PANE_PX (the collapsed-code floor, 37 + a small margin). */
 .code-editor__tabbar {
   display: flex;
-  /* CENTRED, not flex-end. Every control in this row is now one --ctl-size box
-     — the two tabs on the left, Apply/Import on the right — so centring is what
-     puts their top and bottom edges on the same two lines. Under flex-end the
-     tabs hung 5px below the buttons, because the tabs bottom-anchored into the
-     bar's border while the actions row held itself up with its own padding. */
-  align-items: center;
+  /* Everything stands on the line: the tabs and the buttons opposite them
+     share their top and bottom edges (the chosen tab alone rises above). */
+  align-items: flex-end;
   justify-content: space-between;
-  /* The top padding is breathing room under the preview/code seam, which lands
-     directly on this bar. Without it the Apply/Import buttons and the tab tops
-     touch the divider line. It sits HERE, not as a gap above the seam, because
-     the seam reads as the 3D viewport's own bottom edge — content butting the
-     line from below is the side that can afford to give way. Matches the 4px
-     .code-editor__actions already puts under the buttons, so they sit evenly
-     in the bar. The matching 4px BELOW is now the bar's own padding rather than
-     the actions row's, so the tabs get it too.
-
-     Bar height = 4 + --ctl-size (28) + 4 + the 1px bottom border = 37px, and
-     ONE other number is derived from that 37 and must move with it:
-     SplitPane's CROSS_MIN_PANE_PX (the collapsed-code floor, 37 + a small
-     margin). */
-  padding: 4px var(--space-2);
-  background: var(--bg-surface);
+  padding: 4px var(--space-2) 0;
+  background:
+    linear-gradient(var(--border-strong), var(--border-strong)) bottom / 100% 2px no-repeat,
+    var(--bg-surface);
   flex-shrink: 0;
-  border-bottom: 1px solid var(--border-subtle);
 }
 
-/* Tab row. The old FOLDER metaphor is gone with the app's rounded corners: a
-   tab used to be a rounded-top plate pushed 1px down so its erased bottom
-   border merged it into the editor below. With square corners that reads as a
-   plain rectangle whose bottom edge is missing, so the tabs are now what they
-   look like — two segments of one control, the active one filled. */
+/* The tab row: as a browser's (IntroWindow.css, ContentBrowser.css). The
+   chosen tab and the editor under it are ONE shape — the editor's own colour
+   inside one 2px line, with nothing between them; the others stand behind it
+   on the bar's line. */
 .code-editor__tabs {
   display: flex;
-  gap: 0;
+  align-items: flex-end;
   position: relative;
 }
 
-/* Same height and same font as every other button in the app (--ctl-size /
-   --font-size-sm), which is what the Apply/Import pair opposite them already
-   uses — they sit in the same row and used to be 10px type in a 23px box
-   beside 12px type in a 28px box. */
+/* A tab behind: the bar's colour, a thin line, standing on the bar's line.
+   Same height and font as every other button in the app (--ctl-size /
+   --font-size-sm), which the Apply/Import pair opposite them uses. A column,
+   so the bold-width reservation below stacks under the name. */
 .code-editor__tab {
+  position: relative;
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   height: var(--ctl-size);
+  margin-bottom: 2px;
   padding: 0 16px;
   font-size: var(--font-size-sm);
   font-weight: 600;
@@ -98,28 +106,55 @@
   color: var(--text-secondary);
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--border-radius-sm);
+  border-bottom: none;
+  border-radius: 0;
   cursor: pointer;
   transition: color 0.15s, background 0.15s;
-  position: relative;
 }
 
-/* Segmented: the pair shares one outline instead of drawing a doubled 2px
-   line down the middle. */
+/* Neighbours share one border line. */
 .code-editor__tab + .code-editor__tab {
-  border-left: none;
+  margin-left: -1px;
 }
 
-.code-editor__tab:hover {
+.code-editor__tab:hover:not(.code-editor__tab--active) {
   color: var(--text-primary);
   background: rgba(0, 0, 0, 0.02);
 }
 
-/* Active tab: the filled segment. */
+/* A square focus ring inside the tab, never the browser's rounded one. */
+.code-editor__tab:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -4px;
+}
+
+/* Every tab reserves its BOLD width (an invisible bold copy of its own label,
+   `data-label`), so the chosen tab's weight change never shifts the others. */
+.code-editor__tab::after {
+  content: attr(data-label);
+  display: block;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+/* The chosen tab: the editor's own colour inside the bar's own line, reaching
+   down over that line so nothing parts the two. 3px taller than the others
+   (the row bottom-aligns its tabs, so the extra height raises it alone; the
+   name sits where the others' do). The thicker line is paid for in padding,
+   so no tab moves as the choice changes. */
 .code-editor__tab--active {
+  z-index: 1;
+  height: calc(var(--ctl-size) + 5px);
+  margin-bottom: 0;
+  padding: 0 15px;
   color: var(--text-primary);
-  background: var(--bg-panel);
-  border-color: var(--border-strong);
+  font-weight: 700;
+  background: var(--code-editor-page);
+  border: 2px solid var(--border-strong);
+  border-bottom: none;
 }
 
 /* The A-Frame tab names the one file it holds. A label, not a control — the
@@ -135,13 +170,45 @@
   white-space: nowrap;
 }
 
-/* Actions row (right side of tabbar). No bottom padding of its own any more —
-   the bar's symmetric 4px now holds every child off both edges, which is what
-   lets the buttons and the tabs share one centre line. */
+/* Actions row (right side of tabbar), standing on the bar's line like the tabs
+   behind the chosen one, so the buttons and those tabs share both edges. */
 .code-editor__actions {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  margin-bottom: 2px;
+}
+
+/* The "?" that leads the tab row, just before the TSL tab: a plain glyph with
+   no frame (owner, 2026-11-26), opening the prompt for another AI
+   (AiPromptDialog.tsx). A full --ctl-size target all the same, standing on
+   the bar's line like the tabs behind the chosen one. */
+.code-editor__help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ctl-size);
+  height: var(--ctl-size);
+  margin: 0 2px 2px 0;
+  padding: 0;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.code-editor__help:hover {
+  color: var(--text-primary);
+}
+
+.code-editor__help:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
 }
 
 /* Error count chip; `--warn` recolours it for warnings. */
@@ -215,7 +282,7 @@
    The tabbar/banners are token-driven and flip for free. These few rules borrow
    text tokens for BUTTON backgrounds (which flip light in dark → invisible label)
    or use black washes (invisible on dark), so they need explicit dark values. */
-:root[data-theme="dark"] .code-editor__tab:hover {
+:root[data-theme="dark"] .code-editor__tab:hover:not(.code-editor__tab--active) {
   background: rgba(255, 255, 255, 0.05);
 }
 

@@ -86,10 +86,13 @@ export function scriptToTSL(scriptCode: string): string {
  *
  * An ADDED material's settings keys are different: they ARE editor TSL (inside
  * `parts`, in the loader's own spelling), so they pass through here verbatim
- * and codeToGraph reads them back. Known gap: the node-prop names inside
- * `parts` are NOT reversed (`colorNode:` stays `colorNode:` and lands on a
- * dead `m1:colorNode` handle), so a bare-script import of a parts module keeps
- * its part settings and loses its part channels. The same gap applies to the
+ * and codeToGraph reads them back. The node-prop names inside `parts` are NOT
+ * reversed here (`colorNode:` stays `colorNode:`); since 2026-11-26 codeToGraph
+ * reads the seven plain renames itself (`OUTPUT_CHANNEL_ALIASES`), so a
+ * bare-script import of a parts module keeps those part channels. Known gap:
+ * a part's `positionNode` is not unwrapped — it is dropped, with a warning
+ * (it used to land on a dead `m1:positionNode` handle, like every other
+ * channel of the part, without one). The same gap applies to the
  * glTF-index table (`materialParts`, GLB Phase 5), which — with its
  * `modelSignature` — passes through untouched. The loader-0.6 MIRRORS do not:
  * the `materialPartsMirror` list is dropped and every `parts` entry it names is

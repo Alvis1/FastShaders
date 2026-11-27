@@ -61,6 +61,7 @@ import { safeJsonReviver } from '@/utils/safeJson';
 import { HEX6 } from '@/utils/colorUtils';
 import { authoredUniformChange } from '@/utils/uniformOverride';
 import { normalizeChainOperands } from '@/utils/chainOperands';
+import { draftAfterGraphWrite, errorsAfterGraphWrite, panelText, type CodeDraft } from '@/utils/codeDraft';
 import { nodeCostPoints, computeReachableCost, imageNodeCost, getCost, sinkCosts, sinkBadgesStale, stampSinkCosts, freshNodeCost } from '@/utils/nodeCost';
 // From the LEAF cost table, not from nodeCost: both of these are called at
 // MODULE SCOPE below (loadCostProfiles + the boot setCostOverrides), and
@@ -1545,6 +1546,12 @@ export interface SetCodeMeta {
    * pass hid and deletes the ones it revealed.
    */
   base?: string;
+  /**
+   * A `'graph'` write only: this pass re-read a graph that did NOT change (the
+   * unknown-expression validator landed). A kept text (`codeDraft`) then moves
+   * to the new text instead of ending (utils/codeDraft.ts).
+   */
+  sameGraph?: boolean;
 }
 
 /** One graph→code pass's text with its `codeEmitted` / `codeNames` (a ring of
@@ -1599,6 +1606,16 @@ interface AppState {
    * one. Session-only: never persisted, never in history.
    */
   codeNodeSpans: CodeNodeSpans | null;
+  /**
+   * The text the code panel shows INSTEAD of `code`, kept because the last
+   * Apply could not put all of it into the graph (utils/codeDraft.ts; owner,
+   * 2026-11-26). `code` and `previewCode` stay the graph's own, so everything
+   * that runs or writes the shader follows the graph; only the panel reads
+   * this (`panelText`), a keystroke edits it and Apply parses it. Ended by the
+   * first graph→code pass that writes a different text. Session-only: never
+   * persisted, never in history.
+   */
+  codeDraft: CodeDraft | null;
   codeErrors: ParseError[];
 
   // Complexity
@@ -1890,6 +1907,12 @@ interface AppState {
   /** `meta` rides only a `'graph'` write: what that text was generated from. */
   setCode: (code: string, source?: SyncSource, previewCode?: string, meta?: SetCodeMeta) => void;
   setCodeErrors: (errors: ParseError[]) => void;
+  /**
+   * Keep the panel's text beside the graph's code: the Apply that just read
+   * `applied` could not put all of it into the graph. `emitted` and `names`
+   * are what that parse built — the scope the text's next Apply reads.
+   */
+  holdCodeDraft: (applied: string, emitted: ReadonlySet<string>, names: ReadonlyMap<string, string>) => void;
   codeSyncRequested: boolean;
   requestCodeSync: () => void;
 
@@ -2117,6 +2140,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   codeNames: null,
   codeScopes: [],
   codeNodeSpans: null,
+  codeDraft: null,
   codeErrors: [],
   totalCost: 0,
   syncSource: 'graph',
@@ -2594,20 +2618,37 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setShaderPalettes: (palettes) => set({ shaderPalettes: palettes }),
 
   setCode: (code, source = 'code', previewCode, meta) => {
-    // Skip no-op: prevents Monaco onChange from flipping syncSource after programmatic updates
-    if (code === get().code && source === 'code') return;
     if (source === 'code') {
+      const draft = get().codeDraft;
+      // A KEYSTROKE in a kept text (utils/codeDraft.ts) edits that text and
+      // nothing else: `code` stays the graph's own, so the preview and every
+      // export keep following the graph. Only the editor names a `base`.
+      if (draft && meta?.base !== undefined) {
+        if (code !== draft.code) set({ codeDraft: { ...draft, code } });
+        return;
+      }
+      // Skip no-op: prevents Monaco onChange from flipping syncSource after programmatic updates
+      if (code === get().code && !draft) return;
       // User typing — just store the code, don't update preview yet. The
       // emitted set stays: it describes the text the user is editing — unless
       // that is an OLDER pass's text than the store's (`meta.base`, the panel's
       // settle lag), whose scope is still in the ring. So does the spans pair,
       // which carries its own text (the highlight follows the typing through
       // Monaco's tracked ranges, never through this).
+      // A text that IS a remembered one — Monaco's undo back to an older pass,
+      // or to a kept text whose hold a graph edit just ended — reads under the
+      // scope that text had, whatever it was typed over.
       const base = meta?.base;
-      const scope = base === undefined || base === get().code
-        ? undefined
-        : get().codeScopes.find((sc) => sc.code === base);
-      set(scope ? { code, codeEmitted: scope.emitted, codeNames: scope.names } : { code });
+      const ring = get().codeScopes;
+      const scope = ring.find((sc) => sc.code === code)
+        ?? (base === undefined || base === get().code ? undefined : ring.find((sc) => sc.code === base));
+      set({
+        code,
+        ...(scope ? { codeEmitted: scope.emitted, codeNames: scope.names } : {}),
+        // Any other `'code'` write REPLACES the panel's text (a bare-script
+        // import), so a text kept from an earlier Apply goes with it.
+        ...(draft ? { codeDraft: null } : {}),
+      });
     } else {
       // Graph or initial sync — update preview immediately. `previewCode` is
       // the ONE divergence the two are allowed: while a node is PREVIEWED
@@ -2619,15 +2660,25 @@ export const useAppStore = create<AppState>()((set, get) => ({
       // `codeNodeSpans`, the text and its node spans as one value.
       const emitted = meta?.emitted ?? null;
       const names = emitted ? meta?.names ?? null : null;
+      // A text kept from an Apply that dropped code (utils/codeDraft.ts) stays
+      // on the panel while this pass writes the text it is held against, and
+      // ends — in this same write — the moment the graph's code is another.
+      const held = get().codeDraft;
+      const draft = draftAfterGraphWrite(held, code, meta?.sameGraph === true);
       // A BLOCKING error describes the text a failed Apply left in the panel,
       // and this write replaces that text: kept, the panel showed "Unexpected
       // token (10:39)" over generated code with no such line. Warnings stay —
       // they say what a SUCCESSFUL Apply did, and that Apply's own regeneration
-      // lands here a moment later. Same array when nothing goes (a scrub frame).
+      // lands here a moment later. While a text is kept the report describes
+      // IT and stays whole. Same array when nothing goes (a scrub frame).
       const errors = get().codeErrors;
-      const keptErrors = errors.some((e) => e.severity !== 'warning')
-        ? errors.filter((e) => e.severity === 'warning')
-        : errors;
+      const keptErrors = errorsAfterGraphWrite(errors, held, draft);
+      // A hold that ends here leaves its text in Monaco until the panel
+      // settles (CODE_SETTLE_MS), so its scope joins the ring like an older
+      // pass's: a keystroke in that window is an edit of THAT text.
+      const ended: CodeScope[] = held !== null && draft === null
+        ? [{ code: held.code, emitted: held.emitted, names: held.names }]
+        : [];
       set({
         code,
         codeErrors: keptErrors,
@@ -2636,14 +2687,20 @@ export const useAppStore = create<AppState>()((set, get) => ({
         codeEmitted: emitted,
         codeNames: names,
         codeScopes: emitted && names
-          ? [{ code, emitted, names }, ...get().codeScopes].slice(0, CODE_SCOPE_RING)
+          ? [{ code, emitted, names }, ...ended, ...get().codeScopes].slice(0, CODE_SCOPE_RING)
           : [],
         codeNodeSpans: meta?.nodeSpans ? { code, spans: meta.nodeSpans } : null,
+        ...(draft !== held ? { codeDraft: draft } : {}),
       });
     }
   },
 
   setCodeErrors: (errors) => set({ codeErrors: errors }),
+
+  // The panel's text NOW, not `applied`: a keystroke that landed while the
+  // parser chunk was loading is kept, and Apply sees it as unapplied.
+  holdCodeDraft: (applied, emitted, names) =>
+    set((state) => ({ codeDraft: { code: panelText(state), applied, graph: null, emitted, names } })),
 
   // NB deliberately NO evalLog here: projectImport also calls this on the
   // bare-script import path, which would conflate imports with user Applies —

@@ -19,6 +19,11 @@ export function useDismiss(
     const onPointerDown = (e: MouseEvent) => {
       const t = e.target as Node;
       if (refsRef.current.some((r) => r.current?.contains(t))) return;
+      // A setting button's list (SettingButton) is a portal on the body, but
+      // it belongs to its button: a press in it must not close the popover
+      // the button sits in (the toolbar's ☰ menu), or the list unmounts
+      // before its click lands.
+      if ((t as Element).closest?.('.fs-setting__menu')) return;
       setOpen(false);
     };
     const onKeyDown = (e: KeyboardEvent) => {

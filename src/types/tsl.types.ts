@@ -3,6 +3,13 @@ export interface ParseError {
   line?: number;
   column?: number;
   severity?: 'error' | 'warning';
+  /**
+   * The code this warning quotes is KEPT in the graph as written (an unknown
+   * function, round-tripped as an Unknown node). Every other warning describes
+   * code that did NOT reach the graph — which is what the code panel's banner
+   * says under them.
+   */
+  kept?: true;
 }
 
 /**

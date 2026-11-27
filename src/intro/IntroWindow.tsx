@@ -21,8 +21,11 @@ import { UniformScene } from './UniformScene';
 import { ModelScene } from './ModelScene';
 import { MeshesScene } from './MeshesScene';
 import { KeysTab } from './KeysTab';
+import { ShaderTab } from './ShaderTab';
+import { EXPLAINER_TITLE } from './shaderExplainerText';
 import { introHidden, setIntroHidden, type IntroVia } from './introGate';
 import { LangSwitch } from '@/eval/LangSwitch';
+import { closeSettingMenu } from '@/components/inputs/SettingButton';
 import { evalLog } from '@/eval/telemetry';
 import { evalTask, introShowsBudget } from '@/eval/evalTask';
 import '@/components/Modals/CsvImportModal.css';
@@ -115,23 +118,27 @@ const SLIDES: ReadonlyArray<{ id: string; Scene: ComponentType; caption: string 
 
 /**
  * The window FastShaders opens with (`introGate.ts` decides; App.tsx mounts it
- * lazily; in a study session only after Agree). Two tabs, Intro first and
+ * lazily; in a study session only after Agree). Three tabs, Intro first and
  * always the one it opens on:
  *  - INTRO: slides of live scenes drawn with the real node cards, stepped with
  *    the arrows beside the stage, the boxes under it, or ← / →. Only the shown
- *    slide is mounted, so only its animation runs — and none while Keys shows.
+ *    slide is mounted, so only its animation runs — and none on another tab.
  *  - KEYS ("Taustiņi"): every shortcut, as a static table (`KeysTab`, data in
- *    `introKeys.ts`). It keeps the Intro page's height, measured as the tab
- *    switches, so the window does not jump; the table scrolls inside it.
+ *    `introKeys.ts`).
+ *  - WHAT IS A SHADER? (`ShaderTab`, owner 2026-11-26): what a shader is, in
+ *    plain words, with three drawn spheres, the first lesson as the next step
+ *    and five pages to read on.
+ * Keys and What is a shader? keep the Intro page's height, measured as the
+ * tab switches away from it, so the window does not jump; they scroll inside.
  *
- * The shared dialog chrome (CsvImportModal.css), laid out on one centre line:
- * the tabs (in the title's place and size) with the language switch beside
- * them (the study dialogs' own `LangSwitch` — the toolbar's is behind the
- * backdrop), the page, Start and "Don't show this again" under it. There is no
- * ✕: Escape, the backdrop and Start close it, and closing writes "Don't show
- * this again" whichever way it went. `aria-modal` is what stands the canvas's
- * shortcuts down behind it. The backdrop swallows a dropped file, so it never
- * navigates away.
+ * The shared dialog chrome (CsvImportModal.css): the tabs as a strip along
+ * the top in the asset bar's tab look (owner, 2026-11-26), with the language
+ * switch at its right end (the study dialogs' own `LangSwitch` — the
+ * toolbar's is behind the backdrop), the page, Start and "Don't show this
+ * again" centred under it. There is no ✕: Escape, the backdrop and Start
+ * close it, and closing writes "Don't show this again" whichever way it went.
+ * `aria-modal` is what stands the canvas's shortcuts down behind it. The
+ * backdrop swallows a dropped file, so it never navigates away.
  */
 /**
  * The slides a STUDY session shows (every entry — `introInStudy`): all of
@@ -144,10 +151,11 @@ function studySlides(): typeof SLIDES {
   return SLIDES.filter((s) => s.id !== 'folder' && (budget || s.id !== 'budget'));
 }
 
-type IntroTab = 'intro' | 'keys';
+type IntroTab = 'intro' | 'keys' | 'shader';
 const TABS: ReadonlyArray<{ id: IntroTab; label: string }> = [
   { id: 'intro', label: 'Intro' },
   { id: 'keys', label: 'Keys' },
+  { id: 'shader', label: EXPLAINER_TITLE },
 ];
 const tabId = (tab: IntroTab) => `fs-intro-tab-${tab}`;
 
@@ -156,9 +164,10 @@ const tabId = (tab: IntroTab) => `fs-intro-tab-${tab}`;
  * opening (`via`: Agree or the toolbar's "i"), every slide shown and its close
  * are logged, and it writes nothing — "Don't show this again" is not offered,
  * as no study session ever opens it at boot. A tab switch rides `intro-slide`
- * (the disclosure's "intro slides used"): `{tab: 'keys'}` carries no `slide`,
- * so the summary's `introSlidesSeen` still counts slides only, and the way
- * back names the slide shown again; a close on Keys adds `tab: 'keys'`.
+ * (the disclosure's "intro slides used"): `{tab: 'keys'}` and
+ * `{tab: 'shader'}` carry no `slide`, so the summary's `introSlidesSeen` still
+ * counts slides only, and the way back names the slide shown again; a close
+ * on another tab than Intro adds that `tab`.
  */
 export function IntroWindow({ onClose, via = 'boot', study = false }: { onClose: () => void; via?: IntroVia; study?: boolean }) {
   const language = useAppStore((s) => s.language);
@@ -167,7 +176,9 @@ export function IntroWindow({ onClose, via = 'boot', study = false }: { onClose:
   const [index, setIndex] = useState(0);
   const [tab, setTab] = useState<IntroTab>('intro');
   const [dontShow, setDontShow] = useState(introHidden);
-  // The Intro page's height, read as Keys opens, so the window keeps its size.
+  // The points paragraph on What is a shader? follows the budget slide's rule.
+  const showCost = !study || introShowsBudget(evalTask());
+  // The Intro page's height, read as another tab opens, so the window keeps its size.
   const pageRef = useRef<HTMLDivElement>(null);
   const [pageHeight, setPageHeight] = useState<number | null>(null);
   const tabRefs = useRef<Partial<Record<IntroTab, HTMLButtonElement | null>>>({});
@@ -183,8 +194,8 @@ export function IntroWindow({ onClose, via = 'boot', study = false }: { onClose:
 
   const showTab = (to: IntroTab) => {
     if (to === tab) return;
-    if (to === 'keys' && pageRef.current) setPageHeight(pageRef.current.offsetHeight);
-    if (study) evalLog('intro-slide', to === 'keys' ? { tab: to } : { tab: to, slide: slides[index].id, n: index + 1 });
+    if (tab === 'intro' && pageRef.current) setPageHeight(pageRef.current.offsetHeight);
+    if (study) evalLog('intro-slide', to !== 'intro' ? { tab: to } : { tab: to, slide: slides[index].id, n: index + 1 });
     setTab(to);
   };
 
@@ -194,7 +205,7 @@ export function IntroWindow({ onClose, via = 'boot', study = false }: { onClose:
         slide: slides[index].id,
         seen: seen.current.size,
         of: slides.length,
-        ...(tab === 'keys' ? { tab } : {}),
+        ...(tab !== 'intro' ? { tab } : {}),
       });
     } else {
       setIntroHidden(dontShow);
@@ -216,7 +227,8 @@ export function IntroWindow({ onClose, via = 'boot', study = false }: { onClose:
   useModalKeys(true, (e) => {
     if (e.key === 'Escape') {
       e.stopPropagation();
-      close();
+      // An open setting list (the language button's) closes first.
+      if (!closeSettingMenu()) close();
     } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       const left = e.key === 'ArrowLeft';
       // On a focused tab the arrows move between the tabs (the ARIA tabs
@@ -270,26 +282,31 @@ export function IntroWindow({ onClose, via = 'boot', study = false }: { onClose:
                 aria-selected={tab === id}
                 aria-controls="fs-intro-page"
                 tabIndex={tab === id ? 0 : -1}
-                className={`csv-import-modal__title fs-intro__title fs-intro__tab${tab === id ? ' fs-intro__tab--on' : ''}`}
+                className={`fs-intro__tab${tab === id ? ' fs-intro__tab--on' : ''}`}
+                data-label={t(label, language)}
                 onClick={() => showTab(id)}
               >
                 {t(label, language)}
               </button>
             ))}
           </div>
-          <LangSwitch />
+          <LangSwitch named />
         </div>
 
         <div
           ref={pageRef}
-          className={`fs-intro__page${tab === 'keys' ? ' fs-intro__page--keys' : ''}`}
+          className={`fs-intro__page${tab !== 'intro' ? ' fs-intro__page--scroll' : ''}`}
           id="fs-intro-page"
           role="tabpanel"
           aria-labelledby={tabId(tab)}
-          style={tab === 'keys' && pageHeight ? { height: pageHeight } : undefined}
+          // Focusable while it scrolls, so the keyboard can scroll it.
+          tabIndex={tab !== 'intro' ? 0 : undefined}
+          style={tab !== 'intro' && pageHeight ? { height: pageHeight } : undefined}
         >
           {tab === 'keys' ? (
             <KeysTab language={language} />
+          ) : tab === 'shader' ? (
+            <ShaderTab language={language} showCost={showCost} />
           ) : (
             <>
               <div className="fs-intro__body">
@@ -339,7 +356,7 @@ export function IntroWindow({ onClose, via = 'boot', study = false }: { onClose:
         </div>
 
         <div className="fs-intro__actions">
-          <button ref={startRef} className="csv-import-modal__button csv-import-modal__button--yes" onClick={close}>
+          <button ref={startRef} className="csv-import-modal__button csv-import-modal__button--yes fs-intro__start" onClick={close}>
             {t('Start', language)}
           </button>
           {!study && (

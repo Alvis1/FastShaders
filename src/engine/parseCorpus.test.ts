@@ -10,6 +10,15 @@
  * 2026-07-11 fixes (member-init split wiring, .toVar() dedup, constant folding
  * + degradation warnings). When a parser change legitimately alters these
  * numbers, regenerate the affected entries and justify the change in review.
+ *
+ * 2026-11-26: the 27 fixtures that are RAW exported modules spell their
+ * channels three's way (`colorNode:`, `positionNode: positionLocal.add(
+ * normalLocal.mul(x))`). Read here without the import path's scriptToTSL, each
+ * key used to be wired onto a handle the Output does not have — a dead edge,
+ * no warning. Now the plain renames are read (same edge count, a real socket)
+ * and `positionNode` says why it is not `position` instead of building the
+ * four nodes of a chain that reached nothing: 4 nodes and 3–5 edges fewer, one
+ * warning more, per file.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -60,116 +69,116 @@ function parseStats(code: string): CorpusStats {
 
 const EXPECTED: Record<string, CorpusStats> = {
   '1stTest/2km-shader-iced-udens.js': {
-    nodeTypeCounts: { color: 2, float: 1, time: 1, mul: 4, unknown: 2, remap: 1, add: 4, clamp: 1, mix: 1, output: 1, positionLocal: 1 },
-    edgeCount: 19, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { color: 2, float: 1, time: 1, mul: 4, unknown: 2, remap: 1, add: 3, clamp: 1, mix: 1, output: 1 },
+    edgeCount: 16, errorCount: 0, warningCount: 3,
   },
   '1stTest/2km-shader-uguns.js': {
-    nodeTypeCounts: { color: 2, sub: 2, uv: 2, vec2: 3, add: 4, mul: 10, split: 1, cos: 2, sin: 2, time: 1, unknown: 2, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 37, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { color: 2, sub: 2, uv: 2, vec2: 3, add: 3, mul: 9, split: 1, cos: 2, sin: 2, time: 1, unknown: 2, mix: 1, output: 1 },
+    edgeCount: 32, errorCount: 0, warningCount: 3,
   },
   '1stTest/as_udens.js': {
-    nodeTypeCounts: { color: 2, time: 1, float: 1, mul: 5, unknown: 2, remap: 1, add: 4, clamp: 1, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 22, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { color: 2, time: 1, float: 1, mul: 4, unknown: 2, remap: 1, add: 3, clamp: 1, mix: 1, output: 1 },
+    edgeCount: 17, errorCount: 0, warningCount: 3,
   },
   '1stTest/as_uguns.js': {
-    nodeTypeCounts: { color: 2, time: 1, sub: 2, uv: 2, vec2: 3, add: 4, mul: 10, split: 1, cos: 2, sin: 2, unknown: 2, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 37, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { color: 2, time: 1, sub: 2, uv: 2, vec2: 3, add: 3, mul: 9, split: 1, cos: 2, sin: 2, unknown: 2, mix: 1, output: 1 },
+    edgeCount: 32, errorCount: 0, warningCount: 3,
   },
   '1stTest/bj_udens.js': {
-    nodeTypeCounts: { time: 1, float: 1, color: 2, mul: 5, unknown: 2, remap: 1, add: 4, clamp: 1, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 22, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { time: 1, float: 1, color: 2, mul: 4, unknown: 2, remap: 1, add: 3, clamp: 1, mix: 1, output: 1 },
+    edgeCount: 17, errorCount: 0, warningCount: 3,
   },
   '1stTest/bj_uguns.js': {
-    nodeTypeCounts: { color: 2, sub: 2, uv: 2, vec2: 3, add: 4, mul: 10, split: 1, cos: 2, sin: 2, time: 1, unknown: 2, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 37, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { color: 2, sub: 2, uv: 2, vec2: 3, add: 3, mul: 9, split: 1, cos: 2, sin: 2, time: 1, unknown: 2, mix: 1, output: 1 },
+    edgeCount: 32, errorCount: 0, warningCount: 3,
   },
   '1stTest/bj_uguns2.js': {
-    nodeTypeCounts: { color: 2, sub: 2, uv: 2, vec2: 3, add: 4, mul: 10, split: 1, cos: 2, sin: 2, time: 1, unknown: 2, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 37, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { color: 2, sub: 2, uv: 2, vec2: 3, add: 3, mul: 9, split: 1, cos: 2, sin: 2, time: 1, unknown: 2, mix: 1, output: 1 },
+    edgeCount: 32, errorCount: 0, warningCount: 3,
   },
   '1stTest/em_udens.js': {
-    nodeTypeCounts: { time: 1, float: 2, color: 2, voronoi: 1, mul: 5, unknown: 2, remap: 1, add: 4, clamp: 1, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 22, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { time: 1, float: 2, color: 2, voronoi: 1, mul: 4, unknown: 2, remap: 1, add: 3, clamp: 1, mix: 1, output: 1 },
+    edgeCount: 17, errorCount: 0, warningCount: 3,
   },
   '1stTest/em_uguns.js': {
-    nodeTypeCounts: { color: 2, sub: 4, uv: 2, vec2: 6, add: 6, mul: 14, split: 2, cos: 4, sin: 4, time: 1, unknown: 2, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 56, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { color: 2, sub: 4, uv: 2, vec2: 6, add: 5, mul: 13, split: 2, cos: 4, sin: 4, time: 1, unknown: 2, mix: 1, output: 1 },
+    edgeCount: 51, errorCount: 0, warningCount: 3,
   },
   '1stTest/emk-udens.js': {
-    nodeTypeCounts: { color: 2, time: 1, float: 1, uv: 1, mul: 5, unknown: 3, mix: 1, output: 1, add: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 15, errorCount: 0, warningCount: 3,
+    nodeTypeCounts: { color: 2, time: 1, float: 1, uv: 1, mul: 4, unknown: 3, mix: 1, output: 1 },
+    edgeCount: 10, errorCount: 0, warningCount: 4,
   },
   '1stTest/emk-uguns.js': {
-    nodeTypeCounts: { time: 1, sub: 2, uv: 1, vec2: 3, add: 3, mul: 7, split: 1, cos: 2, sin: 2, color: 1, unknown: 2, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 31, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { time: 1, sub: 2, uv: 1, vec2: 3, add: 2, mul: 6, split: 1, cos: 2, sin: 2, color: 1, unknown: 2, mix: 1, output: 1 },
+    edgeCount: 26, errorCount: 0, warningCount: 3,
   },
   '1stTest/ez_udens.js': {
-    nodeTypeCounts: { time: 1, color: 2, float: 1, mul: 5, unknown: 2, remap: 1, add: 4, clamp: 1, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 22, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { time: 1, color: 2, float: 1, mul: 4, unknown: 2, remap: 1, add: 3, clamp: 1, mix: 1, output: 1 },
+    edgeCount: 17, errorCount: 0, warningCount: 3,
   },
   '1stTest/ez_uguns.js': {
-    nodeTypeCounts: { time: 1, sub: 2, uv: 2, vec2: 3, add: 4, mul: 10, split: 1, cos: 2, sin: 2, color: 2, unknown: 2, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 37, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { time: 1, sub: 2, uv: 2, vec2: 3, add: 3, mul: 9, split: 1, cos: 2, sin: 2, color: 2, unknown: 2, mix: 1, output: 1 },
+    edgeCount: 32, errorCount: 0, warningCount: 3,
   },
   '1stTest/li_udens.js': {
-    nodeTypeCounts: { color: 2, time: 1, float: 1, mul: 5, unknown: 2, remap: 1, add: 4, clamp: 1, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 22, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { color: 2, time: 1, float: 1, mul: 4, unknown: 2, remap: 1, add: 3, clamp: 1, mix: 1, output: 1 },
+    edgeCount: 17, errorCount: 0, warningCount: 3,
   },
   '1stTest/li_uguns.js': {
-    nodeTypeCounts: { color: 2, sub: 2, uv: 2, vec2: 3, add: 4, mul: 10, split: 1, cos: 2, sin: 2, time: 1, unknown: 2, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 37, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { color: 2, sub: 2, uv: 2, vec2: 3, add: 3, mul: 9, split: 1, cos: 2, sin: 2, time: 1, unknown: 2, mix: 1, output: 1 },
+    edgeCount: 32, errorCount: 0, warningCount: 3,
   },
   '1stTest/lo_udens.js': {
-    nodeTypeCounts: { time: 1, color: 2, mul: 3, div: 3, unknown: 2, mix: 3, split: 2, add: 3, clamp: 3, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 28, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { time: 1, color: 2, mul: 2, div: 3, unknown: 2, mix: 3, split: 2, add: 2, clamp: 3, output: 1 },
+    edgeCount: 23, errorCount: 0, warningCount: 3,
   },
   '1stTest/lo_uguns.js': {
-    nodeTypeCounts: { time: 1, sub: 6, uv: 2, vec2: 6, add: 5, mul: 13, split: 3, cos: 4, sin: 4, unknown: 2, div: 1, mix: 1, clamp: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 56, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { time: 1, sub: 6, uv: 2, vec2: 6, add: 4, mul: 12, split: 3, cos: 4, sin: 4, unknown: 2, div: 1, mix: 1, clamp: 1, output: 1 },
+    edgeCount: 51, errorCount: 0, warningCount: 3,
   },
   '1stTest/my-shader 2.js': {
-    nodeTypeCounts: { unknown: 2, color: 2, sub: 5, uv: 2, vec2: 6, add: 5, mul: 10, split: 2, cos: 4, sin: 4, time: 1, positionGeometry: 1, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 49, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { unknown: 2, color: 2, sub: 5, uv: 2, vec2: 6, add: 4, mul: 9, split: 2, cos: 4, sin: 4, time: 1, positionGeometry: 1, mix: 1, output: 1 },
+    edgeCount: 44, errorCount: 0, warningCount: 3,
   },
   '1stTest/my-shader 3.js': {
-    nodeTypeCounts: { unknown: 2, color: 2, sub: 5, uv: 2, vec2: 6, add: 5, mul: 10, split: 2, cos: 4, sin: 4, time: 1, positionGeometry: 1, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 49, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { unknown: 2, color: 2, sub: 5, uv: 2, vec2: 6, add: 4, mul: 9, split: 2, cos: 4, sin: 4, time: 1, positionGeometry: 1, mix: 1, output: 1 },
+    edgeCount: 44, errorCount: 0, warningCount: 3,
   },
   '1stTest/rk-udens.js': {
-    nodeTypeCounts: { color: 2, time: 1, float: 1, mul: 5, unknown: 2, add: 4, remap: 1, clamp: 1, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 22, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { color: 2, time: 1, float: 1, mul: 4, unknown: 2, add: 3, remap: 1, clamp: 1, mix: 1, output: 1 },
+    edgeCount: 17, errorCount: 0, warningCount: 3,
   },
   '1stTest/rk-udens2.js': {
-    nodeTypeCounts: { color: 2, time: 1, float: 1, unknown: 3, mul: 6, add: 5, remap: 1, sub: 1, clamp: 1, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 28, errorCount: 0, warningCount: 3,
+    nodeTypeCounts: { color: 2, time: 1, float: 1, unknown: 3, mul: 5, add: 4, remap: 1, sub: 1, clamp: 1, mix: 1, output: 1 },
+    edgeCount: 23, errorCount: 0, warningCount: 4,
   },
   '1stTest/rk-uguns.js': {
-    nodeTypeCounts: { color: 2, time: 1, sub: 2, uv: 2, vec2: 3, add: 4, mul: 10, split: 1, cos: 2, sin: 2, unknown: 2, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 38, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { color: 2, time: 1, sub: 2, uv: 2, vec2: 3, add: 3, mul: 9, split: 1, cos: 2, sin: 2, unknown: 2, mix: 1, output: 1 },
+    edgeCount: 33, errorCount: 0, warningCount: 3,
   },
   '1stTest/tk-udens.js': {
-    nodeTypeCounts: { color: 2, time: 1, float: 1, mul: 5, unknown: 2, remap: 1, add: 4, clamp: 1, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 22, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { color: 2, time: 1, float: 1, mul: 4, unknown: 2, remap: 1, add: 3, clamp: 1, mix: 1, output: 1 },
+    edgeCount: 17, errorCount: 0, warningCount: 3,
   },
   '1stTest/tk-uguns.js': {
-    nodeTypeCounts: { color: 2, time: 1, sub: 2, uv: 2, vec2: 3, add: 4, mul: 10, split: 1, cos: 2, sin: 2, unknown: 2, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 37, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { color: 2, time: 1, sub: 2, uv: 2, vec2: 3, add: 3, mul: 9, split: 1, cos: 2, sin: 2, unknown: 2, mix: 1, output: 1 },
+    edgeCount: 32, errorCount: 0, warningCount: 3,
   },
   '1stTest/udens-shader.js': {
-    nodeTypeCounts: { time: 1, float: 1, color: 2, mul: 5, unknown: 2, add: 4, remap: 1, clamp: 1, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 22, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { time: 1, float: 1, color: 2, mul: 4, unknown: 2, add: 3, remap: 1, clamp: 1, mix: 1, output: 1 },
+    edgeCount: 17, errorCount: 0, warningCount: 3,
   },
   '1stTest/wood.js': {
     nodeTypeCounts: { property_float: 6, positionGeometry: 1, mul: 36, cos: 3, sin: 2, split: 1, sub: 3, add: 8, exp: 2, max: 1, div: 3, vec3: 7, perlin: 5, mix: 2, output: 1 },
     edgeCount: 114, errorCount: 0, warningCount: 0,
   },
   '1stTest/zd_udens.js': {
-    nodeTypeCounts: { time: 1, float: 1, color: 2, mul: 5, unknown: 2, remap: 1, add: 4, clamp: 1, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 22, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { time: 1, float: 1, color: 2, mul: 4, unknown: 2, remap: 1, add: 3, clamp: 1, mix: 1, output: 1 },
+    edgeCount: 17, errorCount: 0, warningCount: 3,
   },
   '1stTest/zd_uguns.js': {
-    nodeTypeCounts: { color: 2, sub: 2, uv: 2, vec2: 3, add: 4, mul: 10, split: 1, cos: 2, sin: 2, time: 1, unknown: 2, mix: 1, output: 1, positionLocal: 1, normalLocal: 1 },
-    edgeCount: 37, errorCount: 0, warningCount: 2,
+    nodeTypeCounts: { color: 2, sub: 2, uv: 2, vec2: 3, add: 3, mul: 9, split: 1, cos: 2, sin: 2, time: 1, unknown: 2, mix: 1, output: 1 },
+    edgeCount: 32, errorCount: 0, warningCount: 3,
   },
   'morph-triangles-watercolor.tsl.js': {
     nodeTypeCounts: { property_float: 7, positionGeometry: 1, mul: 7, fbm: 2, add: 3, clamp: 2, voronoiVec3: 1, split: 1, sub: 1, smoothstep: 5, color: 8, mix: 7, output: 1 },

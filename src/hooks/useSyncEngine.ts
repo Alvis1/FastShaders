@@ -24,11 +24,14 @@ import { carrySplatReplaceColor, splatStoredColor } from '@/utils/splatColor';
 import { isDirectAssignmentCode } from '@/engine/evaluateTSLScript';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import { sameGraphSemantics } from '@/utils/graphSemantics';
-import type { AppNode } from '@/types';
+import type { AppEdge, AppNode } from '@/types';
 import { generateEdgeId } from '@/utils/idGenerator';
 import { unwrapCollapsedGroupEdges, unwrapGroupsOnly } from '@/utils/edgeUtils';
 import { previewGraph, resolveNodePreview } from '@/utils/nodePreview';
 import { keepsNativeUndo } from '@/utils/isTypingTarget';
+import { dropsCode } from '@/utils/codeDraft';
+import { programInReply } from '@/utils/replyProgram';
+import type { NodePreviewTarget } from '@/utils/nodePreview';
 
 
 export function useSyncEngine() {
@@ -90,48 +93,15 @@ export function useSyncEngine() {
   useEffect(() => onUnknownExpressionValidated(() => setExprEpoch((n) => n + 1)), []);
   const prevExprEpochRef = useRef(exprEpoch);
 
-  // Graph → Code
-  useEffect(() => {
-    if (syncSource !== 'graph' || syncInProgress) return;
-    const revalidated = exprEpoch !== prevExprEpochRef.current;
-    prevExprEpochRef.current = exprEpoch;
-    // Entering or leaving Preview mode (or switching node) changes what the
-    // 3D view must render while `nodes`/`edges` stay exactly as they were —
-    // the same shape as `revalidated`, threaded through both guards the same
-    // way.
-    const previewChanged = nodePreview !== prevPreviewRef.current;
-    prevPreviewRef.current = nodePreview;
-    if (!revalidated && !previewChanged && nodes === prevNodesRef.current && edges === prevEdgesRef.current) return;
-    // Position/selection-only updates (every drag pointermove mints a new
-    // array identity) can't change generated code — skip the whole pass, not
-    // just the store writes. Never skip while isUndoRedo is set: this effect
-    // doubles as the undo path's reconciliation point and must reach the
-    // flag-clearing `finally` below (undo/redo structuredClones the arrays,
-    // so its `data` refs are always fresh and the predicate is false anyway —
-    // this guard covers the empty-graph corner where the scan is vacuous).
-    const inert =
-      !revalidated &&
-      !previewChanged &&
-      !useAppStore.getState().isUndoRedo &&
-      sameGraphSemantics(prevNodesRef.current, nodes, prevEdgesRef.current, edges);
-    prevNodesRef.current = nodes;
-    prevEdgesRef.current = edges;
-    if (inert) return;
-
-    // NB this pass deliberately does NOT bracket itself with
-    // `setSyncInProgress`. Its body is synchronous, so no other effect and no
-    // render can interleave with it, and the two writes cost two whole store
-    // notification rounds each pass — zustand re-runs EVERY subscribed
-    // selector on every notify, and this pass runs on every frame of a value
-    // scrub. Nothing observes the flag mid-body either: the ONLY readers are
-    // this effect's own guard above and the codeSyncRequested effect below,
-    // and `doCodeSync` (the path that really can overlap a render, since it
-    // replaces the whole graph) still sets it. Re-entrancy here is already
-    // covered by the `prevNodesRef`/`prevEdgesRef` identity check above —
-    // `setCode('graph')` touches neither `nodes` nor `edges`, and re-writes
-    // `syncSource` with the value the guard above already required it to have,
-    // so none of this effect's deps changes value and it cannot re-trigger.
-    try {
+  /**
+   * ONE graph→code pass: the panel's text, the preview's module and the node
+   * names, from `nodes`/`edges`. Shared by the effect below and by an Apply
+   * that keeps the typed text (utils/codeDraft.ts), which must run it at once
+   * rather than wait for whatever next arms the effect. `sameGraph` is a pass
+   * over a graph that did not change (the validator landing).
+   */
+  const emitGraphCode = useCallback(
+    (nodes: AppNode[], edges: AppEdge[], nodePreview: NodePreviewTarget | null, sameGraph: boolean) => {
       // The panel shows only the nodes that FEED AN OUTPUT (engine/panelCode.ts)
       // — and so does the preview, which runs the same text: a dead chain is
       // dead code, so a Time node in one no longer keeps the preview drawing
@@ -158,7 +128,8 @@ export function useSyncEngine() {
       // `nodeSpans` rides the same write: the panel's node → code highlight
       // (CodeEditor/useNodeCodeHighlight.ts) pairs it with THIS text only.
       // So do the whole graph's names: an Apply pairs and re-wires by them.
-      setCode(result.code, 'graph', previewText, { emitted, names: result.varNames, nodeSpans: result.nodeSpans });
+      // `sameGraph`: a kept text moves to this pass's text rather than ending.
+      setCode(result.code, 'graph', previewText, { emitted, names: result.varNames, nodeSpans: result.nodeSpans, sameGraph });
       lastSyncedCodeRef.current = result.code;
       // Update node variable names for display.
       //
@@ -190,16 +161,64 @@ export function useSyncEngine() {
         }
       }
       if (namesChanged) useAppStore.getState().setNodeVarNames(names);
+    },
+    [setCode],
+  );
+
+  // Graph → Code
+  useEffect(() => {
+    if (syncSource !== 'graph' || syncInProgress) return;
+    const revalidated = exprEpoch !== prevExprEpochRef.current;
+    prevExprEpochRef.current = exprEpoch;
+    // Entering or leaving Preview mode (or switching node) changes what the
+    // 3D view must render while `nodes`/`edges` stay exactly as they were —
+    // the same shape as `revalidated`, threaded through both guards the same
+    // way.
+    const previewChanged = nodePreview !== prevPreviewRef.current;
+    prevPreviewRef.current = nodePreview;
+    if (!revalidated && !previewChanged && nodes === prevNodesRef.current && edges === prevEdgesRef.current) return;
+    // Position/selection-only updates (every drag pointermove mints a new
+    // array identity) can't change generated code — skip the whole pass, not
+    // just the store writes. Never skip while isUndoRedo is set: this effect
+    // doubles as the undo path's reconciliation point and must reach the
+    // flag-clearing `finally` below (undo/redo structuredClones the arrays,
+    // so its `data` refs are always fresh and the predicate is false anyway —
+    // this guard covers the empty-graph corner where the scan is vacuous).
+    const sameGraph =
+      !useAppStore.getState().isUndoRedo &&
+      sameGraphSemantics(prevNodesRef.current, nodes, prevEdgesRef.current, edges);
+    const inert = !revalidated && !previewChanged && sameGraph;
+    prevNodesRef.current = nodes;
+    prevEdgesRef.current = edges;
+    if (inert) return;
+
+    // NB this pass deliberately does NOT bracket itself with
+    // `setSyncInProgress`. Its body is synchronous, so no other effect and no
+    // render can interleave with it, and the two writes cost two whole store
+    // notification rounds each pass — zustand re-runs EVERY subscribed
+    // selector on every notify, and this pass runs on every frame of a value
+    // scrub. Nothing observes the flag mid-body either: the ONLY readers are
+    // this effect's own guard above and the codeSyncRequested effect below,
+    // and `doCodeSync` (the path that really can overlap a render, since it
+    // replaces the whole graph) still sets it. Re-entrancy here is already
+    // covered by the `prevNodesRef`/`prevEdgesRef` identity check above —
+    // `setCode('graph')` touches neither `nodes` nor `edges`, and re-writes
+    // `syncSource` with the value the guard above already required it to have,
+    // so none of this effect's deps changes value and it cannot re-trigger.
+    try {
+      // `sameGraph` here is the validator landing on an unchanged graph: the
+      // text may differ with no edit behind it, so a kept text stays.
+      emitGraphCode(nodes, edges, nodePreview, revalidated && sameGraph);
     } finally {
       if (useAppStore.getState().isUndoRedo) {
         useAppStore.setState({ isUndoRedo: false });
       }
     }
-  }, [nodes, edges, syncSource, syncInProgress, setCode, exprEpoch, nodePreview]);
+  }, [nodes, edges, syncSource, syncInProgress, emitGraphCode, exprEpoch, nodePreview]);
 
   // Code → Graph (with stable node matching)
   const doCodeSync = useCallback(
-    async (codeStr: string, skipHistory = false) => {
+    async (typed: string, skipHistory = false) => {
       // A code→graph pass ends Preview mode: `requestCodeSync` has already
       // put the panel's text on the preview, and with `syncSource` at 'code'
       // the graph→code effect above — the only thing that emits the
@@ -209,7 +228,28 @@ export function useSyncEngine() {
       // direct-assignment early return, since that path leaves the panel's
       // text on the preview too.
       useAppStore.getState().setNodePreview(null);
+      // A whole AI reply pasted into the panel: the program is the code in its
+      // ```js fence (utils/replyProgram.ts). The panel takes that text, so the
+      // report's line numbers are the ones it shows — and so does the preview,
+      // which `requestCodeSync` had handed the reply itself.
+      const program = programInReply(typed);
+      const codeStr = program ?? typed;
+      if (program !== null) {
+        const draft = useAppStore.getState().codeDraft;
+        if (draft) {
+          useAppStore.setState({ codeDraft: { ...draft, code: codeStr, applied: codeStr } });
+        } else {
+          useAppStore.setState({ code: codeStr, previewCode: codeStr });
+          lastSyncedCodeRef.current = codeStr;
+        }
+      }
       if (isDirectAssignmentCode(codeStr)) {
+        // No graph is built from this style: the text IS the module. A kept
+        // text (utils/codeDraft.ts) therefore becomes the store's code here,
+        // which a typed one already is.
+        if (useAppStore.getState().codeDraft) {
+          useAppStore.setState({ code: codeStr, previewCode: codeStr, codeDraft: null });
+        }
         setCodeErrors([]);
         return;
       }
@@ -272,11 +312,16 @@ export function useSyncEngine() {
           // the nodes in `codeEmitted`, so every other old node is carried
           // back whole (utils/panelCarry.ts) and may not be paired. Null — a
           // study session, no sink, a bare-script import — carries nothing.
-          const scope = useAppStore.getState().codeEmitted;
+          //
+          // A KEPT text (utils/codeDraft.ts) is read under its own scope — what
+          // the parse that made it built — since `codeEmitted` then describes
+          // the graph's code, which is not the text on the panel.
+          const heldText = useAppStore.getState().codeDraft;
+          const scope = heldText ? heldText.emitted : useAppStore.getState().codeEmitted;
           const carriedIds = panelCarryIds(oldNodes, scope);
           // The text's names (`codeNames`): pass 0 of the pairing and the
           // carried wires follow them. Null with the scope.
-          const textNames = scope !== null ? useAppStore.getState().codeNames : null;
+          const textNames = scope !== null ? (heldText ? heldText.names : useAppStore.getState().codeNames) : null;
 
           // The parsed graph's module-settings Output: its vertex settings are
           // the module's own and never in the code, so they are carried; every
@@ -643,12 +688,35 @@ export function useSyncEngine() {
           // The names with it: each parsed node's label is its declared name.
           // The ring of older passes' scopes is done with — the text on the
           // panel is this one now.
+          const parsedNames = new Map([...positioned, ...unpositioned].map((n) => [n.id, String(n.data.label)] as const));
           if (scope !== null) {
             useAppStore.setState({
               codeEmitted: parseIds,
-              codeNames: new Map([...positioned, ...unpositioned].map((n) => [n.id, String(n.data.label)] as const)),
+              codeNames: parsedNames,
               codeScopes: [],
             });
+          }
+
+          // An Apply that could NOT put all of the text into the graph KEEPS
+          // the text on the panel (utils/codeDraft.ts; owner, 2026-11-26): its
+          // warnings quote lines the user is told to rewrite, and the pass
+          // that follows every Apply — React Flow re-measures the replaced
+          // nodes, which arms it — used to delete those very lines. The pass
+          // still runs, here and at once, because the 3D view, the exports and
+          // the node names must be the GRAPH's; it just no longer writes the
+          // panel. A text kept from an earlier Apply that now reaches the graph
+          // whole is released the same way, so the panel shows the graph's code
+          // again. Any other Apply is left exactly as it was.
+          const keepsText = dropsCode(result.errors);
+          if (keepsText) useAppStore.getState().holdCodeDraft(codeStr, parseIds, parsedNames);
+          else if (heldText) useAppStore.setState({ codeDraft: null });
+          if (keepsText || heldText) {
+            const applied = useAppStore.getState();
+            emitGraphCode(applied.nodes, applied.edges, null, false);
+            // The effect above recognises its own graph by these two refs (as
+            // the cost effect's stamp does), so it does not run the pass again.
+            prevNodesRef.current = applied.nodes;
+            prevEdgesRef.current = applied.edges;
           }
         }
         if (!skipHistory) {
@@ -658,13 +726,24 @@ export function useSyncEngine() {
         setSyncInProgress(false);
       }
     },
-    [setNodes, setEdges, setCodeErrors, setSyncInProgress]
+    [setNodes, setEdges, setCodeErrors, setSyncInProgress, emitGraphCode]
   );
 
   // Code → Graph (manual Save trigger)
   useEffect(() => {
     if (!codeSyncRequested || syncInProgress) return;
     useAppStore.setState({ codeSyncRequested: false });
+
+    // A kept text (utils/codeDraft.ts) is what the panel shows, so it is what
+    // Apply reads — and applying it again unchanged does nothing, like any
+    // text the last Apply already read.
+    const draft = useAppStore.getState().codeDraft;
+    if (draft) {
+      if (draft.code === draft.applied) return;
+      useAppStore.setState({ codeDraft: { ...draft, applied: draft.code } });
+      void doCodeSync(draft.code);
+      return;
+    }
 
     // Skip code→graph sync if the code hasn't been manually edited
     // (i.e. it was generated from the graph — nothing to parse back)

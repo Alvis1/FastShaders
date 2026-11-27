@@ -443,17 +443,18 @@ describe('codeToGraph — bare-global member args and computed constants', () =>
     expect(result.errors).toEqual([]);
   });
 
-  it('warns (severity warning) on unfoldable computed args like Math.PI', () => {
+  it('warns (severity warning) on unfoldable computed args like Math.E', () => {
+    // (Math.PI itself is its number since 2026-11-26 — droppedCodeWarnings.test.ts.)
     const result = codeToGraph(`
       import { Fn, time, mul } from 'three/tsl';
       const shader = Fn(() => {
-        const m = mul(time, Math.PI);
+        const m = mul(time, Math.E);
         return m;
       });
       export default shader;
     `);
     const warning = result.errors.find((e) => e.severity === 'warning');
-    expect(warning?.message).toMatch(/Math\.PI/);
+    expect(warning?.message).toMatch(/Math\.E/);
     // Warnings must not block sync
     expect(result.errors.every((e) => e.severity === 'warning')).toBe(true);
     // The mul node still exists with time wired

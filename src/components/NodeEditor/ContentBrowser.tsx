@@ -114,18 +114,24 @@ function assetMatches(a: { id: string; name: string; description: string }, q: s
     .some((x) => foldSearchText(x).includes(q));
 }
 
-const ACTIVE_TAB_BG = '#1A1A1A';
+/** The tile strip's tint for a category (none for All), laid over the bar's
+ *  own --bg-raised: by the strip itself and by its chosen tab alike. */
+function stripTint(hex: string | undefined): string | undefined {
+  return hex ? `${hex}1A` : undefined;
+}
 
-/** Tab style for a coloured category button: the active tab is dark (light
- *  text from the CSS class) with its bottom border in the same colour. */
-function tabStyle(hex: string, active: boolean): React.CSSProperties {
+/** Tab style for a category button (`hex` undefined for All). */
+function tabStyle(hex: string | undefined, active: boolean): React.CSSProperties {
   if (active) {
-    // Owner 2026-11-10: the chosen tab is DARK with light text (the colour in
-    // .content-browser__cat-btn--active), whatever the theme; the category
-    // hue stays in its border and in the tile strip underneath.
-    return { background: ACTIVE_TAB_BG, borderColor: `${hex}66`, borderBottomColor: ACTIVE_TAB_BG };
+    // Owner 2026-11-26: the chosen tab and the tile strip under it are ONE
+    // shape, as a browser's tab and its page: the strip's own colour, its tint
+    // layered over --bg-raised exactly as the strip's is, so the two are equal
+    // to the pixel; the line round it is .content-browser__cat-btn--active's.
+    // (It replaced the dark chosen tab of 2026-11-10.)
+    const tint = stripTint(hex);
+    return { background: tint ? `linear-gradient(${tint}, ${tint}), var(--bg-raised)` : 'var(--bg-raised)' };
   }
-  return { background: `${hex}15`, borderColor: `${hex}33` };
+  return hex ? { background: `${hex}15`, borderColor: `${hex}33` } : {};
 }
 
 /** Tile-zoom bounds: 0.5× keeps headers legible, 2× keeps a tile per screen. */
@@ -1197,16 +1203,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
           )}
           <button
             className={`content-browser__cat-btn ${activeCategory === 'all' ? 'content-browser__cat-btn--active' : ''}`}
-            style={
-              activeCategory === 'all'
-                ? {
-                    // Dark like every active tab (tabStyle).
-                    background: ACTIVE_TAB_BG,
-                    borderColor: 'var(--border-subtle)',
-                    borderBottomColor: ACTIVE_TAB_BG,
-                  }
-                : {}
-            }
+            style={tabStyle(undefined, activeCategory === 'all')}
             onClick={() => pickTab('all')}
             data-label={t('All', language)}
           >
@@ -1252,9 +1249,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
           className="content-browser__items"
           ref={scrollRef}
           style={{
-            background: activeCategory !== 'all'
-              ? `${CAT_HEX[activeCategory]}1A`
-              : undefined,
+            background: stripTint(activeCategory !== 'all' ? CAT_HEX[activeCategory] : undefined),
             zoom,
           }}
         >

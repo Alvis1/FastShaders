@@ -14,6 +14,7 @@ import { hasKtx2Encoder } from '@/utils/ktx2Encoder';
 import { useExportPreflight } from '@/components/Modals/ExportPreflightModal';
 import { FeedbackModal } from '@/components/Modals/FeedbackModal';
 import { PalettesModal } from '@/components/Modals/PalettesModal';
+import { PALETTE_FILE_EVENT, paletteFileOf } from '@/utils/paletteImportRequest';
 import { isEvalMode } from '@/eval/evalMode';
 import { evalTask, introInStudy } from '@/eval/evalTask';
 import { openIntro } from '@/intro/introGate';
@@ -25,6 +26,8 @@ import { GeneratorLauncher } from './GeneratorLauncher';
 import { BakeLauncher } from './BakeLauncher';
 import { WorkFolder } from './WorkFolder';
 import { formatCategoryLabel, t } from '@/i18n';
+import { SettingButton } from '@/components/inputs/SettingButton';
+import { LANGUAGE_OPTIONS, languageTitle } from '@/eval/LangSwitch';
 import { CATEGORIES } from '@/registry/nodeCategories';
 import { OPTIONAL_CATEGORIES, type OptionalCategory } from '@/registry/optionalCategories';
 import { foldOverflow, OVERFLOW_INITIAL } from './toolbarOverflow';
@@ -183,7 +186,7 @@ const OPTIONAL_CATEGORY_HINTS: Readonly<Record<OptionalCategory, string>> = {
 function prefsClaimedElsewhere(el: HTMLElement | null): boolean {
   if (!el) return false;
   if (isTypingTarget(el, { anyInputType: true })) return true;
-  return !!el.closest('.toolbar__export-wrap, .toolbar__local, .toolbar__overflow, .toolbar__reload-wrap');
+  return !!el.closest('.toolbar__export-wrap, .toolbar__local, .toolbar__overflow, .toolbar__reload-wrap, .fs-setting');
 }
 
 /**
@@ -312,6 +315,20 @@ export function Toolbar() {
   // LimitModal) exists because those dialogs are raised by non-UI code and can
   // stack; this one has a single button and no queue.
   const [palettesOpen, setPalettesOpen] = useState(false);
+  // Palette files picked with an Import button (utils/paletteImportRequest.ts):
+  // the dialog opens and reads each as its own "Open file" does.
+  const [paletteFiles, setPaletteFiles] = useState<File[]>([]);
+  useEffect(() => {
+    const onFile = (e: Event) => {
+      const file = paletteFileOf(e);
+      if (!file) return;
+      setPaletteFiles((q) => [...q, file]);
+      setPalettesOpen(true);
+    };
+    window.addEventListener(PALETTE_FILE_EVENT, onFile);
+    return () => window.removeEventListener(PALETTE_FILE_EVENT, onFile);
+  }, []);
+  const takePaletteFiles = useCallback(() => setPaletteFiles([]), []);
 
   // VR bench popover (desktop builds only — the button is behind
   // __FS_DESKTOP__, so this state is inert on the web).
@@ -681,25 +698,24 @@ export function Toolbar() {
           SC
         </a>
       )}
-      {/* Language switch (Latvian ⇄ English). Latvian is a display-only
-          overlay — see src/i18n — and the app's DEFAULT, so the button
-          labels the language it switches TO ("EN" while Latvian is on).
-          That makes it an action, not a state: no `aria-pressed`, which
-          beside a flipping label reads as a contradiction in a screen
-          reader (the WGSL/GLSL toggle documents the same trap). */}
-      <button
-        type="button"
+      {/* Language (English ⇄ Latvian; Latvian is a display-only overlay —
+          see src/i18n). Like every setting button it shows the language that
+          is ON ("LV" while Latvian is on; owner, 2026-11-26), a click
+          switches and a right-click lists both (SettingButton, which the
+          bar's own right-click menu leaves alone: `.fs-setting` in
+          prefsClaimedElsewhere). Its accessible name says the state, so it
+          carries no `aria-pressed`: a two-language state is not a press. */}
+      <SettingButton
+        options={LANGUAGE_OPTIONS}
+        value={language}
+        onSelect={setLanguage}
+        menuLabel={t('Language', language)}
         className="toolbar__sc-link toolbar__lang"
-        onClick={() => setLanguage(language === 'lv' ? 'en' : 'lv')}
-        title={
-          language === 'lv'
-            ? 'Pārslēgt uz angļu valodu (Switch to English)'
-            : 'Pārslēgt uz latviešu valodu (Switch to Latvian)'
-        }
-        aria-label={language === 'lv' ? 'Switch to English' : 'Pārslēgt uz latviešu valodu'}
+        title={languageTitle(language)}
+        aria-label={`${t('Language', language)}: ${language === 'lv' ? 'latviešu' : 'English'}`}
       >
-        {language === 'lv' ? 'EN' : 'LV'}
-      </button>
+        {language === 'lv' ? 'LV' : 'EN'}
+      </SettingButton>
       {/* Inside the desktop app, offering a download of itself makes no
           sense — __FS_DESKTOP__ builds hide the button. */}
       {!__FS_DESKTOP__ && (
@@ -841,16 +857,23 @@ export function Toolbar() {
       )}
       {/* App-wide dark/light toggle (moved here from the code panel's tab
           bar) — still the ONE dark-mode control: themes Monaco AND stamps
-          data-theme on <html> via setCodeEditorTheme. */}
-      <button
-        type="button"
+          data-theme on <html> via setCodeEditorTheme. It shows the mode that
+          is ON (☾ dark, ☼ light; owner, 2026-11-26), a right-click lists
+          both. */}
+      <SettingButton
+        options={[
+          { value: 'vs', label: t('Light mode', language) },
+          { value: 'vs-dark', label: t('Dark mode', language) },
+        ]}
+        value={isDark ? 'vs-dark' : 'vs'}
+        onSelect={setCodeEditorTheme}
+        menuLabel={t('Appearance', language)}
         className="toolbar__sc-link toolbar__theme-toggle"
-        onClick={() => setCodeEditorTheme(isDark ? 'vs' : 'vs-dark')}
-        title={isDark ? t('Switch to light mode', language) : t('Switch to dark mode', language)}
-        aria-label={t('Toggle dark mode', language)}
+        title={`${t(isDark ? 'Dark mode' : 'Light mode', language)}. ${t(isDark ? 'Switch to light mode' : 'Switch to dark mode', language)}. ${t('Right-click: all options.', language)}`}
+        aria-label={`${t('Appearance', language)}: ${t(isDark ? 'Dark mode' : 'Light mode', language)}`}
       >
-        {isDark ? '☼' : '☾'}
-      </button>
+        {isDark ? '☾' : '☼'}
+      </SettingButton>
     </>
   );
 
@@ -1252,7 +1275,12 @@ export function Toolbar() {
       ) : (
         <FeedbackModal open={feedbackOpen} onClose={closeFeedback} />
       )}
-      <PalettesModal open={palettesOpen} onClose={closePalettes} />
+      <PalettesModal
+        open={palettesOpen}
+        onClose={closePalettes}
+        importFiles={paletteFiles}
+        onImportFilesTaken={takePaletteFiles}
+      />
       {exportPreflightModal}
       {prefsAt && (
         <div

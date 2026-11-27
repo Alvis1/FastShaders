@@ -149,10 +149,15 @@ describe('default UI language', () => {
     expect(src).toContain('applyLangAttribute(useAppStore.getState().language);');
   });
 
-  it('offers the OTHER language on the toolbar button, so the label is an action', () => {
-    const toolbar = readFileSync(fileURLToPath(new URL('../components/Layout/Toolbar.tsx', import.meta.url)), 'utf8');
-    expect(toolbar).toContain("{language === 'lv' ? 'EN' : 'LV'}");
-    // A flipping label beside aria-pressed reads as a contradiction.
+  it('shows the language that is ON on every language button (owner, 2026-11-26), with a list on a right-click', () => {
+    const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+    const toolbar = read('../components/Layout/Toolbar.tsx');
+    const sw = read('../eval/LangSwitch.tsx');
+    for (const src of [toolbar, sw]) {
+      expect(src).toContain("{language === 'lv' ? 'LV' : 'EN'}");
+      expect(src).toContain('options={LANGUAGE_OPTIONS}');
+    }
+    // The name carries the state; a two-language state is not a press.
     expect(toolbar).not.toMatch(/toolbar__lang[\s\S]{0,400}aria-pressed/);
   });
 });

@@ -70,14 +70,17 @@ describe('keys table', () => {
 describe('intro window tabs', () => {
   const win = src('intro/IntroWindow.tsx');
 
-  it('Intro first and opened by default, then Keys', () => {
-    expect(win).toMatch(/const TABS[^=]*= \[\s*\{ id: 'intro', label: 'Intro' \},\s*\{ id: 'keys', label: 'Keys' \},\s*\]/);
+  it('Intro first and opened by default, then Keys, then What is a shader?', () => {
+    expect(win).toMatch(
+      /const TABS[^=]*= \[\s*\{ id: 'intro', label: 'Intro' \},\s*\{ id: 'keys', label: 'Keys' \},\s*\{ id: 'shader', label: EXPLAINER_TITLE \},\s*\]/,
+    );
     expect(win).toContain("useState<IntroTab>('intro')");
   });
 
-  it('logs Keys without a slide, so the summary still counts slides only', () => {
+  it('logs Keys and What is a shader? without a slide, so the summary still counts slides only', () => {
     // (Spelled in two halves: evalHooks.test.ts reads the whole call form in
     // any file outside its reviewed set as telemetry spreading.)
-    expect(win).toContain('evalLog' + "('intro-slide', to === 'keys' ? { tab: to } :");
+    expect(win).toContain('evalLog' + "('intro-slide', to !== 'intro' ? { tab: to } :");
+    expect(win).toContain("...(tab !== 'intro' ? { tab } : {}),");
   });
 });

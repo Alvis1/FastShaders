@@ -1,0 +1,39 @@
+/* The prompt for another AI (AiPromptDialog.tsx): the shared dialog panel
+   (CsvImportModal.css), wider, with three numbered steps and the text itself
+   in a read-only box that scrolls. Flat like every panel: no radius, no blur. */
+.csv-import-modal__panel.ai-prompt {
+  width: min(560px, 92vw);
+  max-height: min(88vh, 760px);
+}
+
+.ai-prompt__steps {
+  margin: 0;
+  padding-left: 1.4em;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.ai-prompt__text {
+  flex: 1 1 auto;
+  min-height: 120px;
+  height: 260px;
+  padding: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  /* The text is copied character for character: `=>` must not be drawn as
+     one ⇒ glyph (the mono font's ligature). */
+  font-variant-ligatures: none;
+  white-space: pre-wrap;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: 0;
+  resize: none;
+}
+
+.ai-prompt__text:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+}

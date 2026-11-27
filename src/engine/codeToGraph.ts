@@ -1,6 +1,6 @@
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
-import type { Binding, Scope } from '@babel/traverse';
+import type { Binding, NodePath, Scope } from '@babel/traverse';
 import * as t from '@babel/types';
 import type { AppNode, AppEdge, NodeDefinition, ParseError, TSLDataType, MaterialSettings } from '@/types';
 import { setNodeValues } from '@/types';
@@ -19,6 +19,7 @@ import {
   SPLAT_SCOPES,
   bindingOfRoot,
   implicitIdentifierOf,
+  noisePosIdentifier,
 } from '@/utils/sdfPartition';
 import { SPLAT_LIGHT_COLOR_DEFAULTS, SPLAT_LIGHT_DIRECTION_EPSILON } from '@/utils/splatLight';
 import { generateId } from '@/utils/idGenerator';
@@ -28,7 +29,7 @@ import { makeTypedEdge } from '@/utils/edgeUtils';
 import { freshNodeCost, nodeCostPoints } from '@/utils/nodeCost';
 import { VALID_SWIZZLE, TOHSL_COMPONENT_TO_HANDLE, OWN_MEMBER_TO_HANDLE, VECTOR_ONLY_FNS } from './graphToCode';
 import { INT_PRESERVING_TYPES, isIntSource } from './intPromotion';
-import { intGraphOver } from './cpuEvaluator';
+import { getEdgeOutputShape, intGraphOver } from './cpuEvaluator';
 import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import { DEFAULT_RAMP_STOPS, formatRampStops, isRampInterp, parseRampStops } from '@/utils/colorRamp';
 import { IDENTITY_CURVE, formatCurve, parseCurve, isCurveExtend } from '@/utils/rgbCurves';
@@ -38,6 +39,25 @@ import { MAX_UNKNOWN_REFS, isUnknownRefName, unknownCallRefNames, unknownRefHand
  *  twin of graphToCode's stored-value emission (keep the two in sync). */
 const OUTPUT_FLOAT_VALUE_CHANNELS = new Set(['roughness', 'metalness', 'opacity', 'position', 'discard']);
 const OUTPUT_COLOR_VALUE_CHANNELS = new Set(['color', 'emissive', 'normal', 'env']);
+
+/**
+ * three.js's own material property names for the channels the module builder
+ * writes as a plain rename (tslCodeProcessor's channel → node-prop map, read
+ * backwards) — what code written for a three material spells (`colorNode: …`),
+ * and what an exported module's own `parts` bodies hold. `positionNode` is
+ * deliberately absent: three's is the WHOLE position, the Output's `position`
+ * only how far to move along the normal (the builder wraps it), so reading
+ * one as the other would displace twice. It says so instead.
+ */
+const OUTPUT_CHANNEL_ALIASES: ReadonlyMap<string, string> = new Map([
+  ['colorNode', 'color'],
+  ['emissiveNode', 'emissive'],
+  ['roughnessNode', 'roughness'],
+  ['metalnessNode', 'metalness'],
+  ['opacityNode', 'opacity'],
+  ['normalNode', 'normal'],
+  ['envNode', 'env'],
+]);
 
 /** TSL statement-level constructs that build a control-flow block from a callback. */
 const IMPERATIVE_BLOCKS = new Set(['Loop', 'If', 'Switch']);
@@ -541,9 +561,11 @@ export function codeToGraph(code: string): CodeToGraphResult {
     tempPrefix: string,
   ): void => {
     const storedValues: Record<string, string | number> = {};
+    const sockets = NODE_REGISTRY.get('output')?.inputs.map((p) => p.id) ?? [];
     for (const rawProp of obj.properties) {
       if (!t.isObjectProperty(rawProp)) continue;
-      const channel = propKeyName(rawProp);
+      const written = propKeyName(rawProp);
+      const channel = written === null ? null : OUTPUT_CHANNEL_ALIASES.get(written) ?? written;
       // `parts` is the per-mesh map, handled by buildPartOutputs — never a
       // channel of the output it appears on. Nor is a material's settings key
       // (engine/materialSettingsCode): a value that resolves to a graph node
@@ -566,8 +588,25 @@ export function codeToGraph(code: string): CodeToGraphResult {
         || channel === 'materialParts'
         || channel === 'modelSignature'
         || channel === 'materialPartsMirror'
+        // Module-only, derived from the code by buildShaderModule: a raw
+        // module pasted into the panel carries it, and it is no channel.
+        || channel === 'uvDisplaced'
         || PART_BODY_SETTING_KEYS.has(channel)
       ) continue;
+      // A key the Output has no socket for (`alpha`, `displacement`, three's
+      // `positionNode`) used to be wired onto a handle that does not exist: a
+      // dead edge, and the value gone in silence.
+      if (!sockets.includes(channel)) {
+        const why = written === 'positionNode'
+          ? 'the Output\'s "position" channel takes only how far to move along the normal (a float), not the whole position'
+          : `the Output has no "${written}" channel; its channels are ${sockets.join(', ')}`;
+        warnings.push({
+          message: `"${written}: ${sourceText(rawProp.value, code)}" was dropped — ${why}.`,
+          line: rawProp.loc?.start.line,
+          severity: 'warning',
+        });
+        continue;
+      }
       // Same widening undo as the single-value form above — a multi-channel
       // return carries `{ color: vec3(noise1), opacity: … }`.
       const prop = { ...rawProp, value: unwrapScalarWiden(rawProp.value) } as t.ObjectProperty;
@@ -578,16 +617,31 @@ export function codeToGraph(code: string): CodeToGraphResult {
         storedValues[channel] = stored;
         continue;
       }
+      // What a channel that reads nothing says (DROPPED CODE): the lost text,
+      // why, and — for a bare number — the stored form that channel takes.
+      const dropChannel = (why?: string): void => {
+        // Quoted as WRITTEN (`roughnessNode: 0.3`); the fix names the channel.
+        warnings.push(
+          why
+            ? { message: `"${written}: ${sourceText(prop.value, code)}" was dropped — ${why}.`, line: prop.value.loc?.start.line, severity: 'warning' }
+            : droppedWarning(`${written}: ${sourceText(prop.value, code)}`, prop.value, code, prop.value, (n) =>
+              OUTPUT_COLOR_VALUE_CHANNELS.has(channel) ? `${channel}: color(0xRRGGBB)` : `${channel}: float(${n})`),
+        );
+      };
       if (t.isIdentifier(prop.value)) {
         const sourceId = varToNodeId.get(prop.value.name)
           ?? ensureBareInputNode(prop.value.name, rawNodes, varToNodeId);
         if (sourceId) {
           addEdge(rawEdges, sourceId, varToHandle.get(prop.value.name) ?? 'out', outputId, channel);
+        } else if (!reported(prop.value)) {
+          dropChannel();
         }
       } else if (t.isMemberExpression(prop.value)) {
         const ref = resolveMemberExpr(prop.value, rawNodes, rawEdges, varToNodeId, splitNodes, varToHandle);
         if (ref) {
           addEdge(rawEdges, ref.nodeId, ref.handle, outputId, channel, 'float');
+        } else {
+          dropChannel('it cannot be read as one value; give it its own const first');
         }
       } else if (t.isCallExpression(prop.value)) {
         // The synthetic name must not be one the MODULE already defines:
@@ -604,6 +658,10 @@ export function codeToGraph(code: string): CodeToGraphResult {
         if (sourceId) {
           addEdge(rawEdges, sourceId, 'out', outputId, channel);
         }
+      } else {
+        // A bare number, an operator, a ternary…: the channel used to stay
+        // empty in silence.
+        dropChannel();
       }
     }
     applyStoredOutputValues(outputId, storedValues);
@@ -1154,13 +1212,50 @@ export function codeToGraph(code: string): CodeToGraphResult {
     const returnRef = resolveReturnSource(arg, rawNodes, rawEdges, varToNodeId, varToHandle, splitNodes, code, warnings);
     if (returnRef) {
       addEdge(rawEdges, returnRef.nodeId, returnRef.handle, outputId, 'color');
+    } else if (!reported(arg) && !t.isCallExpression(arg)) {
+      // `return 0.5;`, `return a * b;`, a name declared nowhere: the Output
+      // used to stay empty in silence. (A call reports for itself.)
+      warnings.push(droppedWarning(`return ${sourceText(arg, code)}`, arg, code, arg));
     }
   };
+
+  // A bare shader BODY (a top-level `return`, or the three.js TSL editor's
+  // `output = …`) is graph content right at the module's top level. Anywhere
+  // else the top level holds the module-scope SETUP graphToCode writes ahead
+  // of the shader Fn — an image's `new Image()`, its `let ok = true`, its
+  // texture's fallback ternary — which is no graph content and must never
+  // read as dropped code (`isAppSetup` below).
+  const bareBody = ast.program.body.some((s) =>
+    t.isReturnStatement(s) ||
+    (t.isExpressionStatement(s) && t.isAssignmentExpression(s.expression) && t.isIdentifier(s.expression.left, { name: 'output' })),
+  );
+  const isAppSetup = (path: NodePath<t.VariableDeclarator>, init: t.Node): boolean =>
+    !bareBody &&
+    !path.getFunctionParent() &&
+    (t.isNewExpression(init) || t.isBooleanLiteral(init) || t.isConditionalExpression(init));
+  // This run's declared-but-dropped names (see `droppedDeclarations`).
+  const dropped = new Set<string>();
+  droppedDeclarations = dropped;
+  oneValueVectors = [];
+  /** A later read of a name already reported (or app setup) stays quiet. */
+  const reported = (expr: t.Node): boolean => t.isIdentifier(expr) && dropped.has(expr.name);
 
   try {
     traverse(ast, {
       VariableDeclarator(path) {
-        if (!t.isIdentifier(path.node.id)) return;
+        if (!t.isIdentifier(path.node.id)) {
+          // `const { r, g } = …` / `const [a, b] = …`: no node can hold a
+          // destructured name, and the declaration used to vanish in silence.
+          if (path.node.init) {
+            for (const name of Object.keys(t.getBindingIdentifiers(path.node.id))) dropped.add(name);
+            warnings.push({
+              message: `"${sourceText(path.node, code)}" was dropped — a destructured name is not a node; give each value its own const.`,
+              line: path.node.loc?.start.line,
+              severity: 'warning',
+            });
+          }
+          return;
+        }
         const varName = path.node.id.name;
         const init = path.node.init;
         if (!init) return;
@@ -1379,6 +1474,9 @@ export function codeToGraph(code: string): CodeToGraphResult {
             varToNodeId.set(varName, varToNodeId.get(init.name)!);
             const handle = varToHandle.get(init.name);
             if (handle) varToHandle.set(varName, handle);
+          } else {
+            dropped.add(varName);
+            if (!reported(init)) warnings.push(droppedWarning(`${varName} = ${init.name}`, init, code, init));
           }
           return;
         }
@@ -1392,6 +1490,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
             varToNodeId.set(varName, ref.nodeId);
             varToHandle.set(varName, ref.handle);
           } else {
+            dropped.add(varName);
             const exprText = init.start != null && init.end != null
               ? code.slice(init.start, init.end)
               : 'member expression';
@@ -1410,6 +1509,20 @@ export function codeToGraph(code: string): CodeToGraphResult {
           // Inside a splat Fn a noise position may be the Fn's own `p`.
           if (inScopeFn && splatFns.has(scopeFn!)) inSplatFn(scopeFn!, parse);
           else parse();
+          // A call that built nothing (the `Fn` wrapper itself, a callee with
+          // no name): a later read of the name must not claim it was never
+          // declared.
+          if (!varToNodeId.has(varName)) dropped.add(varName);
+          return;
+        }
+
+        // Nothing above built a node from this declaration, so it is DROPPED,
+        // and every later read of the name reads nothing: a plain number, an
+        // operator, a ternary, a function of the user's own. Said aloud — but
+        // the module-scope setup the app writes itself is no graph content.
+        dropped.add(varName);
+        if (!isAppSetup(path, init)) {
+          warnings.push(droppedWarning(`${varName} = ${sourceText(init, code)}`, init, code, init));
         }
       },
 
@@ -1551,6 +1664,9 @@ export function codeToGraph(code: string): CodeToGraphResult {
         );
         if (ref) {
           addEdge(rawEdges, ref.nodeId, ref.handle, outputNode.id, 'discard', 'float');
+        } else if (!reported(pendingDiscardArg) && !t.isCallExpression(pendingDiscardArg)) {
+          // `Discard(x > 0.5)`: the cutout used to vanish in silence.
+          warnings.push(droppedWarning(`Discard(${sourceText(pendingDiscardArg, code)})`, pendingDiscardArg, code, pendingDiscardArg));
         }
       }
     }
@@ -1575,6 +1691,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
   }
 
   warnings.push(...lostIntConversions(lostIntCandidates, rawNodes, rawEdges));
+  warnings.push(...spreadOneValueVectors(oneValueVectors, rawNodes, rawEdges, code));
   return { nodes: rawNodes, edges: rawEdges, errors: warnings };
 }
 
@@ -2009,6 +2126,156 @@ export const HELPER_ARG_READERS: ReadonlyMap<string, HelperArgReader> = new Map<
   }],
 ]);
 
+/**
+ * DROPPED CODE (owner, 2026-11-26). Code the graph cannot hold used to vanish
+ * on Apply with `errors: []` — a `const k = 3;`, an `a * b`, a `roughness: 0.3`
+ * — and the panel, rewritten from the graph, then no longer showed it. Every
+ * such spot now says what was lost, why, and what to write instead. The
+ * message QUOTES the lost text, because after the Apply the panel no longer
+ * holds it. Always `severity: 'warning'`: the rest of the code still applies.
+ */
+
+/** `n`'s source text on one line, capped at 80 characters. */
+function sourceText(n: t.Node, code: string): string {
+  const text = n.start != null && n.end != null ? code.slice(n.start, n.end).replace(/\s+/g, ' ').trim() : '';
+  return text.length > 80 ? `${text.slice(0, 80)}…` : text;
+}
+
+/** The node function a JS operator stands for (when the registry has it). */
+const OPERATOR_FUNCTIONS: Readonly<Record<string, string>> = {
+  '+': 'add', '-': 'sub', '*': 'mul', '/': 'div', '%': 'mod', '**': 'pow',
+  '>': 'greaterThan', '<': 'lessThan', '==': 'equal', '===': 'equal',
+};
+
+/**
+ * `expr` with EVERY operator written as its node function, so the fix a
+ * warning offers is whole: `n * 0.5 + 0.5` → `add(mul(n, 0.5), 0.5)`. One level
+ * only would send the user back for a second warning about the inner operator.
+ * A constant part (`1 / 6`, `Math.PI * 2`) stays as written: an argument folds
+ * it. Anything else is its own source text.
+ */
+function asFunctions(expr: t.Node, code: string): string {
+  if (foldNumericConstant(expr) !== undefined) return sourceText(expr, code);
+  if (t.isBinaryExpression(expr) && !t.isPrivateName(expr.left)) {
+    const fn = OPERATOR_FUNCTIONS[expr.operator];
+    if (fn && TSL_FUNCTION_TO_DEF.has(fn)) return `${fn}(${asFunctions(expr.left, code)}, ${asFunctions(expr.right, code)})`;
+  }
+  if (t.isUnaryExpression(expr) && expr.operator === '-') return `mul(${asFunctions(expr.argument, code)}, -1)`;
+  return sourceText(expr, code);
+}
+
+/**
+ * Why `expr` can be no node, and what to write instead: the second half of a
+ * dropped-code warning. `numberFix` spells the node a bare number should have
+ * been where it stands (`float(0.3)`, or `color(0xRRGGBB)` in a colour channel).
+ */
+function droppedWhy(expr: t.Node, code: string, numberFix: (n: number) => string = (n) => `float(${n})`): string {
+  const n = foldNumericConstant(expr);
+  if (n !== undefined) return `a plain number is not a node; write ${numberFix(n)}`;
+  if (t.isBinaryExpression(expr) && !t.isPrivateName(expr.left)) {
+    const fn = OPERATOR_FUNCTIONS[expr.operator];
+    return fn && TSL_FUNCTION_TO_DEF.has(fn)
+      ? `shader values have no ${expr.operator} operator; write ${asFunctions(expr, code)}`
+      : `shader values have no ${expr.operator} operator`;
+  }
+  if (t.isUnaryExpression(expr)) {
+    return expr.operator === '-'
+      ? `shader values have no - sign; write ${asFunctions(expr, code)}`
+      : `shader values have no ${expr.operator} operator`;
+  }
+  if (t.isLogicalExpression(expr)) return `shader values have no ${expr.operator} operator`;
+  if (t.isConditionalExpression(expr)) return 'a ? b : c is not a node; write select(condition, ifTrue, ifFalse)';
+  if (t.isIdentifier(expr)) return `"${expr.name}" is not an input or a node declared above`;
+  if (t.isArrowFunctionExpression(expr) || t.isFunctionExpression(expr)) {
+    return 'a function of your own is not a node; write its steps in the shader itself';
+  }
+  if (t.isStringLiteral(expr) || t.isTemplateLiteral(expr)) return 'text is not a node';
+  return 'it is not a node';
+}
+
+/** One dropped-code warning: `"<what>" was dropped — <why>.` on `at`'s line. */
+function droppedWarning(what: string, expr: t.Node, code: string, at: t.Node, numberFix?: (n: number) => string): ParseError {
+  return {
+    message: `"${what}" was dropped — ${droppedWhy(expr, code, numberFix)}.`,
+    line: at.loc?.start.line,
+    severity: 'warning',
+  };
+}
+
+/**
+ * The names this parse DECLARED but built no node for — every dropped
+ * declaration (its own warning already said so: one warning per lost line, not
+ * one more per use of it), and the module-scope setup the app writes itself.
+ * A later read of one of them stays quiet; a name declared NOWHERE still says
+ * so where it is read. Set for the run by codeToGraph (processCall reads it).
+ */
+let droppedDeclarations: Set<string> = new Set();
+
+/**
+ * `vec3(x)` with ONE value. TSL spreads a single number to every component;
+ * the Vec node has one socket per component, so the generic argument loop read
+ * it as (x, 0, 0) — grey came back red, with no warning. A NUMBER is spread
+ * before the node is built (processCall). A wire is spread HERE, on the built
+ * graph, where its width is known: one channel feeds every socket, exactly as
+ * TSL would; anything wider cannot be held by per-component sockets and says
+ * so. graphToCode never writes a one-value vector as a node of its own (its
+ * `vec3(ref)` widenings are undone before the walk), so this is hand-written
+ * code only. Set for the run by codeToGraph (processCall fills it).
+ */
+let oneValueVectors: { nodeId: string; call: t.CallExpression }[] = [];
+
+const VEC_PORTS = ['x', 'y', 'z', 'w'];
+
+function spreadOneValueVectors(
+  pending: readonly { nodeId: string; call: t.CallExpression }[],
+  nodes: AppNode[],
+  edges: AppEdge[],
+  code: string,
+): ParseError[] {
+  const warnings: ParseError[] = [];
+  if (pending.length === 0) return warnings;
+  // ONE walk of the edges, and every width read BEFORE the first wire is
+  // added: a file can hold any number of these, and the evaluator's graph
+  // index is keyed on the arrays this loop grows.
+  const intoX = new Map<string, AppEdge>();
+  for (const e of edges) if (e.targetHandle === 'x' && !intoX.has(e.target)) intoX.set(e.target, e);
+  const plans = pending.map(({ nodeId, call }) => {
+    const node = nodeById(nodes, nodeId);
+    const size = node ? NODE_REGISTRY.get(String(node.data.registryType))?.inputs.length ?? 0 : 0;
+    const fed = intoX.get(nodeId);
+    // Nothing reached `x` (its own warning already said why).
+    if (!node || !fed || size < 2) return null;
+    return { nodeId, call, size, fed, oneChannel: getEdgeOutputShape(fed, nodes, edges) === 1 };
+  });
+  for (const plan of plans) {
+    if (!plan) continue;
+    const { nodeId, call, size, fed } = plan;
+    if (plan.oneChannel) {
+      for (const port of VEC_PORTS.slice(1, size)) {
+        addEdge(edges, fed.source, fed.sourceHandle ?? 'out', nodeId, port, 'float');
+      }
+      continue;
+    }
+    const text = sourceText(call, code);
+    const name = t.isIdentifier(call.callee) ? call.callee.name : 'vec';
+    warnings.push({
+      message: `"${text}" was read as ONE component — a ${name} node takes one number per socket; write each: ${name}(${VEC_PORTS.slice(0, size).map((c) => `a.${c}`).join(', ')}).`,
+      line: call.loc?.start.line,
+      severity: 'warning',
+    });
+  }
+  return warnings;
+}
+
+/** A name that resolves to nothing, read where a socket wanted a wire. */
+function unresolvedNameWarning(name: string, where: string, consequence: string, at: t.Node): ParseError {
+  return {
+    message: `"${name}" (${where}) is not an input or a node declared above — ${consequence}.`,
+    line: at.loc?.start.line,
+    severity: 'warning',
+  };
+}
+
 /** The readers' shared reporting: `warn` pushes a non-blocking warning on the call's line; `quote` is the
  *  argument's source text, capped at 80 chars, in double quotes (or `"argument"` without positions). A STRING
  *  literal is quoted by its VALUE (`JSON.stringify`, so control characters stay escaped) — its source text
@@ -2189,8 +2456,30 @@ function processCall(
   // name stays a Vec3 node. The two nodes emit identical text, so nothing in the
   // source can distinguish them — and keeping the component-wise form as VecN is
   // what leaves the built-in textures/presets (26 such calls) byte-identical.
+  // `color(r, g, b)` is three LINEAR components — exactly what a Vec3 holds.
+  // Read as the hex Color node it stored the first number AS the hex:
+  // `color(1, 0.5, 0)` came back `color(0x000001)`, black, without a word.
+  if (funcName === 'color' && t.isIdentifier(callExpr.callee) && callExpr.arguments.length === 3) {
+    processCall(
+      { ...callExpr, callee: t.identifier('vec3') } as t.CallExpression,
+      varName, nodes, edges, varToNodeId, varToHandle, splitNodesMap, code, errors,
+    );
+    return;
+  }
+
   const VEC_CTOR_SIZE: Record<string, number> = { vec2: 2, vec3: 3, vec4: 4 };
   const appendCtorSize = VEC_CTOR_SIZE[funcName] ?? 0;
+  // ONE value (`vec3(0.5)`, `vec3(n)`): TSL spreads it to every component. A
+  // number is spread here; a wire once its width is known (`oneValueVectors`).
+  const oneValueVector = appendCtorSize > 0 && t.isIdentifier(callExpr.callee) && callExpr.arguments.length === 1;
+  if (oneValueVector && typeof foldNumericConstant(callExpr.arguments[0]) === 'number') {
+    const only = callExpr.arguments[0];
+    processCall(
+      { ...callExpr, arguments: Array.from({ length: appendCtorSize }, () => only) } as t.CallExpression,
+      varName, nodes, edges, varToNodeId, varToHandle, splitNodesMap, code, errors,
+    );
+    return;
+  }
   if (appendCtorSize > 0 && callExpr.arguments.length >= 2 && callExpr.arguments.length <= appendCtorSize) {
     const isConcat = callExpr.arguments.length < appendCtorSize;
     const namedAppend = /^append\d*$/.test(varName);
@@ -2215,15 +2504,32 @@ function processCall(
               varToNodeId.get(arg.name) ?? ensureBareInputNode(arg.name, nodes, varToNodeId);
             if (sourceId) {
               addEdge(edges, sourceId, varToHandle.get(arg.name) ?? 'out', nodeId, ports[i]);
+            } else if (!droppedDeclarations.has(arg.name)) {
+              errors.push(unresolvedNameWarning(arg.name, `argument of ${funcName}`, 'that part of the vector stays 0', arg));
             }
           } else if (t.isMemberExpression(arg)) {
             const ref = resolveMemberExpr(arg, nodes, edges, varToNodeId, splitNodesMap, varToHandle);
             if (ref) {
               addEdge(edges, ref.nodeId, ref.handle, nodeId, ports[i], 'float');
+            } else {
+              errors.push({
+                message: `Cannot represent "${sourceText(arg, code)}" (argument of ${funcName}) — that part of the vector stays 0.`,
+                line: arg.loc?.start.line ?? callExpr.loc?.start.line,
+                severity: 'warning',
+              });
             }
           } else {
             const lit = extractLiteral(arg);
             if (typeof lit === 'number') setNodeValues(appendNode, { [ports[i]]: lit });
+            // This path reads names, swizzles and numbers only: an inline call
+            // here used to vanish too.
+            else if (t.isCallExpression(arg)) {
+              errors.push({
+                message: `"${sourceText(arg, code)}" (argument of ${funcName}) was dropped — give it its own const first.`,
+                line: arg.loc?.start.line ?? callExpr.loc?.start.line,
+                severity: 'warning',
+              });
+            } else errors.push(droppedWarning(sourceText(arg, code), arg, code, arg));
           }
         }
         return;
@@ -2242,22 +2548,46 @@ function processCall(
   // registry), so the colour form is recognised from the ARGUMENT shape here.
   // Without this branch the generic path would build a color node wired into a
   // property_float — a different graph than the one that emitted the code.
-  if (funcName === 'uniform' && callExpr.arguments.length === 1) {
+  if (funcName === 'uniform' && t.isIdentifier(callExpr.callee) && callExpr.arguments.length === 1) {
     const uArg = callExpr.arguments[0];
     if (t.isCallExpression(uArg) && t.isIdentifier(uArg.callee) && uArg.callee.name === 'color') {
       const colorDef = NODE_REGISTRY.get('property_color');
       const lit = uArg.arguments.length === 1 ? extractLiteral(uArg.arguments[0]) : undefined;
-      if (colorDef && typeof lit === 'number') {
+      // `color(0xRRGGBB)` — or the same six digits as a string, `color('#ff8800')`.
+      const hex = typeof lit === 'number' ? toHex6(lit)
+        : typeof lit === 'string' && /^#[0-9a-fA-F]{6}$/.test(lit) ? lit.toLowerCase()
+          : null;
+      if (colorDef && hex !== null) {
         const nodeId = generateId();
         const node = createNode(nodeId, colorDef, varName);
         setNodeValues(node, {
-          hex: toHex6(lit),
+          hex,
           name: varName,
         });
         nodes.push(node);
         varToNodeId.set(varName, nodeId);
         return;
       }
+    }
+    // `uniform(float(2))` is `uniform(2)`: the conversion of a number is that number.
+    const inner = t.isCallExpression(uArg) && t.isIdentifier(uArg.callee) && (uArg.callee.name === 'float' || uArg.callee.name === 'int') && uArg.arguments.length === 1
+      ? uArg.arguments[0]
+      : uArg;
+    if (typeof foldNumericConstant(inner) !== 'number') {
+      // Anything else (a vector, another const, an object) left the uniform at
+      // its default 1 in silence — and an inline call there built an orphan
+      // node wired to a socket the property does not have.
+      errors.push({
+        message: `"${varName} = ${sourceText(callExpr, code)}" lost its value — a uniform holds a number or a hex colour; write uniform(1.5) or uniform(color(0xRRGGBB)).`,
+        line: callExpr.loc?.start.line,
+        severity: 'warning',
+      });
+      processCall({ ...callExpr, arguments: [] } as t.CallExpression, varName, nodes, edges, varToNodeId, varToHandle, splitNodesMap, code, errors);
+      return;
+    }
+    if (inner !== uArg) {
+      processCall({ ...callExpr, arguments: [inner] } as t.CallExpression, varName, nodes, edges, varToNodeId, varToHandle, splitNodesMap, code, errors);
+      return;
     }
   }
 
@@ -2302,6 +2632,7 @@ function processCall(
       message: `Unknown function: ${funcName}`,
       line: callExpr.loc?.start.line,
       severity: 'warning',
+      kept: true,
     });
     return;
   }
@@ -2312,6 +2643,7 @@ function processCall(
   nodes.push(node);
   varToNodeId.set(varName, nodeId);
   if (INT_PRESERVING_TYPES.has(def.type)) CALL_NODE_IDS.set(callExpr, nodeId);
+  if (oneValueVector && def.type === funcName) oneValueVectors.push({ nodeId, call: callExpr });
 
   // fs* helpers carry non-socket arguments (Fresnel's implicit geometry, the Color Ramp / RGB Curves canonical
   // strings): a per-type reader stores them in `values` (PARSE-THEN-RE-EMIT) and returns only the SOCKET
@@ -2370,6 +2702,16 @@ function processCall(
     }
     if (src) {
       addEdge(edges, src.nodeId, src.handle, nodeId, def.inputs[0].id, def.inputs[0].dataType);
+    } else if (
+      objectVarName && t.isMemberExpression(callExpr.callee) && t.isIdentifier(callExpr.callee.object) &&
+      !droppedDeclarations.has(objectVarName)
+    ) {
+      // A receiver that names nothing (`foo.mul(2)`, a typo) used to leave the
+      // input unwired in silence. (A receiver CALL that built nothing has its
+      // own warning, from its own parse. An unreadable SWIZZLE receiver stays
+      // quiet on purpose: the data charts' hand-written emission is one-way
+      // through this parser and spells `uv().x.sub(…)` on every Apply.)
+      errors.push(unresolvedNameWarning(objectVarName, `the value ${funcName} is called on`, `${funcName}'s first input keeps its default value`, callExpr.callee.object));
     }
     inputIdx = 1;
   }
@@ -2385,8 +2727,12 @@ function processCall(
     const argText = arg.start != null && arg.end != null
       ? code.slice(arg.start, arg.end)
       : 'argument';
+    // An operator or a ternary says what to write instead (droppedWhy).
+    const fix = t.isBinaryExpression(arg) || t.isUnaryExpression(arg) || t.isLogicalExpression(arg) || t.isConditionalExpression(arg)
+      ? ` (${droppedWhy(arg, code)})`
+      : '';
     errors.push({
-      message: `Cannot represent "${argText}" (argument of ${funcName}) — the port keeps its default value.`,
+      message: `Cannot represent "${argText}" (argument of ${funcName}) — the port keeps its default value${fix}.`,
       line: arg.loc?.start.line ?? callExpr.loc?.start.line,
       severity: 'warning',
     });
@@ -2427,9 +2773,25 @@ function processCall(
         ? { id: chainPortId(portIndex), label: chainPortId(portIndex).toUpperCase(), dataType: 'any' as const }
         : undefined);
 
-    const literalValue = extractLiteral(arg);
+    // An argument past the node's last socket (`sin(x, 2)`) used to vanish in
+    // silence — and an inline call there still built an orphan node.
+    if (!port && def.inputs.length > 0) {
+      const extra = callArgs.slice(i);
+      errors.push({
+        message: `${funcName}: ${extra.length} extra argument${extra.length > 1 ? 's' : ''} dropped — "${extra.map((a) => sourceText(a, code)).join(', ')}".`,
+        line: callExpr.loc?.start.line,
+        severity: 'warning',
+      });
+      break;
+    }
 
-    if (t.isIdentifier(arg)) {
+    const literalValue = extractLiteral(arg);
+    // A number constant spelled as a name (`PI`, `Math.PI` — foldNumericConstant)
+    // is its number, unless the name is a node this module declares.
+    const constantArg = typeof literalValue === 'number' &&
+      (t.isMemberExpression(arg) || (t.isIdentifier(arg) && !varToNodeId.has(arg.name)));
+
+    if (t.isIdentifier(arg) && !constantArg) {
       const sourceId =
         varToNodeId.get(arg.name) ?? ensureBareInputNode(arg.name, nodes, varToNodeId);
       const srcHandle = varToHandle.get(arg.name) ?? 'out';
@@ -2444,8 +2806,12 @@ function processCall(
         extractedValues[defaultKeys[i]] = arg.name;
       } else if (!port) {
         break;
+      } else if (!sourceId && !droppedDeclarations.has(arg.name)) {
+        // A name that is no node and no input (a typo, a name declared
+        // nowhere) used to leave the port at its default in silence.
+        errors.push(unresolvedNameWarning(arg.name, `argument of ${funcName}`, 'the port keeps its default value', arg));
       }
-    } else if (t.isMemberExpression(arg)) {
+    } else if (t.isMemberExpression(arg) && !constantArg) {
       // Member expression: someVar.x (or a bare global like positionGeometry.y)
       // → resolve through split node
       const ref = resolveMemberExpr(arg, nodes, edges, varToNodeId, splitNodesMap, varToHandle);
@@ -2705,6 +3071,17 @@ function processNoiseCall(
   const extractedValues: Record<string, string | number> = {};
   const args = callExpr.arguments;
 
+  // A bare name in the position is STORED (the inputs the noise reads, like
+  // `positionWorld`) — but emission keeps only names it knows
+  // (noisePosIdentifier), so a typo or a name declared nowhere used to turn
+  // into `positionGeometry` in silence. A dropped declaration has said so.
+  const storePosName = (id: t.Identifier): void => {
+    extractedValues.pos = id.name;
+    if (noisePosIdentifier(id.name) !== id.name && !droppedDeclarations.has(id.name)) {
+      errors.push(unresolvedNameWarning(id.name, `the position of ${callExpr.callee && t.isIdentifier(callExpr.callee) ? callExpr.callee.name : 'the noise'}`, 'the noise reads positionGeometry', id));
+    }
+  };
+
   // A position that is neither implicit, an identifier, nor a member: a member
   // (`fresnel1.x`, `toHsl1.y`, a Split swizzle) is a wire into `pos`; anything
   // else has no graph form and is reported rather than dropped in silence.
@@ -2736,7 +3113,7 @@ function processNoiseCall(
       if (sourceId) {
         addEdge(edges, sourceId, varToHandle.get(posInner.name) ?? 'out', nodeId, 'pos');
       } else {
-        extractedValues.pos = posInner.name;
+        storePosName(posInner);
       }
     } else {
       wireMemberPos(posInner);
@@ -2748,6 +3125,8 @@ function processNoiseCall(
       const sourceId = varToNodeId.get(scaleInner.name);
       if (sourceId) {
         addEdge(edges, sourceId, varToHandle.get(scaleInner.name) ?? 'out', nodeId, 'scale');
+      } else if (!droppedDeclarations.has(scaleInner.name)) {
+        errors.push(unresolvedNameWarning(scaleInner.name, 'the noise scale', 'the scale keeps its default value', scaleInner));
       }
     }
   };
@@ -2781,7 +3160,7 @@ function processNoiseCall(
       if (sourceId) {
         addEdge(edges, sourceId, varToHandle.get(posArg.name) ?? 'out', nodeId, 'pos');
       } else {
-        extractedValues.pos = posArg.name;
+        storePosName(posArg);
       }
     } else {
       wireMemberPos(posArg);
@@ -2867,6 +3246,14 @@ function extractLiteral(node: t.Node): string | number | undefined {
   return foldNumericConstant(node);
 }
 
+/** The number constants `three/tsl` exports (r184 `MathNode.js`: PI, TWO_PI and its older name PI2, HALF_PI). */
+const TSL_NUMBER_CONSTANTS: ReadonlyMap<string, number> = new Map([
+  ['PI', Math.PI],
+  ['TWO_PI', Math.PI * 2],
+  ['PI2', Math.PI * 2],
+  ['HALF_PI', Math.PI / 2],
+]);
+
 /**
  * Evaluate a compile-time numeric constant: numeric literals, unary +/-, and
  * BinaryExpressions whose operands are themselves numeric constants (`1 / 6`,
@@ -2879,6 +3266,14 @@ function foldNumericConstant(node: t.Node): number | undefined {
   // here, an Infinity would be STORED in node values, and the fs:graph autosave
   // (JSON.stringify) rewrites it to `null`, which later coerces to a real 0.
   if (t.isNumericLiteral(node)) return Number.isFinite(node.value) ? node.value : undefined;
+  // three/tsl's own number constants, and JavaScript's π: `mul(angle, PI)`,
+  // `Math.PI * 2`. A name the module declares as a NODE wins where a wire is
+  // read (processCall's argument loop asks first).
+  if (t.isIdentifier(node) && TSL_NUMBER_CONSTANTS.has(node.name)) return TSL_NUMBER_CONSTANTS.get(node.name);
+  if (
+    t.isMemberExpression(node) && !node.computed &&
+    t.isIdentifier(node.object, { name: 'Math' }) && t.isIdentifier(node.property, { name: 'PI' })
+  ) return Math.PI;
   if (t.isUnaryExpression(node) && (node.operator === '-' || node.operator === '+')) {
     const v = foldNumericConstant(node.argument);
     if (v === undefined) return undefined;

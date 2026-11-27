@@ -71,7 +71,8 @@ describe('useStudyDialog', () => {
     // the browser's Save Page no longer sees the key.
     expect(helper).toMatch(/useModalKeys\(open, \(e\) => \{[\s\S]*?if \(e\.key !== 'Tab'\) e\.stopPropagation\(\);\s*\}, true\);/);
     expect(helper).toMatch(/if \(\(e\.metaKey \|\| e\.ctrlKey\) && e\.key\.toLowerCase\(\) === 's'\) e\.preventDefault\(\);/);
-    expect(helper).toMatch(/if \(e\.key === 'Escape'\) \{\s*e\.stopPropagation\(\);\s*onEscape\?\.\(\);/);
+    // Escape closes an open setting list (the language button's) first.
+    expect(helper).toMatch(/if \(e\.key === 'Escape'\) \{\s*e\.stopPropagation\(\);[^}]*if \(!closeSettingMenu\(\)\) onEscape\?\.\(\);/);
   });
 
   it('the consent is inert behind its Details dialog', () => {

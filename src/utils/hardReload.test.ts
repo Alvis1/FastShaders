@@ -146,7 +146,7 @@ describe('the toolbar control', () => {
     // bar is expanded — and only the new one once collapsed, because
     // `.toolbar__overflow` is already guarded. State-dependent, so it survives
     // testing at one window size.
-    expect(tb).toMatch(/closest\('\.toolbar__export-wrap[^']*\.toolbar__reload-wrap'\)/);
+    expect(tb).toMatch(/closest\('\.toolbar__export-wrap[^']*\.toolbar__reload-wrap[,']/);
     expect(tb).toMatch(/className="toolbar__local toolbar__reload-wrap"/);
   });
 

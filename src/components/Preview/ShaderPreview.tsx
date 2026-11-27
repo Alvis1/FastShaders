@@ -110,6 +110,7 @@ import { platformWebGL2Reason } from '@/utils/feedbackReport';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { fullscreenElement } from '@/components/inputs/colorPickerModel';
 import { NumberField } from '@/components/inputs/NumberField';
+import { SettingButton } from '@/components/inputs/SettingButton';
 import { formatFieldNumber, parseFieldNumber } from '@/utils/numberField';
 import { AnimClipMenu } from './AnimClipMenu';
 import { FlySettingsMenu } from './FlySettingsMenu';
@@ -241,6 +242,13 @@ const STAGE_TITLES: Record<PreviewStage, string> = {
   room: 'Background: checker room around the object, with its X, Y and Z axes. Click for a grid in metres',
   grid: 'Background: grid in metres through the object’s centre, with its X, Y and Z axes. Click for the plain colour',
 };
+
+/** The background button's list, in its click order (`nextPreviewStage`). */
+const STAGE_OPTIONS: readonly { value: PreviewStage; label: string }[] = [
+  { value: 'none', label: 'Plain colour' },
+  { value: 'room', label: 'Checker room' },
+  { value: 'grid', label: 'Grid' },
+];
 
 /** The background button's icon: what is shown NOW. 16 px, stroked in the
  *  button's own text colour, so it follows the theme. */
@@ -3327,13 +3335,19 @@ export function ShaderPreview() {
           {/* WGSL/GLSL backend toggle. The label is the backend the CURRENT
               document reported (a prediction only until the first report
               lands); active styling marks the FORCED state, so auto-GLSL on
-              Safari reads as a fact, not a setting. */}
-          <button
-            type="button"
+              Safari reads as a fact, not a setting. A right-click lists the
+              two settings (SettingButton; owner, 2026-11-26). */}
+          <SettingButton
+            options={[
+              { value: false, label: t('Automatic: WebGPU (WGSL)', language) },
+              { value: true, label: 'WebGL2 (GLSL)' },
+            ]}
+            value={forceWebGL2}
+            onSelect={setPreviewForceWebGL2}
+            menuLabel={t('Backend', language)}
             className={`shader-preview__props-btn${forceWebGL2 ? ' shader-preview__props-btn--active' : ''}`}
-            onClick={() => { if (backendLocked) return; setPreviewForceWebGL2(!forceWebGL2); }}
+            locked={backendLocked}
             aria-pressed={forceWebGL2}
-            aria-disabled={backendLocked || undefined}
             // Stable accessible name: the visible WGSL/GLSL text flips with
             // state, and a flipping name beside aria-pressed reads as a
             // contradiction in a screen reader ("GLSL, not pressed" while
@@ -3343,21 +3357,27 @@ export function ShaderPreview() {
             aria-label={t('Force the WebGL2 (GLSL) backend', language)}
             title={backendLocked
               ? t('WebGPU is not available in this browser — the preview always renders through WebGL2 (GLSL).', language)
-              : forceWebGL2
+              : `${forceWebGL2
                 ? t('Forced to the WebGL2 (GLSL) backend — what the VR popup and Safari run. Click to return to WebGPU (WGSL).', language)
-                : t('Rendering through WebGPU (WGSL). Click to force the WebGL2 (GLSL) backend — what the VR popup and Safari run — to check for backend-dependent differences.', language)}
+                : t('Rendering through WebGPU (WGSL). Click to force the WebGL2 (GLSL) backend — what the VR popup and Safari run — to check for backend-dependent differences.', language)} ${t('Right-click: all options.', language)}`}
           >
             {backendIsGlsl ? 'GLSL' : 'WGSL'}
-          </button>
-          <button
-            type="button"
+          </SettingButton>
+          {/* Lit while on, and a right-click lists Off and On. */}
+          <SettingButton
+            options={[
+              { value: false, label: t('Off', language) },
+              { value: true, label: t('On', language) },
+            ]}
+            value={showStats}
+            onSelect={setShowStats}
+            menuLabel={t('FPS', language)}
             className={`shader-preview__props-btn${showStats ? ' shader-preview__props-btn--active' : ''}`}
-            onClick={() => setShowStats((v) => !v)}
-            title={t('Frames per second and the time between presented frames, over the top-right corner. The period includes vsync, so it reads the display refresh rate until the shader actually misses frames.', language)}
+            title={`${t('Frames per second and the time between presented frames, over the top-right corner. The period includes vsync, so it reads the display refresh rate until the shader actually misses frames.', language)} ${t('Right-click: all options.', language)}`}
             aria-pressed={showStats}
           >
             {t('FPS', language)}
-          </button>
+          </SettingButton>
           {uniforms.length > 0 && (
             <button
               type="button"
@@ -3602,16 +3622,20 @@ export function ShaderPreview() {
               title={t('Background color', language)}
             />
             {/* The backdrop: room → grid → none, the icon showing what is on
-                now. A viewing preference, so it never touches the graph. */}
-            <button
-              type="button"
-              className={`shader-preview__stage-btn${stage !== 'none' ? ' shader-preview__stage-btn--active' : ''}`}
+                now; a right-click lists the three. A viewing preference, so
+                it never touches the graph. */}
+            <SettingButton
+              options={STAGE_OPTIONS.map((o) => ({ value: o.value, label: t(o.label, language) }))}
+              value={stage}
+              onSelect={setStage}
               onClick={() => setStage(nextPreviewStage(stage))}
-              title={t(STAGE_TITLES[stage], language)}
+              menuLabel={t('Background', language)}
+              className={`shader-preview__stage-btn${stage !== 'none' ? ' shader-preview__stage-btn--active' : ''}`}
+              title={`${t(STAGE_TITLES[stage], language)}. ${t('Right-click: all options.', language)}`}
               aria-label={t(STAGE_TITLES[stage], language)}
             >
               <StageIcon stage={stage} />
-            </button>
+            </SettingButton>
             <button
               type="button"
               className="shader-preview__reset-btn"

@@ -138,10 +138,14 @@ describe('ShaderPreview fs:model-ktx2 (what the transcode really did)', () => {
 
 describe('NodeEditor canvas model drop', () => {
   it('partitions models out BEFORE images', () => {
-    const model = NODE_EDITOR.indexOf('detectMeshKind(f.name) !== null) models.push(f)');
-    const image = NODE_EDITOR.indexOf('isImageFile(f)) images.push(f)');
+    // The partition is the one the Import buttons share (utils/fileImport.ts).
+    const kinds = readFileSync(resolve(__dirname, '../../utils/fileImport.ts'), 'utf8');
+    const model = kinds.indexOf("if (detectMeshKind(file.name) !== null) return 'model';");
+    const image = kinds.indexOf("if (isImageFile(file)) return 'picture';");
     expect(model).toBeGreaterThan(-1);
     expect(image).toBeGreaterThan(model);
+    expect(NODE_EDITOR).toContain('const kind = importFileKind(f);');
+    expect(NODE_EDITOR).toContain("importFiles(Array.from(files), event.clientX, event.clientY, 'drop');");
   });
 
   it('hands the first model to the preview on both branches, and never counts it as ignored', () => {

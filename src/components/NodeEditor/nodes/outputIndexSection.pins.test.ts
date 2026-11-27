@@ -123,7 +123,7 @@ describe('every module path passes the mirror plan (R7)', () => {
       .toContain('materialPartsMirrorPlanAcross(contributingOutputs(graph.nodes)),');
     const codeEditor = src('../../CodeEditor/CodeEditor.tsx');
     expect(codeEditor).toContain('materialPartsMirror,\n      );');
-    expect(codeEditor).toContain('[settledCode, activeTab, materialSettings, properties, materialPartsMirror]');
+    expect(codeEditor).toContain('[settledCode, heldModuleCode, activeTab, materialSettings, properties, materialPartsMirror]');
     const preview = src('../../Preview/ShaderPreview.tsx');
     // The module is built from the placeholder code since the image-asset feed
     // (GLB Phase 6 S3) — the mirror key is still a dep beside it.

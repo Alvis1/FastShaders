@@ -45,6 +45,6 @@ describe('node → code highlight wiring (source pins)', () => {
   });
 
   it('the spans ride the graph→code write with their text', () => {
-    expect(sync).toContain("setCode(result.code, 'graph', previewText, { emitted, names: result.varNames, nodeSpans: result.nodeSpans })");
+    expect(sync).toContain("setCode(result.code, 'graph', previewText, { emitted, names: result.varNames, nodeSpans: result.nodeSpans, sameGraph })");
   });
 });

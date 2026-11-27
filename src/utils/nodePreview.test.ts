@@ -554,7 +554,7 @@ describe('preview mode wiring (source pins)', () => {
   });
 
   it('the sync engine emits previewCode from the derived graph and ends the mode on a code→graph pass', () => {
-    expect(engine).toContain("setCode(result.code, 'graph', previewText, { emitted, names: result.varNames, nodeSpans: result.nodeSpans })");
+    expect(engine).toContain("setCode(result.code, 'graph', previewText, { emitted, names: result.varNames, nodeSpans: result.nodeSpans, sameGraph })");
     expect(engine).toMatch(/previewGraph\(nodes, edges, live\)/);
     // The derived text is the connected-only panel's too (engine/panelCode.ts).
     expect(engine).toContain('panelCodegen(derived.nodes, derived.edges, false).result.code');

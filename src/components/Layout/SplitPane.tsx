@@ -17,9 +17,8 @@ const clampRatio = (r: number) => Math.max(0.05, Math.min(0.95, r));
  * The BOTTOM pane's floor is in PANE px rather than a ratio: the seam may ride
  * DOWN until only the code editor's TSL/A-Frame tab bar remains, and a ratio
  * floor would leave a screen-height-dependent stub of Monaco visible instead of
- * stopping AT the bar. ~37px measured bar (the 28px --ctl-size Apply/Import
- * buttons plus the actions row's 4px bottom padding, the 4px padding-top that
- * clears the seam, and the 1px border — see CodeEditor.css) and a small margin.
+ * stopping AT the bar. A 37px bar (the chosen tab, --ctl-size + 5px, under the
+ * 4px padding-top that clears the seam — see CodeEditor.css) and a small margin.
  *
  * The TOP pane takes a plain ratio floor instead — the 3D view has no collapsed
  * state worth stopping at, so it simply never drops below a quarter of the

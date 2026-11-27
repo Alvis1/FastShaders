@@ -316,13 +316,14 @@ describe('useSyncEngine wiring (source pins)', () => {
 
   it('the graph→code pass is the panel’s codegen, connected-only in a study too, and writes the emitted set WITH the code', () => {
     expect(src).toContain('const { result, emitted } = panelCodegen(nodes, edges, false);');
-    expect(src).toContain("setCode(result.code, 'graph', previewText, { emitted, names: result.varNames, nodeSpans: result.nodeSpans })");
+    expect(src).toContain("setCode(result.code, 'graph', previewText, { emitted, names: result.varNames, nodeSpans: result.nodeSpans, sameGraph })");
     expect(src).not.toMatch(/\bgraphToCode\(/);
   });
 
   it('the carry reads the scope, excludes it from pairing and lands BEFORE the layout decision', () => {
     const sync = src.slice(src.indexOf('const doCodeSync'));
-    const scope = sync.indexOf('const scope = useAppStore.getState().codeEmitted;');
+    // A kept text (utils/codeDraft.ts) is read under its own scope instead.
+    const scope = sync.indexOf('const scope = heldText ? heldText.emitted : useAppStore.getState().codeEmitted;');
     const pair = sync.indexOf('pairResyncNodes(oldNodes, result.nodes, oldActive?.id ?? null, carriedIds, textNames)');
     const carry = sync.indexOf('carryPanelHidden(oldNodes, groupOldEdges, carriedIds, feederOf, unpositioned.length > 0)');
     const layout = sync.indexOf('autoLayout([...positioned, ...unpositioned, ...hidden.nodes], remappedEdges)');

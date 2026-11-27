@@ -1,0 +1,58 @@
+/* A setting button's list of options (SettingButton.tsx): an opaque floating
+   panel in the app's flat style — square, a hard offset shadow, no blur. */
+.fs-setting__menu {
+  position: fixed;
+  z-index: calc(var(--z-overlay) + 2);
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+  padding: var(--space-1) 0;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-float);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+}
+
+.fs-setting__head {
+  padding: 2px var(--space-3) var(--space-1);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.fs-setting__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--ctl-size);
+  padding: 0 var(--space-3) 0 var(--space-2);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  white-space: nowrap;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.fs-setting__item:hover,
+.fs-setting__item:focus-visible {
+  background: var(--bg-surface-hover);
+  outline: none;
+}
+
+.fs-setting__item--on {
+  font-weight: 700;
+}
+
+.fs-setting__tick {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+}

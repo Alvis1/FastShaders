@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useModalKeys } from '@/components/Modals/useModalKeys';
+import { closeSettingMenu } from '@/components/inputs/SettingButton';
 
 /**
  * What every study dialog shares — the consent, its Details, the finish
@@ -23,8 +24,9 @@ import { useModalKeys } from '@/components/Modals/useModalKeys';
  *    typing, radio arrows, a text field's own undo — are untouched; ⌘S alone
  *    is prevented, since the code panel's handler that used to prevent it no
  *    longer sees it and the browser's Save Page would open over the study.
- * 3. Escape runs `onEscape` (when the dialog has a safe answer for it) and
- *    stops there too.
+ * 3. Escape first closes an open setting list (the language button's
+ *    right-click list, SettingButton), else runs `onEscape` (when the dialog
+ *    has a safe answer for it), and stops there too.
  */
 let inertHolders = 0;
 
@@ -44,7 +46,8 @@ export function useStudyDialog(open: boolean, onEscape?: () => void): void {
   useModalKeys(open, (e) => {
     if (e.key === 'Escape') {
       e.stopPropagation();
-      onEscape?.();
+      // An open setting list (the language button's) closes first.
+      if (!closeSettingMenu()) onEscape?.();
       return;
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') e.preventDefault();

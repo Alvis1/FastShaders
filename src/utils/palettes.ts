@@ -224,6 +224,24 @@ export interface PaletteFile {
   palettes: Omit<Palette, 'id'>[];
 }
 
+/**
+ * Whether a file's text claims to be a palette — a GIMP palette's header, or a
+ * JSON object carrying the `format` discriminator — before anything is
+ * imported from it. A claim only, decided the way `parsePaletteFile`
+ * dispatches: the Import buttons route such a file to the Palettes dialog,
+ * whose own read then reports what it found (utils/fileImport.ts).
+ */
+export function looksLikePaletteFile(text: string): boolean {
+  if (/^\s*GIMP Palette/i.test(text)) return true;
+  try {
+    const rec = JSON.parse(text, safeJsonReviver) as unknown;
+    return !!rec && typeof rec === 'object' && !Array.isArray(rec)
+      && (rec as Record<string, unknown>).format === PALETTE_FILE_FORMAT;
+  } catch {
+    return false;
+  }
+}
+
 /** Serialize palettes as the canonical JSON. Ids are omitted — they are local
  *  bookkeeping, and emitting them invites a reader to adopt them. `names` is
  *  omitted for an unlabelled palette, so such a file is byte-identical to one

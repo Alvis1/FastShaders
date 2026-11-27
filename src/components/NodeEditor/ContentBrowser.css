@@ -89,8 +89,13 @@
   padding: 0 var(--space-2);
   overflow-x: auto;
   flex: 1;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg-raised-sub);
+  /* The line along the row's foot that the tabs stand on and the chosen tab
+     breaks (owner, 2026-11-26). Painted INSIDE the row, never as its border:
+     a scroller clips its children at the padding edge, so a tab could never
+     reach down over a border to cover it. */
+  background:
+    linear-gradient(var(--border-strong), var(--border-strong)) bottom / 100% 2px no-repeat,
+    var(--bg-raised-sub);
   position: relative;
   scrollbar-width: none;
 }
@@ -173,29 +178,31 @@
   white-space: nowrap;
 }
 
-/* Category tabs. These KEEP the folder merge the code panel's TSL/A-Frame tabs
-   dropped (`bottom: -1px` plus an active `borderBottomColor` matching the strip
-   below — see tabStyle() in ContentBrowser.tsx), and that is not drift: here the
-   merge carries information. The active tab's colour IS the tint of the tile
-   strip underneath it, so the join says "these tiles are that category". The
-   code panel's tabs sit above a Monaco editor with its own background and had
-   nothing to merge into, which is why they became plain segments.
-   The chrome font rule applies to both, though — 12px, not the old 10px. */
+/* Category tabs, as a browser's (owner, 2026-11-26; the intro window's tabs
+   are the same shape, IntroWindow.css): the chosen tab and the tile strip
+   under it are ONE shape, the strip's own colour (tabStyle() in
+   ContentBrowser.tsx) inside one 2px line, with nothing between them; the
+   other tabs stand behind it on the row's line. That merge carries
+   information: the chosen tab's colour IS the tint of the strip, so the join
+   says "these tiles are that category". The code panel's TSL / A-Frame /
+   Three.js tabs are the same shape over its editor (CodeEditor.css), in the
+   same 12px chrome type. */
 .content-browser__cat-btn {
   flex-shrink: 0;
   padding: 5px 14px 4px;
+  /* Standing on the row's 2px line. */
+  margin-bottom: 2px;
   font-size: var(--font-size-sm);
   font-family: var(--font-sans);
   font-weight: 600;
   cursor: pointer;
   transition: color 0.15s, background 0.15s;
   border: 1px solid transparent;
-  border-bottom: 1px solid var(--border-subtle);
-  border-radius: var(--border-radius-sm) var(--border-radius-sm) 0 0;
+  border-bottom: none;
+  border-radius: 0;
   background: var(--bg-raised-sub);
   color: var(--text-secondary);
   position: relative;
-  bottom: -1px;
 }
 
 .content-browser__cat-btn:hover:not(.content-browser__cat-btn--active) {
@@ -221,16 +228,20 @@
   pointer-events: none;
 }
 
-/* Active tab: connected to the page below — border on top/sides, no bottom
-   border — and TALLER and bold, so the chosen tab reads at a glance. The row
-   bottom-aligns its tabs, so the extra top padding raises the active one alone
-   (exactly one tab is always active, so the row's own height never moves). */
+/* Active tab: the row's line runs up round it, and it reaches down over that
+   line into the strip, so nothing parts the two. TALLER and bold, so the
+   chosen tab reads at a glance. The row bottom-aligns its tabs, so the extra
+   top padding raises the active one alone (exactly one tab is always active,
+   so the row's own height never moves). The thicker line is paid for in
+   padding: its name sits where the others' do, and no tab moves. */
 .content-browser__cat-btn--active {
-  color: #F5F5F5; /* on the dark background tabStyle() sets inline */
+  z-index: 1;
+  margin-bottom: 0;
+  padding: 8px 13px 6px;
+  color: var(--text-primary);
   font-weight: 700;
-  padding-top: 9px;
-  border-color: var(--border-subtle);
-  border-bottom-color: transparent;
+  border: 2px solid var(--border-strong);
+  border-bottom: none;
 }
 
 .content-browser__items {
@@ -408,6 +419,9 @@
   .content-browser__cat-btn {
     padding: 10px 18px 9px;
     font-size: 11px;
+  }
+  .content-browser__cat-btn--active {
+    padding: 13px 17px 11px;
   }
   .content-browser__search {
     padding: 8px 10px;

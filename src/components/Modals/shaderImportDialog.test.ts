@@ -48,9 +48,11 @@ describe('requestShaderImport — the ONE gate', () => {
   it('and every one of them RETURNS when the dialog took the file', () => {
     // Falling through would run the old import as well — two imports for one
     // drop, the second overwriting the answer the user gave.
+    // Either it returns, or it is the last statement of its handler (the code
+    // panel's drop, where nothing follows it).
     for (const src of [PREVIEW, NODE_EDITOR, CODE_EDITOR]) {
       const at = codeOnly(src).indexOf('requestShaderImport(');
-      expect(codeOnly(src).slice(at, at + 400)).toMatch(/\breturn\b/);
+      expect(codeOnly(src).slice(at, at + 400)).toMatch(/\breturn\b|^requestShaderImport\([\s\S]*?\}\);\s*\}, \[/);
     }
   });
 });

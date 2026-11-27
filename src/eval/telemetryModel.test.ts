@@ -419,6 +419,30 @@ describe('ready-made material, setting edits and the intro', () => {
     expect(s.introSlidesSeen).toBe(3);
   });
 
+  it('the "What is a shader?" tab rides intro-slide with no slide: no slide seen, the intro time unchanged', () => {
+    // IntroWindow logs {tab: 'shader'} as the tab opens and the next tab as
+    // it is left; the reading time is the gap between the two.
+    const session = (explainer: boolean): [EvalEventType, number, Record<string, unknown>?][] => [
+      ['session-start', 0],
+      ['intro-open', 100, { via: 'start', slide: 'search' }],
+      ...(explainer
+        ? ([
+            ['intro-slide', 5_000, { tab: 'shader' }],
+            ['intro-slide', 35_000, { tab: 'intro', slide: 'search', n: 1 }],
+          ] as [EvalEventType, number, Record<string, unknown>?][])
+        : []),
+      ['intro-close', 40_100, { slide: 'search' }],
+      ['session-end', 50_000],
+    ];
+    const without = deriveSummary(stream(session(false)), { idleThresholdMs: T });
+    const read = deriveSummary(stream(session(true)), { idleThresholdMs: T });
+    expect(read.introSlidesSeen).toBe(without.introSlidesSeen);
+    expect(read.introSlidesSeen).toBe(1);
+    expect(read.introMs).toBe(without.introMs);
+    expect(read.introMs).toBe(40_000);
+    expect(read.counts['intro-slide']).toBe(2);
+  });
+
   it('lessons: started, completed (distinct), and what "Do it for me" did is not the participant\'s work', () => {
     const s = deriveSummary(
       stream([

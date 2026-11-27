@@ -169,7 +169,8 @@ describe('the Three.js embed page', () => {
     const editor = readFileSync(`${REPO}/src/components/CodeEditor/CodeEditor.tsx`, 'utf8');
     expect(editor).toContain("sdfDrives ? { ...rawMaterialSettings, side: 'double' as const } : rawMaterialSettings");
     expect(editor).toContain('return buildThreeEmbedHTML(scriptCode, {');
-    expect(editor).toMatch(/tslToShaderModule\(\s*settledCode,\s*materialSettings,/);
+    // (`heldModuleCode`: the graph's module while the panel keeps a typed text.)
+    expect(editor).toMatch(/tslToShaderModule\(\s*heldModuleCode \?\? settledCode,\s*materialSettings,/);
     const code = "import { Fn, vec3 } from 'three/tsl';\n\nconst shader = Fn(() => {\n  return vec3(1, 0, 0);\n});\n\nexport default shader;\n";
     expect(tslToShaderModule(code, { side: 'double' })).toMatch(/\bside: 2\b/);
   });
