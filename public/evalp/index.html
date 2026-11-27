@@ -49,7 +49,13 @@
       if (q.length >= 2048) q = '?points=off&arm=evalp';
       sessionStorage.setItem('fs:evalTaskQuery', q);
     } catch (e) { /* storage blocked — the app just boots normally */ }
-    location.replace('../');
+    // A `?lang=en|lv` on the study link opens the app, and so its consent, in
+    // that language: handed on to the app, which adopts it as the language
+    // button would (src/utils/linkLanguage.ts, the same rule). Only that one
+    // parameter travels in the address; the rest rides fs:evalTaskQuery.
+    var lang = '';
+    try { lang = (new URLSearchParams(location.search).get('lang') || '').trim().toLowerCase(); } catch (e3) { lang = ''; }
+    location.replace(lang === 'en' || lang === 'lv' ? '../?lang=' + lang : '../');
   </script>
   <noscript>
     <p style="font-family: sans-serif; padding: 0 2rem;">

@@ -30,7 +30,11 @@
         var el = document.documentElement;
         el.setAttribute('data-theme', dark ? 'dark' : 'light');
         el.style.background = dark ? '#33363b' : '#F5F5F5';
-        el.setAttribute('lang', localStorage.getItem('fs:lang') === 'lv' ? 'lv' : 'en');
+        // A `?lang=en|lv` link wins (utils/linkLanguage.ts, the same rule:
+        // the first `lang`, trimmed and lower-cased, exactly en or lv).
+        var linkLang = (new URLSearchParams(location.search).get('lang') || '').trim().toLowerCase();
+        if (linkLang !== 'en' && linkLang !== 'lv') linkLang = '';
+        el.setAttribute('lang', linkLang || (localStorage.getItem('fs:lang') === 'lv' ? 'lv' : 'en'));
       } catch (e) { /* private mode / storage disabled — light, English */ }
     </script>
   </head>

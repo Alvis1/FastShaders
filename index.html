@@ -32,7 +32,11 @@
         // advertising English while the UI rendered Latvian: wrong screen-reader
         // phonetics, a browser 'translate from English' prompt, and an English
         // spellcheck dictionary over Latvian note and shader-name input (WCAG 3.1.1).
-        el.setAttribute('lang', localStorage.getItem('fs:lang') === 'lv' ? 'lv' : 'en');
+        // A `?lang=en|lv` link wins (utils/linkLanguage.ts, the same rule:
+        // the first `lang`, trimmed and lower-cased, exactly en or lv).
+        var linkLang = (new URLSearchParams(location.search).get('lang') || '').trim().toLowerCase();
+        if (linkLang !== 'en' && linkLang !== 'lv') linkLang = '';
+        el.setAttribute('lang', linkLang || (localStorage.getItem('fs:lang') === 'lv' ? 'lv' : 'en'));
       } catch (e) { /* private mode / storage disabled — default light */ }
     </script>
   </head>

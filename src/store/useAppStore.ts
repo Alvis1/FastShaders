@@ -151,6 +151,7 @@ import { encodeImageFile } from '@/utils/imageImport';
 import { filePictureOrientation } from '@/utils/pictureOrientation';
 import { transposeCsv, type ParsedCsv } from '@/utils/csvParser';
 import { NOTE_BODY_COLOR, NOTE_HEADER_COLOR, NOTE_HEIGHT, NOTE_WIDTH } from '@/utils/noteDefaults';
+import { linkLanguage, searchWithoutLang } from '@/utils/linkLanguage';
 
 /**
  * A user-saved group: the group node + every member node + every edge that lives
@@ -2131,6 +2132,29 @@ interface AppState {
 let lastNodeEdit: { key: string; at: number } = { key: '', at: -Infinity };
 const NODE_EDIT_BURST_MS = 2_000;
 
+/**
+ * `?lang=en` / `?lang=lv` (utils/linkLanguage.ts): a link that opens the app in
+ * a chosen language. Adopted ONCE, at module init, as if the language button
+ * had been clicked — saved to `fs:lang` — and then removed from the address, so
+ * a reload keeps whatever the user switches to next instead of flipping back.
+ * Only `lang` is removed: every other parameter (`?intro`, `?embed=1`, a study
+ * entry's own) stays exactly as written. No `lang-switch` event: nothing is
+ * logged before a study's Agree, and a boot is not a switch.
+ */
+function adoptLinkLanguage(): 'en' | 'lv' | null {
+  if (typeof window === 'undefined') return null;
+  let lang: 'en' | 'lv' | null = null;
+  try {
+    const { pathname, search, hash } = window.location;
+    lang = linkLanguage(search);
+    if (!lang) return null;
+    saveString('fs:lang', lang);
+    window.history.replaceState(window.history.state, '', `${pathname}${searchWithoutLang(search)}${hash}`);
+  } catch { /* a sandboxed or odd history: the language still applies */ }
+  return lang;
+}
+const LINK_LANGUAGE = adoptLinkLanguage();
+
 export const useAppStore = create<AppState>()((set, get) => ({
   nodes: [],
   edges: [],
@@ -2206,7 +2230,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   // language they may not read. Latvian is one click away on the toolbar's LV
   // button. Only a FRESH browser gets the default: a stored `fs:lang` keeps
   // whatever the user last chose, so nobody's existing session flips.
-  language: (loadString('fs:lang', 'en') === 'lv' ? 'lv' : 'en'),
+  // A `?lang=` link wins over the stored choice (adoptLinkLanguage, above).
+  language: LINK_LANGUAGE ?? (loadString('fs:lang', 'en') === 'lv' ? 'lv' : 'en'),
   // Hydrated by App.tsx's mount effect (`loadSavedGroupsReport()`), exactly as
   // `drawings` and `shaderPalettes` below are — NOT at module scope, and that
   // is load-bearing rather than symmetry.

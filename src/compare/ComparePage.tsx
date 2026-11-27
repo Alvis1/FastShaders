@@ -16,6 +16,7 @@ import {
   MAX_COLUMNS, MAX_PROFILE_FILE_BYTES,
   type CompareDevice, type DeviceKind, type PriceNote,
 } from './compareModel';
+import { linkLanguage } from '@/utils/linkLanguage';
 import './compare.css';
 
 /**
@@ -43,7 +44,10 @@ function readStorage(key: string): string | null {
   }
 }
 
-const LANGUAGE: Language = languageOf(readStorage('fs:lang'));
+// A `?lang=en|lv` link wins over the editor's stored choice. Read only: this
+// page writes no storage key, so the parameter stays in its own link.
+const LANGUAGE: Language =
+  (typeof window !== 'undefined' ? linkLanguage(window.location.search) : null) ?? languageOf(readStorage('fs:lang'));
 const BUILTINS = builtinDevices();
 const GROUPS = compareGroups();
 
